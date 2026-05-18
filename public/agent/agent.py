@@ -65,7 +65,7 @@ JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
-JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
+JOURNAL_FAIL_MSG = "Login หรือ Password ไม่ถูกต้อง"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
 AGENT_BUILD_ID = "2026-05-18-mt5-algo-live-v21"
@@ -1678,22 +1678,22 @@ def _journal_outcome_for_login(
         re.I,
     )
 
-    lines = text.splitlines()
-    for line in reversed(lines):
-        low = line.lower()
-        if login.lower() not in low:
-            continue
-        if server.lower() not in low and not ok_prev_rx.search(line):
-            continue
-        if fail_rx.search(line):
-            return False
-        if any(w in low for w in failed_words):
-            return False
-        if "authorization on" in low and "failed" in low:
-            return False
-        if ok_rx.search(line) or ok_prev_rx.search(line):
-            return True
-    return None
+  lines = [ln for ln in text.splitlines() if ln.strip()]
+  for line in reversed(lines):
+    low = line.lower()
+    if login.lower() not in low:
+      continue
+    if server.lower() not in low and not ok_prev_rx.search(line):
+      continue
+    if fail_rx.search(line):
+      return False
+    if any(w in low for w in failed_words):
+      return False
+    if "authorization on" in low and "failed" in low:
+      return False
+    if ok_rx.search(line) or ok_prev_rx.search(line):
+      return True
+  return None
 
 
 def automate_mt5_open_account_wizard(
@@ -2098,9 +2098,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
 
+    login_started_at = time.time()
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
     if ok_fast and mt5_running_for_port_dir(port_dir):
-        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180)
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, login_started_at - 3)
         if j_fast is False:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(

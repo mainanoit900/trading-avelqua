@@ -15,7 +15,8 @@ const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
   syncJournalFromLatestCommand,
-  failAccountFromJournal
+  failAccountFromJournal,
+  queueJournalReadVerify
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
@@ -753,6 +754,15 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const shouldSyncJournal = ['connecting', 'starting', 'checking'].includes(statusFinal);
 
     if (shouldSyncJournal) {
+      if (a.folder_path && a.vps_id && elapsedSec >= 3) {
+        await queueJournalReadVerify({
+          accountId: a.id,
+          vpsId: a.vps_id,
+          folderPath: a.folder_path,
+          mt5Login: a.mt5_login,
+          portNo: a.assigned_port_no
+        }).catch(() => {});
+      }
       await syncJournalFromLatestCommand(
         a.id,
         a.vps_id,
