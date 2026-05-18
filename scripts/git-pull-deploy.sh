@@ -60,8 +60,21 @@ if ! git rev-parse --verify HEAD >/dev/null 2>&1; then
   git commit -m "chore: production baseline before first git pull" || true
 fi
 
-echo "==> git pull (ff-only)"
+echo "==> git pull"
+set +e
 git pull --ff-only origin "$GIT_BRANCH"
+PULL_RC=$?
+set -e
+if [ "$PULL_RC" -ne 0 ]; then
+  if [ "${GIT_ALLOW_UNRELATED:-1}" = "1" ]; then
+    echo "==> fast-forward ไม่ได้ — merge ครั้งแรก (unrelated histories)"
+    git merge "origin/$GIT_BRANCH" --allow-unrelated-histories --no-edit \
+      -m "chore: merge origin/$GIT_BRANCH into production"
+  else
+    echo "ERROR: git pull failed (ตั้ง GIT_ALLOW_UNRELATED=1 หรือแก้ conflict เอง)"
+    exit 1
+  fi
+fi
 
 if [ "$RUN_NPM_INSTALL" = "1" ] && [ -f package.json ]; then
   echo "==> npm install"
