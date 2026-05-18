@@ -46,6 +46,8 @@ if [ -n "$GIT_REMOTE_URL" ] && [ "$CURRENT_URL" != "$GIT_REMOTE_URL" ]; then
   git remote set-url origin "$GIT_REMOTE_URL"
 fi
 
+PREV_HEAD="$(git rev-parse HEAD 2>/dev/null || echo '')"
+
 echo "==> git fetch origin $GIT_BRANCH"
 git fetch origin "$GIT_BRANCH"
 
@@ -84,6 +86,23 @@ fi
 if [ -f scripts/deploy-mt5-live-fix.sh ]; then
   echo "==> verify MT5 patches"
   bash scripts/deploy-mt5-live-fix.sh "$APP_DIR" || true
+fi
+
+AGENT_DEPLOY_ON_PULL="${AGENT_DEPLOY_ON_PULL:-1}"
+FORCE_AGENT_DEPLOY="${FORCE_AGENT_DEPLOY:-0}"
+DEPLOY_AGENTS=0
+if [ "$AGENT_DEPLOY_ON_PULL" = "1" ]; then
+  if [ "${FORCE_AGENT_DEPLOY}" = "1" ]; then
+    DEPLOY_AGENTS=1
+  elif [ -z "$PREV_HEAD" ]; then
+    DEPLOY_AGENTS=1
+  elif git diff --name-only "$PREV_HEAD" HEAD 2>/dev/null | grep -qE '^public/agent/agent\.py$'; then
+    DEPLOY_AGENTS=1
+  fi
+fi
+if [ "$DEPLOY_AGENTS" = "1" ] && [ -f scripts/deploy-agents-all-vps.js ]; then
+  echo "==> deploy agent.py to all VPS + queue restart"
+  node scripts/deploy-agents-all-vps.js || echo "WARN: agent deploy script failed (check DB/.env)"
 fi
 
 echo "==> pm2 restart"

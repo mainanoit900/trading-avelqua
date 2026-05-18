@@ -58,7 +58,7 @@ const {
   metricsFromSnapshotResult,
   applyEquityToAccount
 } = require('../lib/mt5EquitySync');
-const { folderPathForPortNo } = require('../lib/mt5AccountPort');
+const { folderPathForPortNo, vpsPortNameForNo } = require('../lib/mt5AccountPort');
 const {
   ensureRunBotAgent,
   hasRunBotMarker,
@@ -3446,14 +3446,18 @@ router.get('/mt5/live-dashboard', async (req, res) => {
     });
 
     if (doSync) {
+      const forceSync = String(req.query.force || '') === '1';
       for (const inst of instances) {
         const st = String(inst.status || '').toLowerCase();
         const isBotActive = ['running', 'pending', 'restarting', 'starting'].includes(st);
-        if (!isBotActive && !inst.metrics_missing) continue;
+        // ไม่คิวคำสั่งถ้า BOT ไม่รัน — ยกเว้นกด sync บังคับ (force=1)
+        if (!isBotActive) {
+          if (!forceSync) continue;
+        }
         const vpsId = Number(inst.vps_id || 0);
         const portNo = Number(inst.assigned_port_no || 0);
         if (!vpsId || !portNo) continue;
-        const recent = await hasRecentMetricsSync(vpsId, inst.id, isBotActive ? 5 : 20);
+        const recent = await hasRecentMetricsSync(vpsId, inst.id, isBotActive ? 8 : 60);
         if (recent) continue;
         const folder = folderPathForPortNo(portNo, '');
         const syncPayload = {
@@ -3695,19 +3699,23 @@ const trend = emaFast - emaSlow;
   if (drawdown > 20 || profit < -100) {
 
     const portNo = Number(instance.assigned_port_no || 0);
-    const folderPath = folderPathForPortNo(portNo, '');
+    const folderPath = folderPathForPortNo(portNo, instance.folder_path || '');
+    const portName = vpsPortNameForNo(portNo);
+    if (!folderPath && !portNo) return;
     await query(`
       INSERT INTO vps_system.vps_agent_commands
       (vps_id,node_id,command_type,payload,status,created_at)
-      VALUES ($1,$1,'STOP_MT5_BOT',$2::jsonb,'pending',NOW())
+      VALUES ($1,$1,'stop_mt5_bot',$2::jsonb,'pending',NOW())
     `, [
       instance.vps_id,
       JSON.stringify({
         instanceId: instance.id,
         port: portNo,
         portNumber: portNo,
+        portSlot: portNo,
         vpsFolderPath: folderPath,
         folder_path: folderPath,
+        vpsPortName: portName,
         reason: 'AI_cut_loss',
         stopTradingOnly: true,
         keepMt5Open: true
@@ -3830,6 +3838,6 @@ setInterval(async () => {
     await aiTradingBrain(inst);
   }
 
-}, 5000);
+}, 60000);
 
 module.exports = router;

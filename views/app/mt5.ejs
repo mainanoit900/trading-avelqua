@@ -1148,7 +1148,9 @@ async function loadMt5LiveDashboard() {
   mt5LiveDashBusy = true;
 
   try {
-    const res = await fetch('/app/mt5/live-dashboard?sync=1&_=' + Date.now(), {
+    window.mt5LiveDashPollN = (window.mt5LiveDashPollN || 0) + 1;
+    const syncQ = window.mt5LiveDashPollN <= 1 || window.mt5LiveDashPollN % 4 === 0 ? 'sync=1' : 'sync=0';
+    const res = await fetch('/app/mt5/live-dashboard?' + syncQ + '&_=' + Date.now(), {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { Accept: 'application/json' }
@@ -1286,7 +1288,7 @@ async function loadMt5Diagnostics() {
 loadMt5Diagnostics();
 setInterval(loadMt5Diagnostics, 15000);
 loadMt5LiveDashboard();
-setInterval(loadMt5LiveDashboard, 2000);
+setInterval(loadMt5LiveDashboard, 8000);
 </script>
 
 <style>

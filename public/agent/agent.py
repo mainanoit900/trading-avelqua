@@ -447,6 +447,8 @@ def resolve_mt5_port_dir(port: Any, payload: Optional[Dict[str, Any]] = None) ->
         ):
             if candidate.exists():
                 return candidate
+        # path มาตรฐานบน VPS (ยังไม่มีโฟลเดอร์ — ใช้สำหรับ stop/gate ไม่ต้อง error)
+        return MT5_ROOT / f"VPS-WIN-01-PORT-{n:02d}"
 
     raise RuntimeError("Missing vpsFolderPath (strict mode)")
 
