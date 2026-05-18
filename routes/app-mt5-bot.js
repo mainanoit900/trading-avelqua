@@ -63,6 +63,7 @@ const {
 const { folderPathForPortNo, vpsPortNameForNo } = require('../lib/mt5AccountPort');
 const {
   ensureRunBotAgent,
+  resolveLiveDashboardAgentNotice,
   hasRunBotMarker,
   hasAgentCapableMarker,
   REQUIRED_AGENT_VERSION,
@@ -1570,7 +1571,9 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
 
     const blockers = [];
     if (!redisOk) blockers.push('Redis ไม่พร้อม — อาจกระทบปุ่มเปิด BOT (ล็อกชั่วคราว)');
-    if (vpsAgent && !vpsAgent.capable) {
+    if (vpsAgent && !vpsAgent.runBotReady && ctx.botRunning) {
+      blockers.push(`Agent VPS ยังไม่เป็น v21 (ปัจจุบัน: ${vpsAgent.agentVersion || 'ไม่ทราบ'})`);
+    } else if (vpsAgent && !vpsAgent.capable && ctx.botRunning) {
       blockers.push(`Agent VPS ยังไม่เป็น v21 (ปัจจุบัน: ${vpsAgent.agentVersion || 'ไม่ทราบ'})`);
     }
     if (ctx.account && String(ctx.account.status).toLowerCase() !== 'connected') {
@@ -2906,7 +2909,10 @@ router.get('/mt5/bot-analytics/:id', requireLogin, async (req, res) => {
           'แนบ EA บนกราฟ XAUUSD และเปิดปุ่ม Algo Trading (สีเขียว) ใน MT5 — ถ้าเป็นสีแดง BOT จะไม่เทรด'
       });
     }
-    if (!hasRunBotMarker(inst.vps_agent_version)) {
+    const instActive = ['running', 'pending', 'restarting', 'starting'].includes(
+      String(inst.status || '').toLowerCase()
+    );
+    if (instActive && !hasRunBotMarker(inst.vps_agent_version)) {
       alerts.push({
         level: 'danger',
         message: 'Agent บน VPS ยังเป็นเวอร์ชันเก่า — รออัปเดต v21 หรือกด Restart BOT'
@@ -3581,18 +3587,22 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       }
     }
 
-    const needsAgentUpdate = instances.some(
-      (i) =>
-        String(i.last_error || '').includes('Unknown command_type') ||
-        !hasRunBotMarker(i.vps_agent_version)
-    );
-
-    if (needsAgentUpdate) {
+    const agentBanner = await resolveLiveDashboardAgentNotice(instances);
+    if (agentBanner.queueDeploy) {
       const vpsIds = [
-        ...new Set(instances.map((i) => Number(i.vps_id || 0)).filter((id) => id > 0))
+        ...new Set(
+          instances
+            .filter((i) =>
+              ['running', 'pending', 'restarting', 'starting'].includes(
+                String(i.status || '').toLowerCase()
+              )
+            )
+            .map((i) => Number(i.vps_id || 0))
+            .filter((id) => id > 0)
+        )
       ];
       for (const vpsId of vpsIds.slice(0, 2)) {
-        await ensureRunBotAgent(vpsId, { forceDeploy: true }).catch(() => {});
+        await ensureRunBotAgent(vpsId, { forceDeploy: false }).catch(() => {});
       }
     }
 
@@ -3602,9 +3612,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       equitySeriesByInstance,
       chartInstanceId,
       chartSeries,
-      agentNotice: needsAgentUpdate
-        ? 'Agent บน VPS กำลังอัปเดตเป็น v21 (รอ 2–3 นาที) — หลังเสร็จค่า Balance/Equity จะขยับทุก ~4 วินาที · ใน MT5 ต้องเปิดปุ่ม Algo Trading (สีเขียว) และแนบ EA บนกราฟ XAUUSD'
-        : null
+      agentNotice: agentBanner.notice
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
