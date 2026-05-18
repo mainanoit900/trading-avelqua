@@ -2103,10 +2103,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
 
+    procs_existing = mt5_port_processes(port, payload)
+    mt5_already_open = bool(procs_existing) or mt5_running_for_port_dir(port_dir)
+
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
-    if ok_fast and mt5_running_for_port_dir(port_dir):
-        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180)
-        if j_fast is False:
+    if mt5_already_open:
+        journal_since_open = time.time() - 600
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, journal_since_open)
+        if j_fast is False and ok_fast:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
                 payload,
@@ -2116,23 +2120,26 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 journal_evidence=j_chunk_fast,
             )
             raise RuntimeError(JOURNAL_FAIL_MSG)
-        if j_fast is True:
+        if j_fast is True or ok_fast:
             enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            proc_pid = procs_existing[0].pid if procs_existing else None
             send_connect_result(
                 payload,
                 "connected",
-                "เชื่อมต่อแล้ว — ยังไม่เปิด BOT กรุณาตั้งค่าขั้นตอน 3) แล้วกด Run BOT",
+                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่ ยังไม่เปิด BOT กรุณากด Run BOT ในขั้นตอน 3)",
                 port,
+                process_id=proc_pid,
                 window_title=title_fast,
-                window_verified=True,
+                window_verified=ok_fast,
                 journal_evidence=j_chunk_fast,
             )
-            log(f"LOGIN FAST REUSE PORT={port} LOGIN={login} (journal ok)")
+            log(f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} journal={j_fast} window={ok_fast}")
             return {
                 "action": "login_mt5",
                 "status": "connected",
                 "loginOnly": True,
                 "fastReuse": True,
+                "keepMt5Open": True,
                 "port": port,
                 "login": login,
                 "server": server,
@@ -2140,7 +2147,48 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "config": str(config_file),
                 "terminal": str(terminal),
             }
-        log(f"LOGIN FAST REUSE skipped — journal not confirmed for {login}")
+        proc_pid = procs_existing[0].pid if procs_existing else None
+        log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid} (no kill/relaunch)")
+        journal_since = time.time() - 120
+        journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "10"))
+        ok, msg, journal_chunk = wait_mt5_login_hybrid(
+            port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
+        )
+        titles = " | ".join(mt5_window_titles(port, payload))
+        if ok:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่",
+                port,
+                process_id=proc_pid,
+                journal_evidence=journal_chunk,
+                window_title=titles,
+            )
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "keepMt5Open": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
+        send_connect_result(
+            payload,
+            "failed",
+            msg or "ไม่สามารถยืนยัน Login บน MT5 ที่เปิดอยู่",
+            port,
+            process_id=proc_pid,
+            journal_evidence=journal_chunk,
+            window_title=titles,
+        )
+        raise RuntimeError(msg or "login verify failed on open MT5")
 
     # ====================================
     # BLOCK SAME LOGIN ON ANOTHER PORT (not this port_dir)
@@ -2213,11 +2261,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
-        try:
-            stop_mt5_port_only(port, payload)
-        except Exception as e:
-            log(f"STOP OLD MT5 ERROR: {e}")
-        time.sleep(0.35)
+        procs = mt5_port_processes(port, payload)
+        if procs or mt5_running_for_port_dir(port_dir):
+            pid = procs[0].pid if procs else None
+            log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
+            return procs[0] if procs else None
         write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)

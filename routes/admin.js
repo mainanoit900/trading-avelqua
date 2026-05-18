@@ -2960,11 +2960,18 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
       const mt5State = resolveAdminPortMt5State({ live, dbUse, adminDisabled });
       const inUse = mt5State.inUse;
       const agentState = mt5State.agentState;
+      const orphanRunning = mt5State.orphanRunning === true;
       const dbRunning = dbUse.running === true;
-      if (agentState === false && (dbRunning || dbBusy)) {
+      const freshAgent = live?.updated_at && Date.now() - new Date(live.updated_at).getTime() <= 3 * 60 * 1000;
+      if (
+        agentState === false &&
+        freshAgent &&
+        !dbRunning &&
+        !inUse &&
+        !orphanRunning
+      ) {
         reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
       }
-      const orphanRunning = mt5State.orphanRunning === true;
       const mt5Login = inUse || orphanRunning
         ? mt5State.mt5Login || p.mt5_login || null
         : null;
