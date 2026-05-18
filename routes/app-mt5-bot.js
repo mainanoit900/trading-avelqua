@@ -45,6 +45,7 @@ const {
   isProductionBot,
   validateRunCapital,
   normalizeTradeLevel,
+  tradeLevelLabel,
   packageLotLimits: resolvePackageLotLimits
 } = require('../lib/mt5BotPresets');
 const { loadAccountPortContext, buildRunMt5BotPayload } = require('../lib/mt5AccountPort');
@@ -1194,7 +1195,8 @@ async function buildBotControlPayload(userId, preferredSlot, instancesOverride) 
           bot_code: ctx.instance.bot_code,
           bot_name: ctx.instance.display_name || ctx.instance.bot_name,
           lot_used: ctx.instance.lot_used,
-          assigned_port_no: ctx.instance.assigned_port_no
+          assigned_port_no: ctx.instance.assigned_port_no,
+          trade_level: ctx.instance.trade_level
         }
       : null,
     botRunning: ctx.botRunning,
@@ -1848,7 +1850,11 @@ router.get('/mt5', async (req, res) => {
     vpsProbe,
     vpsProbeText: vpsProbeText(vpsProbe),
     mt5EquitySuffix,
-    mt5EquityData
+    mt5EquityData,
+    tradeLevelLabel,
+    preferredTradeLevel: botControl.instance
+      ? normalizeTradeLevel(botControl.instance.trade_level)
+      : ''
   });
 });
 
@@ -3065,7 +3071,7 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
         accountCtx.folderPath,
         accountCtx.mt5Login,
         calc.preset?.id || null,
-        trade.trade_level,
+        tradeLevel,
         capCheck.capital,
         mt5Balance ?? null,
         mt5Equity ?? null
@@ -3101,6 +3107,8 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
       ...payload,
       instanceId,
       commandId: null,
+      tradeLevel,
+      trade_level: tradeLevel,
       folder_path: accountCtx.folderPath || payload.folder_path,
       folderPath: accountCtx.folderPath || payload.folderPath,
       vpsFolderPath: accountCtx.folderPath || payload.vpsFolderPath

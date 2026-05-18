@@ -846,7 +846,13 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
         return False
 
 
-def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> None:
+def patch_mt5_experts_config(
+    port_dir: Path, enabled: bool, *, skip_if_mt5_running: bool = True
+) -> None:
+    """แก้ [Experts] ใน ini — ข้ามเมื่อ terminal64 เปิดอยู่ (MT5 มัก reload/restart)"""
+    if skip_if_mt5_running and mt5_running_for_port_dir(port_dir):
+        log(f"PATCH EXPERTS skipped — MT5 running (gate/Files only) enabled={enabled}")
+        return
     for rel in ("config/common.ini", "config/settings.ini", "MQL5/config/common.ini"):
         p = port_dir / Path(rel.replace("/", os.sep))
         if _patch_ini_experts_section(p, enabled):

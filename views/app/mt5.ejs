@@ -212,7 +212,7 @@ document.addEventListener('DOMContentLoaded', function () {
     </div>
 
     <div id="mt5RunPanel">
-    <% const ac = typeof activeAccount !== 'undefined' ? activeAccount : null; const bi = typeof activeBotInstance !== 'undefined' ? activeBotInstance : null; const _activeSt = ['running','pending','starting','restarting']; const _stopInst = bi && bi.id && _activeSt.indexOf(String(bi.status||'').toLowerCase()) >= 0 ? bi : ((instances || []).find(function(i) { var st = String(i.status||'').toLowerCase(); if (_activeSt.indexOf(st) < 0) return false; if (ac && Number(i.mt5_account_id) === Number(ac.id)) return true; if (ac && Number(i.assigned_port_no) === Number(ac.port_slot)) return true; return false; }) || null); const stopInstId = _stopInst ? Number(_stopInst.id) : 0; const botOn = !!_stopInst; %>
+    <% const ac = typeof activeAccount !== 'undefined' ? activeAccount : null; const bi = typeof activeBotInstance !== 'undefined' ? activeBotInstance : null; const _activeSt = ['running','pending','starting','restarting']; const _stopInst = bi && bi.id && _activeSt.indexOf(String(bi.status||'').toLowerCase()) >= 0 ? bi : ((instances || []).find(function(i) { var st = String(i.status||'').toLowerCase(); if (_activeSt.indexOf(st) < 0) return false; if (ac && Number(i.mt5_account_id) === Number(ac.id)) return true; if (ac && Number(i.assigned_port_no) === Number(ac.port_slot)) return true; return false; }) || null); const stopInstId = _stopInst ? Number(_stopInst.id) : 0; const botOn = !!_stopInst; const _prefLvl = (typeof preferredTradeLevel !== 'undefined' && preferredTradeLevel) ? String(preferredTradeLevel).toLowerCase() : (_stopInst && _stopInst.trade_level ? String(_stopInst.trade_level).toLowerCase() : ''); %>
     <% if (!ac || String(ac.status||'').toLowerCase() !== 'connected') { %>
       <div class="mt5-empty">Login PORT <%= typeof activePortSlot !== 'undefined' && activePortSlot ? activePortSlot : 'ที่เลือก' %> ก่อน (ขั้นตอน 2) — ระบบยังไม่เปิด BOT ให้เอง</div>
     <% } else { %>
@@ -238,9 +238,9 @@ document.addEventListener('DOMContentLoaded', function () {
           <div>
             <label>2) ระดับความเสี่ยง</label>
             <select name="trade_level" id="mt5TradeLevel"<%= botOn ? ' disabled' : '' %>>
-              <option value="high">🔴 เสี่ยงสูง</option>
-              <option value="medium" selected>🟡 เสี่ยงกลาง</option>
-              <option value="low">🟢 เสี่ยงต่ำ</option>
+              <option value="high"<%= _prefLvl === 'high' ? ' selected' : '' %>>🔴 เสี่ยงสูง</option>
+              <option value="medium"<%= (!_prefLvl || _prefLvl === 'medium') ? ' selected' : '' %>>🟡 เสี่ยงกลาง</option>
+              <option value="low"<%= _prefLvl === 'low' ? ' selected' : '' %>>🟢 เสี่ยงต่ำ</option>
             </select>
             <small class="mt5-hint" id="mt5PresetHint">อิงตาราง admin ตาม LOT</small>
           </div>
@@ -315,7 +315,7 @@ document.addEventListener('DOMContentLoaded', function () {
               <td><%= i.node_name || i.node_code || '-' %></td>
               <td><%= i.assigned_port_no || '-' %></td>
               <td><%= i.lot_used || '-' %></td>
-              <td><%= i.trade_level || '-' %></td>
+              <td><%= typeof tradeLevelLabel === 'function' ? tradeLevelLabel(i.trade_level) : (i.trade_level || '-') %></td>
               <td><span class="status <%= i.status %>"><%= i.status %></span></td>
               <td class="mt5-row-actions">
                 <button type="button" class="mt5-btn mini" onclick="loadMt5BotAnalytics(<%= i.id %>)">วิเคราะห์</button>
@@ -433,7 +433,8 @@ document.addEventListener('DOMContentLoaded', function () {
     packageLotMin: <%= packageLotMin %>,
     packageLotMax: <%= packageLotMax %>,
     packageDefaultLot: <%= packageDefaultLot %>,
-    packageGroup: '<%= packageGroup %>'
+    packageGroup: '<%= packageGroup %>',
+    preferredTradeLevel: '<%= typeof preferredTradeLevel !== "undefined" ? preferredTradeLevel : "" %>'
   };
 
   function mt5Esc(s) {
@@ -490,13 +491,26 @@ document.addEventListener('DOMContentLoaded', function () {
     const firstAcc = (connected || [])[0];
     const accId = firstAcc ? firstAcc.id : '';
     const portSlot = firstAcc ? firstAcc.port_slot : '';
+    let savedLvl = meta.preferredTradeLevel || '';
+    try {
+      if (!savedLvl) savedLvl = localStorage.getItem('mt5TradeLevel') || '';
+    } catch (_) {}
+    function tradeOpt(v, label) {
+      const sel =
+        savedLvl === v || (!savedLvl && v === 'medium') ? ' selected' : '';
+      return '<option value="' + v + '"' + sel + '>' + label + '</option>';
+    }
+    const tradeOpts =
+      tradeOpt('high', '🔴 เสี่ยงสูง') +
+      tradeOpt('medium', '🟡 เสี่ยงกลาง') +
+      tradeOpt('low', '🟢 เสี่ยงต่ำ');
     return (
       '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
       '<input type="hidden" name="mt5_account_id" id="mt5AccountId" value="' + accId + '">' +
       '<input type="hidden" name="port_slot" id="mt5RunPortSlot" value="' + portSlot + '">' +
       '<div class="mt5-form-row">' +
       '<div><label>1) BOT</label><select name="bot_id" id="mt5BotSelect" required>' + botOpts + '</select></div>' +
-      '<div><label>2) ระดับความเสี่ยง</label><select name="trade_level" id="mt5TradeLevel"><option value="high">🔴 เสี่ยงสูง</option><option value="medium" selected>🟡 เสี่ยงกลาง</option><option value="low">🟢 เสี่ยงต่ำ</option></select><small class="mt5-hint" id="mt5PresetHint"></small></div></div>' +
+      '<div><label>2) ระดับความเสี่ยง</label><select name="trade_level" id="mt5TradeLevel">' + tradeOpts + '</select><small class="mt5-hint" id="mt5PresetHint"></small></div></div>' +
       '<div class="mt5-form-row mt5-bot-config-row">' +
       '<div><label>3) เงินทุน (ขั้นต่ำ $100)</label><input type="number" step="0.01" min="100" name="capital_manual" id="capital_manual" value="' + capitalVal + '"><small class="mt5-hint" id="mt5CapitalHint"></small></div>' +
       '<div><label>4) LOT</label><input name="manual_lot" id="mt5ManualLot" type="number" step="0.01" min="' + lotMin + '" max="' + lotMax + '" value="' + defaultLot + '"><small class="mt5-hint" id="mt5LotHint"></small></div></div>' +
@@ -912,9 +926,34 @@ function syncMt5BotControlUi() {
       }
       if (openBtn) openBtn.disabled = running || packageExpired;
       if (restartBtn) restartBtn.disabled = !running;
+      const levelSel = document.getElementById('mt5TradeLevel');
+      if (levelSel && data.instance && data.instance.trade_level) {
+        const lv = String(data.instance.trade_level).toLowerCase();
+        if (lv === 'high' || lv === 'medium' || lv === 'low') levelSel.value = lv;
+      }
     })
     .catch(function () {});
 }
+
+function mt5RestoreTradeLevelSelect() {
+  const levelSel = document.getElementById('mt5TradeLevel');
+  if (!levelSel || levelSel.disabled) return;
+  const meta = window.__mt5PageMeta || {};
+  let lv = meta.preferredTradeLevel || '';
+  try {
+    if (!lv) lv = localStorage.getItem('mt5TradeLevel') || '';
+  } catch (_) {}
+  if (lv === 'high' || lv === 'medium' || lv === 'low') levelSel.value = lv;
+  if (!levelSel.dataset.levelStoreBound) {
+    levelSel.dataset.levelStoreBound = '1';
+    levelSel.addEventListener('change', function () {
+      try {
+        localStorage.setItem('mt5TradeLevel', levelSel.value || 'medium');
+      } catch (_) {}
+    });
+  }
+}
+mt5RestoreTradeLevelSelect();
 
 setInterval(syncMt5BotControlUi, 4000);
 syncMt5BotControlUi();
@@ -1802,7 +1841,7 @@ function deletePortCountdown(e, form) {
     const params = new URLSearchParams({
       mt5_account_id: accountId,
       bot_id: botId,
-      trade_level: levelSel.value || 'safe',
+      trade_level: levelSel.value || 'medium',
       capital_manual: capitalInput && capitalInput.value ? capitalInput.value : '',
       manual_lot: lotInput && lotInput.value ? lotInput.value : ''
     });
@@ -1968,6 +2007,7 @@ function deletePortCountdown(e, form) {
   }
   window.mt5BindRunForm = mt5BindRunForm;
   mt5BindRunForm();
+  if (typeof mt5RestoreTradeLevelSelect === 'function') mt5RestoreTradeLevelSelect();
 
   function updateAccountSelectEquityLabel(sel, snap) {
     if (!sel || !sel.options.length || !snap) return;
