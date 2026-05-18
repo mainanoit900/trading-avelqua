@@ -1066,13 +1066,107 @@ def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[s
 _LAST_ALGO_ENABLE: Dict[str, float] = {}
 
 
-def enable_mt5_algo_trading_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> bool:
+def _mt5_main_window_title(port: Any, payload: Optional[Dict[str, Any]] = None) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload or {})
+        root = str(port_dir).replace("\\", "\\\\")
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$root = '{root}'
+$login = '{login}'
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+  $x = $_.Path
+  if ($x -and $x -like "*$root*") {{ return $true }}
+  if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+  return $false
+}} | Select-Object -First 1
+if ($p) {{ $p.MainWindowTitle }} else {{ '' }}
+"""
+        return (_run_powershell(ps, timeout=8) or "").strip()
+    except Exception:
+        return ""
+
+
+def _chart_symbol_from_window_title(title: str) -> str:
+    t = str(title or "").upper()
+    if not t:
+        return ""
+    for pat in (
+        r"XAU\s*USD",
+        r"GOLD",
+        r"([A-Z]{6,7})",
+        r"([A-Z]{3,4}[A-Z]{3,4})",
+    ):
+        m = re.search(pat, t)
+        if not m:
+            continue
+        sym = m.group(1) if m.lastindex else m.group(0)
+        sym = str(sym or "").replace(" ", "").strip(",[]")
+        if sym:
+            return sym
+    return ""
+
+
+def assess_mt5_bot_ready(
+    port: Any,
+    payload: Optional[Dict[str, Any]],
+    bot_code: str,
+    *,
+    algo_enabled: Optional[bool] = None,
+) -> Dict[str, Any]:
+    """ตรวจว่า MT5 พร้อมให้ EA เทรดจริงหรือยัง (แยกจากสถานะ running บนเว็บ)"""
+    port_dir = resolve_mt5_port_dir(port, payload or {})
+    rel = str(
+        payload_get(payload or {}, "expertsRelative", "experts_relative", default=r"MQL5\Experts\Trading Bot")
+        or r"MQL5\Experts\Trading Bot"
+    )
+    experts_dir = port_dir / Path(rel.replace("\\", os.sep))
+    ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
+    title = _mt5_main_window_title(port, payload)
+    chart_sym = _chart_symbol_from_window_title(title)
+    sym_u = chart_sym.upper().replace("GOLD", "XAUUSD")
+
+    if not ea_info.get("ok"):
+        return {
+            "ea_status": "attach_required",
+            "message": "แนบ EA บนกราฟ XAUUSD แล้ว Load preset",
+            "chartSymbol": chart_sym,
+            "windowTitle": title,
+        }
+    if algo_enabled is False:
+        return {
+            "ea_status": "algo_off",
+            "message": "เปิดปุ่ม Algo Trading บน MT5 ให้เป็นสีเขียว",
+            "chartSymbol": chart_sym,
+            "windowTitle": title,
+        }
+    if chart_sym and "XAU" not in sym_u:
+        return {
+            "ea_status": "wrong_chart",
+            "message": f"เปิดกราฟ XAUUSD (ตอนนี้หน้าต่าง MT5 เป็น {chart_sym})",
+            "chartSymbol": chart_sym,
+            "windowTitle": title,
+        }
+    return {
+        "ea_status": "ready",
+        "message": "พร้อมเทรด",
+        "chartSymbol": chart_sym or "XAUUSD",
+        "windowTitle": title,
+    }
+
+
+def enable_mt5_algo_trading_uia(
+    port: Any, payload: Optional[Dict[str, Any]] = None, *, force: bool = False
+) -> bool:
     """กดปุ่ม Algo Trading บนแถบเครื่องมือ MT5 (ต้องเป็นสีเขียว BOT ถึงเทรดได้)"""
     if os.name != "nt":
         return False
     key = str(normalize_port(port) or port or "")
     now = time.time()
-    if key and now - _LAST_ALGO_ENABLE.get(key, 0) < 90:
+    if not force and key and now - _LAST_ALGO_ENABLE.get(key, 0) < 90:
         return False
     if key:
         _LAST_ALGO_ENABLE[key] = now
@@ -2805,25 +2899,48 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     try:
         files_dir = port_dir / "MQL5" / "Files"
         files_dir.mkdir(parents=True, exist_ok=True)
+        run_meta: Dict[str, Any] = {
+            "phase": "bot_running",
+            "tradingEnabled": True,
+            "allowExpertTrading": True,
+            "botCode": bot_code,
+            "instanceId": payload_get(payload, "instanceId", "instance_id"),
+            "updatedAt": datetime.now().isoformat(timespec="seconds"),
+        }
         (files_dir / "avelqua_run.json").write_text(
-            json.dumps(
-                {
-                    "phase": "bot_running",
-                    "tradingEnabled": True,
-                    "allowExpertTrading": True,
-                    "botCode": bot_code,
-                    "instanceId": payload_get(payload, "instanceId", "instance_id"),
-                    "updatedAt": datetime.now().isoformat(timespec="seconds"),
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(run_meta, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
     except Exception as e:
         log(f"avelqua_run.json bot_running: {e}")
+        run_meta = {}
 
     log(f"RUN BOT HOT PORT={port} PID={proc_pid or '?'} — MT5 stays open, trading gate ON")
+
+    algo_ok = False
+    for attempt in range(3):
+        if attempt:
+            time.sleep(2)
+        if enable_mt5_algo_trading_uia(port, payload, force=(attempt == 0)):
+            algo_ok = True
+            break
+
+    readiness = assess_mt5_bot_ready(port, payload, bot_code, algo_enabled=algo_ok)
+    try:
+        run_meta.update(
+            {
+                "eaStatus": readiness.get("ea_status"),
+                "algoTradingEnabled": algo_ok,
+                "chartSymbol": readiness.get("chartSymbol"),
+                "readinessMessage": readiness.get("message"),
+            }
+        )
+        (port_dir / "MQL5" / "Files" / "avelqua_run.json").write_text(
+            json.dumps(run_meta, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        log(f"avelqua_run.json readiness: {e}")
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -2836,7 +2953,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             profit = None
 
     instance_id = payload_get(payload, "instanceId")
-    ea_status = "attach_required" if ea_missing else "ready"
+    ea_status = readiness.get("ea_status") or ("attach_required" if ea_missing else "ready")
     send_mt5_live_status(
         instance_id,
         port,
@@ -2851,16 +2968,16 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_account_metrics(payload, bal, eq, snap.get("currency", ""))
     schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
     threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
-    threading.Thread(
-        target=lambda: (time.sleep(2), enable_mt5_algo_trading_uia(port, payload)),
-        daemon=True,
-    ).start()
 
-    msg = (
-        "BOT enabled — MT5 stayed open; attach EA / load preset / turn on Algo Trading"
-        if ea_missing
-        else "BOT enabled — MT5 stayed open"
-    )
+    hint = readiness.get("message") or ""
+    if ea_status == "ready":
+        msg = "BOT พร้อมเทรด — MT5 ยังเปิดอยู่"
+    elif ea_status == "algo_off":
+        msg = hint or "เปิดปุ่ม Algo Trading (สีเขียว) ใน MT5"
+    elif ea_status == "wrong_chart":
+        msg = hint or "เปิดกราฟ XAUUSD ใน MT5"
+    else:
+        msg = hint or "แนบ EA บน XAUUSD แล้ว Load preset"
     return {
         "action": "run_bot",
         "ok": True,
@@ -2877,11 +2994,14 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "equity": eq,
         "profit": profit,
         "eaStatus": ea_status,
+        "algoTradingEnabled": algo_ok,
+        "chartSymbol": readiness.get("chartSymbol"),
         "botCode": bot_code,
         "expertsPath": str(experts_dir),
         "eaFiles": ea_info,
         "eaSet": set_info,
         "instanceId": instance_id,
+        "readiness": readiness,
     }
 
 
@@ -2976,15 +3096,18 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         if not port:
             return
         instance_id = payload_get(payload, "instanceId")
+        bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "")
         st = mt5_port_status_one(port, payload)
         snap = account_snapshot(port, payload)
+        algo_ok = False
         if st["running"]:
-            enable_mt5_algo_trading_uia(port, payload)
+            algo_ok = enable_mt5_algo_trading_uia(port, payload)
+        ready = assess_mt5_bot_ready(port, payload, bot_code, algo_enabled=algo_ok)
         send_mt5_live_status(
             instance_id,
             port,
             "running" if st["running"] else "stopped",
-            st["status"],
+            ready.get("ea_status") or "unknown",
             snap.get("balance"),
             snap.get("equity"),
             "",

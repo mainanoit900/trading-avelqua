@@ -1147,10 +1147,14 @@ function drawLiveEquityChart(canvas, series) {
 
 function fmtEaStatus(i) {
   const s = String(i.ea_status || '').trim().toLowerCase();
-  if (s === 'attach_required') return '⚠ attach EA';
+  if (s === 'ready') return '✓ พร้อมเทรด';
+  if (s === 'algo_off') return '⚠ Algo ปิด';
+  if (s === 'wrong_chart') return '⚠ ไม่ใช่ XAUUSD';
+  if (s === 'attach_required') return '⚠ แนบ EA';
+  if (s === 'stopped') return 'หยุด';
   if (!s || s === 'unknown') {
     const st = String(i.status || '').toLowerCase();
-    if (st === 'running') return 'ready';
+    if (st === 'running') return 'กำลังตรวจ…';
     if (st === 'starting' || st === 'restarting') return 'pending';
     if (st === 'failed' || st === 'error') return 'error';
     return '—';

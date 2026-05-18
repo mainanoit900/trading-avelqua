@@ -2912,11 +2912,25 @@ router.get('/mt5/bot-analytics/:id', requireLogin, async (req, res) => {
     if (num(inst.last_ping_sec, 0) > 120) {
       alerts.push({ level: 'warning', message: 'Agent ไม่ตอบสนองนานเกิน 2 นาที' });
     }
-    if (String(inst.ea_status || '').toLowerCase() === 'attach_required') {
+    const eaSt = String(inst.ea_status || '').toLowerCase();
+    if (eaSt === 'attach_required') {
       alerts.push({
         level: 'warning',
         message:
-          'แนบ EA บนกราฟ XAUUSD และเปิดปุ่ม Algo Trading (สีเขียว) ใน MT5 — ถ้าเป็นสีแดง BOT จะไม่เทรด'
+          'แนบ EA บนกราฟ XAUUSD แล้ว Load preset — จาก Navigator ลาก AK-SNIPER-VIP-VER4.0 ลงกราฟ'
+      });
+    }
+    if (eaSt === 'algo_off') {
+      alerts.push({
+        level: 'danger',
+        message:
+          'ปุ่ม Algo Trading ใน MT5 ยังปิด (สีแดง) — กดให้เป็นสีเขียว BOT ถึงจะเทรดได้'
+      });
+    }
+    if (eaSt === 'wrong_chart') {
+      alerts.push({
+        level: 'warning',
+        message: 'เปิดกราฟ XAUUSD ใน MT5 (ไม่ใช่คู่เงินอื่น เช่น EURCHF)'
       });
     }
     const instActive = ['running', 'pending', 'restarting', 'starting'].includes(
@@ -3447,10 +3461,11 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       }
       const st = String(r.status || '').toLowerCase();
       let eaStatus = String(r.ea_status || '').trim().toLowerCase();
-      if (!eaStatus || eaStatus === 'unknown') {
-        if (st === 'running') eaStatus = 'ready';
+      if (!eaStatus || eaStatus === 'unknown' || eaStatus === 'full' || eaStatus === 'free') {
+        if (st === 'running') eaStatus = 'unknown';
         else if (st === 'starting' || st === 'restarting') eaStatus = 'pending';
         else if (st === 'failed' || st === 'error') eaStatus = 'error';
+        else if (st === 'stopped') eaStatus = 'stopped';
         else eaStatus = '—';
       }
       const displayError = String(r.cmd_error || r.last_error || '').trim();
