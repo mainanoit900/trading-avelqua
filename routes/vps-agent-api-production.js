@@ -19,6 +19,7 @@ const { normalizeLockedServer } = require('../lib/mt5Server');
 const {
   verifyLoginFromCommand,
   applyLoginMt5FromCommandResult,
+  applyLoginMt5CommandFailed,
   applyJournalReadCommandResult,
   findLoginCommandInProgress,
   extractJournalEvidence,
@@ -100,11 +101,18 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
   const accountId = pl.accountId ?? pl.account_id;
   const purpose = String(pl.purpose || '');
 
-  if (!ok) return;
-
-  if (ctype === 'login_mt5') {
+  if (ctype === 'login_mt5' || ctype === 'connect_mt5') {
+    if (!ok) {
+      await applyLoginMt5CommandFailed(node, pl, { message, result }).catch((e) => {
+        console.error('[login_mt5 failed]', e.message || e);
+      });
+      return;
+    }
     await applyLoginMt5FromCommandResult(node, pl, result).catch(() => {});
+    return;
   }
+
+  if (!ok) return;
   if (
     (ctype === 'read_file' || ctype === 'port_read_file')
     && purpose === 'verify_mt5_journal'

@@ -812,9 +812,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
-    const shouldSyncJournal = ['connecting', 'starting', 'checking'].includes(statusFinal)
-      && staleMs >= 500
-      && !windowHint;
+    const shouldSyncJournal =
+      ['connecting', 'starting', 'checking'].includes(statusFinal) && !windowHint;
 
     if (shouldSyncJournal) {
       await syncJournalFromLatestCommand(
@@ -860,7 +859,10 @@ async function handleMt5ConnectStatusProduction(req, res) {
       a.last_login_message = MT5_SUCCESS_MSG;
     }
 
-    if (['connecting', 'starting', 'checking'].includes(statusFinal)) {
+    if (
+      ['connecting', 'starting', 'checking', 'connected'].includes(statusFinal) &&
+      (statusFinal !== 'connected' || messageIndicatesLoginFailed(msgBlob, loginInMsg))
+    ) {
       const resolved = await resolveStuckLoginAccount(a).catch(() => ({ resolved: false }));
       if (resolved.resolved) {
         statusFinal = resolved.status || statusFinal;

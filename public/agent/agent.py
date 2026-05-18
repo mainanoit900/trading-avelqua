@@ -1674,25 +1674,22 @@ def _journal_outcome_for_login(
         re.I,
     )
 
-    last: Optional[bool] = None
-    for line in text.splitlines():
+    lines = text.splitlines()
+    for line in reversed(lines):
         low = line.lower()
         if login.lower() not in low:
             continue
         if server.lower() not in low:
             continue
         if fail_rx.search(line):
-            last = False
-            continue
+            return False
         if any(w in low for w in failed_words):
-            last = False
-            continue
+            return False
         if "authorization on" in low and "failed" in low:
-            last = False
-            continue
+            return False
         if ok_rx.search(line):
-            last = True
-    return last
+            return True
+    return None
 
 
 def automate_mt5_open_account_wizard(
@@ -3354,6 +3351,21 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 send_connect_result(payload, "failed", str(e))
             except Exception:
                 pass
+            try:
+                command_result(
+                    cmd_id,
+                    False,
+                    {
+                        "action": ctype,
+                        "status": "failed",
+                        "login": payload_get(payload, "mt5Login", "login"),
+                        "message": str(e)[:500],
+                    },
+                    str(e)[:500],
+                )
+            except Exception:
+                pass
+            return
         if ctype in (
             "run_bot",
             "restart_ea",
