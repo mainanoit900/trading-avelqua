@@ -2964,7 +2964,8 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
       if (agentState === false && (dbRunning || dbBusy)) {
         reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
       }
-      const mt5Login = inUse
+      const orphanRunning = mt5State.orphanRunning === true;
+      const mt5Login = inUse || orphanRunning
         ? mt5State.mt5Login || p.mt5_login || null
         : null;
       return {
@@ -2979,10 +2980,11 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
         is_active: !adminDisabled,
         admin_disabled: adminDisabled,
         is_used: inUse,
-        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
-        status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
+        orphan_running: orphanRunning,
+        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
+        status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
         live_pid: live?.pid || live?.process_id || null,
-        live_running: inUse && !adminDisabled,
+        live_running: (inUse || orphanRunning) && !adminDisabled,
         usage_source: mt5State.usageSource,
         mt5_login: mt5Login
       };
@@ -3026,14 +3028,16 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
     const cleanRows = Array.from(dedupe.values()).sort((a,b) => Number(a.port_number||0) - Number(b.port_number||0));
 
     const totalPorts = cleanRows.length;
-    const activePorts = cleanRows.filter((p) => p.live_running === true && !p.admin_disabled).length;
+    const connectedPorts = cleanRows.filter((p) => p.is_used === true && !p.admin_disabled).length;
+    const orphanPorts = cleanRows.filter((p) => p.orphan_running === true && !p.admin_disabled).length;
 
     res.json({
       ok: true,
       stats: {
         total_ports: totalPorts,
-        active_ports: activePorts,
-        free_ports: Math.max(0, totalPorts - activePorts)
+        active_ports: connectedPorts,
+        orphan_ports: orphanPorts,
+        free_ports: Math.max(0, totalPorts - connectedPorts - orphanPorts)
       },
       ports: cleanRows
     });

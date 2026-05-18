@@ -7,7 +7,7 @@
 body{margin:0;font-family:Arial,sans-serif;background:#0f172a;color:#e5e7eb}
 .wrap{padding:28px;max-width:1280px;margin:auto}
 .top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px}
-.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+.grid{display:grid;grid-template-columns:repeat(4,1fr);gap:14px;margin-bottom:18px}
 .stat{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:18px}
 .stat .label{color:#94a3b8;font-size:13px}
 .stat .num{font-size:32px;font-weight:800;margin-top:6px}
@@ -28,6 +28,7 @@ td{padding:12px;border-top:1px solid #1f2937;vertical-align:middle}
 .badge-used{background:#7f1d1d;color:#fecaca}
 .badge-free{background:#14532d;color:#86efac}
 .badge-off{background:#422006;color:#fde68a}
+.badge-orphan{background:#713f12;color:#fde68a}
 </style>
 </head>
 <body>
@@ -44,8 +45,9 @@ td{padding:12px;border-top:1px solid #1f2937;vertical-align:middle}
 </div>
 <div class="grid">
 <div class="stat"><div class="label">PORT ทั้งหมด</div><div id="totalPorts" class="num">0</div></div>
-<div class="stat"><div class="label">ใช้งาน (MT5 รัน)</div><div id="activePorts" class="num">0</div></div>
-<div class="stat"><div class="label">คงเหลือ</div><div id="remainPorts" class="num">0</div></div>
+<div class="stat"><div class="label">เชื่อมต่อ (ลูกค้า)</div><div id="activePorts" class="num">0</div></div>
+<div class="stat"><div class="label">MT5 ค้าง</div><div id="orphanPorts" class="num">0</div></div>
+<div class="stat"><div class="label">ว่าง</div><div id="remainPorts" class="num">0</div></div>
 </div>
 <div class="card">
 <table>
@@ -68,15 +70,20 @@ function portIsOff(p){
 function paintPorts(d){
   document.getElementById('totalPorts').textContent=d.stats.total_ports;
   document.getElementById('activePorts').textContent=d.stats.active_ports;
+  const orphanEl=document.getElementById('orphanPorts');
+  if(orphanEl)orphanEl.textContent=d.stats.orphan_ports!=null?d.stats.orphan_ports:0;
   document.getElementById('remainPorts').textContent=d.stats.free_ports;
   const box=document.getElementById('ports');
   if(!d.ports.length){box.innerHTML='<tr><td colspan="5">ไม่มี PORT</td></tr>';return;}
   box.innerHTML=d.ports.map(p=>{
     const off=portIsOff(p);
-    const run=!!p.live_running&&!off;
+    const connected=!!p.is_used&&!off;
+    const orphan=!!p.orphan_running&&!off;
+    const run=connected||orphan;
     let st='ว่าง',bc='badge-free';
     if(off){st='ปิดการใช้งาน';bc='badge-off';}
-    else if(run){st='ใช้งาน'+(p.mt5_login?' · Login '+p.mt5_login:'');bc='badge-used';}
+    else if(connected){st='ใช้งาน'+(p.mt5_login?' · Login '+p.mt5_login:'');bc='badge-used';}
+    else if(orphan){st='MT5 ค้าง'+(p.mt5_login?' · Login '+p.mt5_login:'');bc='badge-orphan';}
     const fileUrl='/admin/vps/'+VPS_ID+'/ports/'+p.id+'/files';
     const toggleLbl=off?'เปิด':'ปิด';
     const toggleCls=off?'btn-toggle-on':'btn-toggle-off';
