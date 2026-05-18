@@ -28,7 +28,8 @@ const {
   tryApplyPendingJournalRead,
   queueJournalReadVerify,
   queueStopMt5ForAccount,
-  failAccountFromJournal
+  failAccountFromJournal,
+  accountConnectSinceMs
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -735,6 +736,7 @@ router.post('/connect-result', async (req, res) => {
 
     if (status === 'starting' || status === 'checking') {
       const loginHint = String(mt5Login || '').trim();
+      const sinceMs = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
       const journalBlob = sanitizeJournalText(
         extractJournalEvidence(
           req.body.journalEvidence,
@@ -745,8 +747,10 @@ router.post('/connect-result', async (req, res) => {
       );
       const titleBlob = `${windowTitle} ${message} ${journalBlob}`;
       if (
-        (journalBlob && loginHint && parseMt5JournalOutcome(journalBlob, loginHint) === 'failed') ||
-        messageIndicatesLoginFailed(titleBlob, loginHint)
+        (journalBlob &&
+          loginHint &&
+          parseMt5JournalOutcome(journalBlob, loginHint, undefined, sinceMs) === 'failed') ||
+        messageIndicatesLoginFailed(titleBlob, loginHint, sinceMs)
       ) {
         await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
           vpsId: node.id,
@@ -801,11 +805,15 @@ router.post('/connect-result', async (req, res) => {
           message
         ) || ''
       );
+      const sinceMsConn = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
       let journalVerdict = journalEvidence && loginForJournal
-        ? parseMt5JournalOutcome(journalEvidence, loginForJournal)
+        ? parseMt5JournalOutcome(journalEvidence, loginForJournal, undefined, sinceMsConn)
         : null;
 
-      if (journalVerdict === 'failed' || messageIndicatesLoginFailed(journalEvidence || message, loginForJournal)) {
+      if (
+        journalVerdict === 'failed' ||
+        messageIndicatesLoginFailed(journalEvidence || message, loginForJournal, sinceMsConn)
+      ) {
         await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
           vpsId: node.id,
           portNo,
@@ -1029,7 +1037,12 @@ router.post('/connect-result', async (req, res) => {
           req.body.journalEvidence || req.body.journal_evidence || ''
         ).trim();
         const loginForFail = String(mt5Login || '').trim();
-        if (evidence && loginForFail && parseMt5JournalOutcome(evidence, loginForFail) === 'failed') {
+        const sinceMsFail = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
+        if (
+          evidence &&
+          loginForFail &&
+          parseMt5JournalOutcome(evidence, loginForFail, undefined, sinceMsFail) === 'failed'
+        ) {
           failMsg = MT5_FAIL_USER_MSG;
         }
       }

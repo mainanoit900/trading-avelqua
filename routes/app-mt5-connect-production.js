@@ -15,7 +15,8 @@ const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
   syncJournalFromLatestCommand,
-  failAccountFromJournal
+  failAccountFromJournal,
+  cancelJournalVerifyForAccount
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
@@ -97,6 +98,7 @@ async function ensureRuntimeColumns() {
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_balance NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_equity NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS connect_started_at TIMESTAMPTZ`).catch(() => {});
 
   await query(`
     CREATE TABLE IF NOT EXISTS vps_system.mt5_login_history (
@@ -548,6 +550,7 @@ async function handleMt5ConnectProduction(req, res) {
         status='connecting',
         last_error=NULL,
         last_login_message='กำลังเปิด MT5 และ Login...',
+        connect_started_at=NOW(),
         updated_at=NOW()
       WHERE user_id=$1
         AND mt5_login=$6
@@ -573,9 +576,9 @@ async function handleMt5ConnectProduction(req, res) {
         INSERT INTO vps_system.mt5_accounts
         (user_id, vps_id, port_id, port_slot, assigned_port_no, windows_port_no,
          mt5_login, mt5_password, broker, server_name, mt5_server, account_name, status,
-         last_error, last_login_message, updated_at)
+         last_error, last_login_message, connect_started_at, updated_at)
         VALUES
-        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'กำลังเปิด MT5 และ Login...',NOW())
+        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'กำลังเปิด MT5 และ Login...',NOW(),NOW())
         RETURNING id
       `, [
         userId,
@@ -605,6 +608,7 @@ async function handleMt5ConnectProduction(req, res) {
             status='connecting',
             last_error=NULL,
             last_login_message='กำลังเปิด MT5 และ Login...',
+            connect_started_at=NOW(),
             updated_at=NOW()
           WHERE user_id=$1
             AND mt5_login=$6
@@ -625,6 +629,7 @@ async function handleMt5ConnectProduction(req, res) {
     }
 
     const accountId = acc.rows[0].id;
+    await cancelJournalVerifyForAccount(reservedPort.vps_id, accountId).catch(() => {});
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
