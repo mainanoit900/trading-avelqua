@@ -64,6 +64,7 @@ const { folderPathForPortNo, vpsPortNameForNo } = require('../lib/mt5AccountPort
 const {
   ensureRunBotAgent,
   resolveLiveDashboardAgentNotice,
+  ensureAgentMaintenance,
   hasRunBotMarker,
   hasAgentCapableMarker,
   REQUIRED_AGENT_VERSION,
@@ -1528,8 +1529,17 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
           capable: hasAgentCapableMarker(node?.agent_version),
           runBotReady: hasRunBotMarker(node?.agent_version)
         };
-        upgradeState = await getAgentUpgradeState(accCtx.vpsId).catch(() => 'unknown');
-        upgradeMessage = messageForUpgradeState(upgradeState);
+        const maint = await ensureAgentMaintenance(accCtx.vpsId).catch(() => ({
+          state: 'unknown',
+          maintenancePending: false
+        }));
+        upgradeState = maint.state || (await getAgentUpgradeState(accCtx.vpsId).catch(() => 'unknown'));
+        upgradeMessage = maint.maintenancePending
+          ? ''
+          : messageForUpgradeState(upgradeState);
+        if (maint.maintenancePending && upgradeState !== 'ready') {
+          upgradeState = 'deploying';
+        }
 
         const pend = await query(
           `
@@ -1570,20 +1580,20 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
     }
 
     const blockers = [];
+    const maintPending =
+      upgradeState === 'deploying' &&
+      (!vpsAgent?.runBotReady || String(upgradeMessage || '') === '');
+
     if (!redisOk) blockers.push('Redis ไม่พร้อม — อาจกระทบปุ่มเปิด BOT (ล็อกชั่วคราว)');
-    if (vpsAgent && !vpsAgent.runBotReady && ctx.botRunning) {
-      blockers.push(`Agent VPS ยังไม่เป็น v21 (ปัจจุบัน: ${vpsAgent.agentVersion || 'ไม่ทราบ'})`);
-    } else if (vpsAgent && !vpsAgent.capable && ctx.botRunning) {
-      blockers.push(`Agent VPS ยังไม่เป็น v21 (ปัจจุบัน: ${vpsAgent.agentVersion || 'ไม่ทราบ'})`);
-    }
     if (ctx.account && String(ctx.account.status).toLowerCase() !== 'connected') {
       blockers.push('PORT ยังไม่ connected — ต้อง Login MT5 ขั้นตอน 2 ก่อน');
     }
-    if (upgradeState === 'deploying') {
-      blockers.push('กำลัง deploy Agent — รอ 2–3 นาที');
-    }
-    if (upgradeState === 'needs_restart') {
-      blockers.push('ไฟล์ Agent อัปเดตแล้ว แต่ service ยังไม่ restart');
+    if (maintPending && ctx.botRunning) {
+      blockers.push('ระบบกำลังอัปเดต Agent บน VPS อัตโนมัติ — รอประมาณ 1–2 นาที');
+    } else if (vpsAgent && !vpsAgent.runBotReady && ctx.botRunning && upgradeState === 'legacy') {
+      blockers.push(
+        `Agent VPS ยังเป็นเวอร์ชันเก่า (${vpsAgent.agentVersion || 'ไม่ทราบ'}) — ระบบกำลังอัปเดตให้อัตโนมัติ`
+      );
     }
 
     return res.json({
@@ -3588,7 +3598,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
     }
 
     const agentBanner = await resolveLiveDashboardAgentNotice(instances);
-    if (agentBanner.queueDeploy) {
+    if (agentBanner.queueDeploy || agentBanner.maintenancePending) {
       const vpsIds = [
         ...new Set(
           instances
@@ -3602,7 +3612,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
         )
       ];
       for (const vpsId of vpsIds.slice(0, 2)) {
-        await ensureRunBotAgent(vpsId, { forceDeploy: false }).catch(() => {});
+        await ensureAgentMaintenance(vpsId).catch(() => {});
       }
     }
 

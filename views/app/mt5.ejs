@@ -1369,10 +1369,16 @@ async function loadMt5Diagnostics() {
       return;
     }
     banner.style.display = 'block';
+    banner.className =
+      'mt5-alert ' +
+      (data.upgradeState === 'deploying' ? 'warn' : 'danger') +
+      ' mt5-diag-banner';
     banner.innerHTML =
       '<b>ตรวจระบบ:</b> ' +
       data.blockers.map(function (b) { return escAttr(b); }).join(' · ') +
-      (data.upgradeMessage ? '<br><small>' + escAttr(data.upgradeMessage) + '</small>' : '');
+      (data.upgradeMessage && data.upgradeState !== 'deploying'
+        ? '<br><small>' + escAttr(data.upgradeMessage) + '</small>'
+        : '');
   } catch (_) {
     banner.style.display = 'none';
   }
