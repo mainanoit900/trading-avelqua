@@ -16,3 +16,9 @@ public/agent/.env
 coverage/
 dist/
 build/
+data/data.json
+backup_before_public_id.sql
+*.sql
+*.env
+.env
+deploy.env
