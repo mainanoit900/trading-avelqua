@@ -2940,28 +2940,32 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
 
     const liveMap = await fetchLiveHealthMap(nodeId);
     const dbUsageMap = await fetchDbMt5UsageMap(nodeId);
-    const { isAgentMt5Running, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
+    const {
+      reconcilePortIdleWhenAgentFree,
+      lookupLiveHealth,
+      lookupDbUsage,
+      resolveAdminPortMt5State
+    } = require('../lib/adminVpsBridge');
 
     const rows = (ports.rows || []).map((p) => {
       const portNo = parsePortNumber(p);
-      const live = liveMap[portNo] || {};
-      const dbUse = dbUsageMap[portNo] || {};
-      const agentState = isAgentMt5Running(live);
-      const agentRunning = agentState === true;
-      const dbRunning = dbUse.running === true;
+      const live = lookupLiveHealth(liveMap, portNo);
+      const dbUse = lookupDbUsage(dbUsageMap, portNo);
       const adminDisabled = isPortAdminDisabled(p);
       const dbSt = String(p.status || '').trim().toLowerCase();
       const dbBusy = ['locked', 'used', 'running', 'busy', 'full'].includes(dbSt);
       const portName = p.port_name || p.display_name || (`PORT-${String(portNo).padStart(2, '0')}`);
       const basePath =
         p.folder_path || p.base_path || live.folder_path || dbUse.folder_path || `C:\\MT5_PORTS\\${portName}`;
+      const mt5State = resolveAdminPortMt5State({ live, dbUse, adminDisabled });
+      const inUse = mt5State.inUse;
+      const agentState = mt5State.agentState;
+      const dbRunning = dbUse.running === true;
       if (agentState === false && (dbRunning || dbBusy)) {
         reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
       }
-      // แสดง "ใช้งาน" เฉพาะเมื่อ Agent ยืนยันว่า terminal64 รันจริง — ไม่พึ่งสถานะ DB ค้าง
-      const inUse = !adminDisabled && agentRunning === true;
-      const mt5Login = agentRunning
-        ? live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null
+      const mt5Login = inUse
+        ? mt5State.mt5Login || p.mt5_login || null
         : null;
       return {
         ...p,
@@ -2979,7 +2983,7 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
         status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
         live_pid: live?.pid || live?.process_id || null,
         live_running: inUse && !adminDisabled,
-        usage_source: agentState === false ? 'free' : agentRunning ? 'agent' : dbRunning ? dbUse.source || 'db' : dbBusy ? 'allocation' : 'free',
+        usage_source: mt5State.usageSource,
         mt5_login: mt5Login
       };
     });
