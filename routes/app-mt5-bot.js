@@ -3043,7 +3043,7 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     const lot = calc.lot;
 
     const assignedPortNo = accountCtx.portNo;
-    const commandType = 'run_mt5_bot';
+    const commandType = 'run_bot';
 
     const inst = await client.query(
       `
@@ -3189,7 +3189,8 @@ router.post('/mt5/stop/:id', requireLogin, async (req, res) => {
         [inst.vps_id, num(inst.lot_used)]
       );
       const portNo = Number(inst.assigned_port_no || 0);
-      const folderPath = folderPathForPortNo(portNo, '');
+      const folderPath = folderPathForPortNo(portNo, inst.folder_path || '');
+      const portName = vpsPortNameForNo(portNo) || `VPS-WIN-01-PORT-${String(portNo).padStart(2, '0')}`;
       await cancelStaleRunBotCommands(inst.vps_id, null, id);
       await client.query(
         `
@@ -3206,7 +3207,7 @@ router.post('/mt5/stop/:id', requireLogin, async (req, res) => {
             portSlot: portNo,
             vpsFolderPath: folderPath,
             folder_path: folderPath,
-            vpsPortName: `VPS-WIN-01-PORT-${String(portNo).padStart(2, '0')}`,
+            vpsPortName: portName,
             stopTradingOnly: true,
             keepMt5Open: true,
             action: 'stop_bot_trading'

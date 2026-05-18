@@ -464,6 +464,49 @@ def iter_terminal_processes() -> Iterable[Any]:
             continue
     return out
 
+
+def _norm_win_path(s: str) -> str:
+    return str(s or "").lower().replace("/", "\\").rstrip("\\")
+
+
+def _port_folder_token(port_dir: Path) -> str:
+    m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", port_dir.name)
+    if not m:
+        return ""
+    return f"port-{int(m.group(1)):02d}"
+
+
+def _process_matches_port_dir(proc: Any, port_dir: Path) -> bool:
+    """จับคู่ terminal64 กับโฟลเดอร์ PORT (exe/cmdline/cwd + ชื่อโฟลเดอร์)"""
+    root = _norm_win_path(port_dir)
+    name = port_dir.name.lower()
+    token = _port_folder_token(port_dir)
+    try:
+        exe = _norm_win_path(proc.info.get("exe") or "")
+        cmd = _norm_win_path(" ".join(proc.info.get("cmdline") or []))
+        cwd = ""
+        try:
+            cwd = _norm_win_path(proc.cwd())
+        except Exception:
+            pass
+        for hay in (exe, cmd, cwd):
+            if not hay:
+                continue
+            if hay.startswith(root) or root in hay:
+                return True
+            if name and name in hay:
+                return True
+            if token and token in hay:
+                return True
+    except Exception:
+        pass
+    return False
+
+
+def mt5_processes_for_port_dir(port_dir: Path) -> List[Any]:
+    return [p for p in iter_terminal_processes() if _process_matches_port_dir(p, port_dir)]
+
+
 def stop_mt5_by_folder(folder_path):
     if not folder_path:
         raise Exception("missing folder_path")
@@ -836,16 +879,7 @@ def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
 
 
 def mt5_running_for_port_dir(port_dir: Path) -> bool:
-    root = str(port_dir).rstrip("\\/").lower()
-    for p in iter_terminal_processes():
-        try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
-                return True
-        except Exception:
-            pass
-    return False
+    return len(mt5_processes_for_port_dir(port_dir)) > 0
 
 
 def enforce_login_no_trading(
@@ -2304,17 +2338,7 @@ def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def mt5_port_processes(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    root = str(port_dir).rstrip("\\/").lower()
-    out = []
-    for p in list(iter_terminal_processes()):
-        try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
-                out.append(p)
-        except Exception:
-            pass
-    return out
+    return mt5_processes_for_port_dir(port_dir)
 
 
 def mt5_port_status_one(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2712,15 +2736,15 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not set_info.get("ok"):
         log(f"RUN BOT preset .set skipped: {set_info.get('reason')}")
 
-    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
-    password = str(payload_get(payload, "mt5Password", "password") or "")
-    server = str(payload_get(payload, "serverName", "server") or LOCKED_MT5_SERVER).strip() or LOCKED_MT5_SERVER
-
     procs = mt5_port_processes(port, payload)
     mt5_open = bool(procs) or mt5_running_for_port_dir(port_dir)
-    launched = False
     proc_pid = procs[0].pid if procs else None
-    hot_run = False
+
+    if not mt5_open:
+        raise RuntimeError(
+            "MT5 ยังไม่เปิดอยู่บน PORT นี้ — กรุณาเชื่อมต่อจากเว็บก่อน "
+            "(ระบบจะไม่ปิด/เปิด MT5 ใหม่เมื่อกดเปิด BOT)"
+        )
 
     write_avelqua_trading_gate(port_dir, True, payload)
     patch_mt5_experts_config(port_dir, True)
@@ -2745,24 +2769,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         log(f"avelqua_run.json bot_running: {e}")
 
-    if mt5_open:
-        hot_run = True
-        log(f"RUN BOT HOT PORT={port} PID={proc_pid or '?'} — MT5 stays open, trading gate ON")
-    else:
-        if login and password:
-            try:
-                write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=True)
-            except Exception as e:
-                log(f"RUN BOT enable expert trading in ini skipped: {e}")
-        cfg = mt5_startup_ini_path(port_dir)
-        if not cfg.exists():
-            raise RuntimeError("MT5 startup.ini missing — connect MT5 from web first")
-        args = [str(terminal), "/portable", f"/config:{cfg}"]
-        log(f"RUN BOT launch MT5 PORT={port} cwd={port_dir} config={cfg}")
-        proc = _popen_hidden(args, cwd=str(port_dir))
-        launched = True
-        proc_pid = proc.pid if proc else None
-        time.sleep(3)
+    log(f"RUN BOT HOT PORT={port} PID={proc_pid or '?'} — MT5 stays open, trading gate ON")
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -2795,18 +2802,11 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         daemon=True,
     ).start()
 
-    if hot_run:
-        msg = (
-            "BOT enabled — MT5 stayed open; attach EA / load preset / turn on Algo Trading"
-            if ea_missing
-            else "BOT enabled — MT5 stayed open"
-        )
-    else:
-        msg = (
-            "BOT ready — attach EA on XAUUSD and load preset"
-            if ea_missing
-            else "BOT ready on PORT"
-        )
+    msg = (
+        "BOT enabled — MT5 stayed open; attach EA / load preset / turn on Algo Trading"
+        if ea_missing
+        else "BOT enabled — MT5 stayed open"
+    )
     return {
         "action": "run_bot",
         "ok": True,
@@ -2815,9 +2815,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "folderPath": str(port_dir),
         "portNumber": normalize_port(port),
         "mt5Running": True,
-        "hotRun": hot_run,
+        "hotRun": True,
         "keepMt5Open": True,
-        "launched": launched,
+        "launched": False,
         "processId": proc_pid,
         "balance": bal,
         "equity": eq,
@@ -3274,8 +3274,10 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port"):
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
             port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
-            stop_soft = ctype == "stop_mt5_bot" or payload_get(
-                payload, "stopTradingOnly", "keepMt5Open", "softStop"
+            stop_soft = (
+                ctype == "stop_mt5_bot"
+                or str(payload_get(payload, "action") or "").lower() == "stop_bot_trading"
+                or payload_get(payload, "stopTradingOnly", "keepMt5Open", "softStop")
             )
 
             if stop_soft:
