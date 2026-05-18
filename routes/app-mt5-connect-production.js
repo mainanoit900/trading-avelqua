@@ -12,6 +12,7 @@ const express = require('express');
 const Redis = require('ioredis');
 const { requireLogin } = require('../middleware/requireAuth');
 const { query, getClient } = require('../config/database');
+const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 const {
   resolveStuckLoginAccount,
   syncJournalFromLatestCommand,
@@ -698,12 +699,12 @@ async function handleMt5ConnectProduction(req, res) {
       serverName
     });
 
-    const cmd = await query(`
-      INSERT INTO vps_system.vps_agent_commands
-      (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
-      VALUES ($1,$1,$2,'login_mt5',$3::jsonb,'pending',NOW(),NOW())
-      RETURNING id
-    `, [reservedPort.vps_id, reservedPort.port_id, JSON.stringify(payload)]);
+    const queued = await insertPendingAgentCommand({
+      vpsId: reservedPort.vps_id,
+      portId: reservedPort.port_id,
+      commandType: 'login_mt5',
+      payload
+    });
 
     await query(`
       INSERT INTO vps_system.mt5_login_history
@@ -720,7 +721,7 @@ async function handleMt5ConnectProduction(req, res) {
       ok: true,
       status: 'queued',
       accountId,
-      commandId: cmd.rows?.[0]?.id || null,
+      commandId: queued.id || null,
       vpsId: reservedPort.vps_id,
       portId: reservedPort.port_id,
       portNo: allocPortNo,

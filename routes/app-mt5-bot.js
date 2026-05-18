@@ -26,6 +26,7 @@ async function releaseRedisLock(key) {
 
 const { requireLogin, prefersJsonResponse } = require('../middleware/requireAuth');
 const { query, getClient, repairVpsAgentCommandSequences } = require('../config/database');
+const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
 const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
 const {
@@ -1428,14 +1429,12 @@ router.get('/mt5/recovery-check', async (req, res) => {
         })
       );
 
-      await query(
-        `
-        INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
-        VALUES ($1,$1,$2,'login_mt5',$3::jsonb,'pending',NOW(),NOW())
-      `,
-        [p.vps_id, p.port_id, payloadJson]
-      ).catch(() => {});
+      await insertPendingAgentCommand({
+        vpsId: p.vps_id,
+        portId: p.port_id,
+        commandType: 'login_mt5',
+        payload: JSON.parse(payloadJson)
+      }).catch(() => {});
 
       requeued += 1;
     }
@@ -2039,37 +2038,37 @@ console.log('[MT5 CONNECT START]', {
     });
     const payloadJson = JSON.stringify(loginPayload);
 
-    async function insertConnectCommand() {
-      return query(
-        `
-      INSERT INTO vps_system.vps_agent_commands
-      (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
-      VALUES ($1,$1,$2,'login_mt5',$3::jsonb,'pending',NOW(),NOW())
-      RETURNING id
-    `,
-        [reservedPort.vps_id, reservedPort.port_id, payloadJson]
-      );
-    }
-
-    let cmdRes;
+    let cmdId = 0;
     try {
-      cmdRes = await insertConnectCommand();
+      const queued = await insertPendingAgentCommand({
+        vpsId: reservedPort.vps_id,
+        portId: reservedPort.port_id,
+        commandType: 'login_mt5',
+        payload: loginPayload
+      });
+      cmdId = queued.id;
     } catch (insErr) {
-      const isDup =
+      const isSeqDup =
         insErr &&
         insErr.code === '23505' &&
-        String(insErr.message || '').includes('vps_agent_commands');
-      if (isDup) {
+        String(insErr.message || '').includes('vps_agent_commands_pkey');
+      if (isSeqDup) {
         console.warn('[MT5 CONNECT] Repair command id sequence after duplicate pkey, retry insert');
         await repairVpsAgentCommandSequences();
-        cmdRes = await insertConnectCommand();
+        const queued = await insertPendingAgentCommand({
+          vpsId: reservedPort.vps_id,
+          portId: reservedPort.port_id,
+          commandType: 'login_mt5',
+          payload: loginPayload
+        });
+        cmdId = queued.id;
       } else {
         throw insErr;
       }
     }
 
 console.log('[MT5 CONNECT COMMAND INSERTED]', {
-  commandId: cmdRes.rows?.[0]?.id,
+  commandId: cmdId,
   accountId,
   reservedPort
 });
@@ -2083,7 +2082,7 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
       status: 'queued',
       message: `ส่งคำสั่งเปิด MT5 แล้ว — ${pickLabel} (${FIXED_SERVER}) กำลังล็อกอิน...`,
       accountId,
-      commandId: cmdRes.rows?.[0]?.id || null,
+      commandId: cmdId || null,
       vpsName: reservedPort.node_name || '',
       folderPath: reservedPort.folder_path || '',
       portNumber: allocPortNo
@@ -3109,16 +3108,15 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
 
     await cancelStaleRunBotCommands(accountCtx.vpsId, accountCtx.portId, instanceId);
 
-    const cmd = await client.query(
-      `
-      INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, port_id, command_type, payload, status, created_at)
-      VALUES ($1,$1,$2,$3,$4::jsonb,'pending',NOW())
-      RETURNING id
-    `,
-      [accountCtx.vpsId, accountCtx.portId, commandType, toJsonbParam(fullPayload)]
-    );
+    const queued = await insertPendingAgentCommand({
+      vpsId: accountCtx.vpsId,
+      portId: accountCtx.portId,
+      commandType,
+      payload: fullPayload,
+      client
+    });
 
-    const commandId = cmd.rows[0].id;
+    const commandId = queued.id;
     const payloadWithCmd = { ...fullPayload, commandId };
 
     await client.query(
@@ -3333,14 +3331,12 @@ router.post('/mt5/request-restart/:id', requireLogin, async (req, res) => {
 
     await cancelStaleRunBotCommands(inst.vps_id, accountCtx.portId, inst.id);
 
-    const cmd = await query(
-      `
-      INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, port_id, command_type, payload, status, created_at)
-      VALUES ($1,$1,$2,'restart_ea',$3::jsonb,'pending',NOW())
-      RETURNING id
-    `,
-      [inst.vps_id, accountCtx.portId, toJsonbParam({ ...payload, commandId: null })]
-    );
+    const queued = await insertPendingAgentCommand({
+      vpsId: inst.vps_id,
+      portId: accountCtx.portId,
+      commandType: 'restart_ea',
+      payload: { ...payload, commandId: null }
+    });
 
     await query(
       `
@@ -3354,7 +3350,7 @@ router.post('/mt5/request-restart/:id', requireLogin, async (req, res) => {
           updated_at=NOW()
       WHERE id=$1
     `,
-      [id, cmd.rows[0].id, toJsonbParam({ ...payload, commandId: cmd.rows[0].id })]
+      [id, queued.id, toJsonbParam({ ...payload, commandId: queued.id })]
     );
 
     return res.redirect('/app/mt5');
