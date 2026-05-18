@@ -21,7 +21,8 @@ const {
   isLegacyWindowVerifiedMessage
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
-const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
+const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG, MT5_FAIL_USER_MSG } = require('../lib/mt5Server');
+const { messageIndicatesLoginFailed } = require('../lib/mt5JournalVerify');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
@@ -778,6 +779,19 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const updatedAt = a.updated_at ? new Date(a.updated_at).getTime() : 0;
     const staleMs = Date.now() - updatedAt;
     let status = String(a.status || '').toLowerCase();
+    const loginNum = String(a.mt5_login || '').trim();
+    const msgBlobEarly = String(a.last_login_message || a.last_error || '');
+    if (messageIndicatesLoginFailed(msgBlobEarly, loginNum)) {
+      await failAccountFromJournal(a.id, a.port_id, MT5_FAIL_USER_MSG, {
+        vpsId: a.vps_id,
+        portNo: a.assigned_port_no,
+        folderPath: a.folder_path,
+        reason: 'poll_journal_failed'
+      }).catch(() => {});
+      status = 'failed';
+      a.last_error = MT5_FAIL_USER_MSG;
+      a.last_login_message = MT5_FAIL_USER_MSG;
+    }
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
       : { rows: [] };
@@ -831,7 +845,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const windowHintOk =
       windowHint &&
       loginInMsg &&
-      (msgBlob.includes(loginInMsg) || /window verified|เชื่อมต่อสำเร็จ/i.test(msgBlob));
+      (msgBlob.includes(loginInMsg) || /window verified|เชื่อมต่อสำเร็จ/i.test(msgBlob)) &&
+      !messageIndicatesLoginFailed(msgBlob, loginInMsg);
 
     if (['connecting', 'starting', 'checking'].includes(statusFinal) && windowHintOk) {
       await promoteAccountConnected({

@@ -1966,8 +1966,8 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        # เห็นเลขบัญชีบน title bar แล้ว + Journal ไม่ได้บอกว่าผิด → สำเร็จทันที
-        if window_ok_streak >= 1 and j_out is not False:
+        # สำเร็จเฉพาะเมื่อ Journal ยืนยัน authorized on (ห้ามยอมแค่เห็นเลขบนหน้าต่าง)
+        if window_ok_streak >= 2 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
             except Exception:
@@ -2067,28 +2067,42 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
     if ok_fast and mt5_running_for_port_dir(port_dir):
-        enforce_login_no_trading(port_dir, port, payload, login, password, server)
-        send_connect_result(
-            payload,
-            "connected",
-            "เชื่อมต่อแล้ว — ยังไม่เปิด BOT กรุณาตั้งค่าขั้นตอน 3) แล้วกด Run BOT",
-            port,
-            window_title=title_fast,
-            window_verified=True,
-        )
-        log(f"LOGIN FAST REUSE PORT={port} LOGIN={login} (no relaunch)")
-        return {
-            "action": "login_mt5",
-            "status": "connected",
-            "loginOnly": True,
-            "fastReuse": True,
-            "port": port,
-            "login": login,
-            "server": server,
-            "bot": bot,
-            "config": str(config_file),
-            "terminal": str(terminal),
-        }
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180)
+        if j_fast is False:
+            cleanup_mt5_after_login_fail(port, payload, port_dir)
+            send_connect_result(
+                payload,
+                "failed",
+                JOURNAL_FAIL_MSG,
+                port,
+                journal_evidence=j_chunk_fast,
+            )
+            raise RuntimeError(JOURNAL_FAIL_MSG)
+        if j_fast is True:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อแล้ว — ยังไม่เปิด BOT กรุณาตั้งค่าขั้นตอน 3) แล้วกด Run BOT",
+                port,
+                window_title=title_fast,
+                window_verified=True,
+                journal_evidence=j_chunk_fast,
+            )
+            log(f"LOGIN FAST REUSE PORT={port} LOGIN={login} (journal ok)")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
+        log(f"LOGIN FAST REUSE skipped — journal not confirmed for {login}")
 
     # ====================================
     # BLOCK SAME LOGIN ON ANOTHER PORT (not this port_dir)

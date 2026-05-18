@@ -9,7 +9,12 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { query } = require('../config/database');
-const { parseMt5JournalOutcome, MT5_SUCCESS_MSG, MT5_FAIL_USER_MSG } = require('../lib/mt5JournalVerify');
+const {
+  parseMt5JournalOutcome,
+  messageIndicatesLoginFailed,
+  MT5_SUCCESS_MSG,
+  MT5_FAIL_USER_MSG
+} = require('../lib/mt5JournalVerify');
 const { normalizeLockedServer } = require('../lib/mt5Server');
 const {
   verifyLoginFromCommand,
@@ -723,29 +728,13 @@ router.post('/connect-result', async (req, res) => {
     if (status === 'starting' || status === 'checking') {
       const loginHint = String(mt5Login || '').trim();
       const titleBlob = `${windowTitle} ${message}`;
-      const seenOnWindow = loginHint && titleBlob.includes(loginHint);
-
-      if (status === 'checking' && seenOnWindow) {
-        await patchAccountMt5Preview(accountId, {
-          message: message || MT5_SUCCESS_MSG,
-          windowTitle,
-          previewB64
-        });
-        await promoteAccountConnected({
-          accountId,
-          portId,
-          mt5Login: loginHint,
-          message: message || MT5_SUCCESS_MSG
-        });
-        if (portId) {
-          await query(`
-            UPDATE vps_system.vps_ports
-            SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
-                locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
-            WHERE id=$1
-          `, [portId, pid, loginHint]).catch(() => {});
-        }
-        return res.json({ ok: true, connected: true, earlyWindow: true });
+      if (messageIndicatesLoginFailed(titleBlob, loginHint)) {
+        await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
+          vpsId: node.id,
+          portNo,
+          reason: 'journal_during_checking'
+        }).catch(() => {});
+        return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
       }
 
       await patchAccountMt5Preview(accountId, {
@@ -797,7 +786,16 @@ router.post('/connect-result', async (req, res) => {
         ? parseMt5JournalOutcome(journalEvidence, loginForJournal)
         : null;
 
-      if (windowVerified && loginVerified) {
+      if (journalVerdict === 'failed' || messageIndicatesLoginFailed(journalEvidence || message, loginForJournal)) {
+        await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
+          vpsId: node.id,
+          portNo,
+          reason: 'journal_rejected_connected'
+        }).catch(() => {});
+        return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
+      }
+
+      if (windowVerified && loginVerified && journalVerdict === 'success') {
         await patchAccountMt5Preview(accountId, {
           message: message || MT5_SUCCESS_MSG,
           windowTitle,
