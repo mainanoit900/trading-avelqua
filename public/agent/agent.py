@@ -1673,13 +1673,17 @@ def _journal_outcome_for_login(
         rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorized on\s+{server_esc}(?:\s+through)?\b",
         re.I,
     )
+    ok_prev_rx = re.compile(
+        rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*previous successful authorization",
+        re.I,
+    )
 
     lines = text.splitlines()
     for line in reversed(lines):
         low = line.lower()
         if login.lower() not in low:
             continue
-        if server.lower() not in low:
+        if server.lower() not in low and not ok_prev_rx.search(line):
             continue
         if fail_rx.search(line):
             return False
@@ -1687,7 +1691,7 @@ def _journal_outcome_for_login(
             return False
         if "authorization on" in low and "failed" in low:
             return False
-        if ok_rx.search(line):
+        if ok_rx.search(line) or ok_prev_rx.search(line):
             return True
     return None
 
@@ -1899,7 +1903,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    deadline = time.time() + max(6, min(timeout_sec, 12))
+    deadline = time.time() + max(12, min(timeout_sec, 40))
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
@@ -1938,7 +1942,18 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
         if j_out is True:
-            return True, "window verified; journal ok", j_chunk
+            titles_ok = " | ".join(mt5_window_titles(port, payload))
+            send_connect_result(
+                payload,
+                "connected",
+                JOURNAL_OK_MSG,
+                port,
+                process_id=proc_pid,
+                journal_evidence=j_chunk,
+                window_title=titles_ok,
+                window_verified=True,
+            )
+            return True, "journal ok", j_chunk
 
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)
@@ -2015,7 +2030,18 @@ def wait_mt5_login_hybrid(
 
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
+    titles_end = " | ".join(mt5_window_titles(port, payload))
     if j_out is True:
+        send_connect_result(
+            payload,
+            "connected",
+            JOURNAL_OK_MSG,
+            port,
+            process_id=proc_pid,
+            journal_evidence=j_chunk,
+            window_title=titles_end,
+            window_verified=True,
+        )
         return True, JOURNAL_OK_MSG, j_chunk
     if j_out is False:
         cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2028,6 +2054,16 @@ def wait_mt5_login_hybrid(
             journal_evidence=j_chunk,
         )
         return False, JOURNAL_FAIL_MSG, j_chunk
+    ok_w_end, _ = mt5_login_verified_by_window(port, payload)
+    if ok_w_end:
+        send_connect_result(
+            payload,
+            "checking",
+            f"เห็นบัญชี {login} บน MT5 แล้ว — กำลังยืนยัน Journal...",
+            port,
+            process_id=proc_pid,
+            window_title=titles_end,
+        )
     return False, JOURNAL_TIMEOUT_MSG, chunk
 
 
@@ -2199,7 +2235,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "10"))
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "28"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
