@@ -1534,11 +1534,12 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
           maintenancePending: false
         }));
         upgradeState = maint.state || (await getAgentUpgradeState(accCtx.vpsId).catch(() => 'unknown'));
-        upgradeMessage = maint.maintenancePending
-          ? ''
-          : messageForUpgradeState(upgradeState);
-        if (maint.maintenancePending && upgradeState !== 'ready') {
+        upgradeMessage = maint.notice || messageForUpgradeState(upgradeState);
+        if (maint.state === 'stuck') {
+          upgradeState = 'stuck';
+        } else if (maint.maintenancePending && upgradeState !== 'ready') {
           upgradeState = 'deploying';
+          upgradeMessage = '';
         }
 
         const pend = await query(
@@ -1582,17 +1583,31 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
     const blockers = [];
     const maintPending =
       upgradeState === 'deploying' &&
-      (!vpsAgent?.runBotReady || String(upgradeMessage || '') === '');
+      pendingCommands.some((c) =>
+        ['deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent'].includes(
+          String(c.command_type || '').toLowerCase()
+        )
+      );
 
     if (!redisOk) blockers.push('Redis ไม่พร้อม — อาจกระทบปุ่มเปิด BOT (ล็อกชั่วคราว)');
     if (ctx.account && String(ctx.account.status).toLowerCase() !== 'connected') {
       blockers.push('PORT ยังไม่ connected — ต้อง Login MT5 ขั้นตอน 2 ก่อน');
     }
-    if (maintPending && ctx.botRunning) {
+    if (upgradeState === 'stuck' && ctx.botRunning) {
+      blockers.push(
+        upgradeMessage ||
+          'อัปเดต Agent อัตโนมัติไม่สำเร็จ — บน VPS รัน Restart-Service AvelquaPythonAgent -Force'
+      );
+    } else if (maintPending && ctx.botRunning) {
       blockers.push('ระบบกำลังอัปเดต Agent บน VPS อัตโนมัติ — รอประมาณ 1–2 นาที');
     } else if (vpsAgent && !vpsAgent.runBotReady && ctx.botRunning && upgradeState === 'legacy') {
       blockers.push(
         `Agent VPS ยังเป็นเวอร์ชันเก่า (${vpsAgent.agentVersion || 'ไม่ทราบ'}) — ระบบกำลังอัปเดตให้อัตโนมัติ`
+      );
+    }
+    if (ctx.botRunning && String(ctx.instance?.ea_status || '').toLowerCase() === 'attach_required') {
+      blockers.push(
+        'แนบ EA บนกราฟ XAUUSD + เปิด Algo Trading (สีเขียว) ใน MT5 — ถ้า Algo แดง BOT จะไม่เทรด'
       );
     }
 
@@ -3493,7 +3508,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
         const vpsId = Number(inst.vps_id || 0);
         const portNo = Number(inst.assigned_port_no || 0);
         if (!vpsId || !portNo) continue;
-        const recent = await hasRecentMetricsSync(vpsId, inst.id, isBotActive ? 8 : 60);
+        const recent = await hasRecentMetricsSync(vpsId, inst.id, isBotActive ? 30 : 90);
         if (recent) continue;
         const folder = folderPathForPortNo(portNo, '');
         const syncPayload = {
@@ -3631,13 +3646,18 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       }
     }
 
+    let agentNotice = agentBanner.notice || null;
+    if (!agentNotice && agentBanner.maintenancePending) {
+      agentNotice = 'ระบบกำลังอัปเดต Agent บน VPS — รอ 2–3 นาที (ไม่ต้องรีเฟรชถี่)';
+    }
+
     return res.json({
       ok: true,
       instances,
       equitySeriesByInstance,
       chartInstanceId,
       chartSeries,
-      agentNotice: agentBanner.notice
+      agentNotice
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
