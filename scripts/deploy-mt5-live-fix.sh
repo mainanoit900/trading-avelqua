@@ -14,7 +14,8 @@ set -euo pipefail
 APP_DIR="${1:-/root/trading-avelqua}"
 cd "$APP_DIR"
 
-BACKUP_DIR="$APP_DIR/backup-mt5-live-$(date +%Y%m%d-%H%M%S)"
+BACKUP_ROOT="$APP_DIR/backups"
+BACKUP_DIR="$BACKUP_ROOT/mt5-live-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 
 FILES=(

@@ -3,7 +3,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/root/trading-avelqua}"
 DB_NAME="${DB_NAME:-trading_avelqua}"
 TS="$(date +%Y%m%d-%H%M%S)"
-BACKUP_DIR="$APP_DIR/backup-before-mt5-port-picker-$TS"
+BACKUP_DIR="$APP_DIR/backups/before-mt5-port-picker-$TS"
 
 mkdir -p "$BACKUP_DIR"
 cp -a "$APP_DIR/routes/app-mt5-bot.js" "$BACKUP_DIR/" 2>/dev/null || true
