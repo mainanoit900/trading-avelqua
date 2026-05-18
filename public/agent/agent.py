@@ -1937,7 +1937,7 @@ def wait_mt5_login_hybrid(
                 "failed",
                 JOURNAL_FAIL_MSG,
                 port,
-                process_id=None,
+                process_id=proc_pid,
                 journal_evidence=j_chunk,
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
@@ -2255,17 +2255,20 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             log(f"stop_mt5_port_only after failed login: {e}")
         remove_mt5_login_ini(port_dir)
         clear_mt5_login_cache(port_dir)
+        fail_msg = JOURNAL_FAIL_MSG if msg == JOURNAL_FAIL_MSG or "authorization" in (msg or "").lower() else msg
         send_connect_result(
             payload,
             "failed",
-            msg,
+            fail_msg,
             port,
             process_id=None,
             journal_evidence=journal_chunk,
             window_title=titles,
             preview_b64=preview_final,
         )
-        raise RuntimeError(msg)
+        err = RuntimeError(fail_msg)
+        err.journal_evidence = journal_chunk  # type: ignore[attr-defined]
+        raise err
 
     journal_final = journal_chunk or ""
     if "window verified" not in (msg or "").lower():
@@ -3272,7 +3275,8 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, restart_ea_command(payload))
 
         elif ctype in ("connect_mt5", "login_mt5"):
-            command_result(cmd_id, True, start_mt5_bot(payload))
+            res = start_mt5_bot(payload)
+            command_result(cmd_id, True, res)
 
         elif ctype in ("run_mt5_bot", "run_mt5"):
             command_result(cmd_id, True, run_bot_command(payload))
@@ -3388,6 +3392,9 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             except Exception:
                 pass
             try:
+                j_ev = str(getattr(e, "journal_evidence", "") or "")[:8000]
+                if not j_ev and ("journal" in str(e).lower() or "authorization" in str(e).lower()):
+                    j_ev = str(e)[:8000]
                 command_result(
                     cmd_id,
                     False,
@@ -3396,6 +3403,8 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                         "status": "failed",
                         "login": payload_get(payload, "mt5Login", "login"),
                         "message": str(e)[:500],
+                        "journalEvidence": j_ev,
+                        "journal_evidence": j_ev,
                     },
                     str(e)[:500],
                 )

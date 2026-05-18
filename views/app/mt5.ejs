@@ -624,7 +624,18 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         return;
       }
-      const stWait = String(data.account.status || '').toLowerCase();
+      const stWait = String(data.account.status || data.status || '').toLowerCase();
+      if (stWait === 'failed' || data.failed === true) {
+        mt5Checking = false;
+        sessionStorage.setItem('mt5FailedShownId', String(data.account.id) + ':' + String(data.account.updated_at || ''));
+        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+        sessionStorage.removeItem('mt5PollAccountId');
+        const failText = data.message || data.account.last_error || data.account.last_login_message || 'เชื่อมต่อไม่สำเร็จ — กรุณาตรวจสอบ Login/Password';
+        showMt5ConnectModal('error', failText);
+        if (window.mt5Checker) clearInterval(window.mt5Checker);
+        window.mt5Checker = null;
+        return;
+      }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
         const btn = document.getElementById('mt5ConnectBtn');
         const sec = data.elapsedSec != null ? data.elapsedSec : '';
