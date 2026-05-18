@@ -598,12 +598,13 @@ router.get('/queue', async (req, res) => {
           AND COALESCE(status, '') NOT IN ('success', 'failed', 'cancelled', 'expired')
         ORDER BY
           CASE
+            WHEN command_type IN ('login_mt5', 'connect_mt5') THEN 0
+            WHEN command_type IN ('run_mt5_bot', 'run_mt5', 'run_bot', 'restart_mt5_bot', 'restart_ea') THEN 1
             WHEN command_type IN (
               'deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent'
-            ) THEN 0
-            WHEN command_type IN ('login_mt5', 'connect_mt5') THEN 1
-            WHEN command_type IN ('run_mt5_bot', 'run_mt5', 'run_bot', 'restart_mt5_bot', 'restart_ea') THEN 2
-            ELSE 1
+            ) THEN 3
+            WHEN command_type IN ('dashboard', 'watchdog', 'account_snapshot', 'sync_mt5_account') THEN 4
+            ELSE 2
           END,
           id ASC
         FOR UPDATE SKIP LOCKED

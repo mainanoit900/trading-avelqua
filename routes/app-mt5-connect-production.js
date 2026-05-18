@@ -22,7 +22,7 @@ const {
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
-const { expireStuckMaintenanceCommands } = require('../lib/agentDeploy');
+const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
   buildMt5LoginPayload
@@ -679,6 +679,7 @@ async function handleMt5ConnectProduction(req, res) {
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
+    await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
 
     if (reservedPort.admin_node_id && allocPortNo) {
       await setAdminAllocationStatus(
@@ -798,7 +799,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
     const shouldSyncJournal = ['connecting', 'starting', 'checking'].includes(statusFinal)
-      && staleMs >= 2500
+      && staleMs >= 500
       && !windowHint;
 
     if (shouldSyncJournal) {

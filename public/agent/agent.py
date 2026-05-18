@@ -1902,7 +1902,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    deadline = time.time() + max(8, min(timeout_sec, 16))
+    deadline = time.time() + max(6, min(timeout_sec, 12))
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
@@ -1966,8 +1966,8 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        # เห็นเลขบัญชีบน title bar ต่อเนื่อง ~0.5s และ Journal ไม่ได้บอกว่าผิด → สำเร็จทันที (แจ้งเว็บทันที)
-        if window_ok_streak >= 2 and j_out is not False:
+        # เห็นเลขบัญชีบน title bar แล้ว + Journal ไม่ได้บอกว่าผิด → สำเร็จทันที
+        if window_ok_streak >= 1 and j_out is not False:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
             except Exception:
@@ -2014,7 +2014,7 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
 
-        time.sleep(0.22)
+        time.sleep(0.14)
 
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
@@ -2165,7 +2165,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             stop_mt5_port_only(port, payload)
         except Exception as e:
             log(f"STOP OLD MT5 ERROR: {e}")
-        time.sleep(0.6)
+        time.sleep(0.35)
         write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
@@ -2188,7 +2188,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "14"))
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "10"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
