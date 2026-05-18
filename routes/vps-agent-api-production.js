@@ -735,8 +735,19 @@ router.post('/connect-result', async (req, res) => {
 
     if (status === 'starting' || status === 'checking') {
       const loginHint = String(mt5Login || '').trim();
-      const titleBlob = `${windowTitle} ${message}`;
-      if (messageIndicatesLoginFailed(titleBlob, loginHint)) {
+      const journalBlob = sanitizeJournalText(
+        extractJournalEvidence(
+          req.body.journalEvidence,
+          req.body.journal_evidence,
+          req.body.journal,
+          message
+        ) || ''
+      );
+      const titleBlob = `${windowTitle} ${message} ${journalBlob}`;
+      if (
+        (journalBlob && loginHint && parseMt5JournalOutcome(journalBlob, loginHint) === 'failed') ||
+        messageIndicatesLoginFailed(titleBlob, loginHint)
+      ) {
         await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
           vpsId: node.id,
           portNo,

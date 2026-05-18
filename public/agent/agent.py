@@ -1994,6 +1994,7 @@ def wait_mt5_login_hybrid(
                 f"เห็นบัญชี {login} บนหน้าต่าง MT5 แล้ว — กำลังยืนยัน...",
                 port,
                 process_id=proc_pid,
+                journal_evidence=j_chunk or "",
                 window_title=joined,
                 preview_b64=preview_b64,
             )
