@@ -1,0 +1,170 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const identityData = identity || {};
+const isIdentityVerified = !!(user && (user.identity_verified || user.identityVerified));
+%>
+
+<%- include('../partials/app-shell') %>
+
+<link rel="stylesheet" href="/public/css/app-identity.css">
+
+<div class="identity-page-wrap">
+  <section class="identity-hero-card">
+    <div>
+      <div class="identity-chip"><%= safeT('identity.title', 'ยืนยันตัวตน') %></div>
+      <h1><%= safeT('identity.page_title', 'Identity Verification') %></h1>
+      <p><%= safeT('identity.subtitle', 'กรอกข้อมูลและยืนยันด้วยรหัสที่ส่งไปทางอีเมล') %></p>
+    </div>
+
+    <div class="identity-status-pill <%= isIdentityVerified ? 'verified' : 'pending' %>">
+      <span class="dot"></span>
+      <span>
+        <%= isIdentityVerified
+          ? safeT('identity.status_done', 'ยืนยันแล้ว')
+          : safeT('identity.status_waiting', 'รอยืนยัน') %>
+      </span>
+    </div>
+  </section>
+
+  <% if (error) { %>
+    <div class="identity-alert identity-alert-danger"><%- error %></div>
+  <% } %>
+
+  <% if (success) { %>
+    <div class="identity-alert identity-alert-success"><%- success %></div>
+  <% } %>
+
+  <div class="identity-layout">
+    <section class="identity-card">
+      <div class="identity-card-head">
+        <h2><%= safeT('identity.form_title', 'ข้อมูลยืนยันตัวตน') %></h2>
+        <p><%= safeT('identity.form_desc', 'กรอกข้อมูลให้ครบ แล้วกดขอรหัส OTP ทางอีเมล') %></p>
+      </div>
+
+      <form method="POST" action="/app/identity/request-code" class="identity-form">
+        <div class="identity-grid">
+          <div class="identity-field identity-col-2">
+            <label for="full_name"><%= safeT('identity.full_name', 'ชื่อ-สกุล') %></label>
+            <input type="text" id="full_name" name="full_name" value="<%= identityData.full_name || user?.full_name || '' %>" placeholder="<%= safeT('identity.full_name_placeholder', 'กรอกชื่อ-สกุล') %>" required>
+          </div>
+
+          <div class="identity-field identity-col-2">
+            <label for="address_line"><%= safeT('identity.address_line', 'ที่อยู่') %></label>
+            <input type="text" id="address_line" name="address_line" value="<%= identityData.address_line || '' %>" placeholder="<%= safeT('identity.address_line_placeholder', 'บ้านเลขที่ / หมู่ / ถนน / ซอย') %>" required>
+          </div>
+
+          <div class="identity-field">
+            <label for="subdistrict"><%= safeT('identity.subdistrict', 'ตำบล / แขวง') %></label>
+            <input type="text" id="subdistrict" name="subdistrict" value="<%= identityData.subdistrict || '' %>" placeholder="<%= safeT('identity.subdistrict_placeholder', 'กรอกตำบล / แขวง') %>" required>
+          </div>
+
+          <div class="identity-field">
+            <label for="district"><%= safeT('identity.district', 'อำเภอ / เขต') %></label>
+            <input type="text" id="district" name="district" value="<%= identityData.district || '' %>" placeholder="<%= safeT('identity.district_placeholder', 'กรอกอำเภอ / เขต') %>" required>
+          </div>
+
+          <div class="identity-field">
+            <label for="province"><%= safeT('identity.province', 'จังหวัด') %></label>
+            <input type="text" id="province" name="province" value="<%= identityData.province || '' %>" placeholder="<%= safeT('identity.province_placeholder', 'กรอกจังหวัด') %>" required>
+          </div>
+
+          <div class="identity-field">
+            <label for="postal_code"><%= safeT('identity.postal_code', 'รหัสไปรษณีย์') %></label>
+            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" placeholder="<%= safeT('identity.postal_code_placeholder', 'กรอกรหัสไปรษณีย์') %>" maxlength="5" required>
+          </div>
+
+          <div class="identity-field">
+            <label for="phone"><%= safeT('identity.phone', 'เบอร์โทร') %></label>
+            <input type="text" id="phone" name="phone" value="<%= identityData.phone || '' %>" placeholder="<%= safeT('identity.phone_placeholder', 'กรอกเบอร์โทร') %>" maxlength="10" required>
+          </div>
+
+          <div class="identity-field">
+            <label for="verify_email"><%= safeT('identity.verify_email', 'อีเมลรับรหัส OTP') %></label>
+            <input type="email" id="verify_email" name="verify_email" value="<%= identityData.verify_email || user?.email || '' %>" placeholder="<%= safeT('identity.verify_email_placeholder', 'กรอกอีเมลสำหรับรับ OTP') %>" required>
+          </div>
+        </div>
+
+        <div class="identity-actions">
+  <% if (isIdentityVerified) { %>
+    <button type="button" class="identity-btn identity-btn-disabled" disabled>
+      <%= safeT('identity.already_verified_no_otp', 'ยืนยันตัวตนแล้ว') %>
+    </button>
+  <% } else { %>
+    <button type="submit" class="identity-btn identity-btn-primary">
+      <%= safeT('identity.request_code', 'ขอรหัส OTP ทางอีเมล') %>
+    </button>
+  <% } %>
+</div>
+      </form>
+    </section>
+
+    <section class="identity-card identity-side-card">
+      <div class="identity-card-head">
+        <h2><%= safeT('identity.otp_title', 'ยืนยันรหัส OTP') %></h2>
+        <p><%= safeT('identity.otp_desc', 'นำรหัสจากอีเมลมากรอก แล้วกดยืนยัน') %></p>
+      </div>
+
+      <% if (!isIdentityVerified) { %>
+  <form method="POST" action="/app/identity/verify" class="identity-form">
+    <div class="identity-field">
+      <label for="otp_code"><%= safeT('identity.otp_code', 'รหัส OTP') %></label>
+      <input type="text" id="otp_code" name="otp_code" maxlength="6" placeholder="<%= safeT('identity.otp_code_placeholder', 'กรอกรหัส 6 หลัก') %>" required>
+    </div>
+
+    <div class="identity-actions">
+      <button type="submit" class="identity-btn identity-btn-secondary">
+        <%= safeT('identity.verify_button', 'ยืนยันรหัส') %>
+      </button>
+    </div>
+  </form>
+<% } else { %>
+  <div class="identity-alert identity-alert-success">
+    <%= safeT('identity.already_verified_message', 'บัญชีนี้ยืนยันตัวตนเรียบร้อยแล้ว') %>
+  </div>
+<% } %>
+
+      <div class="identity-mini-summary">
+        <div>
+          <span><%= safeT('identity.current_status', 'สถานะยืนยันตัวตน') %></span>
+          <strong>
+            <%= isIdentityVerified
+              ? safeT('identity.status_done', 'ยืนยันแล้ว')
+              : safeT('identity.status_waiting', 'รอยืนยัน') %>
+          </strong>
+        </div>
+        <div>
+          <span><%= safeT('identity.verify_email', 'อีเมลรับรหัส OTP') %></span>
+          <strong><%= identityData.verify_email || user?.email || '-' %></strong>
+        </div>
+      </div>
+    </section>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const phoneInput = document.getElementById('phone');
+    const postalInput = document.getElementById('postal_code');
+    const otpInput = document.getElementById('otp_code');
+
+    if (phoneInput) {
+      phoneInput.addEventListener('input', function () {
+        this.value = this.value.replace(/[^\d]/g, '').slice(0, 10);
+      });
+    }
+
+    if (postalInput) {
+      postalInput.addEventListener('input', function () {
+        this.value = this.value.replace(/[^\d]/g, '').slice(0, 5);
+      });
+    }
+
+    if (otpInput) {
+      otpInput.addEventListener('input', function () {
+        this.value = this.value.replace(/[^\d]/g, '').slice(0, 6);
+      });
+    }
+  })();
+</script>
+
+<%- include('../partials/app-shell-end') %>

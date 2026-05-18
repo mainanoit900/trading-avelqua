@@ -1,0 +1,159 @@
+<%
+const currentLang = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+const isTH = currentLang === 'th';
+
+const contactInfo = {
+  brand: isTH ? 'TRADING AVELQUA' : 'TRADING AVELQUA',
+  title: isTH ? 'ช่องทางติดต่อ' : 'Contact Channels',
+  subtitle: isTH
+    ? 'ติดต่อทีมงานของเราได้สะดวกผ่านทุกช่องทาง พร้อมให้คำแนะนำและดูแลการใช้งานอย่างมืออาชีพ'
+    : 'Reach our team through every channel. We are ready to assist you with professional support.',
+  email: (typeof site !== 'undefined' && site && site.contactEmail) ? site.contactEmail : 'support@tradingavelqua.com',
+  facebook: (typeof site !== 'undefined' && site && site.facebookUrl) ? site.facebookUrl : 'https://facebook.com/',
+  line: (typeof site !== 'undefined' && site && site.lineUrl) ? site.lineUrl : 'https://line.me/',
+  tiktok: (typeof site !== 'undefined' && site && site.tiktokUrl) ? site.tiktokUrl : 'https://www.tiktok.com/',
+  tel: (typeof site !== 'undefined' && site && site.contactPhone) ? site.contactPhone : '099-999-9999',
+  map: (typeof site !== 'undefined' && site && site.mapUrl) ? site.mapUrl : 'https://maps.google.com/'
+};
+%>
+
+<%- include('partials/head', {
+  title: isTH ? 'ติดต่อเรา | TRADING AVELQUA' : 'Contact | TRADING AVELQUA',
+  lang: currentLang
+}) %>
+
+<link rel="stylesheet" href="/public/css/contact.css">
+
+<%- include('partials/nav', {
+  currentPath: '/contact',
+  user: (typeof user !== 'undefined' ? user : null),
+  lang: currentLang
+}) %>
+
+<main class="contact-premium-page">
+  <section class="contact-hero">
+    <div class="container">
+      <div class="contact-hero-card">
+        <div class="contact-hero-copy">
+          <span class="contact-chip">
+            <%= isTH ? 'CONTACT CENTER' : 'CONTACT CENTER' %>
+          </span>
+
+          <h1><%= contactInfo.title %></h1>
+          <p class="contact-subtitle"><%= contactInfo.subtitle %></p>
+
+          <div class="contact-mini-stats">
+            <div class="mini-stat">
+              <span><%= isTH ? 'ตอบกลับรวดเร็ว' : 'Fast Response' %></span>
+              <strong><%= isTH ? 'ทุกช่องทาง' : 'All Channels' %></strong>
+            </div>
+            <div class="mini-stat">
+              <span><%= isTH ? 'ทีมงานพร้อมดูแล' : 'Support Team' %></span>
+              <strong><%= isTH ? 'มืออาชีพ' : 'Professional' %></strong>
+            </div>
+            <div class="mini-stat">
+              <span><%= isTH ? 'เวลาทำการ' : 'Service Time' %></span>
+              <strong><%= isTH ? 'ทุกวัน' : 'Daily' %></strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="contact-hero-side">
+          <div class="contact-brand-box">
+            <div class="brand-mark">
+              <img src="/public/images/logo.png" alt="TRADING AVELQUA">
+            </div>
+            <div class="brand-copy">
+              <h3><%= contactInfo.brand %></h3>
+              <p>
+                <%= isTH
+                  ? 'ศูนย์รวมระบบเทรดอัตโนมัติ ข่าวสารตลาด และบริการดูแลลูกค้าแบบพรีเมียม'
+                  : 'A premium center for automated trading systems, market updates, and professional support.' %>
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="contact-channel-section">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="section-chip"><%= isTH ? 'ช่องทางติดต่อ' : 'Contact Channels' %></span>
+          <h2><%= isTH ? 'เลือกช่องทางที่สะดวกสำหรับคุณ' : 'Choose the channel that suits you best' %></h2>
+          <p>
+            <%= isTH
+              ? 'เราออกแบบหน้าให้อ่านง่าย ชัดเจน และดูน่าเชื่อถือ เพื่อให้ลูกค้าติดต่อได้สะดวกที่สุด'
+              : 'Designed to be elegant, clear, and trustworthy so customers can reach you with ease.' %>
+          </p>
+        </div>
+      </div>
+
+      <div class="contact-grid">
+        <a class="contact-card" href="mailto:<%= contactInfo.email %>">
+          <div class="contact-icon">✉</div>
+          <div class="contact-content">
+            <span class="contact-label">Email</span>
+            <h3><%= contactInfo.email %></h3>
+            <p><%= isTH ? 'ติดต่อทางอีเมลสำหรับสอบถามรายละเอียดเพิ่มเติม' : 'Contact us by email for more details.' %></p>
+          </div>
+          <span class="contact-arrow">→</span>
+        </a>
+
+        <a class="contact-card" href="<%= contactInfo.facebook %>" target="_blank" rel="noopener noreferrer">
+          <div class="contact-icon">f</div>
+          <div class="contact-content">
+            <span class="contact-label">Facebook</span>
+            <h3><%= isTH ? 'เพจ Facebook' : 'Facebook Page' %></h3>
+            <p><%= isTH ? 'ติดตามข่าวสาร โปรโมชั่น และติดต่อทีมงานผ่านเพจ' : 'Follow updates, promotions, and message our team via Facebook.' %></p>
+          </div>
+          <span class="contact-arrow">→</span>
+        </a>
+
+        <a class="contact-card" href="<%= contactInfo.line %>" target="_blank" rel="noopener noreferrer">
+          <div class="contact-icon">L</div>
+          <div class="contact-content">
+            <span class="contact-label">LINE</span>
+            <h3><%= isTH ? 'ติดต่อผ่าน LINE' : 'Contact via LINE' %></h3>
+            <p><%= isTH ? 'พูดคุยกับทีมงานได้สะดวกและรวดเร็วมากขึ้น' : 'Chat with our team quickly and conveniently.' %></p>
+          </div>
+          <span class="contact-arrow">→</span>
+        </a>
+
+        <a class="contact-card" href="<%= contactInfo.tiktok %>" target="_blank" rel="noopener noreferrer">
+          <div class="contact-icon">♪</div>
+          <div class="contact-content">
+            <span class="contact-label">TikTok</span>
+            <h3><%= isTH ? 'TikTok Channel' : 'TikTok Channel' %></h3>
+            <p><%= isTH ? 'รับชมคอนเทนต์ รีวิว และอัปเดตใหม่ ๆ จากเรา' : 'Watch our latest content, reviews, and updates.' %></p>
+          </div>
+          <span class="contact-arrow">→</span>
+        </a>
+
+        <a class="contact-card" href="tel:<%= contactInfo.tel %>">
+          <div class="contact-icon">☎</div>
+          <div class="contact-content">
+            <span class="contact-label">Tel</span>
+            <h3><%= contactInfo.tel %></h3>
+            <p><%= isTH ? 'โทรหาเราโดยตรงเพื่อรับคำแนะนำและข้อมูลเพิ่มเติม' : 'Call us directly for support and further information.' %></p>
+          </div>
+          <span class="contact-arrow">→</span>
+        </a>
+
+        <a class="contact-card" href="<%= contactInfo.map %>" target="_blank" rel="noopener noreferrer">
+          <div class="contact-icon">⌂</div>
+          <div class="contact-content">
+            <span class="contact-label">Map</span>
+            <h3><%= isTH ? 'แผนที่ / ที่ตั้ง' : 'Map / Location' %></h3>
+            <p><%= isTH ? 'ดูตำแหน่งที่ตั้งและนำทางผ่านแผนที่ได้ทันที' : 'View our location and navigate instantly via map.' %></p>
+          </div>
+          <span class="contact-arrow">→</span>
+        </a>
+      </div>
+    </div>
+  </section>
+</main>
+
+<%- include('partials/footer') %>

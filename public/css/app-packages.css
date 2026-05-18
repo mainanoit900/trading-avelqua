@@ -1,0 +1,138 @@
+.package-hero-card,.package-section-card{border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,rgba(7,19,40,.98) 0%,rgba(8,18,36,.96) 100%);border-radius:24px;padding:22px;color:#fff;box-shadow:0 18px 50px rgba(0,0,0,.22)}.package-hero-card{display:grid;grid-template-columns:minmax(0,1fr) 320px;gap:18px;align-items:stretch;margin-bottom:18px}.package-kicker,.package-chip{display:inline-flex;align-items:center;width:max-content;border-radius:999px;border:1px solid rgba(124,159,255,.28);background:rgba(74,116,255,.10);color:#9db8ff;font-weight:800;font-size:12px;letter-spacing:.12em;padding:7px 10px;text-transform:uppercase}.package-hero-card h2,.package-section-head h3{margin:12px 0 8px;color:#fff}.package-hero-card h2{font-size:30px}.package-hero-card p,.package-section-head p,.package-card p,.package-avg{color:#93a8cf;margin:0;line-height:1.7}.package-hero-stat{border:1px solid rgba(130,154,197,.14);background:rgba(255,255,255,.035);border-radius:20px;padding:18px;display:flex;flex-direction:column;justify-content:center;gap:8px}.package-hero-stat span,.package-features span{color:#8fa5ce;font-size:13px}.package-hero-stat strong{font-size:22px;color:#fff}.package-hero-stat small{color:#9fb4df}.package-section-card{margin-top:18px}.package-section-head{display:flex;justify-content:space-between;gap:16px;align-items:flex-end;flex-wrap:wrap;margin-bottom:16px}.package-section-head p{max-width:560px}.package-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:16px}.package-card{position:relative;overflow:hidden;border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,rgba(10,22,40,.98),rgba(7,17,33,.98));border-radius:22px;padding:18px;display:flex;flex-direction:column;gap:14px}.package-card.popular{border-color:rgba(104,143,255,.48);box-shadow:0 22px 60px rgba(58,95,255,.12)}.package-card-top{display:flex;justify-content:space-between;gap:10px;align-items:center}.package-id{font-size:12px;color:#8fa5ce}.package-popular{border-radius:999px;background:linear-gradient(135deg,#4169ff,#7f4dff);color:#fff;font-size:12px;font-weight:800;padding:6px 10px}.package-card h4{margin:0;font-size:20px;color:#fff}.package-price{display:flex;align-items:flex-end;gap:8px}.package-price strong{font-size:32px;color:#fff}.package-price span{color:#8fa5ce;padding-bottom:6px}.package-features{display:grid;grid-template-columns:1fr 1fr;gap:10px}.package-features div{border:1px solid rgba(130,154,197,.12);background:#0a1628;border-radius:16px;padding:12px}.package-features strong{display:block;margin-top:6px;color:#fff;line-height:1.45}.package-buy-btn{width:100%;justify-content:center;margin-top:auto}.package-empty{border:1px dashed rgba(130,154,197,.22);background:rgba(255,255,255,.025);border-radius:18px;padding:22px;color:#93a8cf;text-align:center}.package-history-table{overflow:auto;border-radius:18px;border:1px solid rgba(130,154,197,.12)}.package-history-table table{width:100%;border-collapse:collapse;min-width:720px;background:rgba(255,255,255,.02)}.package-history-table th,.package-history-table td{padding:13px 14px;text-align:left;border-bottom:1px solid rgba(130,154,197,.10)}.package-history-table th{color:#9fb4df;font-size:13px;background:rgba(255,255,255,.03)}.package-history-table td{color:#eaf1ff}.package-status{display:inline-flex;border-radius:999px;padding:6px 10px;font-weight:800;font-size:12px;background:rgba(255,183,77,.14);color:#ffd48a}.package-status.paid{background:rgba(55,210,138,.14);color:#7af0b5}.package-status.cancelled,.package-status.failed{background:rgba(255,93,93,.14);color:#ffaaa5}@media(max-width:1100px){.package-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.package-hero-card{grid-template-columns:1fr}}@media(max-width:680px){.package-grid,.package-features{grid-template-columns:1fr}.package-hero-card,.package-section-card{padding:16px}.package-hero-card h2{font-size:24px}.package-price strong{font-size:26px}}
+.package-scoin-pay-box{margin:16px 0;padding:16px;border-radius:22px;border:1px solid rgba(128,105,255,.34);background:linear-gradient(135deg,rgba(37,68,255,.16),rgba(126,71,255,.14));box-shadow:0 18px 50px rgba(46,70,255,.13)}
+.package-scoin-pay-top{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px;margin-bottom:14px}
+.package-scoin-pay-top>div{border:1px solid rgba(160,183,255,.16);background:rgba(4,11,24,.38);border-radius:18px;padding:12px}
+.package-scoin-pay-top span{display:block;color:#9fb4df;font-size:12px;font-weight:700;margin-bottom:6px}
+.package-scoin-pay-top strong{display:block;color:#fff;font-size:16px;line-height:1.35;word-break:break-word}
+.pay-scoin-btn{width:100%;border-color:rgba(157,130,255,.42)!important;background:linear-gradient(135deg,#2456ff 0%,#7c3dff 100%)!important;color:#fff!important;box-shadow:0 16px 38px rgba(76,80,255,.24)}
+.pay-scoin-btn:disabled{cursor:not-allowed;opacity:.58;filter:grayscale(.25);box-shadow:none}
+@media(max-width:760px){.package-scoin-pay-top{grid-template-columns:1fr}.package-scoin-pay-box{padding:12px}}
+
+
+.scoin-modal-open{overflow:hidden}
+.scoin-confirm-modal{position:fixed;inset:0;z-index:9999;display:none;align-items:center;justify-content:center;padding:18px}
+.scoin-confirm-modal.show{display:flex}
+.scoin-confirm-backdrop{position:absolute;inset:0;background:rgba(2,8,23,.76);backdrop-filter:blur(8px)}
+.scoin-confirm-card{position:relative;width:min(520px,100%);border:1px solid rgba(157,130,255,.32);background:linear-gradient(180deg,rgba(9,18,38,.98),rgba(6,14,30,.98));border-radius:26px;padding:24px;color:#fff;box-shadow:0 28px 90px rgba(0,0,0,.45),0 0 70px rgba(80,78,255,.16);animation:scoinModalIn .16s ease-out}
+.scoin-confirm-x{position:absolute;top:14px;right:14px;width:36px;height:36px;border:1px solid rgba(159,180,223,.18);border-radius:999px;background:rgba(255,255,255,.06);color:#dbe7ff;font-size:24px;line-height:1;cursor:pointer}
+.scoin-confirm-icon{width:58px;height:58px;border-radius:18px;display:flex;align-items:center;justify-content:center;margin-bottom:12px;background:linear-gradient(135deg,#2456ff,#7c3dff);box-shadow:0 16px 40px rgba(76,80,255,.26);font-size:24px}
+.scoin-confirm-card h3{margin:12px 0 8px;font-size:24px;color:#fff}
+.scoin-confirm-card p{margin:0 0 16px;color:#9fb4df;line-height:1.7}
+.scoin-confirm-lines{display:grid;gap:10px;margin:16px 0 18px}
+.scoin-confirm-lines>div{display:flex;justify-content:space-between;gap:14px;align-items:center;border:1px solid rgba(160,183,255,.14);background:rgba(255,255,255,.035);border-radius:16px;padding:12px 14px}
+.scoin-confirm-lines span{color:#9fb4df;font-size:13px;font-weight:700}
+.scoin-confirm-lines strong{color:#fff;text-align:right;word-break:break-word}
+.scoin-confirm-lines .highlight{background:linear-gradient(135deg,rgba(36,86,255,.22),rgba(124,61,255,.20));border-color:rgba(157,130,255,.38)}
+.scoin-confirm-lines .highlight strong{font-size:20px;color:#fff}
+.scoin-confirm-actions{display:grid;grid-template-columns:1fr 1.2fr;gap:10px;margin-top:8px}
+.scoin-modal-cancel,.scoin-modal-confirm{border:0;border-radius:16px;padding:13px 16px;font-weight:900;cursor:pointer}
+.scoin-modal-cancel{background:rgba(148,163,184,.14);color:#dbe7ff;border:1px solid rgba(148,163,184,.18)}
+.scoin-modal-confirm{background:linear-gradient(135deg,#2456ff,#7c3dff);color:#fff;box-shadow:0 14px 34px rgba(76,80,255,.26)}
+.scoin-modal-confirm:disabled{opacity:.7;cursor:not-allowed}
+@keyframes scoinModalIn{from{opacity:0;transform:translateY(10px) scale(.98)}to{opacity:1;transform:translateY(0) scale(1)}}
+@media(max-width:520px){.scoin-confirm-card{padding:18px;border-radius:22px}.scoin-confirm-actions{grid-template-columns:1fr}.scoin-confirm-lines>div{align-items:flex-start;flex-direction:column}.scoin-confirm-lines strong{text-align:left}.scoin-confirm-lines .highlight strong{font-size:18px}}
+
+/* Package history payment method badges */
+.history-method-badge{
+  display:inline-flex;
+  align-items:center;
+  gap:6px;
+  padding:7px 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:900;
+  white-space:nowrap;
+}
+.history-method-badge.scoin{
+  color:#e0f2fe;
+  background:linear-gradient(135deg,rgba(124,58,237,.35),rgba(14,165,233,.25));
+  border:1px solid rgba(103,232,249,.35);
+  box-shadow:0 8px 24px rgba(14,165,233,.12);
+}
+.history-method-badge.cash{
+  color:#cbd5e1;
+  background:rgba(148,163,184,.12);
+  border:1px solid rgba(148,163,184,.20);
+}
+.history-scoin-amount{
+  display:block;
+  margin-top:4px;
+  color:#67e8f9;
+  font-weight:800;
+  white-space:nowrap;
+}
+
+/* Luxury package buy / free coupon confirmation modals */
+.buy-confirm-card,.free-coupon-card{
+  overflow:hidden;
+  border-color:rgba(245,208,118,.34);
+  background:
+    radial-gradient(circle at 18% 0%,rgba(255,214,102,.18),transparent 30%),
+    radial-gradient(circle at 100% 20%,rgba(124,58,237,.22),transparent 34%),
+    linear-gradient(180deg,rgba(10,18,38,.98),rgba(5,11,26,.98));
+  box-shadow:0 34px 110px rgba(0,0,0,.56),0 0 80px rgba(245,208,118,.13);
+}
+.buy-confirm-card:before,.free-coupon-card:before{
+  content:"";
+  position:absolute;
+  inset:0;
+  pointer-events:none;
+  background:linear-gradient(135deg,rgba(255,255,255,.16),transparent 28%,rgba(255,255,255,.05) 62%,transparent);
+}
+.buy-confirm-icon,.free-coupon-icon{
+  background:linear-gradient(135deg,#f9d56e,#b8862f 48%,#6d3dff);
+  color:#0f172a;
+  box-shadow:0 18px 46px rgba(245,208,118,.24);
+}
+.free-coupon-notice{
+  margin:0 0 14px;
+  border:1px solid rgba(251,191,36,.24);
+  background:rgba(251,191,36,.09);
+  color:#fde68a;
+  border-radius:16px;
+  padding:12px 14px;
+  line-height:1.65;
+  font-weight:800;
+}
+.buy-confirm-modal .scoin-modal-confirm{
+  background:linear-gradient(135deg,#f7c948,#b8862f 45%,#6d3dff);
+  color:#07111f;
+  box-shadow:0 16px 38px rgba(245,208,118,.22);
+}
+
+/* Inline free coupon box beside package history shortcut */
+.package-hero-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+.package-history-shortcut{display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 16px;border-radius:999px;border:1px solid rgba(157,130,255,.32);background:linear-gradient(135deg,rgba(36,86,255,.18),rgba(124,61,255,.14));color:#eaf1ff;text-decoration:none;font-weight:900;box-shadow:0 14px 34px rgba(36,86,255,.10)}
+.package-free-coupon-inline{display:flex;align-items:center;gap:8px;padding:6px;border-radius:999px;border:1px solid rgba(245,208,118,.28);background:linear-gradient(135deg,rgba(245,208,118,.12),rgba(124,58,237,.10));box-shadow:0 14px 34px rgba(245,208,118,.08)}
+.package-free-coupon-inline input{width:190px;min-height:36px;border:0;outline:0;border-radius:999px;padding:0 13px;background:rgba(4,11,24,.55);color:#fff;font-weight:800}
+.package-free-coupon-inline input::placeholder{color:#9fb4df}
+.package-free-coupon-inline button{min-height:36px;border:0;border-radius:999px;padding:0 14px;cursor:pointer;font-weight:900;color:#07111f;background:linear-gradient(135deg,#f9d56e,#b8862f);box-shadow:0 10px 24px rgba(245,208,118,.16)}
+@media(max-width:640px){.package-hero-actions,.package-free-coupon-inline{width:100%}.package-history-shortcut{width:100%}.package-free-coupon-inline input{width:100%;flex:1}.package-free-coupon-inline button{white-space:nowrap}}
+
+
+.package-history-pagination{display:flex;align-items:center;justify-content:center;gap:12px;flex-wrap:wrap;margin-top:18px}
+.history-page-btn{display:inline-flex;align-items:center;gap:8px;min-height:42px;padding:0 16px;border-radius:999px;border:1px solid rgba(96,165,250,.35);background:linear-gradient(135deg,rgba(79,70,229,.95),rgba(14,165,233,.92));color:#fff;text-decoration:none;font-weight:900;box-shadow:0 14px 34px rgba(14,165,233,.16);transition:.18s ease}
+.history-page-btn:hover{transform:translateY(-1px);filter:brightness(1.08)}
+.history-page-btn.disabled{opacity:.42;cursor:not-allowed;background:rgba(148,163,184,.12);border-color:rgba(148,163,184,.20);box-shadow:none;color:#b8c4dc}
+.history-page-info{display:inline-flex;align-items:center;min-height:42px;padding:0 16px;border-radius:999px;border:1px solid rgba(148,163,184,.18);background:rgba(15,23,42,.72);color:#cbd5e1;font-weight:800}
+.history-page-info strong{color:#fff}
+
+/* Free coupon modal on package-payment + packages coupon popup */
+.package-pay-wrap .package-summary-box{border:1px solid rgba(160,183,255,.14);background:rgba(255,255,255,.035);border-radius:16px;padding:12px 14px}
+.package-pay-wrap .package-summary-box .summary-row{display:flex;justify-content:space-between;gap:14px;align-items:center;padding:8px 0;border-bottom:1px solid rgba(160,183,255,.1)}
+.package-pay-wrap .package-summary-box .summary-row:last-of-type{border-bottom:0}
+.package-pay-wrap .package-summary-box .summary-row.total{margin-top:4px;padding-top:12px;border-top:1px solid rgba(157,130,255,.28);border-bottom:0}
+.package-pay-wrap .package-summary-box .summary-row span{color:#9fb4df;font-size:13px;font-weight:700}
+#packageCouponModal .form-control{width:100%;box-sizing:border-box;margin-top:12px;margin-bottom:4px;border:1px solid rgba(160,183,255,.22);border-radius:14px;padding:12px 14px;background:rgba(4,11,24,.55);color:#fff;font-weight:700;outline:none}
+#packageCouponModal .form-control::placeholder{color:#9fb4df}
+#heroFreeCouponModal .form-control{width:100%;box-sizing:border-box;margin-top:12px;margin-bottom:4px;border:1px solid rgba(160,183,255,.22);border-radius:14px;padding:12px 14px;background:rgba(4,11,24,.55);color:#fff;font-weight:700;outline:none}
+#heroFreeCouponModal .form-control::placeholder{color:#9fb4df}
+.package-free-coupon-btn.btn-outline-info{appearance:none;font:inherit;cursor:pointer;border-radius:14px;border:1px solid rgba(14,165,233,.45);background:rgba(14,165,233,.10);color:#bae6fd;font-weight:800;padding:10px 14px}
+.package-free-coupon-btn.btn-outline-info:hover{filter:brightness(1.08);border-color:rgba(125,211,252,.55)}
+.package-hero-freecoupon-btn{appearance:none;font:inherit;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;min-height:46px;padding:0 18px;border-radius:999px;border:1px solid rgba(245,208,118,.38);background:linear-gradient(135deg,rgba(245,208,118,.16),rgba(124,58,237,.12));color:#fef9c3;font-weight:900;box-shadow:0 14px 34px rgba(245,208,118,.1)}
+.package-hero-freecoupon-btn:hover{filter:brightness(1.06)}
+.scoin-confirm-actions-freepreview{display:grid;grid-template-columns:1fr 1.2fr;gap:10px;align-items:stretch;margin-top:8px}
+.scoin-confirm-actions-freepreview form{display:block;margin:0}
+.scoin-confirm-actions-freepreview form .scoin-modal-confirm{width:100%}
+a.scoin-modal-cancel{text-decoration:none}
+@media(max-width:520px){.scoin-confirm-actions-freepreview{grid-template-columns:1fr}}

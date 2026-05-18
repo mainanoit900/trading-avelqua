@@ -1,0 +1,71 @@
+<%- include('../partials/admin-shell') %>
+<%
+const rows = Array.isArray(orders) ? orders : [];
+const f = filters || {};
+function money(v){ return Number(v || 0).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:2}); }
+function num(v){ return Number(v || 0).toLocaleString('th-TH',{minimumFractionDigits:2,maximumFractionDigits:4}); }
+function dt(v){ if(!v) return '-'; try { return new Date(v).toLocaleString('th-TH'); } catch(e){ return '-'; } }
+function badge(s){ s=String(s||'pending'); if(s==='approved'||s==='paid') return 'green'; if(s==='cancelled'||s==='failed') return 'red'; return 'yellow'; }
+%>
+<section class="payment-admin-page">
+  <section class="card payment-hero">
+    <div>
+      <div class="eyebrow">SCOIN PAYOUT CENTER</div>
+      <h3>โอนเงินให้ลูกค้า</h3>
+      <p>ใช้สำหรับกรณีลูกค้าขาย Scoin คืนโฮส: ตรวจบัญชีรับเงิน → โอนเงินจริง → กรอกวันที่/จำนวน/เลขอ้างอิง → Confirm</p>
+    </div>
+    <div class="inline-actions wrap">
+      <a class="btn secondary" href="/admin/payments">กลับ Payments</a>
+      <a class="btn secondary" href="/admin/scoin-payouts">ทั้งหมด</a>
+      <a class="btn primary" href="/admin/scoin-payouts?status=pending">รอโอน</a>
+      <a class="btn secondary" href="/admin/scoin-payouts?status=approved">โอนแล้ว</a>
+      <a class="btn secondary" href="/admin/scoin-payouts?status=cancelled">ยกเลิก</a>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h3>รายการขาย Scoin</h3><p>ถ้าไม่มี admin อนุมัติภายใน 1 วัน ระบบจะยกเลิกอัตโนมัติ</p></div></div>
+    <% if (!rows.length) { %>
+      <div class="empty-box">ยังไม่มีรายการขาย Scoin</div>
+    <% } else { %>
+      <div class="table-wrap">
+        <table class="table payment-table">
+          <thead><tr><th>ID</th><th>ลูกค้า</th><th>Scoin</th><th>ยอดโอนบาท</th><th>บัญชีรับเงิน</th><th>สถานะ</th><th>สร้างเมื่อ</th><th>บันทึกการจ่าย</th></tr></thead>
+          <tbody>
+            <% rows.forEach(function(o){ %>
+              <tr>
+                <td><strong>#<%= o.order_display_id %></strong><div class="cell-sub">Sell Scoin</div></td>
+                <td><strong><%= o.full_name || '-' %></strong><div class="cell-sub"><%= o.email || '-' %></div></td>
+                <td><%= num(o.scoin_amount) %></td>
+                <td>฿<%= money(o.net_amount_thb) %><div class="cell-sub">ราคา ฿<%= money(o.price_thb) %> / Scoin</div></td>
+                <td><%= o.bank_name || '-' %><div class="cell-sub"><%= [o.account_name, o.account_number_masked || o.account_number].filter(Boolean).join(' / ') || '-' %></div></td>
+                <td><span class="badge <%= badge(o.status) %>"><%= o.status || '-' %></span><div class="cell-sub">Payout: <%= o.payout_status || '-' %></div></td>
+                <td><%= dt(o.created_at) %><div class="cell-sub">จ่าย: <%= dt(o.payout_paid_at) %></div></td>
+                <td>
+                  <% if (String(o.status || '') === 'pending') { %>
+                    <form method="POST" action="/admin/scoin-payouts/<%= o.id %>/confirm" class="payout-form">
+                      <input type="number" name="payout_amount_thb" step="0.01" min="0" value="<%= Number(o.net_amount_thb || 0).toFixed(2) %>" required />
+                      <input type="text" name="payout_ref" placeholder="เลขอ้างอิง/สลิป" />
+                      <input type="text" name="payout_note" placeholder="หมายเหตุ" />
+                      <button class="btn success" type="submit" onclick="return confirm('ยืนยันว่าโอนเงินให้ลูกค้าแล้ว?')">Confirm จ่ายแล้ว</button>
+                    </form>
+                    <form method="POST" action="/admin/scoin-payouts/<%= o.id %>/cancel" onsubmit="return confirm('ยืนยันยกเลิกรายการนี้?')" style="margin-top:6px;">
+                      <input type="hidden" name="cancel_reason" value="admin_cancel" />
+                      <button class="btn danger" type="submit">Cancel</button>
+                    </form>
+                  <% } else { %>
+                    <div class="cell-sub">Ref: <%= o.payout_ref || '-' %><br>Note: <%= o.payout_note || '-' %></div>
+                  <% } %>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    <% } %>
+  </section>
+</section>
+<style>
+.payout-form{display:grid;gap:6px;min-width:220px}.payout-form input{border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.78);color:#e5e7eb;border-radius:10px;padding:8px 10px}.btn.success{background:#16a34a;color:#fff}.btn.danger{background:#dc2626;color:#fff}.wrap{flex-wrap:wrap}
+</style>
+<%- include('../partials/admin-shell-end') %>

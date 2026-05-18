@@ -1,0 +1,243 @@
+<%
+  const shellLang = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+  const shellPageTitle = (typeof pageTitle !== 'undefined' && pageTitle) ? pageTitle : 'Customer Portal';
+  const shellCurrentPath = (typeof currentPath !== 'undefined' && currentPath) ? currentPath : '';
+  const shellPageCss = (typeof pageCss !== 'undefined' && pageCss) ? pageCss : '';
+  const shellPageCssHref = shellPageCss ? (shellPageCss.startsWith('/') ? shellPageCss : '/public/css/' + shellPageCss) : '';
+%>
+<!DOCTYPE html>
+<html lang="<%= shellLang %>">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= shellPageTitle %></title>
+  <link rel="stylesheet" href="/public/css/app-packages.css" />
+  <link rel="stylesheet" href="/public/css/customer-portal.css" />
+  <link rel="stylesheet" href="/public/css/app-mt5.css" />
+  <link rel="stylesheet" href="/public/css/app-mt5-bot.css" />
+  <% if (shellPageCssHref) { %>
+    <link rel="stylesheet" href="<%= shellPageCssHref %>" />
+  <% } %>
+  <link rel="icon" type="image/x-icon" href="/public/favicon.ico?v=300">
+  <link rel="shortcut icon" href="/public/favicon.ico?v=300">
+  <link rel="apple-touch-icon" href="/public/favicon.ico?v=300">
+</head>
+<body>
+  <%
+    const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+    const shellUser = (typeof user !== 'undefined' && user) ? user : ((typeof currentUser !== 'undefined' && currentUser) ? currentUser : null);
+    const shellIdentityVerified = !!(
+      shellUser &&
+      (
+        shellUser.identity_verified === true ||
+        shellUser.identity_verified === 't' ||
+        shellUser.identity_verified === 1 ||
+        shellUser.identityVerified === true
+      )
+    );
+  %>
+
+  <script>
+    window.__AVELQUA_I18N__ = {
+      current: <%- JSON.stringify(shellLang) %>,
+      labels: <%- JSON.stringify((typeof localeLabels !== 'undefined' && localeLabels) ? localeLabels : {}) %>,
+      locales: <%- JSON.stringify((typeof clientLocales !== 'undefined' && clientLocales) ? clientLocales : {}) %>
+    };
+
+    window.__AVELQUA_IDENTITY__ = {
+      verified: <%- JSON.stringify(shellIdentityVerified) %>
+    };
+  </script>
+
+  <div class="portal-shell premium">
+    <aside class="sidebar premium">
+      <div class="brand-box">
+        <div class="brand-mark">TA</div>
+        <div>
+          <div class="brand-kicker">TRADING AVELQUA</div>
+          <div class="brand-title" data-i18n="app.portal.title"><%= safeT('app.portal.title', 'Customer Portal') %></div>
+        </div>
+      </div>
+
+      <nav class="nav-links">
+        <a class="<%= shellCurrentPath === '/app' ? 'active' : '' %>" href="/app">
+          <span>🏠</span>
+          <span data-i18n="common.overview"><%= safeT('common.overview', 'Overview') %></span>
+        </a>
+
+        <a
+          class="<%= shellCurrentPath.startsWith('/app/packages') ? 'active' : '' %>"
+          href="/app/packages"
+        >
+          <span>🛒</span>
+          <span data-i18n="app.menu.packages"><%= safeT('app.menu.packages', 'ซื้อแพ็กเกจ') %></span>
+        </a>
+
+        <a
+          class="<%= shellCurrentPath.startsWith('/app/mt5') ? 'active' : '' %>"
+          href="/app/mt5"
+          data-requires-identity="1"
+        >
+          <span>💻</span>
+          <span data-i18n="app.menu.bots"><%= safeT('app.menu.bots', 'Bot Connection') %></span>
+        </a>
+
+        <a
+          class="<%= shellCurrentPath.startsWith('/app/broker-accounts') ? 'active' : '' %>"
+          href="/app/broker-accounts"
+          data-requires-identity="1"
+        >
+          <span>🏦</span>
+          <span data-i18n="app.menu.broker"><%= safeT('app.menu.broker', 'Broker Accounts') %></span>
+        </a>
+
+<a
+          class="<%= shellCurrentPath.startsWith('/app/calendar') ? 'active' : '' %>"
+          href="/app/calendar"
+          data-requires-identity="1"
+        >
+          <span>📰</span>
+          <span data-i18n="app.menu.calendar"><%= safeT('app.menu.calendar', 'Calendar / Performance') %></span>
+        </a>
+
+<a
+  class="<%= shellCurrentPath.startsWith('/app/scoin-wallet') ? 'active' : '' %>"
+  href="/app/scoin-wallet"
+  data-requires-identity="1"
+>
+  <span>💳</span>
+  <span data-i18n="app.menu.scoin_wallet"><%= typeof t === 'function' ? t('app.menu.scoin_wallet', 'กระเป๋า Scoin') : 'กระเป๋า Scoin' %></span>
+</a>
+
+        <a
+  class="<%= shellCurrentPath.startsWith('/app/referrals') ? 'active' : '' %>"
+  href="/app/referrals"
+  data-requires-identity="1"
+>
+  <span>👥</span>
+  <span data-i18n="app.menu.referrals"><%= typeof t === 'function' ? t('app.menu.referrals', 'สายงานของฉัน') : 'สายงานของฉัน' %></span>
+</a>
+
+
+<a
+  class="<%= shellCurrentPath.startsWith('/app/bank-accounts') ? 'active' : '' %>"
+  href="/app/bank-accounts"
+  data-requires-identity="1"
+>
+  <span>🏦</span>
+  <span>ตั้งค่าบัญชี</span>
+</a>
+
+        <a
+          class="<%= shellCurrentPath.startsWith('/app/status') ? 'active' : '' %>"
+          href="/app/status"
+          data-requires-identity="1"
+        >
+          <span>🛡️</span>
+          <span data-i18n="app.menu.status"><%= safeT('app.menu.status', 'Account Status') %></span>
+        </a>
+
+<%
+  // กัน Error: user is not defined เวลาบาง route ไม่ได้ส่ง user เข้ามา
+  const identityOk = !!(
+    shellUser && (
+      shellUser.identity_verified === true ||
+      shellUser.identity_verified === 't' ||
+      shellUser.identity_verified === 1 ||
+      shellUser.identityVerified === true
+    )
+  );
+
+  const identityMenuText = identityOk ? 'ยืนยันสำเร็จ' : 'รอยืนยันตัวตน';
+%>
+        <a
+  class="<%= shellCurrentPath.startsWith('/app/identity') ? 'active' : '' %>"
+  href="/app/identity"
+>
+  <span class="menu-icon-shield">🛂</span>
+  <span><%= identityMenuText %></span>
+</a>
+
+      </nav>
+
+      <div class="sidebar-footer">
+        <div class="user-chip">
+          <div class="avatar-circle"><%= ((shellUser && (shellUser.full_name || shellUser.email)) || 'U').slice(0,1).toUpperCase() %></div>
+          <div>
+            <strong><%= (shellUser && (shellUser.full_name || shellUser.name || shellUser.email)) || 'User' %></strong>
+            <div class="muted"><%= (shellUser && shellUser.email) || '' %></div>
+          </div>
+        </div>
+
+        <% if (!shellIdentityVerified) { %>
+  <div class="sidebar-actions stacked" style="margin-top:14px;">
+    <a
+      href="/app/identity"
+      style="border:1px solid rgba(255,183,77,.35); background:linear-gradient(135deg, rgba(255,183,77,.16), rgba(184,121,19,.10)); color:#ffd48a;"
+    >
+      <span style="margin-right:8px;">⚠️</span>
+      <span data-i18n="identity.pending_short"><%= safeT('identity.pending_short', 'ยังไม่ยืนยันตัวตน') %></span>
+    </a>
+  </div>
+<% } %>
+
+        <div class="sidebar-actions stacked">
+          <a href="/?lang=<%= shellLang %>" data-i18n="common.main_site"><%= safeT('common.main_site', 'Main site') %></a>
+        </div>
+      </div>
+    </aside>
+
+    <main class="content-shell">
+      <header class="topbar premium">
+        <div>
+          <div class="eyebrow" data-i18n="app.header.kicker"><%= safeT('app.header.kicker', 'CLIENT AREA') %></div>
+          <h1><%= pageTitle || 'Customer Portal' %></h1>
+        </div>
+
+        <div class="topbar-actions">
+          <div class="lang-dropdown" id="langDropdown">
+            <button class="ghost-btn lang-trigger" type="button" id="langDropdownBtn">
+              <span class="lang-current" id="langCurrentLabel"><%= (localeLabels && localeLabels[lang]) || 'ไทย' %></span>
+              <span class="lang-caret">▾</span>
+            </button>
+
+            <div class="lang-menu" id="langDropdownMenu">
+              <% ['th','en','lo','vi','my'].forEach(function(code){ %>
+                <button
+                  type="button"
+                  class="lang-option <%= (lang === code) ? 'active' : '' %>"
+                  data-lang-option="<%= code %>"
+                  data-lang-code="<%= code %>"
+                >
+                  <span><%= (localeLabels && localeLabels[code]) || code.toUpperCase() %></span>
+                  <small><%= code.toUpperCase() %></small>
+                </button>
+              <% }) %>
+            </div>
+          </div>
+
+          <a class="ghost-btn" href="/logout" data-i18n="common.logout"><%= safeT('common.logout', 'Logout') %></a>
+        </div>
+      </header>
+  
+      <script src="/public/js/i18n-live.js"></script>
+      <script>
+        (function () {
+          const identityVerified = !!(window.__AVELQUA_IDENTITY__ && window.__AVELQUA_IDENTITY__.verified);
+
+          if (identityVerified) return;
+
+          document.querySelectorAll('[data-requires-identity="1"]').forEach(function (link) {
+            link.addEventListener('click', function (e) {
+              e.preventDefault();
+
+              if (typeof window.openIdentityGateModal === 'function') {
+                window.openIdentityGateModal();
+                return;
+              }
+
+              window.location.href = '/app?showIdentityGate=1';
+            });
+          });
+        })();
+      </script>

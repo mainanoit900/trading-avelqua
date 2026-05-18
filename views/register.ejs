@@ -1,0 +1,204 @@
+<%
+  const safeT = typeof t === 'function' ? t : (key, fallback = '') => fallback || key;
+  const currentLang = typeof lang !== 'undefined' ? lang : 'th';
+  const safeError = typeof error !== 'undefined' ? error : '';
+  const safeSuccess = typeof success !== 'undefined' ? success : '';
+  const safeRef = typeof ref !== 'undefined' ? ref : '';
+%>
+<!DOCTYPE html>
+<html lang="<%= currentLang %>">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= safeT('register.title', 'สมัครสมาชิก') %> | TRADING AVELQUA</title>
+  <link rel="stylesheet" href="/public/css/auth.css">
+  <link rel="stylesheet" href="/public/css/register.css">
+</head>
+<body>
+  <div class="register-page">
+    <div class="register-layout">
+      <section class="register-side">
+        <div class="register-brand">
+          <div class="register-brand-badge">TA</div>
+          <div class="register-brand-text">
+            <strong>TRADING AVELQUA</strong>
+            <span>Customer Portal</span>
+          </div>
+        </div>
+
+        <div class="register-hero">
+          <div class="register-chip">CREATE ACCOUNT</div>
+          <h1><%= safeT('register.heading', 'สมัครสมาชิกเพื่อเริ่มต้นใช้งาน') %></h1>
+          <p><%= safeT('register.subheading', 'เข้าถึงระบบลูกค้า แพ็กเกจเทรด กระเป๋า Scoin และระบบแนะนำเพื่อนในที่เดียว') %></p>
+
+          <div class="register-points">
+            <div class="register-point">
+              <strong><%= safeT('register.feature_1_title', 'สมัครง่าย') %></strong>
+              <span><%= safeT('register.feature_1_desc', 'รองรับสมัครผ่านอีเมล Google และ LINE') %></span>
+            </div>
+            <div class="register-point">
+              <strong><%= safeT('register.feature_2_title', 'ปลอดภัย') %></strong>
+              <span><%= safeT('register.feature_2_desc', 'มีระบบยืนยันอีเมลและจัดการบัญชีผู้ใช้') %></span>
+            </div>
+            <div class="register-point">
+              <strong><%= safeT('register.feature_3_title', 'ทันสมัย') %></strong>
+              <span><%= safeT('register.feature_3_desc', 'ดีไซน์โทนมืด หรู ใช้งานง่ายทั้งมือถือและคอม') %></span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <section class="register-main">
+        <div class="register-card">
+          <div class="register-card-head">
+            <h2><%= safeT('register.title', 'สมัครสมาชิก') %></h2>
+            <p><%= safeT('register.description', 'สร้างบัญชีใหม่ของคุณ หรือเลือกสมัครผ่าน Google / LINE') %></p>
+          </div>
+
+          <% if (safeError) { %>
+            <div class="register-alert error"><%- safeError %></div>
+          <% } %>
+
+          <% if (safeSuccess) { %>
+            <div class="register-alert success"><%- safeSuccess %></div>
+          <% } %>
+
+          <form method="POST" action="/register<%= safeRef ? ('?ref=' + encodeURIComponent(safeRef)) : '' %>" class="register-form">
+  <input type="hidden" name="ref" value="<%= safeRef %>">
+
+  <div class="register-field">
+    <label for="email"><%= safeT('common.email', 'อีเมล') %></label>
+    <input
+      id="email"
+      class="register-input"
+      type="email"
+      name="email"
+      required
+      autocomplete="email"
+      placeholder="<%= safeT('register.email_placeholder', 'กรอกอีเมลของคุณ') %>"
+    >
+  </div>
+
+  <% if (typeof safeRef !== 'undefined') { %>
+    <div class="register-field">
+      <label for="password"><%= safeT('register.password', 'รหัสผ่าน') %></label>
+      <div class="register-password-wrap">
+        <input
+          id="password"
+          class="register-input register-input-password"
+          type="password"
+          name="password"
+          placeholder="<%= safeT('register.password_placeholder', 'กรอกรหัสผ่าน') %>"
+          autocomplete="new-password"
+          minlength="6"
+          required
+        >
+        <button type="button" class="password-toggle-btn" onclick="toggleRegisterPassword()">
+          <span id="passwordToggleText">แสดง</span>
+        </button>
+      </div>
+    </div>
+  <% } else { %>
+    <div class="auth-group auth-password">
+      <label class="auth-label" for="registerPassword"><%= safeT('register.password', 'รหัสผ่าน') %></label>
+      <input
+        type="password"
+        id="registerPassword"
+        name="password"
+        class="auth-input"
+        placeholder="<%= safeT('register.password_placeholder', 'กรอกรหัสผ่าน') %>"
+        autocomplete="new-password"
+        minlength="6"
+        required
+      >
+      <button
+        type="button"
+        class="toggle-pass"
+        onclick="toggleRegisterPass('registerPassword', this)"
+        aria-label="<%= safeT('register.toggle_password', 'แสดงหรือซ่อนรหัสผ่าน') %>"
+      >👁</button>
+    </div>
+
+    <div class="auth-group auth-password">
+      <label class="auth-label" for="registerConfirmPassword">ยืนยันรหัสผ่าน</label>
+      <input
+        type="password"
+        id="registerConfirmPassword"
+        class="auth-input"
+        placeholder="กรอกรหัสผ่านอีกครั้ง"
+        autocomplete="new-password"
+        minlength="6"
+        required
+      >
+      <button
+        type="button"
+        class="toggle-pass"
+        onclick="toggleRegisterPass('registerConfirmPassword', this)"
+        aria-label="แสดงหรือซ่อนรหัสผ่าน"
+      >👁</button>
+    </div>
+
+    <div class="password-hint" data-i18n="auth.password_hint">
+      รหัสผ่านต้องมี:
+      <ul>
+        <li>อย่างน้อย 6 ตัวอักษร</li>
+        <li>ตัวอักษรใหญ่ (A-Z) อย่างน้อย 1 ตัว</li>
+        <li>ตัวอักษรเล็ก (a-z) อย่างน้อย 1 ตัว</li>
+        <li>อักขระพิเศษ เช่น !@#$%^&*</li>
+      </ul>
+    </div>
+  <% } %>
+
+  <button type="submit" class="<%= typeof safeRef !== 'undefined' ? 'register-submit' : 'auth-btn' %>">
+    <%= safeT('register.submit', 'สมัครสมาชิก') %>
+  </button>
+</form>
+
+          <div class="auth-social-divider">
+            <span><%= safeT('register.or_social', 'หรือสมัครด้วย') %></span>
+          </div>
+
+          <div class="auth-social-grid">
+            <a
+              class="auth-social-btn auth-social-google"
+              href="/auth/google<%= safeRef ? ('?ref=' + encodeURIComponent(safeRef)) : '' %>"
+            >
+              <img src="/public/images/google.png" alt="Google">
+              <span>Google</span>
+            </a>
+
+            <a
+              class="auth-social-btn auth-social-line"
+              href="/auth/line<%= safeRef ? ('?ref=' + encodeURIComponent(safeRef)) : '' %>"
+            >
+              <img src="/public/images/line.png" alt="LINE">
+              <span>LINE</span>
+            </a>
+          </div>
+
+          <div class="register-footer">
+            <span><%= safeT('register.have_account', 'มีบัญชีอยู่แล้ว?') %></span>
+            <a href="/login"><%= safeT('nav.login', 'เข้าสู่ระบบ') %></a>
+          </div>
+        </div>
+      </section>
+    </div>
+  </div>
+
+  <script>
+    function toggleRegisterPassword() {
+      const input = document.getElementById('password');
+      const text = document.getElementById('passwordToggleText');
+      if (!input || !text) return;
+
+      if (input.type === 'password') {
+        input.type = 'text';
+        text.textContent = 'ซ่อน';
+      } else {
+        input.type = 'password';
+        text.textContent = 'แสดง';
+      }
+    }
+  </script>
+</body>
+</html>

@@ -1,0 +1,381 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const levels = Array.isArray(referralLevels) ? referralLevels : [];
+const treeRows = Array.isArray(referralTreeRows) ? referralTreeRows : [];
+const totalMembers = pagination && pagination.total ? pagination.total : treeRows.length;
+const incomeSummary = referralIncomeSummary || { totalScoinIncome: 0, totalRewardCount: 0, byLevel: [] };
+const incomeDetails = Array.isArray(referralIncomeDetails) ? referralIncomeDetails : [];
+const incomePager = incomePagination || { page: 1, totalPages: 1, total: incomeDetails.length };
+const memberPager = memberPagination || pagination || { page: 1, totalPages: 1, total: treeRows.length };
+
+function incomeTypeLabel(item) {
+  const type = String((item && item.tx_type) || '');
+  if (type === 'referral_first_purchase_bonus' || type === 'qualified_referral_bonus') return 'โบนัสแนะนำตรงครั้งแรก 60%';
+  if (/^referral_level_[1-5]_bonus$/.test(type)) {
+    const foundLevel = type.match(/^referral_level_([1-5])_bonus$/);
+    return `โบนัสสายงานชั้น ${foundLevel ? foundLevel[1] : Number((item && item.level_no) || 0) || '-'}`;
+  }
+  if (type === 'referral_level_bonus' || type === 'referral_reward') return `โบนัสสายงานชั้น ${Number((item && item.level_no) || 0) || '-'}`;
+  return type || '-';
+}
+
+function incomeRuleText(item) {
+  const type = String((item && item.tx_type) || '');
+  if (type === 'referral_first_purchase_bonus' || type === 'qualified_referral_bonus') return 'แนะนำตรงครั้งแรก: 60% ครั้งเดียว ไม่แบ่งสายงาน';
+  if (/^referral_level_[1-5]_bonus$/.test(type) || type === 'referral_level_bonus' || type === 'referral_reward') {
+    const level = Number((item && item.level_no) || 0);
+    const percent = level === 1 ? 8 : level === 2 ? 5 : level === 3 ? 3 : level === 4 ? 2 : level === 5 ? 2 : Number((item && item.reward_percent) || 0);
+    return `ซื้อแพ็กเกจด้วยเงินจริง แบ่งสายงานชั้น ${level || '-'} = ${percent || '-'}%`;
+  }
+  return '-';
+}
+
+%>
+
+<% pageCss = '/css/app-referrals.css'; %>
+<%- include('../partials/app-shell') %>
+
+<style>
+/* กัน CSS ไม่โหลดจาก shell: บังคับ layout เฉพาะหน้านี้ */
+.ref-page *{box-sizing:border-box;}
+.ref-page .card{overflow:hidden;}
+.ref-kpis{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px;margin-top:18px;}
+.ref-kpi{padding:16px;border-radius:18px;background:linear-gradient(180deg,#0b1628,#081220);border:1px solid rgba(130,154,197,.12);}
+.ref-kpi span{display:block;color:#8fa5ce;font-size:13px;margin-bottom:8px}.ref-kpi strong{color:#fff;word-break:break-word}.ref-kpi-income strong{color:#67e8f9}.ref-link-text{font-size:13px}.ref-link-bar{margin-top:16px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}.ref-link-bar input{flex:1;min-width:260px;height:44px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px}.ref-link-bar button{height:44px;border:0;border-radius:14px;padding:0 18px;background:linear-gradient(135deg,#3456ff,#6d3dff);color:#fff;font-weight:900;cursor:pointer}.ref-income{margin-top:20px}.ref-income-summary{display:grid;grid-template-columns:320px 1fr;gap:16px;margin-top:16px}.ref-income-total,.ref-income-level-card{padding:16px;border-radius:18px;background:linear-gradient(180deg,#0b1628,#081220);border:1px solid rgba(130,154,197,.12)}.ref-income-total strong{display:block;color:#67e8f9;font-size:26px}.ref-income-levels{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:12px}.ref-direct-card{background:linear-gradient(135deg,rgba(52,86,255,.22),rgba(109,61,255,.20));border-color:rgba(120,160,255,.28)}.ref-direct-card strong{color:#c4b5fd}.ref-rule-note{margin-top:12px;padding:12px 14px;border-radius:16px;background:rgba(34,211,238,.08);border:1px solid rgba(34,211,238,.16);color:#cfe8ff;font-size:13px}.ref-subtext{display:block;color:#8fa5ce;font-size:12px;margin-top:4px}.ref-money{white-space:nowrap;color:#dbeafe}.ref-percent{white-space:nowrap;color:#fde68a;font-weight:800}.tree-wrap{margin-top:20px;display:grid;gap:24px}.tree-level-badge{display:inline-flex;align-items:center;gap:8px;min-height:36px;padding:0 14px;border-radius:999px;color:#fff;background:linear-gradient(135deg,#3456ff,#6d3dff);font-weight:800;margin-bottom:14px}.tree-cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;padding-left:18px;border-left:2px dashed rgba(80,110,255,.24)}.tree-card{width:100%;text-align:left;padding:16px;border-radius:18px;border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,#0a1425,#08111d);color:#fff;cursor:pointer}.tree-empty{color:#8fa5ce;padding:12px 0}.tree-card-id{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;margin-bottom:8px;border-radius:999px;background:rgba(34,211,238,.12);color:#a5f3fc;font-size:12px;font-weight:900}.tree-card-name{font-weight:800;margin-bottom:6px}.tree-card-meta{color:#8fa5ce;font-size:13px;margin-bottom:10px;word-break:break-word}.tree-card-scoin{font-size:13px;color:#cfe1ff}.ref-table-wrap{margin-top:16px;width:100%;overflow-x:auto}.ref-table{width:100%;min-width:760px;border-collapse:collapse}.ref-table th,.ref-table td{padding:12px;border-top:1px solid rgba(130,154,197,.12);text-align:left;vertical-align:middle}.ref-table th{color:#8fa5ce;font-weight:700}.ref-level-pill{display:inline-flex;min-height:28px;align-items:center;padding:0 10px;border-radius:999px;background:rgba(80,110,255,.14);color:#dbe6ff;font-size:12px;font-weight:700}.ref-empty-row{color:#8fa5ce}.ref-scoin-plus{color:#67e8f9;font-weight:900;white-space:nowrap}.referral-detail-btn{display:inline-flex;align-items:center;justify-content:center;gap:6px;min-height:38px;padding:0 16px;border:0;border-radius:12px;cursor:pointer;font-size:13px;font-weight:800;color:#fff;background:linear-gradient(135deg,#3456ff,#6d3dff)}.ref-modal{position:fixed;inset:0;z-index:999999;display:none;align-items:center;justify-content:center;padding:18px}.ref-modal.show{display:flex}.ref-modal-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.72);backdrop-filter:blur(6px)}.ref-modal-card{position:relative;width:min(720px,96vw);max-height:90vh;overflow:auto;padding:24px;border-radius:24px;background:linear-gradient(180deg,#091424,#07101b);border:1px solid rgba(108,132,255,.16);box-shadow:0 30px 80px rgba(0,0,0,.45);color:#fff}.ref-modal-close{position:absolute;right:16px;top:14px;width:42px;height:42px;border-radius:50%;border:1px solid rgba(255,255,255,.08);background:#0b1628;color:#fff;font-size:24px;cursor:pointer}.ref-modal-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.ref-modal-item{padding:14px 16px;border-radius:16px;border:1px solid rgba(130,154,197,.10);background:#0c1729}.ref-modal-item span{display:block;color:#8fa5ce;font-size:12px;margin-bottom:6px}.ref-modal-item strong{color:#fff;word-break:break-word}body.modal-open{overflow:hidden}@media(max-width:1100px){.ref-kpis{grid-template-columns:repeat(2,minmax(0,1fr))}.ref-income-summary{grid-template-columns:1fr}.ref-income-levels{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.ref-kpis,.ref-income-levels,.ref-modal-grid{grid-template-columns:1fr}.ref-link-bar{display:grid;grid-template-columns:1fr}.ref-link-bar input{min-width:0;width:100%}}
+</style>
+
+<div class="ref-page">
+
+<section class="ref-hero card">
+  <div class="ref-hero-head">
+    <div>
+      <h3><%= safeT('app.referrals.title', 'สายงานของฉัน') %></h3>
+      <p class="muted"><%= safeT('app.referrals.desc', 'ดูโครงสร้างสมาชิกใต้สายงานของคุณ 5 ชั้น พร้อมรายละเอียดแต่ละคน') %></p>
+    </div>
+  </div>
+
+  <div class="ref-kpis">
+    <div class="ref-kpi">
+      <span><%= safeT('app.referrals.total', 'จำนวนสมาชิกทั้งหมด') %></span>
+      <strong><%= totalMembers %></strong>
+    </div>
+    <div class="ref-kpi ref-kpi-income">
+      <span>รายได้สายงานรวม</span>
+      <strong><%= Number(incomeSummary.totalScoinIncome || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> Scoin</strong>
+    </div>
+    <div class="ref-kpi">
+      <span><%= safeT('app.referrals.referral_code', 'Referral Code') %></span>
+      <strong><%= referralCode || '-' %></strong>
+    </div>
+    <div class="ref-kpi">
+      <span><%= safeT('app.referrals.referral_link', 'ลิงก์แนะนำเพื่อน') %></span>
+      <strong class="ref-link-text"><%= referralUrl || '-' %></strong>
+    </div>
+  </div>
+
+  <div class="ref-link-bar">
+    <input type="text" id="referralUrl" value="<%= referralUrl || '' %>" readonly>
+    <button
+      type="button"
+      class="btn btn-primary"
+      onclick="navigator.clipboard.writeText(document.getElementById('referralUrl').value).then(() => alert('คัดลอกลิงก์แล้ว'))"
+    >
+      คัดลอกลิงก์
+    </button>
+  </div>
+</section>
+
+<section class="ref-income card">
+  <div class="card-head">
+    <div>
+      <h3>รายได้สายงาน</h3>
+      <p class="muted">รวมรายได้จากโบนัสแนะนำ / ค่าการตลาดสายงาน เฉพาะ Scoin</p>
+    </div>
+  </div>
+
+  <div class="ref-income-summary">
+    <div class="ref-income-total">
+      <span>รายได้รวมทั้งหมด</span>
+      <strong><%= Number(incomeSummary.totalScoinIncome || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> Scoin</strong>
+      <small>จำนวนรายการ: <%= Number(incomeSummary.totalRewardCount || 0).toLocaleString('th-TH') %> รายการ</small>
+    </div>
+
+    <div>
+      <div class="ref-income-levels">
+        <div class="ref-income-level-card ref-direct-card">
+          <span>แนะนำตรงครั้งแรก 60%</span>
+          <strong><%= Number(incomeSummary.directFirstIncome || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
+          <small>Scoin · <%= Number(incomeSummary.directFirstCount || 0).toLocaleString('th-TH') %> รายการ</small>
+        </div>
+        <% (incomeSummary.byLevel || []).forEach(function(item){ %>
+          <div class="ref-income-level-card">
+            <span>สายงานชั้น <%= item.level %> (<%= item.percent %>%)</span>
+            <strong><%= Number(item.amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
+            <small>Scoin · สมาชิกชั้นนี้ <%= Number(item.members || 0).toLocaleString('th-TH') %> คน</small>
+          </div>
+        <% }) %>
+      </div>
+      <div class="ref-rule-note">
+        เงินสดซื้อแพ็กเกจ: ลูกค้าได้ 30% · แนะนำตรงครั้งแรกได้ 60% ครั้งเดียว · ซื้อซ้ำ/ลูกค้าเก่าแบ่งสายงาน 8/5/3/2/2 · ชำระด้วย Scoin ไม่คืนโบนัส
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="ref-income card" id="incomeDetails" style="margin-top:20px;">
+  <div class="card-head">
+    <div>
+      <h3>รายละเอียดรายได้ Scoin จากสายงาน / แนะนำตรง</h3>
+      <p class="muted">แสดงโบนัสแนะนำตรงครั้งแรก 60% และโบนัสสายงานซื้อซ้ำ 8/5/3/2/2</p>
+    </div>
+  </div>
+
+  <div class="ref-table-wrap">
+    <table class="ref-table ref-income-table">
+      <thead>
+        <tr>
+          <th>รหัสรายการ</th>
+          <th>วันที่</th>
+          <th>ประเภทโบนัส</th>
+          <th>ชั้น</th>
+          <th>ID สมาชิก</th>
+          <th>สมาชิกที่ซื้อ</th>
+          <th>แพ็กเกจ</th>
+          <th>ราคาแพ็กเกจ</th>
+          <th>สูตรแบ่ง</th>
+          <th>Scoin ที่ได้รับ</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (!incomeDetails.length) { %>
+          <tr>
+            <td colspan="10" class="ref-empty-row">ยังไม่มีรายได้ Scoin จากสายงาน</td>
+          </tr>
+        <% } %>
+
+        <% incomeDetails.forEach(function(item){ %>
+          <tr>
+            <td>#<%= item.display_id || item.id %></td>
+            <td><%= item.created_at ? new Date(item.created_at).toLocaleString('th-TH', {
+              timeZone: 'Asia/Bangkok',
+              year: 'numeric',
+              month: '2-digit',
+              day: '2-digit',
+              hour: '2-digit',
+              minute: '2-digit',
+              hour12: false
+            }) : '-' %></td>
+            <td><strong><%= incomeTypeLabel(item) %></strong><br><small class="ref-subtext"><%= item.tx_type || '-' %></small></td>
+            <td><span class="ref-level-pill">ชั้น <%= item.level_no || '-' %></span></td>
+            <td>#<%= item.buyer_display_id || '-' %></td>
+            <td>
+              <strong><%= item.buyer_name || '-' %></strong>
+              <small class="ref-subtext"><%= item.buyer_email || '-' %></small>
+            </td>
+            <td><%= item.package_name || '-' %></td>
+            <td class="ref-money">฿<%= Number(item.package_price_thb || item.package_amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %></td>
+            <td>
+              <span class="ref-percent"><%= Number(item.reward_percent || 0) > 0 ? Number(item.reward_percent || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 }) + '%' : '-' %></span>
+              <small class="ref-subtext"><%= incomeRuleText(item) %></small>
+            </td>
+            <td class="ref-scoin-plus">+<%= Number(item.amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> Scoin</td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="wallet-actions ref-pager" style="justify-content:flex-end;margin-top:12px;">
+    <% if (incomePager && incomePager.page > 1) { %>
+      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page - 1 %>&memberPage=<%= memberPager.page %>#incomeDetails">ก่อนหน้า</a>
+    <% } %>
+
+    <span class="wallet-muted">
+      รายการ Scoin หน้า <%= incomePager.page %> / <%= incomePager.totalPages %>
+    </span>
+
+    <% if (incomePager && incomePager.page < incomePager.totalPages) { %>
+      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page + 1 %>&memberPage=<%= memberPager.page %>#incomeDetails">ถัดไป</a>
+    <% } %>
+  </div>
+</section>
+
+<section class="ref-tree card">
+  <div class="card-head">
+    <h3><%= safeT('app.referrals.tree_title', 'แผนผังสายงาน 5 ชั้น') %></h3>
+  </div>
+
+  <div class="tree-wrap">
+    <% levels.forEach(function(levelGroup, idx){ %>
+      <div class="tree-level">
+        <div class="tree-level-badge">
+          ชั้น <%= levelGroup.level %>
+          <small>(<%= levelGroup.members.length %>)</small>
+        </div>
+
+        <% if (idx < levels.length - 1) { %>
+          <div class="tree-connector"></div>
+        <% } %>
+
+        <div class="tree-cards">
+          <% if (!levelGroup.members.length) { %>
+            <div class="tree-empty">ไม่มีสมาชิกในชั้นนี้</div>
+          <% } %>
+
+          <% levelGroup.members.forEach(function(member){ %>
+            <button
+              type="button"
+              class="tree-card"
+              onclick='openReferralDetail(<%- JSON.stringify({
+                id: member.display_id || member.id,
+                level_no: member.level_no,
+                full_name: member.full_name || '-',
+                email: member.email || '-',
+                scoin_balance: Number(member.scoin_balance || 0),
+                created_at: member.created_at ? new Date(member.created_at).toLocaleString("th-TH") : '-'
+              }) %>)'
+            >
+              <div class="tree-card-id">#<%= member.display_id || member.id %></div>
+              <div class="tree-card-name"><%= member.full_name || '-' %></div>
+              <div class="tree-card-meta"><%= member.email || '-' %></div>
+              <div class="tree-card-scoin">SCOIN: <%= Number(member.scoin_balance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></div>
+            </button>
+          <% }) %>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+
+<section class="card" id="memberList" style="margin-top:20px;">
+  <div class="card-head">
+    <h3><%= safeT('app.referrals.members', 'ตารางสมาชิกใต้สายงาน') %></h3>
+  </div>
+
+  <div class="ref-table-wrap">
+    <table class="ref-table">
+      <thead>
+        <tr>
+          <th>ID</th>
+          <th>ชั้น</th>
+          <th><%= safeT('common.name', 'ชื่อ') %></th>
+          <th><%= safeT('common.email', 'อีเมล') %></th>
+          <th>Scoin</th>
+          <th><%= safeT('app.referrals.joined_at', 'วันที่สมัคร') %></th>
+          <th>ดู</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (!treeRows.length) { %>
+          <tr>
+            <td colspan="7" class="ref-empty-row"><%= safeT('app.referrals.empty', 'ยังไม่มีสมาชิกใต้สายงาน') %></td>
+          </tr>
+        <% } %>
+
+        <% treeRows.forEach(function(member){ %>
+          <tr>
+            <td>#<%= member.display_id || member.id %></td>
+            <td><span class="ref-level-pill">ชั้น <%= member.level_no %></span></td>
+            <td><%= member.full_name || '-' %></td>
+            <td><%= member.email || '-' %></td>
+            <td><%= Number(member.scoin_balance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></td>
+            <td><%= member.created_at ? new Date(member.created_at).toLocaleString('th-TH', {
+  timeZone: 'Asia/Bangkok',
+  year: 'numeric',
+  month: '2-digit',
+  day: '2-digit',
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hour12: false
+}) : '-' %></td>
+            <td>
+              <button
+  type="button"
+  class="referral-detail-btn"
+  onclick="openReferralDetailFromButton(this)"
+  data-id="<%= member.display_id || member.id %>"
+  data-level="<%= member.level_no %>"
+  data-name="<%= member.full_name || '-' %>"
+  data-email="<%= member.email || '-' %>"
+  data-scoin="<%= Number(member.scoin_balance || 0) %>"
+  data-created="<%= member.created_at ? new Date(member.created_at).toLocaleString('th-TH', { timeZone:'Asia/Bangkok', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }) : '-' %>"
+>
+  🔍 ดูรายละเอียด
+</button>            </td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+<div class="wallet-actions" style="justify-content:flex-end;margin-top:12px;">
+    <% if (memberPager && memberPager.page > 1) { %>
+      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page %>&memberPage=<%= memberPager.page - 1 %>#memberList">
+        ก่อนหน้า
+      </a>
+    <% } %>
+
+    <span class="wallet-muted">
+      หน้า <%= memberPager.page %> / <%= memberPager.totalPages %>
+    </span>
+
+    <% if (memberPager && memberPager.page < memberPager.totalPages) { %>
+      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page %>&memberPage=<%= memberPager.page + 1 %>#memberList">
+        ถัดไป
+      </a>
+    <% } %>
+  </div>
+</section>
+
+<div class="ref-modal" id="refModal">
+  <div class="ref-modal-backdrop" onclick="closeReferralDetail()"></div>
+  <div class="ref-modal-card">
+    <button type="button" class="ref-modal-close" onclick="closeReferralDetail()">×</button>
+    <h2>รายละเอียดสมาชิก</h2>
+
+    <div class="ref-modal-grid">
+      <div class="ref-modal-item"><span>ID</span><strong id="ref-detail-id">-</strong></div>
+      <div class="ref-modal-item"><span>ชั้น</span><strong id="ref-detail-level">-</strong></div>
+      <div class="ref-modal-item"><span>ชื่อ</span><strong id="ref-detail-name">-</strong></div>
+      <div class="ref-modal-item"><span>อีเมล</span><strong id="ref-detail-email">-</strong></div>
+      <div class="ref-modal-item"><span>SCOIN</span><strong id="ref-detail-scoin">-</strong></div>
+      <div class="ref-modal-item"><span>วันที่สมัคร</span><strong id="ref-detail-created">-</strong></div>
+    </div>
+  </div>
+</div>
+
+<script>
+
+function openReferralDetailFromButton(btn) {
+  if (!btn) return;
+
+  openReferralDetail({
+    id: btn.dataset.id || '-',
+    level_no: btn.dataset.level || '',
+    full_name: btn.dataset.name || '-',
+    email: btn.dataset.email || '-',
+    scoin_balance: Number(btn.dataset.scoin || 0),
+    created_at: btn.dataset.created || '-'
+  });
+}
+
+  function openReferralDetail(member) {
+    document.getElementById('ref-detail-id').textContent = member.id || '-';
+    document.getElementById('ref-detail-level').textContent = member.level_no ? `ชั้น ${member.level_no}` : '-';
+    document.getElementById('ref-detail-name').textContent = member.full_name || '-';
+    document.getElementById('ref-detail-email').textContent = member.email || '-';
+    document.getElementById('ref-detail-scoin').textContent = Number(member.scoin_balance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 });
+    document.getElementById('ref-detail-created').textContent = member.created_at || '-';
+    document.getElementById('refModal').classList.add('show');
+    document.body.classList.add('modal-open');
+  }
+
+  function closeReferralDetail() {
+    document.getElementById('refModal').classList.remove('show');
+    document.body.classList.remove('modal-open');
+  }
+</script>
+
+</div>
+
+<%- include('../partials/app-shell-end') %>

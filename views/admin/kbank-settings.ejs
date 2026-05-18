@@ -1,0 +1,27 @@
+<%- include('../partials/admin-shell') %>
+<% const s = settings || {}; %>
+<section class="kbank-admin-page">
+  <section class="card kbank-hero">
+    <div><div class="eyebrow">KASIKORNBANK PAYMENT GATEWAY</div><h3>KBank API Settings</h3><p>ตั้งค่า QR PromptPay และบัตรเครดิต สำหรับตัดยอดอัตโนมัติเมื่อ KBank webhook แจ้งยอดเข้าระบบ</p></div>
+  </section>
+  <form class="card kbank-form" method="POST" action="/admin/kbank-settings">
+    <div class="card-head"><div><h3>ข้อมูล API</h3><p>ค่าที่บันทึกไว้จะเก็บในฐานข้อมูล ไม่ลบข้อมูลเก่า และแก้ไขภายหลังได้</p></div></div>
+    <div class="kbank-switch-grid">
+      <label class="switch-card"><input type="checkbox" name="is_enabled" <%= s.is_enabled ? 'checked' : '' %> /><span>เปิดใช้งาน KBank API</span><small>ใช้กับ Scoin และแพ็กเกจ</small></label>
+      <label class="switch-card"><input type="checkbox" name="mock_mode" <%= s.mock_mode !== false ? 'checked' : '' %> /><span>Mock Mode</span><small>ทดสอบก่อนเปิดจริง</small></label>
+      <label class="switch-card"><input type="checkbox" name="promptpay_enabled" <%= s.promptpay_enabled !== false ? 'checked' : '' %> /><span>QR PromptPay</span><small>รับชำระผ่าน QR</small></label>
+      <label class="switch-card"><input type="checkbox" name="credit_card_enabled" <%= s.credit_card_enabled !== false ? 'checked' : '' %> /><span>Credit Card</span><small>รับชำระผ่านบัตรเครดิต</small></label>
+    </div>
+    <div class="form-grid two">
+      <label>Base URL<input type="text" name="base_url" value="<%= s.base_url || '' %>" /></label>
+      <label>Merchant ID<input type="text" name="merchant_id" value="<%= s.merchant_id || '' %>" /></label>
+      <label>Public Key / API Key<input type="text" name="public_key" value="<%= s.public_key || '' %>" /></label>
+      <label>Secret Key<input type="password" name="secret_key" value="<%= s.secret_key || '' %>" autocomplete="new-password" /></label>
+      <label class="full">Webhook Secret<input type="password" name="webhook_secret" value="<%= s.webhook_secret || '' %>" autocomplete="new-password" /></label>
+    </div>
+    <div class="kbank-note"><strong>Webhook URL</strong><code>https://trading.avelqua.com/app/kbank/package-webhook</code><code>https://trading.avelqua.com/app/kbank/webhook/qr</code><code>https://trading.avelqua.com/app/kbank/webhook/card</code></div>
+    <div class="inline-actions"><button class="btn primary" type="submit">บันทึกการตั้งค่า</button><a class="btn secondary" href="/admin/payments">กลับไปรายการชำระเงิน</a></div>
+  </form>
+</section>
+<style>.kbank-admin-page{display:grid;gap:20px}.kbank-hero{background:linear-gradient(135deg,rgba(30,41,59,.95),rgba(88,28,135,.82));border:1px solid rgba(147,197,253,.22)}.kbank-switch-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin:12px 0 20px}.switch-card{display:grid;gap:6px;padding:16px;border:1px solid rgba(148,163,184,.22);border-radius:18px;background:rgba(15,23,42,.65)}.switch-card input{width:20px;height:20px;accent-color:#7c3aed}.switch-card span{font-weight:800}.switch-card small{color:#94a3b8}.form-grid.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px}.form-grid label{display:grid;gap:8px;font-weight:700}.form-grid input{width:100%;border:1px solid rgba(148,163,184,.25);background:rgba(15,23,42,.78);color:#e5e7eb;border-radius:14px;padding:12px 14px}.form-grid .full{grid-column:1/-1}.kbank-note{display:grid;gap:8px;margin:18px 0;padding:14px;border:1px dashed rgba(96,165,250,.45);border-radius:16px;background:rgba(30,41,59,.55)}.kbank-note code{white-space:normal;word-break:break-all;color:#bfdbfe}@media(max-width:900px){.kbank-switch-grid,.form-grid.two{grid-template-columns:1fr}}</style>
+<%- include('../partials/admin-shell-end') %>

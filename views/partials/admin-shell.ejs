@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="<%= lang || 'th' %>">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title><%= pageTitle || 'Admin' %></title>
+  <link rel="stylesheet" href="/public/css/admin-panel.css" />
+  <link rel="stylesheet" href="/public/css/admin-responsive-fix.css" />
+<link rel="stylesheet" href="/public/css/admin-scoin-market.css">
+<link rel="stylesheet" href="/public/css/admin-backups.css">
+<% if (typeof pageCss !== 'undefined' && pageCss) { %>
+  <link rel="stylesheet" href="/public/css/<%= pageCss %>">
+<% } %>
+<link rel="icon" type="image/x-icon" href="/public/favicon.ico?v=300">
+<link rel="shortcut icon" href="/public/favicon.ico?v=300">
+<link rel="apple-touch-icon" href="/public/favicon.ico?v=300">
+</head>
+<body>
+  <script>
+    window.__AVELQUA_I18N__ = {
+      current: <%- JSON.stringify(lang || 'th') %>,
+      labels: <%- JSON.stringify(localeLabels || {}) %>,
+      locales: <%- JSON.stringify(clientLocales || {}) %>
+    };
+  </script>
+  <div class="admin-shell">
+    <aside class="sidebar premium">
+      <div class="brand-box">
+        <div class="brand-mark">TA</div>
+        <div>
+          <div class="brand-kicker">TRADING AVELQUA</div>
+          <div class="brand-title" data-i18n="admin.sidebar.title"><%= t('admin.sidebar.title', 'Admin Control') %></div>
+        </div>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title" data-i18n="admin.sidebar.phase1"><%= t('admin.sidebar.phase1', 'Phase 1') %></div>
+        <nav class="nav-links">
+          <a class="<%= currentPath === '/admin' ? 'active' : '' %>" href="/admin"><span>📊</span><span data-i18n="admin.menu.dashboard"><%= t('admin.menu.dashboard', 'Dashboard') %></span></a>
+          <a class="<%= currentPath.startsWith('/admin/users') ? 'active' : '' %>" href="/admin/users"><span>👥</span><span data-i18n="admin.menu.users"><%= t('admin.menu.users', 'Users') %></span></a>
+          <a class="<%= currentPath.startsWith('/admin/packages') ? 'active' : '' %>" href="/admin/packages"><span>📦</span><span data-i18n="admin.menu.packages"><%= t('admin.menu.packages', 'Packages') %></span></a>
+          <a class="<%= currentPath.startsWith('/admin/payments') ? 'active' : '' %>" href="/admin/payments"><span>💳</span><span data-i18n="admin.menu.payments"><%= t('admin.menu.payments', 'Payments') %></span></a>
+        <a class="<%= currentPath === '/admin/scoin-market' ? 'active' : '' %>" href="/admin/scoin-market"><span>📈</span><span>ตลาด Scoin</span></a>
+          <a class="<%= currentPath.startsWith('/admin/backups') ? 'active' : '' %>" href="/admin/backups"><span>🛡️</span><span>Backup / Restore</span></a>
+	</nav>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title" data-i18n="admin.sidebar.phase2"><%= t('admin.sidebar.phase2', 'Phase 2') %></div>
+        <nav class="nav-links">
+          <a class="<%= currentPath.startsWith('/admin/news-settings') ? 'active' : '' %>" href="/admin/news-settings"><span>📰</span><span data-i18n="admin.menu.news"><%= t('admin.menu.news', 'News Settings') %></span></a>
+          <a class="<%= currentPath.startsWith('/admin/ai-settings') ? 'active' : '' %>" href="/admin/ai-settings"><span>🤖</span><span data-i18n="admin.menu.ai"><%= t('admin.menu.ai', 'AI Chat Settings') %></span></a>
+          <a class="<%= currentPath.startsWith('/admin/coupons') ? 'active' : '' %>" href="/admin/coupons"><span>🎟️</span><span data-i18n="admin.menu.coupons"><%= t('admin.menu.coupons', 'Coupons') %></span></a>
+        </nav>
+      </div>
+
+      <div class="nav-group">
+        <div class="nav-group-title" data-i18n="admin.sidebar.phase3"><%= t('admin.sidebar.phase3', 'Phase 3') %></div>
+        <nav class="nav-links">
+          <a class="<%= currentPath.startsWith('/admin/vps') ? 'active' : '' %>" href="/admin/vps"><span>🖥️</span><span data-i18n="admin.menu.vps"><%= t('admin.menu.vps', 'VPS / MT5') %></span></a>
+          <a class="<%= currentPath.startsWith('/admin/mt5-presets') ? 'active' : '' %>" href="/admin/mt5-presets"><span>📋</span><span>ตาราง MT5</span></a>
+
+<a class="main-site-link" href="/?lang=<%= lang || 'th' %>">
+  <span>🏠</span>
+  <span data-i18n="common.main_site"><%= t('common.main_site', 'Main site') %></span>
+</a>
+
+        </nav>
+      </div>
+
+      <div class="sidebar-footer">
+        <div class="user-chip">
+          <div class="avatar-circle"><%= ((user && (user.full_name || user.email)) || 'A').slice(0,1).toUpperCase() %></div>
+          <div>
+            <strong><%= (user && (user.full_name || user.name || user.email)) || 'Admin' %></strong>
+            <div class="muted"><%= (user && user.email) || '' %></div>
+          </div>
+        </div>
+        
+      </div>
+    </aside>
+
+    <main class="content-shell">
+      <header class="topbar premium">
+        <div>
+          <div class="eyebrow" data-i18n="admin.header.kicker"><%= t('admin.header.kicker', 'CONTROL CENTER') %></div>
+          <h1><%= pageTitle || 'Admin' %></h1>
+        </div>
+        <div class="topbar-actions">
+          <div class="lang-dropdown" id="langDropdown">
+            <button class="ghost-btn lang-trigger" type="button" id="langDropdownBtn">
+              <span class="lang-current" id="langCurrentLabel"><%= (localeLabels && localeLabels[lang]) || 'ไทย' %></span>
+              <span class="lang-caret">▾</span>
+            </button>
+            <div class="lang-menu" id="langDropdownMenu">
+              <% ['th','en','lo','vi','my'].forEach(function(code){ %>
+                <button
+                  type="button"
+                  class="lang-option <%= (lang === code) ? 'active' : '' %>"
+                  data-lang-option="<%= code %>"
+                  data-lang-code="<%= code %>">
+                  <span><%= (localeLabels && localeLabels[code]) || code.toUpperCase() %></span>
+                  <small><%= code.toUpperCase() %></small>
+                </button>
+              <% }) %>
+            </div>
+          </div>
+          <a class="ghost-btn" href="/admin" data-i18n="common.overview"><%= t('common.overview', 'Overview') %></a>
+          <a class="ghost-btn" href="/logout" data-i18n="common.logout"><%= t('common.logout', 'Logout') %></a>
+        </div>
+      </header>
+      <% if (success) { %><div class="alert success"><%= success %></div><% } %>
+      <% if (error) { %><div class="alert error"><%= error %></div><% } %>
+      <script src="/public/js/i18n-live.js"></script>

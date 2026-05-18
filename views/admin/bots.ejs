@@ -1,0 +1,238 @@
+<%- include('../partials/head', { pageTitle: pageTitle || 'สร้างบอทให้ลูกค้า', pageCss: 'admin-bots.css' }) %>
+<%- include('../partials/admin-shell') %>
+<%
+  const money = (v) => Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  const num = (v) => Number(v || 0).toLocaleString('th-TH');
+  const statusText = { draft:'ร่าง', stopped:'ปิดอยู่', running:'กำลังทำงาน', error:'มีปัญหา' };
+  const riskText = { safe:'เซฟ', medium:'กลาง', fast:'รวบไว' };
+%>
+
+<div class="admin-bots-page">
+  <section class="bot-hero-card">
+    <div>
+      <div class="bot-kicker">ADMIN BOT OPERATIONS</div>
+      <h2>หน้าใช้งาน Admin: สร้างรายการบอทให้ลูกค้า</h2>
+      <p>Admin เป็นคนตั้งค่าบอทให้ลูกค้า ลูกค้าไม่ต้องตั้งเอง: เลือกผู้ใช้ กรอก MT5 เลือก Server แพ็กเกจ คู่เงิน เงินทุน Lot / Port แล้วเปิดบอทได้ทันที</p>
+    </div>
+    <div class="bot-stats">
+      <div><span>ทั้งหมด</span><strong><%= num(summary.total) %></strong></div>
+      <div><span>กำลังทำงาน</span><strong><%= num(summary.running) %></strong></div>
+      <div><span>ปิดอยู่</span><strong><%= num(summary.stopped) %></strong></div>
+      <div><span>Error</span><strong><%= num(summary.error) %></strong></div>
+    </div>
+  </section>
+
+  <section class="bot-card">
+    <div class="bot-card-head">
+      <div>
+        <h3>สร้างบอทใหม่ให้ลูกค้า</h3>
+        <p>ถ้าไม่กำหนด Lot / Port ระบบจะคำนวณจากเงินทุน + ตารางทุนอัตโนมัติ และจำกัดตามแพ็กเกจ</p>
+      </div>
+    </div>
+
+    <form method="POST" action="/admin/bots/create" class="bot-form" data-bot-calc-form>
+      <label>เลือกลูกค้า
+        <select name="user_id" required>
+          <option value="">-- เลือกลูกค้า --</option>
+          <% (users || []).forEach(function(u){ %>
+            <option value="<%= u.id %>"><%= u.display_id %> - <%= u.label %> <%= u.email ? '(' + u.email + ')' : '' %></option>
+          <% }) %>
+        </select>
+      </label>
+
+      <label>ชื่อบอท
+        <input name="bot_name" value="Avelqua Auto Bot" placeholder="เช่น Gold Safe Bot / XAUUSD PRO Bot" required>
+      </label>
+
+      <label>MT5 Server
+        <select name="mt5_server" required>
+          <% (mt5Servers || []).forEach(function(s){ %>
+            <option value="<%= s %>"><%= s %> <%= s.includes('Live') ? '(สำหรับบัญชีจริง)' : '(สำหรับบัญชีทดลอง)' %></option>
+          <% }) %>
+        </select>
+      </label>
+
+      <label>MT5 Login
+        <input name="mt5_login" placeholder="เลขบัญชี MT5" required>
+      </label>
+
+      <label>MT5 Password
+        <input name="mt5_password" type="password" placeholder="รหัสผ่าน MT5" required>
+      </label>
+
+      <label>แพ็กเกจ
+        <select id="package_id" name="package_id" data-package-select required>
+          <option value="">-- เลือกแพ็กเกจ --</option>
+          <% (packages || []).forEach(function(p){ %>
+            <option value="<%= p.id %>" data-lot-min="<%= p.lot_min || 0 %>" data-lot-max="<%= p.lot_max || 0 %>" data-port-min="<%= p.ports_min || 1 %>" data-port-max="<%= p.ports_max || 0 %>">
+              <%= p.group_name || p.package_code %> - <%= p.name %> | Lot <%= p.lot_min %>-<%= Number(p.lot_max || 0) > 0 ? p.lot_max : 'ไม่จำกัด' %> | Port <%= p.ports_min || 1 %>-<%= Number(p.ports_max || 0) > 0 ? p.ports_max : 'ไม่จำกัด' %>
+            </option>
+          <% }) %>
+        </select>
+      </label>
+
+      <label>คู่เงิน / Symbol
+        <select name="symbol">
+          <% (symbols || []).forEach(function(s){ %><option value="<%= s %>"><%= s %></option><% }) %>
+        </select>
+      </label>
+
+      <label>โหมดบอท
+        <select id="risk_mode" name="risk_mode" data-risk-mode>
+          <% (riskModes || []).forEach(function(m){ %><option value="<%= m.key %>"><%= m.label %></option><% }) %>
+        </select>
+      </label>
+
+      <label>
+  เงินทุน US
+  <input id="capital" name="capital" type="number" step="0.01" placeholder="เช่น 300" data-capital>
+</label>
+
+<label>
+  กำไรเป้าหมาย (%)
+  <input id="target_profit_percent" name="target_profit_percent" type="number" step="0.01" placeholder="เช่น 10" data-profit-percent>
+</label>
+
+<label>
+  Lot
+  <input id="lot" name="lot" type="number" step="0.01" placeholder="ว่าง = Auto" data-lot>
+</label>
+
+<label>
+  Port
+  <input id="port" name="port" type="number" placeholder="ว่าง = Auto" data-port>
+</label>
+
+<div id="bot-calc-preview" class="bot-calc-preview" data-preview></div>
+
+        <strong>ค่าที่ระบบแนะนำ</strong>
+        <span>ใส่เงินทุนหรือกำไร ระบบจะคำนวณ Lot / Port / กำไรให้</span>
+      </div>
+
+      <div class="bot-actions full">
+        <button class="bot-btn primary" type="submit">สร้างรายการบอท</button>
+        <button class="bot-btn ghost" type="reset">ล้างฟอร์ม</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="bot-card">
+    <div class="bot-card-head">
+      <div>
+        <h3>รายการบอทลูกค้า</h3>
+        <p>บอทที่กำลังทำงานจะแก้ไข/ลบไม่ได้ ต้องกด “ปิดบอท” ก่อนเท่านั้น</p>
+      </div>
+    </div>
+
+    <div class="bot-table-wrap">
+      <table class="bot-table">
+        <thead>
+          <tr>
+            <th>บอท / ลูกค้า</th>
+            <th>MT5</th>
+            <th>แพ็กเกจ</th>
+            <th>ทุน / กำไร</th>
+            <th>Lot / Port</th>
+            <th>สถานะ</th>
+            <th>จัดการ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!(bots || []).length) { %>
+            <tr><td colspan="7" class="empty-cell">ยังไม่มีรายการบอท</td></tr>
+          <% } %>
+          <% (bots || []).forEach(function(b){ %>
+            <tr>
+              <td>
+                <strong><%= b.bot_name || 'Avelqua Bot' %></strong>
+                <div class="muted"><%= b.user_display_id || '-' %> · <%= b.user_name || '-' %></div>
+                <div class="muted"><%= b.user_email || '' %></div>
+              </td>
+              <td>
+                <div><%= b.mt5_login || '-' %></div>
+                <div class="muted"><%= b.mt5_server %></div>
+                <span class="bot-pill"><%= b.symbol %></span>
+              </td>
+              <td>
+                <strong><%= b.group_name || b.package_code || '-' %></strong>
+                <div class="muted"><%= b.package_name || '' %></div>
+              </td>
+              <td>
+                <div>ทุน <strong><%= money(b.capital) %></strong></div>
+                <div class="muted">เป้า <%= money(b.target_profit_amount) %> / <%= money(b.target_profit_percent) %>%</div>
+              </td>
+              <td>
+                <div>Lot <strong><%= b.lot %></strong></div>
+                <div>Port <strong><%= b.port %></strong></div>
+                <div class="muted"><%= riskText[b.risk_mode] || b.risk_mode %> · T <%= b.t_start %>/<%= b.t_stop %></div>
+              </td>
+              <td><span class="bot-status <%= b.status %>"><%= statusText[b.status] || b.status %></span></td>
+              <td>
+                <div class="row-actions">
+                  <% if (b.status === 'running') { %>
+                    <form method="POST" action="/admin/bots/<%= b.id %>/stop"><button class="bot-btn warn" type="submit">ปิดบอท</button></form>
+                    <button class="bot-btn disabled" type="button" disabled>แก้ไข</button>
+                    <button class="bot-btn disabled" type="button" disabled>ลบ</button>
+                  <% } else { %>
+                    <form method="POST" action="/admin/bots/<%= b.id %>/start"><button class="bot-btn success" type="submit">เปิดบอท</button></form>
+                    <button class="bot-btn ghost" type="button" data-edit-toggle="edit-<%= b.id %>">แก้ไข</button>
+                    <form method="POST" action="/admin/bots/<%= b.id %>/delete" onsubmit="return confirm('ยืนยันลบบอทนี้?')"><button class="bot-btn danger" type="submit">ลบ</button></form>
+                  <% } %>
+                </div>
+              </td>
+            </tr>
+            <% if (b.status !== 'running') { %>
+              <tr id="edit-<%= b.id %>" class="edit-row" hidden>
+                <td colspan="7">
+                  <form method="POST" action="/admin/bots/<%= b.id %>/update" class="bot-form compact" data-bot-calc-form>
+                    <label>ลูกค้า
+                      <select name="user_id" required>
+                        <% (users || []).forEach(function(u){ %><option value="<%= u.id %>" <%= Number(u.id)===Number(b.user_id) ? 'selected' : '' %>><%= u.display_id %> - <%= u.label %></option><% }) %>
+                      </select>
+                    </label>
+                    <label>ชื่อบอท<input name="bot_name" value="<%= b.bot_name %>" required></label>
+                    <label>Server<select name="mt5_server"><% (mt5Servers || []).forEach(function(s){ %><option value="<%= s %>" <%= s===b.mt5_server ? 'selected' : '' %>><%= s %></option><% }) %></select></label>
+                    <label>Login<input name="mt5_login" value="<%= b.mt5_login %>" required></label>
+                    <label>Password<input name="mt5_password" type="password" value="<%= b.mt5_password %>" required></label>
+                    <label>แพ็กเกจ<select name="package_id" data-package-select><% (packages || []).forEach(function(p){ %><option value="<%= p.id %>" data-lot-min="<%= p.lot_min || 0 %>" data-lot-max="<%= p.lot_max || 0 %>" data-port-min="<%= p.ports_min || 1 %>" data-port-max="<%= p.ports_max || 0 %>" <%= Number(p.id)===Number(b.package_id) ? 'selected' : '' %>><%= p.group_name || p.package_code %> - <%= p.name %></option><% }) %></select></label>
+                    <label>Symbol<select name="symbol"><% (symbols || []).forEach(function(s){ %><option value="<%= s %>" <%= s===b.symbol ? 'selected' : '' %>><%= s %></option><% }) %></select></label>
+                    <label>โหมด<select id="risk_mode" name="risk_mode" data-risk-mode><% (riskModes || []).forEach(function(m){ %><option value="<%= m.key %>" <%= m.key===b.risk_mode ? 'selected' : '' %>><%= m.label %></option><% }) %></select></label>
+                    <label>เงินทุน<input name="capital" type="number" step="0.01" value="<%= b.capital %>" data-capital></label>
+                    <label>กำไร %<input name="target_profit_percent" type="number" step="0.01" value="<%= b.target_profit_percent %>" data-profit-percent></label>
+                    <label>กำไรเงิน<input name="target_profit_amount" type="number" step="0.01" value="<%= b.target_profit_amount %>" data-profit-amount></label>
+                    <label>Lot<input name="lot" type="number" step="0.01" value="<%= b.lot %>" data-lot></label>
+                    <label>Port<input name="port" type="number" step="1" value="<%= b.port %>" data-port></label>
+                    <div class="bot-preview full" data-preview>แก้ไขได้ เพราะบอทปิดอยู่</div>
+                    <div class="bot-actions full"><button class="bot-btn primary" type="submit">บันทึกแก้ไข</button></div>
+                  </form>
+                </td>
+              </tr>
+            <% } %>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="bot-card">
+    <div class="bot-card-head"><div><h3>ตารางทุน / Lot ที่ระบบใช้คำนวณ</h3><p>ระบบจะเลือกแถวที่ใกล้เงินทุนที่สุด แล้วดึง Lot และค่า T ตามโหมด เซฟ / กลาง / รวบไว</p></div></div>
+    <div class="bot-table-wrap small">
+      <table class="bot-table compact-table">
+        <thead><tr><th>ทุนแนะนำ</th><th>ทุนเซฟ</th><th>ทุนเซฟสูงสุด</th><th>LOT SIZE</th><th>LOT PLUS</th><th>เซฟ T</th><th>กลาง T</th><th>รวบไว T</th></tr></thead>
+        <tbody>
+          <% (strategyRows || []).forEach(function(r){ %>
+            <tr><td><%= money(r.capital_recommended) %></td><td><%= money(r.capital_safe) %></td><td><%= money(r.capital_max_safe) %></td><td><%= r.lot_size %></td><td><%= r.lot_plus %></td><td><%= r.safe_t_start %>/<%= r.safe_t_stop %></td><td><%= r.medium_t_start %>/<%= r.medium_t_stop %></td><td><%= r.fast_t_start %>/<%= r.fast_t_stop %></td></tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+  window.ADMIN_BOT_PACKAGES = <%- JSON.stringify(packages || []) %>;
+  window.ADMIN_BOT_STRATEGY_ROWS = <%- JSON.stringify(strategyRows || []) %>;
+</script>
+<script src="/js/admin-bots.js"></script>
+
+<%- include('../partials/admin-shell-end') %>

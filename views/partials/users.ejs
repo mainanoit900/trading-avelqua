@@ -1,0 +1,39 @@
+<%- include('../partials/admin-shell') %>
+<section class="card">
+  <div class="card-head"><div><h3>User Center</h3><p>ค้นหาเร็ว แสดงเป็นแถว แล้วค่อยกดแก้ไข</p></div><div class="kpi-row"><span class="kpi-chip">ทั้งหมด <%= counts.total || 0 %></span><span class="kpi-chip">ใช้งาน <%= counts.active || 0 %></span><span class="kpi-chip">ถูกแบน <%= counts.banned || 0 %></span></div></div>
+  <form class="toolbar" method="GET" action="/admin/users">
+    <input type="text" name="q" value="<%= filters.q || '' %>" placeholder="ค้นหาชื่อ / อีเมล / เบอร์ / user id" />
+    <button class="btn primary" type="submit">ค้นหา</button>
+    <a class="btn secondary" href="/admin/users">ล้างคำค้น</a>
+  </form>
+</section>
+
+<section class="accordion-list">
+  <% if (!(users || []).length) { %><section class="card"><div class="empty-box">ไม่พบข้อมูลผู้ใช้</div></section><% } %>
+  <% (users || []).forEach(function(u){ %>
+    <details class="accordion-item">
+      <summary>
+        <div><div class="cell-title">#<%= u.display_id || u.id %> · <%= u.full_name || u.first_name || '-' %></div><div class="cell-sub"><%= u.email || '-' %> · <%= u.phone || '-' %></div></div>
+        <div><strong><%= u.source_channel || u.provider || 'web' %></strong><div class="cell-sub">สมัครผ่าน</div></div>
+        <div><strong><%= u.active_package_name || '-' %></strong><div class="cell-sub">แพ็กเกจล่าสุด</div></div>
+        <div><strong><%= u.package_end_at ? new Date(u.package_end_at).toLocaleString('th-TH') : '-' %></strong><div class="cell-sub">หมดอายุ</div></div>
+        <div><span class="badge <%= u.status === 'banned' ? 'red' : 'green' %>"><%= u.status || 'active' %></span><div class="cell-sub"><%= u.email_verified ? 'email verified' : 'email pending' %></div></div>
+        <div class="inline-actions"><a class="btn secondary" href="/admin/users/<%= u.id %>/edit">แก้ไข</a></div>
+      </summary>
+      <div class="accordion-body">
+        <div class="two-col">
+          <div class="data-panel"><strong>ข้อมูลผู้ใช้</strong><div class="muted">Role: <%= u.role %> · Provider: <%= u.provider %></div><div class="muted">สร้างเมื่อ <%= u.created_at ? new Date(u.created_at).toLocaleString('th-TH') : '-' %></div></div>
+          <div class="inline-actions">
+            <% if (u.status === 'banned') { %>
+              <form method="POST" action="/admin/users/<%= u.id %>/unban"><button class="btn success">ปลดแบน</button></form>
+            <% } else { %>
+              <form method="POST" action="/admin/users/<%= u.id %>/ban"><button class="btn warning">แบน</button></form>
+            <% } %>
+            <form method="POST" action="/admin/users/<%= u.id %>/delete" onsubmit="return confirm('ยืนยันลบผู้ใช้?')"><button class="btn danger">ลบ</button></form>
+          </div>
+        </div>
+      </div>
+    </details>
+  <% }) %>
+</section>
+<%- include('../partials/admin-shell-end') %>

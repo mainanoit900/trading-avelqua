@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>PORT File Manager</title>
+<style>
+body{margin:0;background:#0f172a;color:#e5e7eb;font-family:Arial,Tahoma,sans-serif}
+.wrap{max-width:1200px;margin:auto;padding:28px}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+h1{margin:0;font-size:28px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:18px;padding:20px;box-shadow:0 10px 30px rgba(0,0,0,.25);margin-bottom:18px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.label{font-size:13px;color:#94a3b8;margin-bottom:6px}
+input,textarea{width:100%;box-sizing:border-box;background:#020617;color:#fff;border:1px solid #334155;border-radius:10px;padding:11px}
+textarea{height:260px;font-family:Consolas,monospace}
+button,.btn{border:0;border-radius:10px;padding:10px 14px;font-weight:700;cursor:pointer;text-decoration:none;display:inline-block}
+.btn-back{background:#64748b;color:#fff}
+.btn-save{background:#22c55e;color:#052e16}
+.btn-sync{background:#38bdf8;color:#082f49}
+.btn-del{background:#ef4444;color:#fff}
+.btn-edit{background:#facc15;color:#422006}
+.btn-open{background:#a78bfa;color:#2e1065}
+table{width:100%;border-collapse:collapse}
+th{background:#020617;color:#93c5fd;text-align:left;padding:14px}
+td{padding:14px;border-top:1px solid #1f2937}
+tr:hover{background:#172554}
+.path{font-family:Consolas,monospace;color:#bfdbfe;font-size:13px}
+.actions{display:flex;gap:8px;flex-wrap:wrap}
+.toolbar{display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.status{color:#94a3b8;font-size:13px;margin-top:10px}
+.empty{text-align:center;color:#94a3b8;padding:30px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="top">
+    <h1>📁 PORT FILE MANAGER</h1>
+    <a class="btn btn-back" href="/admin/vps/<%= port.vps_id %>/ports">← กลับหน้า PORT</a>
+  </div>
+
+  <div class="card">
+    <div class="grid">
+      <div>
+        <div class="label">PORT</div>
+        <input value="<%= port.display_name || port.port_name %>" disabled>
+      </div>
+      <div>
+        <div class="label">Experts Path บน Windows VPS</div>
+        <input id="experts_path" value="<%= port.experts_path || '' %>">
+      </div>
+    </div>
+    <br>
+    <div class="toolbar">
+      <button class="btn btn-save" onclick="savePath()">💾 บันทึก Path</button>
+      <button class="btn btn-sync" onclick="syncFiles()">🔗 เชื่อมต่อโฟลเดอร์ Windows VPS</button>
+      <button class="btn btn-open" onclick="openFolder()">📂 เปิดโฟลเดอร์บน Windows</button>
+      <button class="btn btn-del" onclick="lockMT5Port()">🔒 Lock MT5 PORT</button>
+    </div>
+    <div class="status" id="status">พร้อมใช้งาน</div>
+  </div>
+
+  <div class="card">
+    <div class="toolbar">
+      <input type="file" id="file" accept=".mq5,.mqh,.ex5,.txt,.set" style="max-width:420px">
+      <button class="btn btn-save" onclick="uploadFile()">⬆️ อัปโหลดเข้า PORT</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <table>
+      <thead>
+        <tr>
+          <th>ชื่อไฟล์</th>
+          <th>Path</th>
+          <th style="width:260px">จัดการ</th>
+        </tr>
+      </thead>
+      <tbody id="files">
+        <tr><td colspan="3" class="empty">กำลังโหลด...</td></tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div class="card">
+    <h3>✏️ แก้ไขไฟล์</h3>
+    <input id="edit_name" placeholder="ชื่อไฟล์ เช่น Bot.mq5">
+    <br><br>
+    <textarea id="edit_content" placeholder="วางโค้ดไฟล์ที่ต้องการเขียนลง Windows VPS"></textarea>
+    <br><br>
+    <button class="btn btn-save" onclick="saveEditor()">💾 บันทึกไฟล์ไป Windows</button>
+  </div>
+</div>
+
+<script>
+const PORT_ID = <%- JSON.stringify(port.id) %>;
+
+function setStatus(t){ document.getElementById('status').textContent = t; }
+
+async function api(url,opt={}){
+  const r = await fetch(url,{credentials:'same-origin',...opt});
+  const d = await r.json();
+  if(!d.ok && d.error) alert(d.error);
+  return d;
+}
+
+async function loadCache(){
+  const d = await api(`/admin/vps/ports/${PORT_ID}/files/api/windows-files`);
+  const box = document.getElementById('files');
+
+  if(!d.files || !d.files.length){
+    box.innerHTML = `<tr><td colspan="3" class="empty">ยังไม่มีข้อมูลไฟล์ กด “โหลดรายชื่อไฟล์จาก Windows”</td></tr>`;
+    return;
+  }
+
+  box.innerHTML = d.files.map(f=>`
+    <tr>
+      <td><b>${f.filename}</b></td>
+      <td class="path">${f.full_path || '-'}</td>
+      <td>
+        <div class="actions">
+          <button class="btn btn-edit" onclick="openEditor('${f.filename}')">แก้ไข</button>
+          <button class="btn btn-del" onclick="deleteFile('${f.filename}')">ลบ</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+function prepareEdit(name){
+  document.getElementById('edit_name').value = name;
+  setStatus('ใส่/แก้โค้ด แล้วกดบันทึกไฟล์ไป Windows');
+}
+
+async function savePath(){
+  const experts_path = document.getElementById('experts_path').value;
+  await api(`/admin/vps/ports/${PORT_ID}/files/api/path`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({experts_path})
+  });
+  setStatus('บันทึก Path แล้ว');
+}
+
+async function syncFiles(){
+  await api(`/admin/vps/ports/${PORT_ID}/files/api/connect-folder`,{ method:'POST' });
+  setStatus('ส่งคำสั่งให้ Agent โหลดรายชื่อไฟล์แล้ว รอ 3-10 วินาที แล้วกด refresh');
+  setTimeout(loadCache,4000);
+}
+
+async function openFolder(){
+  await api(`/admin/vps/ports/${PORT_ID}/files/api/command`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({command:'port_open_folder'})
+  });
+  setStatus('ส่งคำสั่งเปิดโฟลเดอร์ไป Windows แล้ว');
+}
+
+async function uploadFile(){
+  const f = document.getElementById('file').files[0];
+  if(!f){ alert('เลือกไฟล์ก่อน'); return; }
+
+  const fd = new FormData();
+  fd.append('file',f);
+
+  await fetch(`/admin/vps/ports/${PORT_ID}/files/api/upload`,{
+    method:'POST',
+    credentials:'same-origin',
+    body:fd
+  });
+
+  setStatus('อัปโหลดแล้ว ส่งคำสั่งให้ Agent นำไฟล์เข้า Windows แล้ว');
+}
+
+async function deleteFile(name){
+  if(!confirm('ลบไฟล์นี้บน Windows VPS ใช่ไหม?')) return;
+  await api(`/admin/vps/ports/${PORT_ID}/files/api/command`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({command:'port_delete_file', filename:name})
+  });
+  setStatus('ส่งคำสั่งลบไฟล์แล้ว');
+}
+
+async function writeFile(){
+  const filename = document.getElementById('edit_name').value;
+  const content = document.getElementById('edit_content').value;
+  if(!filename){ alert('ใส่ชื่อไฟล์ก่อน'); return; }
+
+  await api(`/admin/vps/ports/${PORT_ID}/files/api/write`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({filename,content})
+  });
+  setStatus('ส่งคำสั่งเขียนไฟล์ไป Windows แล้ว');
+}
+
+loadCache();
+</script>
+
+<script>
+async function waitCommand(commandId){
+  for(let i=0;i<30;i++){
+    const r = await fetch(`/admin/vps/ports/files/api/command/${commandId}`, {credentials:'same-origin'});
+    const d = await r.json();
+
+    if(d.command && d.command.status === 'done') return d.command;
+    if(d.command && d.command.status === 'error') throw new Error(d.command.error || 'Agent error');
+
+    await new Promise(x=>setTimeout(x,1000));
+  }
+  throw new Error('รอ Agent นานเกินไป');
+}
+
+async function openEditor(filename){
+  document.getElementById('edit_name').value = filename;
+  document.getElementById('edit_content').value = 'กำลังโหลดไฟล์จาก Windows...';
+
+  const r = await fetch(`/admin/vps/ports/${PORT_ID}/files/api/read-file`, {
+    method:'POST',
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({filename})
+  });
+
+  const d = await r.json();
+  if(!d.ok){ alert(d.error); return; }
+
+  try{
+    const cmd = await waitCommand(d.command_id);
+    const result = cmd.result || {};
+    document.getElementById('edit_content').value = result.content || result.text || '';
+    setStatus('โหลดไฟล์จาก Windows สำเร็จ: ' + filename);
+  }catch(e){
+    alert(e.message);
+  }
+}
+
+async function saveEditor(){
+  const filename = document.getElementById('edit_name').value.trim();
+  const content = document.getElementById('edit_content').value;
+
+  if(!filename){ alert('ใส่ชื่อไฟล์ก่อน'); return; }
+
+  const r = await fetch(`/admin/vps/ports/${PORT_ID}/files/api/save-file`, {
+    method:'POST',
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({filename, content})
+  });
+
+  const d = await r.json();
+  if(!d.ok){ alert(d.error); return; }
+
+  setStatus('กำลังบันทึกกลับ Windows...');
+  try{
+    await waitCommand(d.command_id);
+    setStatus('บันทึกกลับ Windows สำเร็จ');
+  }catch(e){
+    alert(e.message);
+  }
+}
+
+async function lockMT5Port(){
+  const r = await fetch(`/admin/vps/ports/${PORT_ID}/files/api/lock-mt5`, {
+    method:'POST',
+    credentials:'same-origin'
+  });
+
+  const d = await r.json();
+  if(!d.ok){ alert(d.error); return; }
+
+  setStatus('ส่งคำสั่ง Lock MT5 PORT แล้ว');
+}
+</script>
+
+</body>
+</html>

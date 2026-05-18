@@ -1,0 +1,488 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const currentLang = String(typeof lang !== 'undefined' ? lang : 'th').toLowerCase();
+const isTH = currentLang === 'th';
+const dateLocale = isTH ? 'th-TH' : 'en-US';
+
+const groups = ['basic', 'pro', 'advanced'];
+const groupLabels = { basic: 'BASIC', pro: 'PRO', advanced: 'ADVANCED' };
+
+function money(value) {
+  return Number(value || 0).toLocaleString(dateLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+}
+function intMoney(value) {
+  return Number(value || 0).toLocaleString(dateLocale, { maximumFractionDigits: 0 });
+}
+function pkgName(pkg) {
+  return isTH ? (pkg.name_th || pkg.name_en || '-') : (pkg.name_en || pkg.name_th || '-');
+}
+function pkgSummary(pkg) {
+  return isTH ? (pkg.summary_th || pkg.summary_en || '') : (pkg.summary_en || pkg.summary_th || '');
+}
+function profitText(pkg) {
+  return isTH ? (pkg.profit_range_th || '-') : (pkg.profit_range_en || pkg.profit_range_th || '-');
+}
+function supportText(pkg) {
+  return isTH
+    ? (pkg.support_th || pkg.support_en || 'เริ่มใช้งานได้หลังชำระเงินและแอดมินอนุมัติ')
+    : (pkg.support_en || pkg.support_th || 'Ready after payment approval');
+}
+function statusText(status) {
+  const s = String(status || 'pending').toLowerCase();
+  if (s === 'paid') return isTH ? 'สำเร็จ' : 'Paid';
+  if (s === 'cancelled') return isTH ? 'ยกเลิก' : 'Cancelled';
+  if (s === 'failed') return isTH ? 'ไม่สำเร็จ' : 'Failed';
+  if (s === 'refunded') return isTH ? 'คืนเงิน' : 'Refunded';
+  return isTH ? 'รอตรวจสอบ' : 'Pending';
+}
+function rawPayloadObj(p) {
+  if (!p || !p.raw_payload) return {};
+  if (typeof p.raw_payload === 'object') return p.raw_payload;
+  try { return JSON.parse(p.raw_payload); } catch (e) { return {}; }
+}
+function isScoinPackagePayment(p) {
+  const raw = rawPayloadObj(p);
+  return String(p.payment_method || '').toLowerCase() === 'scoin' || !!raw.scoin_payment || String(p.payment_ref || '').startsWith('SCOIN-PKG-');
+}
+function scoinAmountText(p) {
+  const raw = rawPayloadObj(p);
+  const amount = Number(p.scoin_paid_amount || (raw.scoin_payment && raw.scoin_payment.scoin_amount) || 0);
+  if (!amount) return '-';
+  return amount.toLocaleString(dateLocale, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + ' Scoin';
+}
+function paymentMethodText(p) {
+  if (isScoinPackagePayment(p)) return isTH ? 'Scoin' : 'Scoin';
+  const m = String(p.payment_method || '').toLowerCase();
+  if (m === 'credit_card') return isTH ? 'บัตรเครดิต' : 'Credit Card';
+  if (m === 'promptpay_qr') return isTH ? 'PromptPay QR' : 'PromptPay QR';
+  if (m === 'bank_transfer') return isTH ? 'โอนเงิน' : 'Bank Transfer';
+  return isTH ? 'เงินสด/โอน' : 'Cash/Transfer';
+}
+
+const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && groupedPackages[key]) || []).length), 0);
+%>
+
+<% var pageCss = '/css/app-packages.css'; %>
+<%- include('../partials/app-shell') %>
+
+<section class="package-lux-hero">
+  <div class="package-hero-glow"></div>
+
+  <div class="package-hero-content">
+    <span class="package-kicker"><%= safeT('app.packages.kicker', 'PACKAGE STORE') %></span>
+    <h2><%= safeT('app.packages.title', 'ซื้อแพ็กเกจ') %></h2>
+    <p><%= safeT('app.packages.subtitle', 'เลือกแพ็กเกจที่เหมาะกับระดับการใช้งาน ระบบจะสร้างรายการชำระเงินให้แอดมินตรวจสอบ') %></p>
+
+    <div class="package-hero-pills">
+<div class="package-hero-actions">
+  <a href="#package-history" class="package-history-shortcut">
+    📦 ดูรายการซื้อแพ็กเกจ
+  </a>
+
+  <button type="button" class="package-hero-freecoupon-btn" id="openHeroFreeCouponModal">
+    ใส่คูปองฟรี
+  </button>
+</div>
+     
+    </div>
+  </div>
+
+  <div class="package-current-card">
+    <span><%= safeT('app.packages.current_package', 'แพ็กเกจปัจจุบัน') %></span>
+    <strong><%= subscription ? (subscription.package_name_snapshot || '-') : '-' %></strong>
+    <small>
+      <%= subscription && subscription.end_at
+        ? `${safeT('app.packages.expire', 'หมดอายุ')} ${new Date(subscription.end_at).toLocaleDateString(dateLocale)}`
+        : safeT('app.packages.no_active', 'ยังไม่มีแพ็กเกจใช้งาน')
+      %>
+    </small>
+  </div>
+</section>
+
+<% groups.forEach(function(groupKey){ const items = (groupedPackages && groupedPackages[groupKey]) || []; %>
+  <section class="package-lux-section">
+    <div class="package-section-head">
+      <div>
+        <span class="package-chip"><%= groupLabels[groupKey] || groupKey.toUpperCase() %></span>
+        <h3><%= groupLabels[groupKey] || groupKey.toUpperCase() %></h3>
+      </div>
+
+      <p>
+        <%= groupKey === 'basic'
+          ? safeT('app.packages.basic_desc', 'เริ่มต้นใช้งาน เหมาะสำหรับทดลองระบบ')
+          : groupKey === 'pro'
+            ? safeT('app.packages.pro_desc', 'เหมาะสำหรับผู้ใช้งานจริง ต้องการเพิ่มพอร์ตและระยะเวลา')
+            : safeT('app.packages.advanced_desc', 'สำหรับผู้ใช้งานระดับสูง ต้องการความยืดหยุ่นสูงสุด')
+        %>
+      </p>
+    </div>
+
+    <% if (!items.length) { %>
+      <div class="package-empty">
+        <i class="fa-regular fa-folder-open"></i>
+        <%= safeT('app.packages.empty', 'ยังไม่มีแพ็กเกจในหมวดนี้') %>
+      </div>
+    <% } else { %>
+      <div class="package-lux-grid">
+        <% items.forEach(function(pkg){
+          const days = Number(pkg.days || 1);
+          const price = Number(pkg.price || 0);
+          const avgPerDay = days ? price / days : 0;
+          const isPopular = pkg.is_popular === true || pkg.is_popular === 't' || pkg.is_popular === 1;
+        %>
+          <article class="package-lux-card <%= isPopular ? 'popular' : '' %>">
+            <div class="package-card-top">
+              <span class="package-id"><%= isPopular ? safeT('app.packages.recommend', 'แนะนำ') : (pkg.display_id || pkg.package_code || ('PK' + String(pkg.id).padStart(6, '0'))) %></span>
+              <span class="package-days"><%= groupLabels[groupKey] || groupKey.toUpperCase() %></span>
+            </div>
+
+            <h4><%= days.toLocaleString(dateLocale) %> <%= safeT('app.packages.days', 'วัน') %></h4>
+
+            <p class="package-summary">
+              <%= pkgSummary(pkg) || (groupKey === 'basic' ? 'เหมาะสำหรับผู้เริ่มต้น' : groupKey === 'pro' ? 'เหมาะสำหรับผู้ใช้งานจริง' : 'เหมาะสำหรับผู้ใช้งานระดับสูง') %>
+            </p>
+
+            <div class="package-price">
+              <strong>฿<%= intMoney(price) %></strong>
+              <small><%= safeT('app.packages.avg_per_day', 'เฉลี่ย') %> ฿<%= money(avgPerDay) %> / <%= safeT('app.packages.day', 'วัน') %></small>
+            </div>
+
+<div class="package-scoin-box">
+  <div class="package-scoin-main">
+    <span>รับ SCOIN</span>
+    <strong><%= money(price * 0.30) %> SCOIN</strong>
+  </div>
+
+  <div class="package-scoin-mini">
+    
+    <div>
+      <span>ผู้แนะนำตรง</span>
+      <strong><%= money(price * 0.60) %> SCOIN</strong>
+    </div>
+  </div>
+
+  <p>
+    หมายเหตุ: สิทธิ์รับ SCOIN 30% และโบนัสแนะนำ ใช้เฉพาะการชำระด้วยเงินจริงเท่านั้น หากชำระแพ็กเกจด้วย Scoin จะไม่ได้รับ Scoin คืนและไม่แบ่งสายงาน
+  </p>
+</div>
+
+            <div class="package-features">
+              <div>
+                <span><%= safeT('app.packages.buy_package', 'ซื้อแพ็กเกจ') %></span>
+                <strong><%= pkgName(pkg) %></strong>
+              </div>
+
+              <div>
+                <span><%= safeT('app.packages.lot', 'รองรับ lot') %></span>
+                <strong><%= pkg.lot_range || '-' %></strong>
+              </div>
+
+              <div>
+                <span><%= safeT('app.packages.port_count', 'จำนวนพอร์ต') %></span>
+                <strong><%= pkg.port_range || '-' %></strong>
+              </div>
+
+              <div>
+                <span><%= safeT('app.packages.profit', 'กำไรเฉลี่ย') %></span>
+                <strong><%= profitText(pkg) %></strong>
+              </div>
+
+              <div>
+                <span><%= safeT('app.packages.duration', 'ใช้งานระบบได้') %></span>
+                <strong><%= days.toLocaleString(dateLocale) %> <%= safeT('app.packages.days', 'วัน') %></strong>
+              </div>
+
+              <div>
+                <span><%= safeT('app.packages.support', 'การใช้งาน') %></span>
+                <strong><%= supportText(pkg) %></strong>
+              </div>
+            </div>
+
+            <p class="package-note">
+              <%= safeT('app.packages.ready_note', 'พร้อมใช้งานทันทีและเหมาะกับระดับแพ็กเกจที่เลือก') %>
+            </p>
+
+            <form method="POST" action="/app/packages/<%= pkg.id %>/buy" class="package-buy-form">
+              <button
+                type="button"
+                class="package-buy-btn js-open-package-buy"
+                data-package-name="<%= pkgName(pkg) %>"
+                data-package-group="<%= groupLabels[groupKey] || groupKey.toUpperCase() %>"
+                data-package-days="<%= days.toLocaleString(dateLocale) %>"
+                data-package-price="฿<%= intMoney(price) %>"
+                data-package-lot="<%= pkg.lot_range || '-' %>"
+                data-package-port="<%= pkg.port_range || '-' %>"
+              >
+                <span><%= safeT('app.packages.buy_now', 'ซื้อแพ็กเกจ') %></span>
+              </button>
+            </form>
+          </article>
+        <% }) %>
+      </div>
+    <% } %>
+  </section>
+<% }) %>
+
+<section id="package-history" class="package-lux-section package-history-section">
+  <div class="package-section-head">
+    <div>
+      <span class="package-chip"><%= safeT('app.packages.history_chip', 'PAYMENT') %></span>
+      <h3><%= safeT('app.packages.history_title', 'รายการซื้อแพ็กเกจล่าสุด') %></h3>
+    </div>
+    <p><%= safeT('app.packages.history_desc', 'รายการที่ซื้อด้วยเงินจริงและ Scoin จะแสดงรวมกัน หากจ่ายด้วย Scoin ระบบเปิดใช้งานทันที แต่ไม่ได้รับ Scoin คืนและไม่แบ่งโบนัสสายงาน') %></p>
+  </div>
+
+  <% if (!(recentPackagePayments || []).length) { %>
+    <div class="package-empty">
+      <i class="fa-regular fa-receipt"></i>
+      <%= safeT('app.packages.no_history', 'ยังไม่มีรายการซื้อแพ็กเกจ') %>
+    </div>
+  <% } else { %>
+    <div class="package-history-table">
+      <table>
+        <thead>
+          <tr>
+            <th><%= safeT('common.id', 'ID') %></th>
+            <th><%= safeT('dashboard.package', 'Package') %></th>
+            <th><%= safeT('common.amount', 'ยอดเงิน') %></th>
+            <th>วิธีชำระ</th>
+            <th><%= safeT('common.status', 'สถานะ') %></th>
+            <th><%= safeT('common.created_at', 'วันที่') %></th>
+	     <th>จัดการ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% recentPackagePayments.forEach(function(p){ %>
+            <tr>
+              <td><span class="history-id">#<%= p.display_id || ('PM' + String(p.id).padStart(6, '0')) %></span></td>
+              <td><%= p.package_name_snapshot || '-' %></td>
+              <td>
+                <div>฿<%= money(p.final_amount || p.amount || 0) %></div>
+                <% if (isScoinPackagePayment(p)) { %>
+                  <small class="history-scoin-amount"><%= scoinAmountText(p) %></small>
+                <% } %>
+              </td>
+              <td>
+                <% if (isScoinPackagePayment(p)) { %>
+                  <span class="history-method-badge scoin">
+                    <i class="fa-solid fa-coins"></i> ชำระด้วย Scoin
+                  </span>
+                <% } else { %>
+                  <span class="history-method-badge cash"><%= paymentMethodText(p) %></span>
+                <% } %>
+              </td>
+              <td><span class="package-status <%= String(p.payment_status || 'pending').toLowerCase() %>"><%= statusText(p.payment_status) %></span></td>
+              <td><%= p.created_at ? new Date(p.created_at).toLocaleString(dateLocale) : '-' %></td>
+<td>
+  <% if (String(p.payment_status || '').toLowerCase() === 'pending') { %>
+    <div class="package-history-actions">
+      <a class="history-pay-btn" href="/app/package-payment/<%= p.id %>">
+        ชำระเงินต่อ
+      </a>
+
+      <form method="POST" action="/app/package-payment/<%= p.id %>/cancel" onsubmit="return confirm('ยืนยันยกเลิกรายการนี้?');">
+        <button type="submit" class="history-cancel-btn">
+          ยกเลิก
+        </button>
+      </form>
+    </div>
+  <% } else { %>
+    <span class="history-muted">-</span>
+  <% } %>
+</td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+
+    <% if ((paymentTotalPages || 1) > 1) { %>
+      <div class="package-history-pagination" aria-label="Package history pagination">
+        <% const currentPayPage = Number(paymentPage || 1); %>
+        <% if (currentPayPage > 1) { %>
+          <a class="history-page-btn" href="/app/packages?page=<%= currentPayPage - 1 %>#package-history">
+            <i class="fa-solid fa-chevron-left"></i> ก่อนหน้า
+          </a>
+        <% } else { %>
+          <span class="history-page-btn disabled"><i class="fa-solid fa-chevron-left"></i> ก่อนหน้า</span>
+        <% } %>
+
+        <span class="history-page-info">
+          หน้า <strong><%= currentPayPage %></strong> / <strong><%= paymentTotalPages %></strong>
+        </span>
+
+        <% if (currentPayPage < Number(paymentTotalPages || 1)) { %>
+          <a class="history-page-btn" href="/app/packages?page=<%= currentPayPage + 1 %>#package-history">
+            ถัดไป <i class="fa-solid fa-chevron-right"></i>
+          </a>
+        <% } else { %>
+          <span class="history-page-btn disabled">ถัดไป <i class="fa-solid fa-chevron-right"></i></span>
+        <% } %>
+      </div>
+    <% } %>
+
+  <% } %>
+</section>
+
+
+<div class="scoin-confirm-modal buy-confirm-modal" id="packageBuyConfirmModal" aria-hidden="true">
+  <div class="scoin-confirm-backdrop" data-buy-close></div>
+  <div class="scoin-confirm-card buy-confirm-card" role="dialog" aria-modal="true" aria-labelledby="packageBuyConfirmTitle">
+    <button type="button" class="scoin-confirm-x" data-buy-close aria-label="ปิด">×</button>
+    <div class="scoin-confirm-icon buy-confirm-icon"><i class="fa-solid fa-gem"></i></div>
+    <span class="package-chip">PREMIUM ORDER</span>
+    <h3 id="packageBuyConfirmTitle">ยืนยันซื้อแพ็กเกจ</h3>
+    <p>ตรวจสอบรายละเอียดก่อนสร้างรายการชำระเงิน ระบบจะพาไปหน้าชำระเงินหลังจากกดยืนยัน</p>
+    <div class="scoin-confirm-lines">
+      <div><span>แพ็กเกจ</span><strong id="buyModalPackage">-</strong></div>
+      <div><span>ระดับ</span><strong id="buyModalGroup">-</strong></div>
+      <div><span>ระยะเวลา</span><strong><span id="buyModalDays">-</span> วัน</strong></div>
+      <div><span>Lot / Port</span><strong><span id="buyModalLot">-</span> · <span id="buyModalPort">-</span></strong></div>
+      <div class="highlight"><span>ยอดชำระ</span><strong id="buyModalPrice">฿0</strong></div>
+    </div>
+    <div class="scoin-confirm-actions">
+      <button type="button" class="scoin-modal-cancel" data-buy-close>ยกเลิก</button>
+      <button type="button" class="scoin-modal-confirm" id="confirmPackageBuyBtn">ยืนยันซื้อ</button>
+    </div>
+  </div>
+</div>
+
+<div class="scoin-confirm-modal" id="heroFreeCouponModal" aria-hidden="true">
+  <div class="scoin-confirm-backdrop" data-hero-fc-close></div>
+  <div class="scoin-confirm-card" role="dialog" aria-modal="true">
+    <button type="button" class="scoin-confirm-x" data-hero-fc-close aria-label="ปิด">×</button>
+    <div class="scoin-confirm-icon">
+      <i class="fa-solid fa-ticket"></i>
+    </div>
+    <span class="package-chip">คูปองฟรี</span>
+    <h3>ใส่คูปองฟรี</h3>
+    <p>กรอกโค้ดเพื่อดูรายละเอียดและยืนยันในขั้นตอนถัดไป</p>
+    <form method="POST" action="/app/packages/free-coupon">
+      <input
+        type="text"
+        name="coupon_code"
+        id="heroFreeCouponCode"
+        class="form-control"
+        placeholder="กรอกโค้ดคูปองฟรี"
+        required
+        autocomplete="off"
+      >
+      <div class="scoin-confirm-actions">
+        <button type="button" class="scoin-modal-cancel" data-hero-fc-close>ยกเลิก</button>
+        <button type="submit" class="scoin-modal-confirm">ตรวจสอบ</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<script>
+  (function () {
+    const modal = document.getElementById('packageBuyConfirmModal');
+    const confirmBtn = document.getElementById('confirmPackageBuyBtn');
+    let activeForm = null;
+    if (!modal || !confirmBtn) return;
+
+    function setText(id, value) {
+      const el = document.getElementById(id);
+      if (el) el.textContent = value || '-';
+    }
+
+    function openModal(button) {
+      activeForm = button.closest('form');
+      setText('buyModalPackage', button.dataset.packageName);
+      setText('buyModalGroup', button.dataset.packageGroup);
+      setText('buyModalDays', button.dataset.packageDays);
+      setText('buyModalLot', button.dataset.packageLot);
+      setText('buyModalPort', button.dataset.packagePort);
+      setText('buyModalPrice', button.dataset.packagePrice);
+      confirmBtn.disabled = false;
+      confirmBtn.textContent = 'ยืนยันซื้อ';
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('scoin-modal-open');
+    }
+
+    function closeModal() {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('scoin-modal-open');
+    }
+
+    document.querySelectorAll('.js-open-package-buy').forEach(function (button) {
+      button.addEventListener('click', function () { openModal(button); });
+    });
+    modal.querySelectorAll('[data-buy-close]').forEach(function (el) { el.addEventListener('click', closeModal); });
+    document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && modal.classList.contains('show')) closeModal(); });
+    confirmBtn.addEventListener('click', function () {
+      if (!activeForm) return;
+      confirmBtn.disabled = true;
+      confirmBtn.textContent = 'กำลังสร้างรายการ...';
+      activeForm.submit();
+    });
+  })();
+</script>
+
+<script>
+  (function () {
+    const openBtn = document.getElementById('openHeroFreeCouponModal');
+    const modal = document.getElementById('heroFreeCouponModal');
+    if (!openBtn || !modal) return;
+
+    function openHeroFc() {
+      modal.classList.add('show');
+      modal.setAttribute('aria-hidden', 'false');
+      document.body.classList.add('scoin-modal-open');
+      const input = document.getElementById('heroFreeCouponCode');
+      if (input) { input.focus(); input.select(); }
+    }
+
+    function closeHeroFc() {
+      modal.classList.remove('show');
+      modal.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('scoin-modal-open');
+    }
+
+    openBtn.addEventListener('click', openHeroFc);
+    modal.querySelectorAll('[data-hero-fc-close]').forEach(function (el) {
+      el.addEventListener('click', closeHeroFc);
+    });
+    document.addEventListener('keydown', function (event) {
+      if (event.key === 'Escape' && modal.classList.contains('show')) closeHeroFc();
+    });
+  })();
+</script>
+
+<% if (packagesFreeCouponPreview) { %>
+  <div class="scoin-confirm-modal show" id="freeCouponPreviewModal" aria-hidden="false">
+    <div class="scoin-confirm-backdrop"></div>
+
+    <div class="scoin-confirm-card">
+      <div class="scoin-confirm-icon">
+        <i class="fa-solid fa-gift"></i>
+      </div>
+
+      <span class="package-chip">คูปองฟรี</span>
+
+      <h3>รายละเอียดคูปองฟรี</h3>
+
+      <div class="scoin-confirm-lines">
+        <div><span>ชื่อคูปอง</span><strong><%= packagesFreeCouponPreview.couponName %></strong></div>
+        <div><span>รหัสฟรี</span><strong><%= packagesFreeCouponPreview.couponCode %></strong></div>
+        <div><span>ประเภท</span><strong><%= packagesFreeCouponPreview.couponType %></strong></div>
+        <div><span>ระดับแพ็กเกจฟรี</span><strong><%= packagesFreeCouponPreview.packageGroup %></strong></div>
+        <div class="highlight"><span>ฟรีกี่วัน</span><strong><%= packagesFreeCouponPreview.freeDays %> วัน</strong></div>
+      </div>
+
+      <div class="scoin-confirm-actions">
+        <a href="/app/packages?clear_free_coupon=1" class="scoin-modal-cancel">ยกเลิก</a>
+
+        <form method="POST" action="/app/packages/free-coupon/confirm">
+          <input type="hidden" name="coupon_code" value="<%= packagesFreeCouponPreview.couponCode %>">
+          <button type="submit" class="scoin-modal-confirm">ยืนยันใช้คูปองฟรี</button>
+        </form>
+      </div>
+    </div>
+  </div>
+<% } %>
+
+<%- include('../partials/app-shell-end') %>

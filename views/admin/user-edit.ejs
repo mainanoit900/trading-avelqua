@@ -1,0 +1,24 @@
+<%- include('../partials/admin-shell') %>
+<section class="card form-card">
+  <div class="card-head"><div><h3><%= t('admin.users.edit_user', 'Edit User') %></h3><p><%= t('admin.users.edit_user_desc', 'Update profile, source channel, and latest package.') %></p></div></div>
+  <% if (!editUser) { %>
+    <div class="empty-box"><%= t('admin.users.empty', 'No users found') %></div>
+  <% } else { %>
+    <form method="POST" action="/admin/users/<%= editUser.id %>/update" class="form-grid three">
+      <label><%= t('admin.users.full_name', 'Full name') %><input type="text" name="full_name" value="<%= editUser.full_name || '' %>" /></label>
+      <label><%= t('admin.users.first_name', 'First name') %><input type="text" name="first_name" value="<%= editUser.first_name || '' %>" /></label>
+      <label><%= t('admin.users.last_name', 'Last name') %><input type="text" name="last_name" value="<%= editUser.last_name || '' %>" /></label>
+      <label><%= t('common.email', 'Email') %><input type="email" name="email" value="<%= editUser.email || '' %>" /></label>
+      <label><%= t('common.phone', 'Phone') %><input type="text" name="phone" value="<%= editUser.phone || '' %>" /></label>
+      <label><%= t('admin.users.role', 'Role') %><select name="role"><option value="user" <%= editUser.role==='user' ? 'selected' : '' %>><%= t('role.user', 'user') %></option><option value="admin" <%= editUser.role==='admin' ? 'selected' : '' %>><%= t('role.admin', 'admin') %></option></select></label>
+      <label><%= t('admin.users.provider', 'Provider') %><select name="provider"><option value="web" <%= editUser.provider==='web' ? 'selected' : '' %>>web</option><option value="google" <%= editUser.provider==='google' ? 'selected' : '' %>>google</option><option value="line" <%= editUser.provider==='line' ? 'selected' : '' %>>line</option><option value="local" <%= editUser.provider==='local' ? 'selected' : '' %>>local</option></select></label>
+      <label><%= t('admin.users.status', 'Status') %><select name="status"><option value="active" <%= editUser.status==='active' ? 'selected' : '' %>><%= t('status.active', 'active') %></option><option value="banned" <%= editUser.status==='banned' ? 'selected' : '' %>><%= t('status.banned', 'banned') %></option></select></label>
+      <input type="hidden" name="subscription_id" value="<%= subscription?.id || '' %>" />
+      <label><%= t('admin.users.source_channel', 'Source Channel') %><input type="text" name="source_channel" value="<%= subscription?.source_channel || '' %>" /></label>
+      <label><%= t('admin.users.latest_package', 'Latest package') %><input type="text" name="package_name_snapshot" value="<%= subscription?.package_name_snapshot || '' %>" /></label>
+      <label><%= t('admin.users.expires_at', 'Expires at') %><input type="datetime-local" name="package_end_at" value="<%= subscription?.end_at ? new Date(new Date(subscription.end_at).getTime() - new Date(subscription.end_at).getTimezoneOffset()*60000).toISOString().slice(0,16) : '' %>" /></label>
+      <div class="form-actions full"><button class="btn primary"><%= t('common.save', 'Save') %></button><a class="btn secondary" href="/admin/users"><%= t('common.back', 'Back') %></a></div>
+    </form>
+  <% } %>
+</section>
+<%- include('../partials/admin-shell-end') %>

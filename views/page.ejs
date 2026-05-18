@@ -1,0 +1,61 @@
+<%
+const safeLang = typeof lang !== 'undefined' ? lang : 'th';
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const safePage = typeof page !== 'undefined' && page ? page : {};
+const safeSite = typeof site !== 'undefined' && site ? site : {};
+const brandName = safeSite.brandName || 'TRADING AVELQUA';
+
+const pageTitle =
+  typeof title !== 'undefined'
+    ? title
+    : (typeof pageTitle !== 'undefined'
+        ? pageTitle
+        : (safePage.title || brandName));
+
+const pageDescription =
+  typeof content !== 'undefined'
+    ? content
+    : (safePage.description || safeT('page.default_desc', 'Information on the TRADING AVELQUA platform'));
+%>
+<!DOCTYPE html>
+<html lang="<%= safeLang %>">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title><%= pageTitle %></title>
+  <meta name="description" content="<%= pageDescription %>">
+
+  <link rel="stylesheet" href="/public/css/style.css">
+  <link rel="stylesheet" href="/public/css/page.css">
+</head>
+<body class="page-screen">
+
+  <div class="page-box">
+    <div class="page-brand"><%= brandName %></div>
+
+    <h1 class="page-title"><%= pageTitle %></h1>
+
+    <p class="page-description"><%= pageDescription %></p>
+
+    <div class="page-body">
+      <% if (safePage.body) { %>
+        <%- safePage.body %>
+      <% } else { %>
+        <%= safeT('page.empty', 'No additional details yet') %>
+      <% } %>
+    </div>
+
+    <div class="page-actions">
+      <a href="/" class="page-btn page-btn-primary">
+        <%= safeT('common.back_home', 'Back to Home') %>
+      </a>
+
+      <div class="page-lang">
+        <a href="/set-language/th" class="page-lang-link <%= safeLang === 'th' ? 'active' : '' %>">TH</a>
+        <a href="/set-language/en" class="page-lang-link <%= safeLang === 'en' ? 'active' : '' %>">EN</a>
+      </div>
+    </div>
+  </div>
+
+</body>
+</html>

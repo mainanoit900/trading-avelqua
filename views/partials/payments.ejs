@@ -1,0 +1,29 @@
+<%- include('../partials/admin-shell') %>
+<section class="card">
+  <div class="card-head"><div><h3>Payment Center</h3><p>แสดงแบบเป็นแถว แล้วค่อยขยายดู</p></div><div class="kpi-row"><span class="kpi-chip">ทั้งหมด <%= counts.total || 0 %></span><span class="kpi-chip">ชำระสำเร็จ <%= counts.paid || 0 %></span><span class="kpi-chip">รายได้ ฿<%= Number(counts.revenue || 0).toLocaleString('th-TH') %></span></div></div>
+  <form class="toolbar" method="GET" action="/admin/payments">
+    <input type="text" name="q" value="<%= filters.q || '' %>" placeholder="ค้นหาผู้จ่าย / แพ็กเกจ / ยอด / สถานะ / วิธีชำระ" />
+    <button class="btn primary" type="submit">ค้นหา</button>
+    <a class="btn secondary" href="/admin/payments">ล้างคำค้น</a>
+  </form>
+</section>
+<section class="accordion-list">
+  <% if (!(payments || []).length) { %><section class="card"><div class="empty-box">ไม่พบข้อมูลการชำระเงิน</div></section><% } %>
+  <% (payments || []).forEach(function(p){ %>
+    <details class="accordion-item">
+      <summary>
+        <div><div class="cell-title"><%= p.payer_name || p.full_name || '-' %></div><div class="cell-sub">#<%= p.display_id || p.id %> · <%= p.payer_email || p.email || '-' %></div></div>
+        <div><strong><%= p.package_name_snapshot || '-' %></strong><div class="cell-sub">แพ็กเกจ</div></div>
+        <div><strong>฿<%= Number(p.final_amount || p.amount || 0).toLocaleString('th-TH') %></strong><div class="cell-sub">ยอดชำระ</div></div>
+        <div><strong><%= p.payment_method || '-' %></strong><div class="cell-sub">ช่องทาง</div></div>
+        <div><span class="badge <%= p.payment_status === 'paid' ? 'green' : 'yellow' %>"><%= p.payment_status %></span></div>
+        <div class="inline-actions"><span class="cell-sub"><%= p.created_at ? new Date(p.created_at).toLocaleString('th-TH') : '-' %></span></div>
+      </summary>
+      <div class="accordion-body">
+        <div class="data-panel">Discount: ฿<%= Number(p.discount_amount || 0).toLocaleString('th-TH') %> · Currency: <%= p.currency_code || 'THB' %> · Paid at: <%= p.paid_at ? new Date(p.paid_at).toLocaleString('th-TH') : '-' %></div>
+        <form method="POST" action="/admin/payments/<%= p.id %>/delete" onsubmit="return confirm('ยืนยันลบ?')"><button class="btn danger">ลบรายการ</button></form>
+      </div>
+    </details>
+  <% }) %>
+</section>
+<%- include('../partials/admin-shell-end') %>

@@ -1,0 +1,40 @@
+{
+  "users": [
+    {
+      "id": "u_177669024889661069",
+      "firstName": "",
+      "lastName": "",
+      "name": "work ai",
+      "email": "workingai9999@gmail.com",
+      "phone": "",
+      "address": "",
+      "password": "",
+      "role": "user",
+      "provider": "google",
+      "emailVerified": true,
+      "verifyToken": "",
+      "status": "active",
+      "googleId": "117813376315127802407",
+      "lineId": "",
+      "createdAt": "2026-04-20T13:04:08.896Z",
+      "activePackageId": null,
+      "activePackageName": null,
+      "packageStartAt": null,
+      "packageEndAt": null,
+      "lotMin": 0,
+      "lotMax": 0,
+      "portMin": 0,
+      "portMax": 0,
+      "packageHistory": []
+    }
+  ],
+  "packages": [],
+  "ports": [],
+  "orders": [],
+  "payments": [],
+  "siteContent": {},
+  "news": [],
+  "communityPosts": [],
+  "passwordResetTokens": [],
+  "emailVerifyTokens": []
+}

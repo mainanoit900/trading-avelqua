@@ -1,0 +1,153 @@
+<%
+const localeCode = String(typeof lang !== 'undefined' ? lang : 'th').toLowerCase() === 'th' ? 'th-TH' : 'en-US';
+
+function fmtMoney(value) {
+  return Number(value || 0).toLocaleString(localeCode, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function fmtNum(value, min = 2, max = 4) {
+  return Number(value || 0).toLocaleString(localeCode, {
+    minimumFractionDigits: min,
+    maximumFractionDigits: max
+  });
+}
+
+const paymentMethod = String(order.payment_method || '').toLowerCase();
+const totalPay = Number(order.net_amount_thb || order.gross_amount_thb || 0);
+%>
+
+<%- include('../partials/app-shell') %>
+
+<style>
+.scoin-pay-page{display:grid;gap:18px}
+.scoin-pay-card{
+  border:1px solid rgba(130,154,197,.14);
+  background:linear-gradient(180deg,rgba(7,19,40,.98) 0%,rgba(8,18,36,.96) 100%);
+  border-radius:22px;
+  padding:22px;
+  color:#fff;
+}
+.scoin-pay-head{display:flex;justify-content:space-between;gap:14px;flex-wrap:wrap;margin-bottom:18px}
+.scoin-pay-head h3{margin:0;font-size:24px}
+.scoin-muted{color:#8fa5ce}
+.scoin-pay-grid{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}
+.scoin-pay-box{background:#0a1628;border:1px solid rgba(130,154,197,.14);border-radius:16px;padding:16px}
+.scoin-pay-box span{display:block;color:#8fa5ce;font-size:13px;margin-bottom:8px}
+.scoin-pay-box strong{font-size:20px}
+.pay-card{margin-top:18px;padding:20px;border-radius:18px;background:rgba(255,255,255,.03);border:1px solid rgba(130,154,197,.12)}
+.qr-box{display:inline-flex;align-items:center;justify-content:center;min-width:230px;min-height:230px;background:#fff;color:#111;border-radius:18px;padding:18px;font-weight:800;text-align:center}
+.pay-actions{display:grid;gap:12px;margin-top:18px}
+.btn-full{width:100%;text-align:center}
+@media(max-width:900px){.scoin-pay-grid{grid-template-columns:1fr 1fr}}
+@media(max-width:560px){.scoin-pay-grid{grid-template-columns:1fr}}
+</style>
+
+<div class="scoin-pay-page">
+  <section class="scoin-pay-card">
+    <div class="scoin-pay-head">
+      <div>
+        <h3>ชำระเงินซื้อ Scoin</h3>
+        <p class="scoin-muted">คำสั่งซื้อ #<%= order.display_id || order.id %></p>
+      </div>
+      <span class="wallet-badge <%= String(order.payment_status || order.status || 'pending').toLowerCase() %>">
+        <%= String(order.payment_status || order.status || 'pending').toUpperCase() %>
+      </span>
+    </div>
+
+    <% if (typeof success !== 'undefined' && success) { %>
+      <div class="alert alert-success"><%= success %></div>
+    <% } %>
+
+    <% if (typeof error !== 'undefined' && error) { %>
+      <div class="alert alert-danger"><%= error %></div>
+    <% } %>
+
+    <div class="scoin-pay-grid">
+      <div class="scoin-pay-box">
+        <span>จำนวน Scoin</span>
+        <strong><%= fmtNum(order.scoin_amount, 2, 4) %></strong>
+      </div>
+
+      <div class="scoin-pay-box">
+        <span>ราคา / Scoin</span>
+        <strong>฿<%= fmtNum(order.price_thb, 2, 4) %></strong>
+      </div>
+
+      <div class="scoin-pay-box">
+        <span>ยอดซื้อ</span>
+        <strong>฿<%= fmtMoney(order.gross_amount_thb) %></strong>
+      </div>
+
+      <div class="scoin-pay-box">
+        <span>ค่าธรรมเนียม</span>
+        <strong>฿<%= fmtMoney(order.fee_amount_thb) %></strong>
+      </div>
+    </div>
+
+    <div class="scoin-pay-box" style="margin-top:12px;">
+      <span>ยอดชำระทั้งหมด</span>
+      <strong>฿<%= fmtMoney(totalPay) %></strong>
+    </div>
+
+    <% if (paymentMethod === 'promptpay_qr') { %>
+  <div class="pay-card">
+    <h4>PromptPay QR</h4>
+    <p class="scoin-muted">สแกน QR และรอระบบ KBank ยืนยันอัตโนมัติ</p>
+
+    <div class="qr-box">
+      <% if (typeof kbankPayment !== 'undefined' && kbankPayment && kbankPayment.qr_text) { %>
+        <div>
+          <div>KBANK QR</div>
+          <div style="font-size:12px;margin-top:8px;word-break:break-all;">
+            <%= kbankPayment.qr_text %>
+          </div>
+          <div style="margin-top:10px;">
+            ยอดชำระ ฿<%= fmtMoney(totalPay) %>
+          </div>
+        </div>
+      <% } else { %>
+        ไม่สามารถสร้าง QR ได้
+      <% } %>
+    </div>
+
+    <% if (typeof kbankMockMode !== 'undefined' && kbankMockMode) { %>
+      <p class="scoin-muted">โหมดทดสอบ: ยังไม่ได้ใส่ KBank Key จริง</p>
+    <% } %>
+
+    <p class="scoin-muted">เมื่อชำระสำเร็จ ระบบจะเติม Scoin ให้อัตโนมัติ</p>
+  </div>
+<% } %>
+
+    <% if (paymentMethod === 'credit_card') { %>
+  <div class="pay-card">
+    <h4>บัตรเครดิต / เดบิต</h4>
+    <p class="scoin-muted">ชำระผ่าน KBank Payment Gateway</p>
+
+    <% if (typeof kbankPayment !== 'undefined' && kbankPayment && kbankPayment.payment_url) { %>
+      <a href="<%= kbankPayment.payment_url %>" class="btn btn-primary btn-full">
+        ไปหน้าชำระเงิน KBank
+      </a>
+    <% } else { %>
+      <button type="button" class="btn btn-secondary btn-full" disabled>
+        ยังไม่ได้เปิดใช้งาน KBank Card Payment
+      </button>
+    <% } %>
+
+    <% if (typeof kbankMockMode !== 'undefined' && kbankMockMode) { %>
+      <p class="scoin-muted">โหมดทดสอบ: รอใส่ KBank Key จริง</p>
+    <% } %>
+  </div>
+<% } %>
+
+    <div class="pay-actions">
+      <a href="/app/scoin-wallet" class="btn btn-secondary btn-full">
+        กลับไปกระเป๋า Scoin
+      </a>
+    </div>
+  </section>
+</div>
+
+<%- include('../partials/app-shell-end') %>

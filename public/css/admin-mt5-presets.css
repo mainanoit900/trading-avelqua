@@ -1,0 +1,482 @@
+.mt5-page {
+  padding: 22px;
+  color: #e5e7eb;
+}
+
+/* ===== HERO ===== */
+.mt5-hero {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 22px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, #020617, #0f172a);
+  border: 1px solid #1e293b;
+}
+
+.mt5-kicker {
+  color: #38bdf8;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.mt5-hero h1 {
+  color: #fff;
+  margin: 5px 0;
+}
+
+.mt5-hero p {
+  color: #94a3b8;
+}
+
+/* ===== BUTTON ===== */
+.mt5-btn {
+  padding: 8px 14px;
+  border-radius: 10px;
+  border: none;
+  font-weight: bold;
+  color: #fff;
+  cursor: pointer;
+}
+
+.mt5-btn.primary { background: #2563eb; }
+.mt5-btn.success { background: #16a34a; }
+.mt5-btn.warning { background: #d97706; }
+.mt5-btn.danger  { background: #dc2626; }
+.mt5-btn.gray    { background: #475569; }
+
+/* ===== CARD ===== */
+.mt5-card {
+  margin-top: 20px;
+  border-radius: 18px;
+  background: #020617;
+  border: 1px solid #1e293b;
+  overflow: hidden;
+}
+
+.mt5-card-head {
+  padding: 16px;
+  background: #020617;
+  border-bottom: 1px solid #1e293b;
+}
+
+.mt5-card-head h2 {
+  color: #fff;
+}
+
+.mt5-card-head p {
+  color: #64748b;
+}
+
+/* ===== TABLE ===== */
+.mt5-table-wrap {
+  overflow-x: auto;
+}
+
+.mt5-excel-table {
+  width: 100%;
+  border-collapse: collapse;
+  color: #e2e8f0;
+  font-size: 14px;
+}
+
+/* header ใหญ่ */
+.mt5-excel-table .group-head th {
+  background: #0f172a;
+  color: #38bdf8;
+  font-weight: 800;
+}
+
+/* header ย่อย */
+.mt5-excel-table .sub-head th {
+  background: #020617;
+  color: #94a3b8;
+}
+
+/* cell */
+.mt5-excel-table th,
+.mt5-excel-table td {
+  border: 1px solid #1e293b;
+  padding: 8px;
+  text-align: center;
+}
+
+/* zebra row */
+.mt5-excel-table tbody tr:nth-child(even) {
+  background: #020617;
+}
+
+.mt5-excel-table tbody tr:nth-child(odd) {
+  background: #030712;
+}
+
+/* hover */
+.mt5-excel-table tbody tr:hover {
+  background: #0f172a;
+}
+
+/* highlight LOT */
+.mt5-excel-table td:nth-child(4),
+.mt5-excel-table td:nth-child(5) {
+  color: #22c55e;
+  font-weight: bold;
+}
+
+/* ===== MODAL ===== */
+.mt5-modal {
+  display: none;
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,.7);
+  z-index: 9999;
+}
+
+.mt5-modal.show {
+  display: block;
+}
+
+.mt5-modal-panel {
+  margin: 40px auto;
+  background: #020617;
+  border-radius: 16px;
+  max-width: 1200px;
+  border: 1px solid #1e293b;
+}
+
+.mt5-modal-head {
+  padding: 15px;
+  background: #0f172a;
+  color: #fff;
+  display: flex;
+  justify-content: space-between;
+}
+
+.mt5-close-modal {
+  background: #dc2626;
+  border: none;
+  color: #fff;
+  padding: 6px 10px;
+  border-radius: 8px;
+}
+
+/* ===== FORM ===== */
+.mt5-form-grid {
+  padding: 20px;
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 10px;
+}
+
+.mt5-form-grid input {
+  background: #020617;
+  border: 1px solid #1e293b;
+  color: #fff;
+  padding: 6px;
+  border-radius: 6px;
+}
+
+/* ===== EDIT TABLE ===== */
+.mt5-edit-table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.mt5-edit-table th {
+  background: #0f172a;
+  color: #fff;
+}
+
+.mt5-edit-table td {
+  border: 1px solid #1e293b;
+}
+
+.small-save {
+  background: #16a34a;
+  color: #fff;
+  border: none;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+.small-delete {
+  background: #dc2626;
+  color: #fff;
+  border: none;
+  padding: 5px 8px;
+  border-radius: 6px;
+}
+
+/* ===== FIX MODAL SCROLL ===== */
+.mt5-modal {
+  overflow-y: auto !important;
+  padding: 24px !important;
+}
+
+.mt5-modal.show {
+  display: block !important;
+}
+
+.mt5-modal-panel {
+  max-height: calc(100vh - 48px) !important;
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.mt5-modal-panel.wide {
+  max-width: 96vw !important;
+}
+
+.mt5-modal-head {
+  position: sticky !important;
+  top: 0 !important;
+  z-index: 5 !important;
+}
+
+.mt5-table-wrap.modal-table {
+  max-height: calc(100vh - 130px) !important;
+  overflow: auto !important;
+}
+
+.mt5-edit-table {
+  min-width: 1350px !important;
+}
+
+.mt5-excel-table {
+  min-width: 1120px !important;
+}
+
+/* ===== BEAUTIFUL PRESET LIST PAGE ===== */
+.mt5-list-page {
+  padding: 26px;
+  color: #e5e7eb;
+}
+
+.mt5-list-hero {
+  position: relative;
+  overflow: hidden;
+  margin-bottom: 24px;
+  padding: 28px;
+  border-radius: 24px;
+  background:
+    radial-gradient(circle at 20% 20%, rgba(56,189,248,.22), transparent 35%),
+    radial-gradient(circle at 80% 0%, rgba(34,197,94,.16), transparent 30%),
+    linear-gradient(135deg, #020617, #0f172a);
+  border: 1px solid rgba(56,189,248,.25);
+  box-shadow: 0 22px 60px rgba(0,0,0,.32);
+}
+
+.mt5-list-hero h1 {
+  margin: 8px 0 6px;
+  font-size: 34px;
+  color: #fff;
+  letter-spacing: .02em;
+}
+
+.mt5-list-hero p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 15px;
+}
+
+.mt5-preset-grid {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(210px, 1fr));
+  gap: 22px;
+}
+
+.mt5-preset-card {
+  position: relative;
+  overflow: hidden;
+  min-height: 190px;
+  padding: 22px;
+  border-radius: 24px;
+  text-decoration: none;
+  color: #fff;
+  background:
+    radial-gradient(circle at top right, rgba(56,189,248,.16), transparent 34%),
+    linear-gradient(145deg, #0f172a, #020617);
+  border: 1px solid rgba(148,163,184,.20);
+  box-shadow: 0 18px 45px rgba(0,0,0,.28);
+  transition: .18s ease;
+}
+
+.mt5-preset-card:hover {
+  transform: translateY(-5px);
+  border-color: rgba(56,189,248,.55);
+  box-shadow: 0 24px 70px rgba(14,165,233,.20);
+}
+
+.preset-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.preset-icon {
+  width: 46px;
+  height: 46px;
+  display: grid;
+  place-items: center;
+  border-radius: 16px;
+  background: rgba(15,23,42,.95);
+  border: 1px solid rgba(56,189,248,.35);
+  box-shadow: inset 0 0 18px rgba(56,189,248,.08);
+  font-size: 22px;
+}
+
+.preset-badge {
+  padding: 6px 10px;
+  border-radius: 999px;
+  background: rgba(34,197,94,.12);
+  color: #86efac;
+  border: 1px solid rgba(34,197,94,.28);
+  font-size: 11px;
+  font-weight: 900;
+  letter-spacing: .08em;
+}
+
+.mt5-preset-card h2 {
+  margin: 24px 0 6px;
+  font-size: 25px;
+  color: #fff;
+}
+
+.mt5-preset-card p {
+  margin: 0;
+  color: #94a3b8;
+  font-size: 14px;
+}
+
+.preset-footer {
+  margin-top: 24px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  color: #38bdf8;
+  font-weight: 900;
+}
+
+.preset-footer b {
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 12px;
+  background: rgba(56,189,248,.12);
+  border: 1px solid rgba(56,189,248,.25);
+}
+
+@media (max-width: 1200px) {
+  .mt5-preset-grid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+
+@media (max-width: 700px) {
+  .mt5-preset-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .mt5-list-hero h1 {
+    font-size: 26px;
+  }
+}
+
+/* ===== PREMIUM VIEW MODAL ===== */
+#mt5ViewModal {
+  padding: 30px !important;
+}
+
+#mt5ViewModal .mt5-modal-panel {
+  max-width: 92vw !important;
+  border-radius: 24px !important;
+  background: linear-gradient(145deg, #020617, #0f172a) !important;
+  border: 1px solid rgba(56,189,248,.28) !important;
+  box-shadow: 0 30px 90px rgba(0,0,0,.65) !important;
+}
+
+#mt5ViewModal .mt5-modal-head {
+  padding: 22px 24px !important;
+  background:
+    radial-gradient(circle at 20% 0%, rgba(56,189,248,.22), transparent 35%),
+    linear-gradient(135deg, #020617, #0f172a) !important;
+  border-bottom: 1px solid rgba(56,189,248,.22) !important;
+}
+
+#mt5ViewModal .mt5-modal-head h2 {
+  margin: 0;
+  font-size: 24px;
+  color: #fff;
+}
+
+#mt5ViewModal .modal-table {
+  padding: 20px !important;
+  background: #020617 !important;
+}
+
+#mt5ViewModal .mt5-excel-table {
+  border-radius: 18px;
+  overflow: hidden;
+  border-collapse: separate !important;
+  border-spacing: 0 !important;
+  font-size: 15px;
+}
+
+#mt5ViewModal .mt5-excel-table .group-head th {
+  background: #111827 !important;
+  color: #e0f2fe !important;
+  font-size: 15px;
+  padding: 13px 10px;
+}
+
+#mt5ViewModal .mt5-excel-table .sub-head th {
+  background: #020617 !important;
+  color: #93c5fd !important;
+  padding: 11px 10px;
+}
+
+#mt5ViewModal .mt5-excel-table th,
+#mt5ViewModal .mt5-excel-table td {
+  border-color: rgba(51,65,85,.9) !important;
+  padding: 10px 12px !important;
+}
+
+#mt5ViewModal .mt5-excel-table tbody td {
+  background: #030712;
+  color: #e5e7eb;
+  font-weight: 700;
+}
+
+#mt5ViewModal .mt5-excel-table tbody tr:nth-child(even) td {
+  background: #07111f;
+}
+
+#mt5ViewModal .mt5-excel-table tbody tr:hover td {
+  background: rgba(14,165,233,.18) !important;
+}
+
+#mt5ViewModal .mt5-excel-table td:nth-child(1),
+#mt5ViewModal .mt5-excel-table td:nth-child(2),
+#mt5ViewModal .mt5-excel-table td:nth-child(3) {
+  color: #fde68a !important;
+}
+
+#mt5ViewModal .mt5-excel-table td:nth-child(4),
+#mt5ViewModal .mt5-excel-table td:nth-child(5) {
+  color: #86efac !important;
+}
+
+#mt5ViewModal .mt5-excel-table td:nth-child(6),
+#mt5ViewModal .mt5-excel-table td:nth-child(7) {
+  color: #fca5a5 !important;
+}
+
+#mt5ViewModal .mt5-excel-table td:nth-child(8),
+#mt5ViewModal .mt5-excel-table td:nth-child(9) {
+  color: #fde68a !important;
+}
+
+#mt5ViewModal .mt5-excel-table td:nth-child(10),
+#mt5ViewModal .mt5-excel-table td:nth-child(11) {
+  color: #bbf7d0 !important;
+}

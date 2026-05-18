@@ -1,0 +1,211 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const isIdentityVerified = !!(user && (user.identity_verified || user.identityVerified));
+const identityEmail = (identity && identity.verify_email) || (user && user.email) || '-';
+const dateLocale = (lang || 'th') === 'th' ? 'th-TH' : 'en-US';
+%>
+
+<%- include('../partials/app-shell') %>
+
+<div class="stats-grid cols-4">
+  <div class="stat-card">
+    <span><%= safeT('dashboard.credits_balance', 'เครดิตคงเหลือ') %></span>
+    <strong><%= subscription ? subscription.ports_max || 0 : 0 %></strong>
+  </div>
+
+  <div class="stat-card">
+    <span><%= safeT('dashboard.latest_package', 'แพ็กเกจล่าสุด') %></span>
+    <strong><%= subscription ? subscription.package_name_snapshot || '-' : '-' %></strong>
+  </div>
+
+  <div class="stat-card">
+    <span><%= safeT('dashboard.paid_count', 'จ่ายแล้ว') %></span>
+    <strong><%= paymentSummary.total || 0 %> <%= safeT('dashboard.items', 'รายการ') %></strong>
+  </div>
+
+  <div class="stat-card">
+    <span><%= safeT('dashboard.total_spent', 'ยอดรวม') %></span>
+    <strong>฿<%= Number(paymentSummary.total_spent || 0).toLocaleString(dateLocale) %></strong>
+  </div>
+</div>
+
+<section class="card" style="margin-top:20px;">
+  <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+    <div>
+      <h3>Scoin Wallet</h3>
+      <p class="muted" style="margin:6px 0 0;">ยอดเหรียญ มูลค่า และลิงก์แนะนำเพื่อนของคุณ</p>
+    </div>
+  </div>
+
+  <div class="kv-grid" style="margin-top:16px;">
+    <div>
+      <span>Scoin Balance</span>
+      <strong><%= Number(scoinBalance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> <%= (scoinSettings && scoinSettings.coin_symbol) || 'SCOIN' %></strong>
+    </div>
+    <div>
+      <span>มูลค่าโดยประมาณ</span>
+      <strong>฿<%= Number(scoinValueThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></strong>
+    </div>
+    <div>
+      <span>ราคา 1 Scoin</span>
+      <strong>฿<%= Number((scoinSettings && scoinSettings.current_price_thb) || 0.10).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
+    </div>
+    <div>
+      <span>Referral Code</span>
+      <strong><%= referralCode || '-' %></strong>
+    </div>
+  </div>
+
+  <div style="margin-top:16px;">
+    <span class="muted" style="display:block;margin-bottom:8px;">ลิงก์แนะนำเพื่อน</span>
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <input
+        type="text"
+        id="referralUrl"
+        value="<%= referralUrl || '' %>"
+        readonly
+        style="flex:1;min-width:260px;height:44px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px;"
+      >
+      <button
+        type="button"
+        class="btn btn-primary"
+        onclick="navigator.clipboard.writeText(document.getElementById('referralUrl').value).then(() => alert('คัดลอกลิงก์แล้ว'))"
+      >
+        คัดลอกลิงก์
+      </button>
+    </div>
+  </div>
+</section>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head">
+      <h3><%= safeT('dashboard.latest_rights', 'สิทธิ์ใช้งานล่าสุด') %></h3>
+    </div>
+
+    <div class="kv-grid">
+      <div><span><%= safeT('dashboard.package', 'Package') %></span><strong><%= subscription ? subscription.package_name_snapshot || '-' : '-' %></strong></div>
+      <div><span><%= safeT('dashboard.source', 'Source') %></span><strong><%= subscription ? subscription.source_channel || '-' : '-' %></strong></div>
+      <div><span>Lot</span><strong><%= subscription ? subscription.lot_min : 0 %> - <%= subscription ? subscription.lot_max : 0 %></strong></div>
+      <div><span>Port</span><strong><%= subscription ? subscription.ports_min : 0 %> - <%= subscription ? subscription.ports_max : 0 %></strong></div>
+      <div><span><%= safeT('dashboard.start_date', 'Start') %></span><strong><%= subscription && subscription.start_at ? new Date(subscription.start_at).toLocaleString(dateLocale) : '-' %></strong></div>
+      <div><span><%= safeT('dashboard.expire_date', 'Expire') %></span><strong><%= subscription && subscription.end_at ? new Date(subscription.end_at).toLocaleString(dateLocale) : '-' %></strong></div>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h3><%= safeT('dashboard.latest_broker_accounts', 'บัญชีโบรกเกอร์ล่าสุด') %></h3>
+    </div>
+
+    <div class="list-stack">
+      <% if (!(brokerAccounts || []).length) { %>
+        <div class="empty-box"><%= safeT('dashboard.no_broker_accounts', 'ยังไม่มีบัญชีโบรกเกอร์') %></div>
+      <% } %>
+
+      <% (brokerAccounts || []).slice(0, 5).forEach(function(a){ %>
+        <div class="list-item">
+          <strong><%= a.broker_name %></strong> - <%= a.account_login %> / <%= a.server_name %>
+        </div>
+      <% }) %>
+    </div>
+  </section>
+</div>
+
+<% if (!isIdentityVerified) { %>
+  <section class="card identity-dashboard-card" style="margin-top:20px;">
+    <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div>
+        <h3><%= safeT('identity.title', 'ยืนยันตัวตน') %></h3>
+        <p class="muted" style="margin:6px 0 0;"><%= safeT('identity.subtitle', 'กรอกข้อมูลและยืนยันด้วยรหัสที่ส่งไปทางอีเมล') %></p>
+      </div>
+      <a href="/app/identity" class="btn btn-primary">
+        <%= safeT('identity.menu', 'ยืนยันตัวตน') %>
+      </a>
+    </div>
+
+    <div class="kv-grid" style="margin-top:16px;">
+      <div>
+        <span><%= safeT('identity.current_status', 'สถานะยืนยันตัวตน') %></span>
+        <strong><%= safeT('identity.status_waiting', 'รอยืนยัน') %></strong>
+      </div>
+      <div>
+        <span><%= safeT('identity.verify_email', 'อีเมลรับรหัส OTP') %></span>
+        <strong><%= identityEmail %></strong>
+      </div>
+    </div>
+  </section>
+<% } %>
+
+<% if (showIdentityGate) { %>
+  <div class="identity-modal-backdrop" id="identityGateModal">
+    <div class="identity-modal-card">
+      <button type="button" class="identity-modal-close" id="identityGateClose">×</button>
+
+      <div class="identity-modal-badge">
+        <%= safeT('identity.modal_badge', 'กรุณายืนยันตัวตน') %>
+      </div>
+
+      <h2><%= safeT('identity.modal_title', 'ยืนยันตัวตนก่อนใช้งานเมนูอื่น') %></h2>
+      <p><%= safeT('identity.modal_desc', 'เพื่อความปลอดภัยของระบบ คุณต้องยืนยันตัวตนก่อน จึงจะสามารถเข้าเมนูอื่นได้') %></p>
+
+      <div class="identity-modal-info">
+        <div>
+          <span><%= safeT('identity.current_status', 'สถานะยืนยันตัวตน') %></span>
+          <strong><%= safeT('identity.status_waiting', 'รอยืนยัน') %></strong>
+        </div>
+        <div>
+          <span><%= safeT('identity.verify_email', 'อีเมลรับรหัส OTP') %></span>
+          <strong><%= identityEmail %></strong>
+        </div>
+      </div>
+
+      <div class="identity-modal-actions">
+        <a href="/app/identity" class="btn btn-primary">
+          <%= safeT('identity.go_verify', 'ไปหน้ายืนยันตัวตน') %>
+        </a>
+        <button type="button" class="btn btn-secondary" id="identityGateDismiss">
+          <%= safeT('common.close', 'ปิด') %>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const modal = document.getElementById('identityGateModal');
+      const closeBtn = document.getElementById('identityGateClose');
+      const dismissBtn = document.getElementById('identityGateDismiss');
+
+      if (document.body) {
+        document.body.classList.add('identity-not-verified');
+      }
+
+      function closeModal() {
+        if (!modal) return;
+        modal.style.opacity = '0';
+        setTimeout(function () {
+          modal.remove();
+        }, 180);
+      }
+
+      if (closeBtn) closeBtn.addEventListener('click', closeModal);
+      if (dismissBtn) dismissBtn.addEventListener('click', closeModal);
+
+      window.openIdentityGateModal = function () {
+        window.location.href = '/app?showIdentityGate=1';
+      };
+    })();
+  </script>
+<% } else { %>
+  <script>
+    (function () {
+      if (document.body) {
+        document.body.classList.remove('identity-not-verified');
+      }
+      window.openIdentityGateModal = function () {};
+    })();
+  </script>
+<% } %>
+
+<%- include('../partials/app-shell-end') %>

@@ -1,0 +1,51 @@
+.ta-container {
+  padding: 20px;
+  color: #fff;
+}
+
+.ta-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+
+.ta-card {
+  background: #111;
+  padding: 20px;
+  border-radius: 12px;
+  text-align: center;
+}
+
+.ta-btn {
+  background: #333;
+  color: #fff;
+  padding: 8px 14px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+}
+
+.ta-green { background: #16a34a; }
+.ta-blue { background: #2563eb; }
+.ta-red { background: #dc2626; }
+
+.ta-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 20px;
+}
+
+.ta-table th,
+.ta-table td {
+  border: 1px solid #333;
+  padding: 10px;
+  text-align: center;
+}
+
+.ta-table th {
+  background: #222;
+}
+
+.ta-actions {
+  margin-bottom: 10px;
+}

@@ -1,0 +1,26 @@
+<%- include('../partials/admin-shell') %>
+<section class="card">
+  <div class="print-toolbar no-print">
+    <div>
+      <h3 style="margin:0">พิมพ์คูปองชุดล่าสุด</h3>
+      <div class="print-note"><%= printData.title || 'Coupon Set' %> · <%= printData.note || 'พร้อมใช้งานได้ทันที' %></div>
+    </div>
+    <div class="form-actions"><button class="btn primary" onclick="window.print()">Print</button><a class="btn secondary" href="/admin/coupons">กลับ</a></div>
+  </div>
+  <div class="coupon-print-grid">
+    <% (printData.codes || []).forEach(function(code){ %>
+      <div class="print-card">
+        <div>
+          <div class="brand-kicker">TRADING AVELQUA</div>
+          <h2 style="margin:8px 0 0"><%= printData.title || 'PROMOTION COUPON' %></h2>
+        </div>
+        <div class="coupon-code"><%= code %></div>
+        <div>
+          <div class="print-note"><%= printData.note || 'ใช้ได้ 1 ครั้งต่อ 1 โค้ด' %></div>
+          <div class="print-note">สร้างเมื่อ <%= new Date(printData.generatedAt).toLocaleString('th-TH') %></div>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<%- include('../partials/admin-shell-end') %>

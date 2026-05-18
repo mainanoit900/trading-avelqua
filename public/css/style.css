@@ -1,0 +1,129 @@
+.ai-chat-float {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 99999;
+}
+
+/* ===== AI CHAT FIX ===== */
+.ai-chat-float {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  z-index: 9999;
+}
+
+.ai-chat-toggle {
+  width: 60px;
+  height: 60px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #4facfe, #00f2fe);
+  border: none;
+  cursor: pointer;
+  box-shadow: 0 10px 25px rgba(0,0,0,0.2);
+}
+
+.ai-chat-toggle img {
+  width: 30px;
+  height: 30px;
+}
+
+.ai-chat-box {
+  width: 320px;
+  height: 420px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 15px 40px rgba(0,0,0,0.2);
+  display: none;
+  flex-direction: column;
+  overflow: hidden;
+  position: absolute;
+  bottom: 70px;
+  right: 0;
+}
+
+.ai-chat-box.open {
+  display: flex;
+}
+
+.ai-chat-header {
+  background: #4facfe;
+  color: #fff;
+  padding: 12px;
+  display: flex;
+  justify-content: space-between;
+}
+
+.ai-chat-messages {
+  flex: 1;
+  padding: 10px;
+  overflow-y: auto;
+  font-size: 14px;
+}
+
+.ai-msg {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 10px;
+  max-width: 80%;
+}
+
+.ai-msg-user {
+  background: #4facfe;
+  color: #fff;
+  margin-left: auto;
+}
+
+.ai-msg-bot {
+  background: #f1f1f1;
+}
+
+.ai-chat-form {
+  display: flex;
+  border-top: 1px solid #eee;
+}
+
+.ai-chat-form input {
+  flex: 1;
+  border: none;
+  padding: 10px;
+}
+
+.ai-chat-form button {
+  border: none;
+  padding: 0 15px;
+  background: #4facfe;
+  color: #fff;
+  cursor: pointer;
+}
+
+/* ===== FIX TEXT DROPDOWN (ADMIN + APP) ===== */
+
+select,
+select.form-control,
+.form-select {
+  color: #f8fafc !important;
+  background-color: #162338 !important;
+}
+
+select option {
+  color: #ffffff !important;
+  background: #162338 !important;
+}
+
+select option:checked,
+select option:hover {
+  color: #ffffff !important;
+  background: #2563eb !important;
+}
+
+/* input text ให้ชัดขึ้น */
+input,
+textarea {
+  color: #f8fafc !important;
+}
+
+input::placeholder {
+  color: #94a3b8 !important;
+  opacity: 1;
+}

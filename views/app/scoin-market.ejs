@@ -1,0 +1,155 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const orders = Array.isArray(marketOrders) ? marketOrders : [];
+const currentPrice = Number((scoinSettings && scoinSettings.current_price_thb) || 0.10);
+const feePercent = Number((scoinSettings && scoinSettings.transfer_fee_percent) || 1.20);
+%>
+
+<%- include('../partials/app-shell') %>
+
+<section class="card" style="margin-top:20px;">
+  <div class="card-head">
+    <h3><%= safeT('app.scoin_market.title', 'ตลาด Scoin') %></h3>
+    <p class="muted" style="margin:6px 0 0;"><%= safeT('app.scoin_market.desc', 'ซื้อ Scoin จากโฮส หรือขาย Scoin คืนโฮส โดยมีค่าธรรมเนียม 1.2%') %></p>
+  </div>
+
+  <div class="kv-grid" style="margin-top:16px;">
+    <div>
+      <span>ราคา 1 Scoin</span>
+      <strong>฿<%= currentPrice.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
+    </div>
+    <div>
+      <span>ค่าธรรมเนียมตลาด</span>
+      <strong><%= feePercent.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %>%</strong>
+    </div>
+    <div>
+      <span>ยอด Scoin ปัจจุบัน</span>
+      <strong><%= Number(scoinBalance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
+    </div>
+    <div>
+      <span>มูลค่าโดยประมาณ</span>
+      <strong>฿<%= Number(scoinValueThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></strong>
+    </div>
+  </div>
+</section>
+
+<div class="grid-2" style="margin-top:20px;">
+  <section class="card">
+    <div class="card-head">
+      <h3>ซื้อ Scoin จากโฮส</h3>
+    </div>
+
+    <form method="POST" action="/app/scoin-market/order" style="margin-top:16px;">
+      <input type="hidden" name="order_type" value="buy">
+
+      <div>
+        <span style="display:block;margin-bottom:8px;color:#8fa5ce;">จำนวน Scoin ที่ต้องการซื้อ</span>
+        <input
+          type="number"
+          name="scoin_amount"
+          min="0.0001"
+          step="0.0001"
+          required
+          placeholder="เช่น 1000"
+          style="width:100%;height:44px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px;"
+        >
+      </div>
+
+      <div style="margin-top:14px;">
+        <span style="display:block;margin-bottom:8px;color:#8fa5ce;">หมายเหตุ</span>
+        <textarea
+          name="note"
+          rows="4"
+          placeholder="แนบรายละเอียดเพิ่มเติม เช่น ช่องทางติดต่อ"
+          style="width:100%;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:12px 14px;"
+        ></textarea>
+      </div>
+
+      <div style="margin-top:16px;">
+        <button type="submit" class="btn btn-primary">ส่งคำขอซื้อ</button>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head">
+      <h3>ขาย Scoin คืนโฮส</h3>
+    </div>
+
+    <form method="POST" action="/app/scoin-market/order" style="margin-top:16px;">
+      <input type="hidden" name="order_type" value="sell">
+
+      <div>
+        <span style="display:block;margin-bottom:8px;color:#8fa5ce;">จำนวน Scoin ที่ต้องการขาย</span>
+        <input
+          type="number"
+          name="scoin_amount"
+          min="0.0001"
+          step="0.0001"
+          required
+          placeholder="เช่น 500"
+          style="width:100%;height:44px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px;"
+        >
+      </div>
+
+      <div style="margin-top:14px;">
+        <span style="display:block;margin-bottom:8px;color:#8fa5ce;">หมายเหตุ</span>
+        <textarea
+          name="note"
+          rows="4"
+          placeholder="เช่น ต้องการรับเงินผ่านบัญชีไหน"
+          style="width:100%;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:12px 14px;"
+        ></textarea>
+      </div>
+
+      <div style="margin-top:16px;">
+        <button type="submit" class="btn btn-secondary">ส่งคำสั่งขาย</button>
+      </div>
+    </form>
+  </section>
+</div>
+
+<section class="card" style="margin-top:20px;">
+  <div class="card-head">
+    <h3>ประวัติคำสั่งตลาด Scoin</h3>
+  </div>
+
+  <div style="overflow:auto;margin-top:16px;">
+    <table style="width:100%;min-width:900px;border-collapse:collapse;">
+      <thead>
+        <tr>
+          <th style="text-align:left;padding:12px;">วันที่</th>
+          <th style="text-align:left;padding:12px;">ประเภท</th>
+          <th style="text-align:left;padding:12px;">Scoin</th>
+          <th style="text-align:left;padding:12px;">ราคา</th>
+          <th style="text-align:left;padding:12px;">รวม</th>
+          <th style="text-align:left;padding:12px;">ค่าธรรมเนียม</th>
+          <th style="text-align:left;padding:12px;">สุทธิ</th>
+          <th style="text-align:left;padding:12px;">สถานะ</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% if (!orders.length) { %>
+          <tr>
+            <td colspan="8" style="padding:16px;color:#8fa5ce;">ยังไม่มีคำสั่งตลาด Scoin</td>
+          </tr>
+        <% } %>
+
+        <% orders.forEach(function(order){ %>
+          <tr>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);"><%= order.created_at ? new Date(order.created_at).toLocaleString('th-TH') : '-' %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);"><%= order.order_type || '-' %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);"><%= Number(order.scoin_amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);">฿<%= Number(order.price_thb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);">฿<%= Number(order.gross_amount_thb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);">฿<%= Number(order.fee_amount_thb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);">฿<%= Number(order.net_amount_thb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></td>
+            <td style="padding:12px;border-top:1px solid rgba(130,154,197,.12);"><%= order.status || '-' %></td>
+          </tr>
+        <% }) %>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<%- include('../partials/app-shell-end') %>

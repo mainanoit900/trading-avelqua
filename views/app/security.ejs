@@ -1,0 +1,14 @@
+<%- include('../partials/app-shell') %>
+<section class="card form-card">
+  <% if (!canChangePassword) { %>
+    <div class="empty-box">เมนูนี้ใช้ได้เฉพาะผู้สมัครผ่านเว็บ ผู้สมัครผ่าน Google / LINE จะไม่แสดงเมนูนี้</div>
+  <% } else { %>
+    <div class="card-head"><div><h3>เปลี่ยนรหัสผ่าน</h3><p>เมื่อกดส่ง ระบบจะส่งอีเมลยืนยันก่อนจึงจะเปลี่ยนรหัสผ่านจริง</p></div></div>
+    <form method="POST" action="/security/password" class="form-grid two">
+      <label>รหัสผ่านใหม่<input type="password" name="newPassword" required /></label>
+      <label>ยืนยันรหัสผ่านใหม่<input type="password" name="confirmPassword" required /></label>
+      <div class="form-actions full"><button class="btn primary">ส่งลิงก์ยืนยันไปยังอีเมล</button></div>
+    </form>
+  <% } %>
+</section>
+<%- include('../partials/app-shell-end') %>

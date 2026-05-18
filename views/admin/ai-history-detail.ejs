@@ -1,0 +1,80 @@
+<%- include('../partials/admin-shell') %>
+
+<section class="card">
+  <div class="card-head">
+    <div>
+      <h3>AI Chat Detail</h3>
+      <p>ดูข้อความจริงของแต่ละ session เพื่อปรับปรุงการตอบ</p>
+    </div>
+    <div class="inline-actions">
+      <a class="btn secondary" href="/admin/ai-history">กลับหน้ารายการ</a>
+    </div>
+  </div>
+
+  <div class="list-stack" style="margin-bottom:18px;">
+    <div class="list-item">Session: <strong><%= sessionInfo.session_key %></strong></div>
+    <div class="list-item">ลูกค้า: <strong><%= sessionInfo.full_name || sessionInfo.name || '-' %></strong></div>
+    <div class="list-item">อีเมล: <strong><%= sessionInfo.email || '-' %></strong></div>
+    <div class="list-item">อัปเดตล่าสุด: <strong><%= sessionInfo.updated_at ? new Date(sessionInfo.updated_at).toLocaleString('th-TH') : '-' %></strong></div>
+  </div>
+
+  <div class="chat-history-wrap">
+    <% if (!messages || !messages.length) { %>
+      <div class="empty-box">ยังไม่มีข้อความใน session นี้</div>
+    <% } %>
+
+    <% (messages || []).forEach(function(msg){ %>
+      <div class="chat-row <%= (msg.role === 'assistant' || msg.role === 'ai') ? 'ai' : 'user' %>">
+        <div class="chat-bubble">
+          <div class="chat-meta">
+            <strong><%= msg.role || '-' %></strong>
+            <span><%= msg.created_at ? new Date(msg.created_at).toLocaleString('th-TH') : '-' %></span>
+          </div>
+          <div class="chat-text"><%= msg.content || msg.message || '-' %></div>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+
+<style>
+  .chat-history-wrap{
+    display:grid;
+    gap:12px;
+  }
+  .chat-row{
+    display:flex;
+  }
+  .chat-row.user{
+    justify-content:flex-start;
+  }
+  .chat-row.ai{
+    justify-content:flex-end;
+  }
+  .chat-bubble{
+    width:min(100%, 900px);
+    border-radius:18px;
+    padding:14px 16px;
+    background:#0f1a2b;
+    border:1px solid rgba(132,161,219,.16);
+    color:#eef4ff;
+  }
+  .chat-row.ai .chat-bubble{
+    background:#14233a;
+  }
+  .chat-meta{
+    display:flex;
+    justify-content:space-between;
+    gap:12px;
+    margin-bottom:8px;
+    font-size:12px;
+    color:#9eb2cd;
+  }
+  .chat-text{
+    white-space:pre-wrap;
+    line-height:1.6;
+    word-break:break-word;
+  }
+</style>
+
+<%- include('../partials/admin-shell-end') %>

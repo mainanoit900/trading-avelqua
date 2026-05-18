@@ -1,0 +1,184 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+<meta charset="UTF-8">
+<title>PORT</title>
+<style>
+body{margin:0;font-family:Arial,sans-serif;background:#0f172a;color:#e5e7eb}
+.wrap{padding:28px;max-width:1280px;margin:auto}
+.top{display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;flex-wrap:wrap;gap:12px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:14px;margin-bottom:18px}
+.stat{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:18px}
+.stat .label{color:#94a3b8;font-size:13px}
+.stat .num{font-size:32px;font-weight:800;margin-top:6px}
+.card{background:#111827;border:1px solid #1f2937;border-radius:16px;padding:20px}
+button,.btn{border:0;border-radius:10px;padding:8px 12px;cursor:pointer;font-weight:700;font-size:13px;margin:2px}
+.btn-back{background:#334155;color:#e2e8f0;text-decoration:none;display:inline-block}
+.btn-add{background:#22c55e;color:#052e16}
+.btn-file{background:#38bdf8;color:#082f49;text-decoration:none;display:inline-block}
+.btn-toggle-off{background:#f97316;color:#fff}
+.btn-toggle-on{background:#22c55e;color:#052e16}
+.btn-del{background:#ef4444;color:#fff}
+.actions{display:flex;flex-wrap:wrap;gap:4px;align-items:center}
+table{width:100%;border-collapse:collapse}
+th{background:#020617;color:#93c5fd;text-align:left;padding:12px}
+td{padding:12px;border-top:1px solid #1f2937;vertical-align:middle}
+.path{font-family:monospace;color:#bfdbfe;font-size:12px;max-width:320px;word-break:break-all}
+.badge{padding:5px 10px;border-radius:999px;font-size:12px;font-weight:700;display:inline-block}
+.badge-used{background:#7f1d1d;color:#fecaca}
+.badge-free{background:#14532d;color:#86efac}
+.badge-off{background:#422006;color:#fde68a}
+</style>
+</head>
+<body>
+<div class="wrap">
+<div class="top">
+<div>
+<h1>PORT — <%= node.node_name || 'VPS' %></h1>
+<p class="stat label">จัดการ PORT · สถานะ MT5 จาก Agent · refresh 3s</p>
+</div>
+<div>
+<a class="btn btn-back" href="/admin/vps">กลับ VPS</a>
+<button class="btn btn-add" type="button" onclick="createPort()">เพิ่ม PORT</button>
+</div>
+</div>
+<div class="grid">
+<div class="stat"><div class="label">PORT ทั้งหมด</div><div id="totalPorts" class="num">0</div></div>
+<div class="stat"><div class="label">ใช้งาน (MT5 รัน)</div><div id="activePorts" class="num">0</div></div>
+<div class="stat"><div class="label">คงเหลือ</div><div id="remainPorts" class="num">0</div></div>
+</div>
+<div class="card">
+<table>
+<thead><tr><th>ชื่อ</th><th>#</th><th>โฟลเดอร์</th><th>สถานะ</th><th>จัดการ</th></tr></thead>
+<tbody id="ports"><tr><td colspan="5">โหลด...</td></tr></tbody>
+</table>
+</div>
+</div>
+<script>
+const VPS_ID=<%- JSON.stringify(node.id) %>;
+let lastPortsData=null;
+const togglePending=new Map();
+function esc(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');}
+function portIsOff(p){
+  const key=Number(p.port_number||0);
+  const pending=togglePending.get(key);
+  if(pending&&Date.now()-pending.ts<60000)return !!pending.disabled;
+  return !!p.admin_disabled;
+}
+function paintPorts(d){
+  document.getElementById('totalPorts').textContent=d.stats.total_ports;
+  document.getElementById('activePorts').textContent=d.stats.active_ports;
+  document.getElementById('remainPorts').textContent=d.stats.free_ports;
+  const box=document.getElementById('ports');
+  if(!d.ports.length){box.innerHTML='<tr><td colspan="5">ไม่มี PORT</td></tr>';return;}
+  box.innerHTML=d.ports.map(p=>{
+    const off=portIsOff(p);
+    const run=!!p.live_running&&!off;
+    let st='ว่าง',bc='badge-free';
+    if(off){st='ปิดการใช้งาน';bc='badge-off';}
+    else if(run){st='ใช้งาน'+(p.mt5_login?' · Login '+p.mt5_login:'');bc='badge-used';}
+    const fileUrl='/admin/vps/'+VPS_ID+'/ports/'+p.id+'/files';
+    const toggleLbl=off?'เปิด':'ปิด';
+    const toggleCls=off?'btn-toggle-on':'btn-toggle-off';
+    const portNo=Number(p.port_number||0);
+    return '<tr data-port="'+portNo+'" data-off="'+(off?'1':'0')+'">'
+      +'<td>'+esc(p.display_name||p.port_name)+'</td>'
+      +'<td>'+String(portNo).padStart(2,'0')+'</td>'
+      +'<td class="path">'+esc(p.base_path||p.folder_path||'')+'</td>'
+      +'<td><span class="badge '+bc+'">'+st+'</span></td>'
+      +'<td><div class="actions">'
+      +'<a class="btn btn-file" href="'+fileUrl+'">ดูไฟล์</a> '
+      +(off
+        ? '<button type="button" class="btn btn-toggle-on" data-port-id="'+p.id+'" data-port-no="'+portNo+'" onclick="togglePort('+p.id+','+portNo+',false,this)">เปิด</button> '
+        : '<button type="button" class="btn btn-toggle-off" data-port-id="'+p.id+'" data-port-no="'+portNo+'" onclick="stopPort('+p.id+','+portNo+',this)">ปิด</button> '
+        +'<button type="button" class="btn btn-toggle-off" style="opacity:.85" data-port-id="'+p.id+'" onclick="togglePort('+p.id+','+portNo+',true,this)">ปิดการใช้งาน</button> ')
+      +'<button type="button" class="btn btn-del" onclick="delPort('+p.id+')">ลบ</button>'
+      +'</div></td></tr>';
+  }).join('');
+}
+async function load(){
+  const r=await fetch('/admin/vps/'+VPS_ID+'/ports/api/list',{credentials:'same-origin'});
+  const d=await r.json();
+  if(!d.ok)return alert(d.error||'โหลดไม่สำเร็จ');
+  lastPortsData=d;
+  for(const p of d.ports||[]){
+    const key=Number(p.port_number||0);
+    const pending=togglePending.get(key);
+    if(!pending)continue;
+    if(!!p.admin_disabled===!!pending.disabled)togglePending.delete(key);
+  }
+  paintPorts(d);
+}
+async function createPort(){
+  const r=await fetch('/admin/vps/'+VPS_ID+'/ports/api/create',{method:'POST',credentials:'same-origin',headers:{'Content-Type':'application/json'},body:'{}'});
+  const d=await r.json();
+  if(!d.ok)return alert(d.error||'สร้างไม่สำเร็จ');
+  load();
+}
+function applyToggleButton(btn,off){
+  if(!btn)return;
+  btn.textContent=off?'เปิด':'ปิด';
+  btn.className='btn '+(off?'btn-toggle-on':'btn-toggle-off');
+  const pid=btn.dataset.portId;
+  const pno=btn.dataset.portNo;
+  btn.setAttribute('onclick','togglePort('+pid+','+pno+','+(off?'false':'true')+',this)');
+}
+async function togglePort(id,portNo,willDisable,btnEl){
+  const msg=willDisable
+    ? 'ปิดใช้งาน PORT นี้?\n\n- ห้ามเลือกจาก /app/mt5\n- ถ้ามี MT5 รันอยู่จะส่งคำสั่งปิดและเคลียร์ทันที'
+    : 'เปิดใช้งาน PORT นี้อีกครั้ง?';
+  if(!confirm(msg))return;
+  const key=Number(portNo||0);
+  const nextOff=!!willDisable;
+  togglePending.set(key,{disabled:nextOff,ts:Date.now()});
+  if(btnEl){
+    btnEl.dataset.portId=String(id);
+    btnEl.dataset.portNo=String(key);
+    applyToggleButton(btnEl,nextOff);
+  }
+  if(lastPortsData){
+    const patched={
+      ...lastPortsData,
+      ports:(lastPortsData.ports||[]).map(p=>{
+        if(Number(p.port_number||0)!==key)return p;
+        return {...p,admin_disabled:nextOff,is_active:!nextOff,status:nextOff?'disabled':'free',live_status:nextOff?'disabled':'free',live_running:nextOff?false:p.live_running};
+      })
+    };
+    paintPorts(patched);
+  }
+  const r=await fetch('/admin/vps/ports/api/toggle/'+id,{
+    method:'POST',
+    credentials:'same-origin',
+    headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({action:willDisable?'disable':'enable'})
+  });
+  const d=await r.json();
+  if(!d.ok){
+    togglePending.delete(key);
+    load();
+    return alert(d.error||'ไม่สำเร็จ');
+  }
+  togglePending.set(key,{disabled:!d.enabled,ts:Date.now()});
+  await load();
+}
+async function stopPort(id,portNo,btnEl){
+  if(!confirm('ปิด MT5 บน PORT นี้และคืนสถานะเป็น "ว่าง"?'))return;
+  if(btnEl)btnEl.disabled=true;
+  const r=await fetch('/admin/vps/ports/api/stop/'+id,{method:'POST',credentials:'same-origin'});
+  const d=await r.json();
+  if(btnEl)btnEl.disabled=false;
+  if(!d.ok)return alert(d.error||'ปิดไม่สำเร็จ');
+  await load();
+}
+async function delPort(id){
+  if(!confirm('ลบ PORT นี้?\n\nจะปิด MT5 (ถ้ามี) และลบออกจากรายการ'))return;
+  const r=await fetch('/admin/vps/ports/api/delete/'+id,{method:'POST',credentials:'same-origin'});
+  const d=await r.json();
+  if(!d.ok)return alert(d.error||'ลบไม่สำเร็จ');
+  load();
+}
+load();
+setInterval(load,3000);
+</script>
+</body>
+</html>

@@ -1,0 +1,129 @@
+.mt5-admin-page{
+  padding:24px;
+  color:#eaf2ff;
+}
+.mt5-admin-page *{box-sizing:border-box}
+.mt5-admin-page h2{font-size:26px;margin:8px 0 12px}
+.mt5-admin-page h3{font-size:18px;margin:0}
+.mt5-admin-page p{color:#9fb0d0;line-height:1.6}
+.mt5-toolbar{
+  display:flex;
+  gap:12px;
+  flex-wrap:wrap;
+  margin:18px 0;
+}
+.mt5-btn,.mt5-admin-page button{
+  border:0;
+  border-radius:14px;
+  padding:11px 18px;
+  font-weight:800;
+  color:white;
+  background:linear-gradient(135deg,#2563eb,#7c3aed);
+  box-shadow:0 12px 30px rgba(79,70,229,.25);
+  cursor:pointer;
+}
+.mt5-card{
+  margin:18px 0;
+  padding:20px;
+  border:1px solid rgba(148,163,184,.18);
+  border-radius:22px;
+  background:linear-gradient(180deg,rgba(15,23,42,.96),rgba(2,6,23,.96));
+  box-shadow:0 18px 45px rgba(0,0,0,.25);
+}
+.mt5-stats{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(160px,1fr));
+  gap:14px;
+  margin:18px 0;
+}
+.mt5-stats article{
+  padding:16px;
+  border-radius:18px;
+  background:rgba(15,23,42,.8);
+  border:1px solid rgba(148,163,184,.14);
+}
+.mt5-stats span{display:block;color:#94a3b8;font-size:13px}
+.mt5-stats strong{display:block;font-size:24px;margin-top:6px}
+.mt5-form{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(180px,1fr));
+  gap:14px;
+  align-items:end;
+}
+.mt5-form.two{grid-template-columns:repeat(3,minmax(220px,1fr))}
+.mt5-form label{
+  display:flex;
+  flex-direction:column;
+  gap:7px;
+  color:#cbd5e1;
+  font-size:13px;
+}
+.mt5-form input,.mt5-form select,.mt5-form textarea{
+  width:100%;
+  min-height:42px;
+  border-radius:12px;
+  border:1px solid rgba(148,163,184,.22);
+  background:#0b1220;
+  color:#e5edff;
+  padding:10px 12px;
+  outline:none;
+}
+.mt5-table-wrap{overflow-x:auto;margin-top:14px}
+.mt5-table{
+  width:100%;
+  border-collapse:separate;
+  border-spacing:0 10px;
+}
+.mt5-table th{
+  text-align:left;
+  color:#93c5fd;
+  font-size:13px;
+  padding:8px 10px;
+}
+.mt5-table td{
+  background:rgba(15,23,42,.78);
+  padding:12px 10px;
+  border-top:1px solid rgba(148,163,184,.12);
+  border-bottom:1px solid rgba(148,163,184,.12);
+}
+.mt5-table td:first-child{border-radius:14px 0 0 14px;border-left:1px solid rgba(148,163,184,.12)}
+.mt5-table td:last-child{border-radius:0 14px 14px 0;border-right:1px solid rgba(148,163,184,.12)}
+.empty-cell{
+  text-align:center!important;
+  color:#94a3b8!important;
+  padding:28px!important;
+}
+.server-pills{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+  margin-top:12px;
+}
+.server-pills span{
+  padding:10px 14px;
+  border-radius:999px;
+  background:rgba(37,99,235,.18);
+  border:1px solid rgba(96,165,250,.28);
+}
+.event-list{display:grid;gap:10px;margin-top:14px}
+.event-item{
+  padding:12px;
+  border-radius:14px;
+  background:rgba(15,23,42,.8);
+  border:1px solid rgba(148,163,184,.14);
+}
+.card-headline{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:14px;
+  margin-bottom:16px;
+}
+@media(max-width:1100px){
+  .mt5-stats{grid-template-columns:repeat(2,1fr)}
+  .mt5-form,.mt5-form.two{grid-template-columns:repeat(2,1fr)}
+}
+@media(max-width:720px){
+  .mt5-admin-page{padding:14px}
+  .mt5-stats,.mt5-form,.mt5-form.two{grid-template-columns:1fr}
+}

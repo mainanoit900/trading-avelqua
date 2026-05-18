@@ -1,0 +1,150 @@
+<%
+  const pathNow = (typeof currentPath !== 'undefined' && currentPath)
+    ? currentPath
+    : ((typeof request !== 'undefined' && request && request.path) ? request.path : '/');
+
+  const userNow = (typeof user !== 'undefined' && user)
+    ? user
+    : ((typeof currentUser !== 'undefined') ? currentUser : null);
+
+  const langNow = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+
+  const requestObj = (typeof request !== 'undefined' && request) ? request : null;
+
+  const labelsMap = (typeof supportedLocaleLabels !== 'undefined' && supportedLocaleLabels)
+    ? supportedLocaleLabels
+    : {
+        th: 'ไทย',
+        en: 'English',
+        lo: 'ລາວ',
+        vi: 'Tiếng Việt',
+        my: 'မြန်မာ'
+      };
+
+  const supported = (typeof supportedLocales !== 'undefined' && Array.isArray(supportedLocales) && supportedLocales.length)
+    ? supportedLocales
+    : ['th', 'en', 'lo', 'vi', 'my'];
+
+  function isActive(path) {
+    return pathNow === path ? 'is-active' : '';
+  }
+
+  function currentUrlWithoutLang() {
+    try {
+      const original = requestObj && (requestObj.originalUrl || requestObj.url)
+        ? (requestObj.originalUrl || requestObj.url)
+        : pathNow;
+
+      const [pathname, queryString = ''] = String(original || '/').split('?');
+      const params = new URLSearchParams(queryString);
+      params.delete('lang');
+      const next = params.toString();
+      return `${pathname}${next ? `?${next}` : ''}`;
+    } catch (error) {
+      return pathNow || '/';
+    }
+  }
+
+  const backTo = encodeURIComponent(currentUrlWithoutLang());
+%>
+
+<header class="site-header">
+  <div class="container">
+    <div class="nav-shell">
+      <a href="/?lang=<%= langNow %>" class="brand">
+        <img src="/public/images/logo.png" alt="TRADING AVELQUA">
+        <div class="brand-text">
+          <span class="brand-title">TRADING</span>
+          <span class="brand-title">AVELQUA</span>
+        </div>
+      </a>
+
+      <nav class="main-nav" id="publicMainNav">
+        <a class="<%= isActive('/') %>" href="/?lang=<%= langNow %>"><%= t('nav.home') %></a>
+        <a class="<%= isActive('/bots') %>" href="/bots?lang=<%= langNow %>"><%= t('nav.bots') %></a>
+        <a class="<%= isActive('/market') %>" href="/market?lang=<%= langNow %>"><%= t('nav.market') %></a>
+        <a class="<%= isActive('/pricing') %>" href="/pricing?lang=<%= langNow %>"><%= t('nav.pricing') %></a>
+        <a class="<%= isActive('/news') %>" href="/news?lang=<%= langNow %>"><%= t('nav.news') %></a>
+        <a class="<%= isActive('/contact') %>" href="/contact?lang=<%= langNow %>"><%= t('nav.contact') %></a>
+      </nav>
+
+      <div class="nav-actions" id="publicNavActions">
+        <div class="lang-dropdown public-lang-dropdown">
+          <button class="lang-current" type="button" aria-label="Switch language">
+            <span><%= labelsMap[langNow] || langNow.toUpperCase() %></span>
+            <span>▾</span>
+          </button>
+
+          <div class="lang-dropdown-menu">
+            <% supported.forEach(function(code) { %>
+              <a
+                href="/set-language/<%= code %>?redirect=<%= backTo %>"
+                class="<%= langNow === code ? 'active' : '' %>"
+              >
+                <span><%= labelsMap[code] || code.toUpperCase() %></span>
+                <small><%= code.toUpperCase() %></small>
+              </a>
+            <% }) %>
+          </div>
+        </div>
+
+        <% if (!userNow) { %>
+          <a href="/login?lang=<%= langNow %>" class="nav-btn nav-btn-soft"><%= t('nav.login') %></a>
+          <a href="/register?lang=<%= langNow %>" class="nav-btn nav-btn-primary"><%= t('nav.register') %></a>
+        <% } else { %>
+          <% if (userNow.role === 'admin') { %>
+            <a href="/admin?lang=<%= langNow %>" class="nav-btn nav-btn-soft"><%= t('nav.admin') %></a>
+          <% } else { %>
+            <a href="/app?lang=<%= langNow %>" class="nav-btn nav-btn-soft"><%= t('nav.dashboard') %></a>
+          <% } %>
+          <a href="/logout" class="nav-btn nav-btn-primary"><%= t('nav.logout') %></a>
+        <% } %>
+      </div>
+
+      <button class="nav-toggle" type="button" aria-label="Toggle navigation">
+        ≡
+      </button>
+    </div>
+  </div>
+</header>
+
+<script>
+  (function () {
+    var dropdowns = document.querySelectorAll('.public-lang-dropdown');
+
+    dropdowns.forEach(function (dropdown) {
+      var btn = dropdown.querySelector('.lang-current');
+      if (!btn) return;
+
+      btn.addEventListener('click', function (event) {
+        event.preventDefault();
+        event.stopPropagation();
+
+        dropdowns.forEach(function (other) {
+          if (other !== dropdown) other.classList.remove('open');
+        });
+
+        dropdown.classList.toggle('open');
+      });
+    });
+
+    document.addEventListener('click', function (event) {
+      dropdowns.forEach(function (dropdown) {
+        if (!dropdown.contains(event.target)) {
+          dropdown.classList.remove('open');
+        }
+      });
+    });
+
+    var toggle = document.querySelector('.nav-toggle');
+    var nav = document.querySelector('.main-nav');
+    var actions = document.querySelector('.nav-actions');
+
+    if (toggle) {
+      toggle.addEventListener('click', function () {
+        if (nav) nav.classList.toggle('open');
+        if (actions) actions.classList.toggle('open');
+      });
+    }
+  })();
+</script>

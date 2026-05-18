@@ -1,0 +1,265 @@
+.admin-page-section{
+  display:grid;
+  gap:20px;
+}
+
+.admin-page-hero{
+  position:relative;
+  overflow:hidden;
+  padding:28px;
+  border-radius:28px;
+  border:1px solid rgba(108,132,255,.14);
+  background:
+    radial-gradient(circle at 85% 15%, rgba(84,110,255,.22), transparent 22%),
+    radial-gradient(circle at 15% 100%, rgba(0,190,255,.10), transparent 24%),
+    linear-gradient(180deg,#0a1528 0%, #07111f 100%);
+  box-shadow:0 24px 60px rgba(0,0,0,.28);
+}
+
+.admin-page-chip{
+  display:inline-flex;
+  padding:8px 12px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+  color:#cdd9ff;
+  background:rgba(84,110,255,.12);
+  border:1px solid rgba(108,132,255,.16);
+  margin-bottom:12px;
+}
+
+.admin-page-hero h1{
+  margin:0 0 8px;
+  color:#fff;
+  font-size:34px;
+  font-weight:800;
+}
+
+.admin-page-hero p{
+  margin:0;
+  color:#95abd3;
+}
+
+.simple-chart{
+  display:flex;
+  align-items:flex-end;
+  gap:10px;
+  min-height:220px;
+  padding:18px 0 8px;
+  overflow-x:auto;
+}
+
+.bar-wrap{
+  display:flex;
+  flex-direction:column;
+  align-items:center;
+  gap:8px;
+  min-width:36px;
+}
+
+.bar{
+  width:28px;
+  border-radius:12px 12px 0 0;
+  background:linear-gradient(180deg,#4f7cff 0%, #6d3dff 100%);
+  box-shadow:0 10px 24px rgba(79,124,255,.25);
+}
+
+.admin-users-card .admin-users-filter input[type="number"],
+.admin-users-card .admin-users-filter input[type="text"],
+.admin-users-card .admin-users-filter input[type="email"],
+.admin-users-card .admin-users-filter select,
+.admin-users-card .admin-users-filter textarea{
+  height:46px;
+  border-radius:14px;
+  border:1px solid rgba(130,154,197,.16);
+  background:#0b1628;
+  color:#fff;
+  padding:0 14px;
+  outline:none;
+}
+
+.admin-users-card .admin-users-filter textarea{
+  min-height:110px;
+  padding:12px 14px;
+  resize:vertical;
+}
+
+.admin-users-card .admin-users-filter label{
+  min-height:46px;
+  display:flex;
+  align-items:center;
+}
+
+.admin-users-kpis{
+  display:grid;
+  grid-template-columns:repeat(4,minmax(0,1fr));
+  gap:16px;
+  margin-top:18px;
+}
+
+@media (max-width: 1100px){
+  .admin-users-kpis{
+    grid-template-columns:repeat(2,minmax(0,1fr));
+  }
+}
+
+@media (max-width: 640px){
+  .admin-users-kpis{
+    grid-template-columns:1fr;
+  }
+}
+/* === Scoin Market usability upgrade 2026-04-26 === */
+.scoin-card-head-actions{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:18px;
+}
+.scoin-head-pills{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  justify-content:flex-end;
+}
+.scoin-head-pills span{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  min-height:36px;
+  padding:8px 12px;
+  border-radius:999px;
+  border:1px solid rgba(130,154,197,.16);
+  background:rgba(12,27,54,.72);
+  color:#8fa5ce;
+  font-size:12px;
+  font-weight:700;
+}
+.scoin-head-pills strong{color:#fff;font-size:13px;}
+.scoin-chart-panel{
+  position:relative;
+  min-height:330px;
+  border-radius:22px;
+  padding:16px;
+  border:1px solid rgba(130,154,197,.12);
+  background:linear-gradient(180deg,rgba(8,18,37,.82),rgba(6,14,30,.68));
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.03);
+}
+.scoin-chart-note{
+  margin-top:10px;
+  color:#7f94bc;
+  font-size:12px;
+  line-height:1.65;
+}
+.scoin-recommend-box,
+.scoin-economy-model{
+  display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  gap:12px;
+  margin-bottom:16px;
+}
+.scoin-recommend-box>div,
+.scoin-economy-model>div{
+  border:1px solid rgba(111,138,255,.16);
+  border-radius:18px;
+  padding:14px;
+  background:linear-gradient(135deg,rgba(34,68,138,.22),rgba(20,29,60,.62));
+}
+.scoin-recommend-box span,
+.scoin-economy-model span{
+  display:block;
+  color:#8fa5ce;
+  font-size:12px;
+  margin-bottom:6px;
+}
+.scoin-recommend-box strong,
+.scoin-economy-model b{
+  display:block;
+  color:#fff;
+  font-size:18px;
+  line-height:1.2;
+}
+.scoin-recommend-box small{
+  display:block;
+  color:#a7b8da;
+  margin-top:6px;
+  line-height:1.5;
+}
+.scoin-economy-model{
+  grid-template-columns:repeat(6,minmax(0,1fr));
+}
+.scoin-economy-model>div{text-align:center;}
+.scoin-table-toolbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  margin-bottom:14px;
+  padding:12px;
+  border:1px solid rgba(130,154,197,.12);
+  border-radius:18px;
+  background:rgba(8,18,37,.58);
+}
+.scoin-table-toolbar.compact{padding:10px;}
+.scoin-table-toolbar span{color:#8fa5ce;font-size:13px;white-space:nowrap;}
+.scoin-table-toolbar strong{color:#fff;}
+.scoin-table-search{
+  width:min(520px,100%);
+  height:42px;
+  border-radius:14px;
+  border:1px solid rgba(130,154,197,.16);
+  background:#08162b;
+  color:#fff;
+  outline:none;
+  padding:0 14px;
+}
+.scoin-table-search::placeholder{color:#6f84aa;}
+.scoin-smart-table td{vertical-align:top;}
+.scoin-actions{display:flex;flex-wrap:wrap;gap:8px;}
+.scoin-badge.buy,.scoin-badge.in,.scoin-badge.approved,.scoin-badge.active{
+  color:#bcffe4;background:rgba(24,188,122,.12);border-color:rgba(24,188,122,.26);
+}
+.scoin-badge.sell,.scoin-badge.out,.scoin-badge.pending{
+  color:#ffe8b0;background:rgba(238,171,54,.12);border-color:rgba(238,171,54,.26);
+}
+.scoin-badge.rejected,.scoin-badge.cancelled,.scoin-badge.inactive{
+  color:#ffc7d1;background:rgba(255,80,112,.12);border-color:rgba(255,80,112,.26);
+}
+
+@media (max-width:1180px){
+  .scoin-card-head-actions{display:grid;}
+  .scoin-head-pills{justify-content:flex-start;}
+  .scoin-economy-model{grid-template-columns:repeat(3,minmax(0,1fr));}
+}
+@media (max-width:760px){
+  .scoin-recommend-box,.scoin-economy-model{grid-template-columns:1fr;}
+  .scoin-table-toolbar{display:grid;}
+  .scoin-table-toolbar span{white-space:normal;}
+  .scoin-chart-panel{min-height:270px;padding:10px;}
+  .scoin-smart-table thead{display:none;}
+  .scoin-smart-table,
+  .scoin-smart-table tbody,
+  .scoin-smart-table tr,
+  .scoin-smart-table td{display:block;width:100%;}
+  .scoin-smart-table tr{
+    margin-bottom:12px;
+    border:1px solid rgba(130,154,197,.14);
+    border-radius:18px;
+    overflow:hidden;
+    background:rgba(8,18,37,.78);
+  }
+  .scoin-smart-table td{
+    display:grid;
+    grid-template-columns:120px minmax(0,1fr);
+    gap:10px;
+    border-bottom:1px solid rgba(130,154,197,.08)!important;
+    padding:11px 12px!important;
+    white-space:normal!important;
+  }
+  .scoin-smart-table td::before{
+    content:attr(data-label);
+    color:#7f94bc;
+    font-size:12px;
+    font-weight:800;
+  }
+  .scoin-smart-table td:last-child{border-bottom:0!important;}
+}

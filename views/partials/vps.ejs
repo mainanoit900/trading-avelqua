@@ -1,0 +1,82 @@
+<%- include('../partials/admin-shell') %>
+<div class="grid-2">
+  <section class="card form-card">
+    <div class="card-head"><div><h3>เพิ่ม VPS Node</h3><p>จัดการเครื่องเป็นแถว สะอาดตา</p></div></div>
+    <form method="POST" action="/admin/vps/create" class="form-grid three">
+      <label>Node Name<input type="text" name="node_name" required /></label>
+      <label>IP<input type="text" name="ip_address" /></label>
+      <label>Status<select name="status"><option value="available">available</option><option value="busy">busy</option><option value="offline">offline</option><option value="maintenance">maintenance</option></select></label>
+      <label>Max Lot<input type="number" step="0.01" name="max_lot" value="0" /></label>
+      <label>Max Ports<input type="number" name="max_ports" value="0" /></label>
+      <label>Used Lot<input type="number" step="0.01" name="used_lot" value="0" /></label>
+      <label>Used Ports<input type="number" name="used_ports" value="0" /></label>
+      <label>Ping<input type="number" step="0.01" name="ping_ms" value="0" /></label>
+      <label>Speed Mbps<input type="number" step="0.01" name="speed_mbps" value="0" /></label>
+      <label class="full">Last Error<input type="text" name="last_error" /></label>
+      <div class="form-actions full"><button class="btn primary">เพิ่ม Node</button></div>
+    </form>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h3>MT5 Presets</h3><p>ตารางตามทุน</p></div></div>
+    <div class="table-compact">
+      <% if (!(profiles || []).length) { %><div class="empty-box">ยังไม่มี MT5 preset</div><% } %>
+      <% (profiles || []).forEach(function(p){ %>
+        <div class="list-item"><strong><%= p.profile_name %></strong><div class="muted">ทุน <%= Number(p.capital_min || 0).toLocaleString('th-TH') %> - <%= Number(p.capital_max || 0).toLocaleString('th-TH') %> · lot <%= p.recommended_lot %> · ports <%= p.recommended_ports %></div></div>
+      <% }) %>
+    </div>
+  </section>
+</div>
+
+<section class="accordion-list">
+  <% if (!(nodes || []).length) { %><section class="card"><div class="empty-box">ยังไม่มี VPS node</div></section><% } %>
+  <% (nodes || []).forEach(function(node){ %>
+    <details class="accordion-item">
+      <summary>
+        <div><div class="cell-title"><%= node.node_name %> <span class="muted">#<%= node.display_id || node.id %></span></div><div class="cell-sub"><%= node.ip_address || '-' %></div></div>
+        <div><strong><%= node.status %></strong><div class="cell-sub">สถานะ</div></div>
+        <div><strong><%= node.used_lot %> / <%= node.max_lot %></strong><div class="cell-sub">Lot ใช้งาน</div></div>
+        <div><strong><%= node.used_ports %> / <%= node.max_ports %></strong><div class="cell-sub">Ports ใช้งาน</div></div>
+        <div><strong><%= node.ping_ms || 0 %> ms</strong><div class="cell-sub">Ping · <%= node.speed_mbps || 0 %> Mbps</div></div>
+        <div class="inline-actions"><span class="badge <%= node.status === 'available' ? 'green' : node.status === 'busy' ? 'yellow' : 'red' %>"><%= node.status %></span></div>
+      </summary>
+      <div class="accordion-body">
+        <form method="POST" action="/admin/vps/<%= node.id %>/update" class="form-grid three">
+          <label>Node Name<input type="text" name="node_name" value="<%= node.node_name %>" /></label>
+          <label>IP<input type="text" name="ip_address" value="<%= node.ip_address %>" /></label>
+          <label>Status<select name="status"><option value="available" <%= node.status==='available' ? 'selected' : '' %>>available</option><option value="busy" <%= node.status==='busy' ? 'selected' : '' %>>busy</option><option value="offline" <%= node.status==='offline' ? 'selected' : '' %>>offline</option><option value="maintenance" <%= node.status==='maintenance' ? 'selected' : '' %>>maintenance</option></select></label>
+          <label>Max Lot<input type="number" step="0.01" name="max_lot" value="<%= node.max_lot %>" /></label>
+          <label>Max Ports<input type="number" name="max_ports" value="<%= node.max_ports %>" /></label>
+          <label>Used Lot<input type="number" step="0.01" name="used_lot" value="<%= node.used_lot %>" /></label>
+          <label>Used Ports<input type="number" name="used_ports" value="<%= node.used_ports %>" /></label>
+          <label>Ping<input type="number" step="0.01" name="ping_ms" value="<%= node.ping_ms || 0 %>" /></label>
+          <label>Speed Mbps<input type="number" step="0.01" name="speed_mbps" value="<%= node.speed_mbps || 0 %>" /></label>
+          <label class="full">Last Error<input type="text" name="last_error" value="<%= node.last_error || '' %>" /></label>
+          <div class="form-actions full"><button class="btn primary">บันทึก</button></div>
+        </form>
+        <form method="POST" action="/admin/vps/<%= node.id %>/delete" onsubmit="return confirm('ยืนยันลบ node?')"><button class="btn danger">ลบ node</button></form>
+      </div>
+    </details>
+  <% }) %>
+</section>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head"><div><h3>Current Allocations</h3><p>เครื่องไหนเชื่อมกับใคร</p></div></div>
+    <div class="table-compact">
+      <% if (!(allocations || []).length) { %><div class="empty-box">ยังไม่มีการจัดสรร</div><% } %>
+      <% (allocations || []).forEach(function(a){ %>
+        <div class="list-item"><strong><%= a.node_name || '-' %></strong><div class="muted"><%= a.full_name || a.email || '-' %> · lot <%= a.allocated_lot %> · ports <%= a.allocated_ports %> · <%= a.status %></div></div>
+      <% }) %>
+    </div>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h3>Bot Sessions</h3><p>สถานะปัจจุบัน / Logout / lot / ports</p></div></div>
+    <div class="table-compact">
+      <% if (!(sessions || []).length) { %><div class="empty-box">ยังไม่มี bot session</div><% } %>
+      <% (sessions || []).forEach(function(s){ %>
+        <div class="list-item"><strong><%= s.full_name || s.email || '-' %></strong><div class="muted"><%= s.node_name || 'ยังไม่จับ node' %> · <%= s.broker_name || '-' %> / <%= s.account_login || '-' %> · <%= s.status %> · lot <%= s.lot_in_use %> · ports <%= s.ports_in_use %></div></div>
+      <% }) %>
+    </div>
+  </section>
+</div>
+<%- include('../partials/admin-shell-end') %>

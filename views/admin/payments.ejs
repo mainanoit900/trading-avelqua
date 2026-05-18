@@ -1,0 +1,524 @@
+<%- include('../partials/admin-shell') %>
+
+<%
+  var __locals = typeof locals !== 'undefined' ? locals : {};
+  var page = Number(__locals.page || 1);
+  var totalPages = Number(__locals.totalPages || 1);
+  const deleteLogs = __locals.deleteLogs || [];
+
+  const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+  const paymentRows = Array.isArray(payments) ? payments : [];
+  var totalRows = Number(__locals.totalRows || paymentRows.length || 0);
+  const deleteLogRows = Array.isArray(__locals.deleteLogs) ? __locals.deleteLogs : [];
+  const kbankSettings = __locals.kbankSettings || {};
+  const qs = new URLSearchParams(filters || {});
+  const currentPage = typeof page !== 'undefined' ? page : 1;
+  const returnTo = '/admin/payments' + (qs.toString() ? '?' + qs.toString() + '&page=' + currentPage : '?page=' + currentPage);
+
+  function formatDateTime(value) {
+    if (!value) return '-';
+    try { return new Date(value).toLocaleString('th-TH'); } catch (e) { return String(value); }
+  }
+  function amountText(value) {
+    return Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  }
+  function rowId(p) { return p.local_id || p.id; }
+  function rowDisplayId(p) {
+    return p.display_id || p.public_id || (p.id ? ('PM' + String(p.id).padStart(6, '0')) : '-');
+  }
+  function rowStatus(p) {
+    return p.status || p.payment_status || p.order_status || '-';
+  }
+  function rowAmount(p) {
+    return p.amount_thb || p.final_amount || p.amount || p.total_amount || 0;
+  }
+  function rowScoin(p) {
+    return p.scoin_amount || p.amount_scoin || p.scoin || p.reward_scoin || p.package_scoin || 0;
+  }
+  function rowType(p) {
+    return p.item_type || p.payment_type || p.order_type || (p.package_id || p.package_name_snapshot ? 'package' : 'package');
+  }
+  function rowItem(p) {
+    return p.item_name || p.package_name_snapshot || p.package_name || p.description || '-';
+  }
+  function rowMethod(p) {
+    return p.payment_method || p.method || p.channel || '-';
+  }
+  function rowPayerName(p) {
+    return p.payer_name || p.full_name || p.name || '-';
+  }
+  function rowPayerEmail(p) {
+    return p.payer_email || p.email || '-';
+  }
+  function typeText(value) {
+    if (value === 'package') return 'แพ็กเกจ';
+    if (value === 'scoin_buy') return 'ซื้อ Scoin';
+    if (value === 'scoin_sell') return 'ขาย Scoin';
+    return value || '-';
+  }
+  function statusClass(value) {
+    const s = String(value || '').toLowerCase();
+    if (['paid','approved','completed','success'].includes(s)) return 'green';
+    if (['cancelled','failed','rejected','refunded'].includes(s)) return 'red';
+    return 'yellow';
+  }
+  function keepParams(extra) {
+    const p = new URLSearchParams(filters || {});
+    Object.keys(extra || {}).forEach(function(k){ p.set(k, extra[k]); });
+    return '/admin/payments?' + p.toString();
+  }
+%>
+
+<section class="payment-admin-page">
+  <section class="card payment-hero">
+    <div class="payment-head-wrap">
+      <div>
+        <h3>รายการชำระเงิน</h3>
+        <p>รวมประวัติซื้อแพ็กเกจ / ซื้อ Scoin / ขาย Scoin พร้อมเลข ID ที่สร้างไว้ และจัดการอนุมัติได้ทั้งอัตโนมัติและแมนนวล</p>
+      </div>
+      <div class="kpi-row">
+        <span class="kpi-chip">ทั้งหมด <%= counts.total || 0 %></span>
+        <span class="kpi-chip">สำเร็จ <%= counts.paid || 0 %></span>
+        <span class="kpi-chip">ยอดรวม ฿<%= amountText(counts.revenue || 0) %></span>
+      </div>
+    </div>
+
+    <form class="payment-filter-grid" method="GET" action="/admin/payments">
+      <label>ค้นหา
+        <input type="text" name="q" value="<%= filters.q || '' %>" placeholder="ชื่อ / ID / Email / เลขอ้างอิง" />
+      </label>
+      <label>ประเภท
+        <select name="type">
+          <option value="all" <%= filters.type === 'all' ? 'selected' : '' %>>ทั้งหมด</option>
+          <option value="package" <%= filters.type === 'package' ? 'selected' : '' %>>แพ็กเกจ</option>
+          <option value="scoin_buy" <%= filters.type === 'scoin_buy' ? 'selected' : '' %>>ซื้อ Scoin</option>
+          <option value="scoin_sell" <%= filters.type === 'scoin_sell' ? 'selected' : '' %>>ขาย Scoin</option>
+        </select>
+      </label>
+      <label>สถานะ
+        <select name="status">
+          <option value="all" <%= filters.status === 'all' ? 'selected' : '' %>>ทั้งหมด</option>
+          <option value="pending" <%= filters.status === 'pending' ? 'selected' : '' %>>pending</option>
+          <option value="paid" <%= filters.status === 'paid' ? 'selected' : '' %>>paid</option>
+          <option value="approved" <%= filters.status === 'approved' ? 'selected' : '' %>>approved</option>
+          <option value="cancelled" <%= filters.status === 'cancelled' ? 'selected' : '' %>>cancelled</option>
+          <option value="failed" <%= filters.status === 'failed' ? 'selected' : '' %>>failed</option>
+        </select>
+      </label>
+      <label>ช่องทาง
+        <select name="method">
+          <option value="all" <%= filters.method === 'all' ? 'selected' : '' %>>ทั้งหมด</option>
+          <option value="promptpay_qr" <%= filters.method === 'promptpay_qr' ? 'selected' : '' %>>QR PromptPay</option>
+          <option value="card" <%= filters.method === 'card' ? 'selected' : '' %>>บัตรเครดิต</option>
+          <option value="kbank" <%= filters.method === 'kbank' ? 'selected' : '' %>>KBank</option>
+          <option value="manual" <%= filters.method === 'manual' ? 'selected' : '' %>>Manual</option>
+        </select>
+      </label>
+      <label>เดือน
+        <input type="number" name="month" min="1" max="12" value="<%= filters.month || '' %>" placeholder="เช่น 4" />
+      </label>
+      <label>ปี
+        <input type="number" name="year" min="2020" max="2100" value="<%= filters.year || '' %>" placeholder="เช่น 2026" />
+      </label>
+      <div class="payment-filter-actions">
+        <button class="btn primary" type="submit">ค้นหา</button>
+        <a class="btn secondary" href="/admin/payments">ล้าง</a>
+        <a class="btn secondary" href="/admin/payments/export">Excel ทั้งหมด</a>
+      </div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head payment-head-wrap">
+      <div>
+        <h3>ตารางรายการ</h3>
+        <p>แสดง 10 แถวต่อหน้า ถ้าเกินจะมีหน้าถัดไป</p>
+      </div>
+      <div class="inline-actions wrap">
+        <button type="button" class="btn secondary" id="selectAllPayments">เลือกทั้งหมด</button>
+        <button type="button" class="btn secondary" id="clearSelectedPayments">ล้างที่เลือก</button>
+        <button type="button" class="btn primary" id="printSelectedPayments">ปริ้นที่เลือก</button>
+        <button type="button" class="btn primary" id="exportSelectedPaymentsExcel">Excel ที่เลือก</button>
+      </div>
+    </div>
+
+    <% if (!paymentRows.length) { %>
+      <div class="empty-box">ไม่พบข้อมูลการชำระเงิน</div>
+    <% } else { %>
+      <div class="table-wrap">
+        <table class="table payment-table">
+          <thead>
+            <tr>
+              <th><input type="checkbox" id="scoinSelectAll" class="scoin-check"></th>
+          <th>ID</th>
+              <th>ประเภท</th>
+              <th>ผู้ใช้</th>
+              <th>รายการ</th>
+              <th>ยอดเงิน</th>
+              <th>ยอด Scoin</th>
+              <th>ช่องทาง</th>
+              <th>สถานะ</th>
+              <th>วันที่</th>
+              <th style="width:220px;">จัดการ</th>
+            </tr>
+          </thead>
+          <tbody>
+            <% paymentRows.forEach(function(p){ %>
+              <%
+                const statusValue = String(rowStatus(p) || '').toLowerCase();
+                const typeValue = rowType(p);
+                const canAction = ['pending','waiting','wait_payment','unpaid','รอยืนยัน','รอตรวจสอบ'].includes(statusValue);
+              %>
+              <tr>
+                <td><input type="checkbox" class="payment-checkbox"
+                  data-id="<%= rowDisplayId(p) %>"
+                  data-type="<%= typeText(typeValue) %>"
+                  data-name="<%= rowPayerName(p) %>"
+                  data-email="<%= rowPayerEmail(p) %>"
+                  data-item="<%= rowItem(p) %>"
+                  data-amount="<%= Number(rowAmount(p) || 0) %>"
+                  data-scoin="<%= Number(rowScoin(p) || 0) %>"
+                  data-method="<%= rowMethod(p) %>"
+                  data-status="<%= rowStatus(p) %>"
+                  data-created="<%= formatDateTime(p.created_at) %>"
+                  data-paid="<%= formatDateTime(p.paid_at || p.updated_at) %>" /></td>
+
+                <td><strong>#<%= rowDisplayId(p) %></strong><div class="cell-sub"><%= p.payment_ref || p.reference_no || p.order_no || '-' %></div></td>
+                <td><span class="type-pill"><%= typeText(typeValue) %></span></td>
+                <td><strong><%= rowPayerName(p) %></strong><div class="cell-sub"><%= p.user_display_id ? '#' + p.user_display_id + ' · ' : '' %><%= rowPayerEmail(p) %></div></td>
+                <td><%= rowItem(p) %></td>
+                <td><strong>฿<%= amountText(rowAmount(p)) %></strong></td>
+                <td><%= Number(rowScoin(p) || 0).toLocaleString('th-TH') %></td>
+                <td><%= rowMethod(p) %></td>
+                <td><span class="badge <%= statusClass(rowStatus(p)) %>"><%= rowStatus(p) %></span></td>
+                <td><%= formatDateTime(p.created_at) %><div class="cell-sub">จ่าย: <%= formatDateTime(p.paid_at || p.updated_at) %></div></td>
+
+                <td>
+                  <div class="payment-row-actions">
+                    <% if (canAction) { %>
+                      <% if (typeValue === 'scoin_buy') { %>
+                        <form method="POST" action="/admin/payments/scoin/<%= rowId(p) %>/approve"><input type="hidden" name="return_to" value="<%= returnTo %>" /><button class="btn success" type="submit">ยืนยัน</button></form>
+                        <form method="POST" action="/admin/payments/scoin/<%= rowId(p) %>/cancel"><input type="hidden" name="return_to" value="<%= returnTo %>" /><button class="btn warning" type="submit">ยกเลิก</button></form>
+                      <% } else { %>
+                        <form method="POST" action="/admin/payments/<%= rowId(p) %>/approve"><input type="hidden" name="return_to" value="<%= returnTo %>" /><button class="btn success" type="submit">ยืนยัน</button></form>
+                        <form method="POST" action="/admin/payments/<%= rowId(p) %>/cancel"><input type="hidden" name="return_to" value="<%= returnTo %>" /><button class="btn warning" type="submit">ยกเลิก</button></form>
+                      <% } %>
+                    <% } %>
+
+                    <form method="POST" action="/admin/payments/<%= rowId(p) %>/delete" onsubmit="return confirm('ยืนยันลบรายการนี้? ระบบจะบันทึกประวัติการลบไว้');">
+                      <input type="hidden" name="return_to" value="<%= returnTo %>" />
+                      <input type="hidden" name="delete_reason" value="ลบจากหน้า admin/payments" />
+                      <button class="btn danger" type="submit">ลบ</button>
+                    </form>
+                  </div>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="pagination-row">
+        <div>หน้า <%= page %> / <%= totalPages %> · ทั้งหมด <%= totalRows %> รายการ</div>
+        <div class="inline-actions">
+          <% if (page > 1) { %><a class="btn secondary" href="<%= keepParams({ page: page - 1 }) %>">ก่อนหน้า</a><% } %>
+          <% if (page < totalPages) { %><a class="btn secondary" href="<%= keepParams({ page: page + 1 }) %>">ถัดไป</a><% } %>
+        </div>
+      </div>
+    <% } %>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h3>ตั้งค่า KBank API Portal</h3><p>รองรับ QR PromptPay และบัตรเครดิต ใช้กับระบบตัดยอดอัตโนมัติผ่าน Webhook</p></div></div>
+    <form class="payment-filter-grid kbank-settings-form" method="POST" action="/admin/payments/kbank-settings">
+      <label class="check-row"><input type="checkbox" name="is_enabled" <%= kbankSettings.is_enabled ? 'checked' : '' %> /> เปิดใช้งาน KBank</label>
+      <label class="check-row"><input type="checkbox" name="mock_mode" <%= kbankSettings.mock_mode ? 'checked' : '' %> /> โหมดทดสอบ</label>
+      <label class="check-row"><input type="checkbox" name="qr_enabled" <%= kbankSettings.qr_enabled !== false ? 'checked' : '' %> /> QR PromptPay</label>
+      <label class="check-row"><input type="checkbox" name="card_enabled" <%= kbankSettings.card_enabled !== false ? 'checked' : '' %> /> บัตรเครดิต</label>
+      <label>KBANK_BASE_URL<input type="text" name="base_url" value="<%= kbankSettings.base_url || '' %>" placeholder="https://..." /></label>
+      <label>KBANK_PUBLIC_KEY<input type="text" name="public_key" value="<%= kbankSettings.public_key || '' %>" /></label>
+      <label>KBANK_SECRET_KEY<input type="password" name="secret_key" value="<%= kbankSettings.secret_key || '' %>" /></label>
+      <label>KBANK_MERCHANT_ID<input type="text" name="merchant_id" value="<%= kbankSettings.merchant_id || '' %>" /></label>
+      <div class="payment-filter-actions"><button class="btn primary" type="submit">บันทึก KBank</button></div>
+    </form>
+  </section>
+
+  <section class="card">
+    <div class="card-head payment-head-wrap">
+      <div><h3>ประวัติการลบล่าสุด</h3><p>แสดง 10 แถวล่าสุด และสามารถดึง Excel ได้</p></div>
+      <a class="btn secondary" href="/admin/payments/export?logs=1">Excel ประวัติการลบ</a>
+    </div>
+    <% if (!deleteLogRows.length) { %>
+      <div class="empty-box">ยังไม่มีประวัติการลบ</div>
+    <% } else { %>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>Payment ID</th><th>ผู้ลบ</th><th>อีเมล</th><th>เหตุผล</th><th>เวลาลบ</th></tr></thead>
+          <tbody>
+            <% deleteLogRows.forEach(function(log){ %>
+              <tr><td><strong><%= log.payment_display_id || log.payment_id || '-' %></strong></td><td><%= log.deleted_by_name || '-' %></td><td><%= log.deleted_by_email || '-' %></td><td><%= log.reason || '-' %></td><td><%= formatDateTime(log.deleted_at) %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    <% } %>
+  </section>
+</section>
+
+<section id="paymentsPrintArea" class="payment-print-area" aria-hidden="true"></section>
+
+<style>
+.payment-admin-page{display:grid;gap:20px}.payment-head-wrap{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;flex-wrap:wrap}.payment-hero{background:linear-gradient(135deg,rgba(37,99,235,.12),rgba(124,58,237,.12))}.payment-filter-grid{display:grid;grid-template-columns:repeat(4,minmax(150px,1fr));gap:12px;margin-top:16px}.payment-filter-grid label{display:grid;gap:7px;color:var(--muted,#94a3b8);font-size:13px}.payment-filter-grid input,.payment-filter-grid select{width:100%;border:1px solid rgba(148,163,184,.22);background:rgba(15,23,42,.55);color:inherit;border-radius:14px;padding:10px 12px}.payment-filter-actions{display:flex;align-items:end;gap:8px;flex-wrap:wrap}.wrap{flex-wrap:wrap}.payment-table input[type="checkbox"]{width:18px;height:18px;accent-color:#7c3aed;cursor:pointer}.type-pill{display:inline-flex;padding:6px 10px;border-radius:999px;background:rgba(59,130,246,.15);border:1px solid rgba(59,130,246,.25);font-size:12px}.payment-row-actions{display:flex;gap:6px;flex-wrap:wrap}.payment-row-actions .btn{padding:7px 9px;font-size:12px}.btn.success{background:#16a34a;color:#fff}.btn.warning{background:#f59e0b;color:#111827}.badge.red{background:rgba(239,68,68,.15);color:#fecaca}.pagination-row{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding-top:14px}.check-row{display:flex!important;grid-template-columns:auto 1fr!important;align-items:center;gap:8px}.check-row input{width:auto!important}.payment-print-area{display:none}.print-sheet{background:#fff;color:#111827;min-height:100vh;padding:24px}.print-head{display:flex;justify-content:space-between;gap:16px;margin-bottom:18px}.print-brand{font-weight:800;font-size:24px}.print-sub{color:#4b5563;font-size:13px;margin-top:4px}.print-table{width:100%;border-collapse:collapse;font-size:13px}.print-table th,.print-table td{border:1px solid #d1d5db;padding:8px 10px;text-align:left;vertical-align:top}.print-table th{background:#f3f4f6}@media (max-width:980px){.payment-filter-grid{grid-template-columns:1fr 1fr}}@media (max-width:640px){.payment-filter-grid{grid-template-columns:1fr}}@media print{body *{visibility:hidden!important}#paymentsPrintArea,#paymentsPrintArea *{visibility:visible!important}#paymentsPrintArea{display:block!important;position:absolute;inset:0;background:#fff}}
+</style>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<script>
+(function(){
+  const cbs=()=>Array.from(document.querySelectorAll('.payment-checkbox'));
+  const printArea=document.getElementById('paymentsPrintArea');
+  function rows(){return cbs().filter(cb=>cb.checked).map(cb=>({ID:cb.dataset.id,ประเภท:cb.dataset.type,ชื่อ:cb.dataset.name,อีเมล:cb.dataset.email,รายการ:cb.dataset.item,ยอด:Number(cb.dataset.amount||0),ช่องทาง:cb.dataset.method,สถานะ:cb.dataset.status,วันที่สร้าง:cb.dataset.created,วันที่จ่าย:cb.dataset.paid}));}
+  function need(a){if(!a.length){alert('กรุณาเลือกรายการก่อน');return false}return true}
+  document.getElementById('selectAllPayments')?.addEventListener('click',()=>cbs().forEach(cb=>cb.checked=true));
+  document.getElementById('clearSelectedPayments')?.addEventListener('click',()=>cbs().forEach(cb=>cb.checked=false));
+  document.getElementById('exportSelectedPaymentsExcel')?.addEventListener('click',()=>{const r=rows(); if(!need(r))return; const wb=XLSX.utils.book_new(); XLSX.utils.book_append_sheet(wb,XLSX.utils.json_to_sheet(r),'Payments'); XLSX.writeFile(wb,`payments-selected-${Date.now()}.xlsx`);});
+  document.getElementById('printSelectedPayments')?.addEventListener('click',()=>{const r=rows(); if(!need(r))return; const now=new Date().toLocaleString('th-TH'); printArea.innerHTML=`<div class="print-sheet"><div class="print-head"><div><div class="print-brand">TRADING AVELQUA</div><div class="print-sub">Payment print sheet</div></div><div class="print-sub">พิมพ์เมื่อ: ${now}</div></div><table class="print-table"><thead><tr><th>ID</th><th>ประเภท</th><th>ชื่อ</th><th>อีเมล</th><th>รายการ</th><th>ยอด</th><th>ช่องทาง</th><th>สถานะ</th><th>วันที่สร้าง</th><th>วันที่จ่าย</th></tr></thead><tbody>${r.map(x=>`<tr><td>${x.ID}</td><td>${x.ประเภท}</td><td>${x.ชื่อ}</td><td>${x.อีเมล}</td><td>${x.รายการ}</td><td>${x.ยอด.toLocaleString('th-TH')}</td><td>${x.ช่องทาง}</td><td>${x.สถานะ}</td><td>${x.วันที่สร้าง}</td><td>${x.วันที่จ่าย}</td></tr>`).join('')}</tbody></table></div>`; window.print();});
+})();
+</script>
+
+
+<style>
+.payment-table{font-size:13px}
+.payment-table th,.payment-table td{padding:8px 10px;vertical-align:middle}
+.payment-table td:nth-child(5){max-width:220px;white-space:normal}
+.payment-row-actions{display:none!important}
+.action-dropdown{position:relative;display:inline-block}
+.action-dropdown summary{
+  list-style:none;cursor:pointer;border:1px solid rgba(148,163,184,.25);
+  background:linear-gradient(135deg,#2563eb,#7c3aed);color:#fff;
+  padding:8px 12px;border-radius:12px;font-weight:700
+}
+.action-dropdown summary::-webkit-details-marker{display:none}
+.action-dropdown-menu{
+  position:absolute;right:0;top:42px;z-index:50;min-width:145px;
+  background:#0f172a;border:1px solid rgba(148,163,184,.25);
+  border-radius:14px;padding:8px;box-shadow:0 16px 40px rgba(0,0,0,.35)
+}
+.action-dropdown-menu form,.action-dropdown-menu a{display:block;margin:4px 0}
+.action-dropdown-menu .btn{width:100%;justify-content:center;font-size:12px;padding:8px 10px}
+@media(max-width:1200px){
+  .payment-table{font-size:12px}
+  .payment-table th,.payment-table td{padding:7px}
+}
+</style>
+
+<script>
+(function(){
+  document.querySelectorAll('.payment-row-actions').forEach(function(box){
+    box.style.display = 'flex';
+    box.classList.add('payment-inline-actions');
+  });
+})();
+</script>
+
+
+<section class="card scoin-sell-card" style="margin-top:24px;">
+  <div class="card-head payment-head-wrap">
+    <div>
+      <h3>รายการลูกค้าขาย Scoin คืนโฮส</h3>
+      <p>ดูรายละเอียด / ปริ้น / Excel / ยืนยัน / ยกเลิก / ลบ</p>
+    </div>
+    <div class="inline-actions wrap">
+      <button type="button" class="btn secondary" id="scoinSelectAllBtn">เลือกทั้งหมด</button>
+      <button type="button" class="btn secondary" id="scoinClearBtn">ล้างที่เลือก</button>
+      <button type="button" class="btn primary" id="scoinPrintBtn">ปริ้นที่เลือก</button>
+      <button type="button" class="btn primary" id="scoinExcelBtn">Excel ที่เลือก</button>
+      <form method="POST" action="/admin/scoin-market/bulk-delete" id="scoinBulkDeleteForm" onsubmit="return confirm('ยืนยันลบรายการที่เลือก?');">
+        <input type="hidden" name="ids" id="scoinBulkDeleteIds" />
+        <button class="btn danger" type="submit">ลบที่เลือก</button>
+      </form>
+    </div>
+  </div>
+
+  <div class="table-wrap scoin-table-wrap">
+    <table class="payment-table scoin-sell-table">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="scoinSelectAll" class="scoin-check"></th>
+          <th>ID</th>
+          <th>ผู้ใช้</th>
+          <th>Scoin</th>
+          <th>ยอดสุทธิ</th>
+          <th>บัญชีรับเงิน</th>
+          <th>สถานะ</th>
+          <th>วันที่</th>
+          <th>จัดการ</th>
+        </tr>
+      </thead>
+      <tbody>
+        <% (scoinSellOrders || []).forEach(function(o){ %>
+          <tr>
+            <td><input type="checkbox" class="scoin-row-check scoin-check" value="<%= o.id %>"></td>
+            <td><strong>#<%= o.display_id || ('SCSELL' + String(o.id).padStart(6,'0')) %></strong></td>
+            <td><strong><%= o.full_name || '-' %></strong><div class="cell-sub"><%= o.email || '-' %></div></td>
+            <td><%= Number(o.scoin_amount || 0).toLocaleString('th-TH') %></td>
+            <td>
+              <strong>฿<%= Number(o.net_amount_thb || 0).toLocaleString('th-TH') %></strong>
+              <div class="cell-sub">ก่อนหัก ฿<%= Number(o.gross_amount_thb || 0).toLocaleString('th-TH') %> / fee ฿<%= Number(o.fee_amount_thb || 0).toLocaleString('th-TH') %></div>
+            </td>
+            <td><%= o.bank_name || '-' %><div class="cell-sub"><%= o.account_name || '-' %> <%= o.account_number_masked || '' %></div></td>
+            <td><span class="badge <%= String(o.status) === 'approved' ? 'green' : (String(o.status) === 'rejected' ? 'red' : 'yellow') %>"><%= o.status || '-' %></span><div class="cell-sub">จ่าย: <%= o.payout_status || '-' %></div></td>
+            <td><%= formatDateTime(o.created_at) %></td>
+            <td>
+              <div class="scoin-actions">
+                <button type="button" class="btn secondary scoin-detail-btn"
+                  data-id="<%= o.display_id || ('SCSELL' + String(o.id).padStart(6,'0')) %>"
+                  data-name="<%= o.full_name || '-' %>"
+                  data-email="<%= o.email || '-' %>"
+                  data-scoin="<%= Number(o.scoin_amount || 0) %>"
+                  data-price="<%= Number(o.price_thb || 0) %>"
+                  data-gross="<%= Number(o.gross_amount_thb || 0) %>"
+                  data-fee="<%= Number(o.fee_amount_thb || 0) %>"
+                  data-net="<%= Number(o.net_amount_thb || 0) %>"
+                  data-bank="<%= o.bank_name || '-' %>"
+                  data-account="<%= o.account_name || '-' %> <%= o.account_number_masked || '' %>"
+                  data-status="<%= o.status || '-' %>"
+                  data-payout="<%= o.payout_status || '-' %>"
+                  data-date="<%= formatDateTime(o.created_at) %>">ดู</button>
+
+                <% if (String(o.status) === 'pending') { %>
+                  <form method="POST" action="/admin/scoin-market/<%= o.id %>/approve"><button class="btn success" type="submit">ยืนยัน</button></form>
+                  <form method="POST" action="/admin/scoin-market/<%= o.id %>/reject"><button class="btn warning" type="submit">ยกเลิก</button></form>
+                <% } %>
+
+                <% if (String(o.status) === 'approved' && String(o.payout_status || 'pending') === 'pending') { %>
+                  <form method="POST" action="/admin/scoin-market/<%= o.id %>/confirm-transfer">
+                    <input type="hidden" name="transfer_note" value="ยืนยันจ่ายจากหน้า payments" />
+                    <button class="btn success" type="submit">จ่ายแล้ว</button>
+                  </form>
+                <% } %>
+
+                <form method="POST" action="/admin/scoin-market/<%= o.id %>/delete" onsubmit="return confirm('ยืนยันลบรายการนี้?');">
+                  <button class="btn danger" type="submit">ลบ</button>
+                </form>
+              </div>
+            </td>
+          </tr>
+        <% }) %>
+
+        <% if (!(scoinSellOrders || []).length) { %>
+          <tr><td colspan="9" class="empty-cell">ยังไม่มีรายการขาย Scoin คืนโฮส</td></tr>
+        <% } %>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="scoinDetailModal" class="scoin-modal" style="display:none;">
+  <div class="scoin-modal-box">
+    <div class="scoin-modal-head">
+      <h3>รายละเอียดการขาย Scoin</h3>
+      <button type="button" id="scoinModalClose" class="btn secondary">ปิด</button>
+    </div>
+    <div id="scoinModalBody" class="scoin-modal-body"></div>
+    <div class="inline-actions">
+      <button type="button" id="scoinModalPrint" class="btn primary">ปริ้นรายละเอียด</button>
+    </div>
+  </div>
+</section>
+
+<section id="scoinPrintArea" class="payment-print-area" aria-hidden="true"></section>
+
+<style>
+.scoin-sell-table{min-width:980px!important}
+.scoin-sell-table th,.scoin-sell-table td{white-space:normal!important}
+.scoin-actions{display:flex;flex-wrap:wrap;gap:5px;max-width:160px}
+.scoin-actions .btn{min-height:28px!important;padding:4px 8px!important;font-size:11px!important;border-radius:8px!important}
+.scoin-actions form{margin:0}
+.scoin-check{width:18px;height:18px;accent-color:#7c3aed}
+.scoin-modal{position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:999999;display:grid;place-items:center;padding:20px}
+.scoin-modal-box{width:min(720px,96vw);background:#0f172a;border:1px solid rgba(148,163,184,.25);border-radius:22px;padding:18px;box-shadow:0 24px 80px rgba(0,0,0,.55)}
+.scoin-modal-head{display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:14px}
+.scoin-modal-body{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.scoin-detail-line{padding:10px 12px;background:rgba(255,255,255,.04);border-radius:12px}
+.scoin-detail-line span{display:block;color:#94a3b8;font-size:12px;margin-bottom:4px}
+@media(max-width:760px){.scoin-modal-body{grid-template-columns:1fr}}
+</style>
+
+<script>
+(function(){
+  const all = document.getElementById('scoinSelectAll');
+  const allBtn = document.getElementById('scoinSelectAllBtn');
+  const clearBtn = document.getElementById('scoinClearBtn');
+  const form = document.getElementById('scoinBulkDeleteForm');
+  const idsInput = document.getElementById('scoinBulkDeleteIds');
+
+  const checks = () => Array.from(document.querySelectorAll('.scoin-row-check'));
+  const selected = () => checks().filter(cb => cb.checked);
+
+  if (all) all.addEventListener('change', () => checks().forEach(cb => cb.checked = all.checked));
+  if (allBtn) allBtn.addEventListener('click', () => checks().forEach(cb => cb.checked = true));
+  if (clearBtn) clearBtn.addEventListener('click', () => checks().forEach(cb => cb.checked = false));
+
+  if (form) form.addEventListener('submit', function(e){
+    const ids = selected().map(cb => cb.value);
+    if (!ids.length) { e.preventDefault(); alert('กรุณาเลือกรายการก่อนลบ'); return false; }
+    idsInput.value = ids.join(',');
+  });
+
+  function orderDataFromRow(cb){
+    const tr = cb.closest('tr');
+    const btn = tr ? tr.querySelector('.scoin-detail-btn') : null;
+    if (!btn) return null;
+    return {
+      ID: btn.dataset.id, ผู้ใช้: btn.dataset.name, Email: btn.dataset.email,
+      Scoin: Number(btn.dataset.scoin||0), ราคาเหรียญ: Number(btn.dataset.price||0),
+      ยอดก่อนหัก: Number(btn.dataset.gross||0), ค่าธรรมเนียม: Number(btn.dataset.fee||0),
+      จ่ายสุทธิ: Number(btn.dataset.net||0), ธนาคาร: btn.dataset.bank,
+      บัญชี: btn.dataset.account, สถานะ: btn.dataset.status,
+      สถานะจ่าย: btn.dataset.payout, วันที่: btn.dataset.date
+    };
+  }
+
+  function requireSelected(){
+    const rows = selected().map(orderDataFromRow).filter(Boolean);
+    if (!rows.length) alert('กรุณาเลือกรายการก่อน');
+    return rows;
+  }
+
+  document.getElementById('scoinExcelBtn')?.addEventListener('click', function(){
+    const rows = requireSelected(); if (!rows.length) return;
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows), 'Scoin Sell');
+    XLSX.writeFile(wb, 'scoin-sell-selected-' + Date.now() + '.xlsx');
+  });
+
+  document.getElementById('scoinPrintBtn')?.addEventListener('click', function(){
+    const rows = requireSelected(); if (!rows.length) return;
+    const html = rows.map(r => `<tr><td>${r.ID}</td><td>${r.ผู้ใช้}<br>${r.Email}</td><td>${r.Scoin}</td><td>${r.ธนาคาร}<br>${r.บัญชี}</td><td>฿${r.จ่ายสุทธิ.toLocaleString('th-TH')}</td><td>${r.สถานะ}</td><td>${r.วันที่}</td></tr>`).join('');
+    document.getElementById('scoinPrintArea').innerHTML = `<div class="print-sheet"><div class="print-head"><div><div class="print-brand">TRADING AVELQUA</div><div class="print-sub">รายการลูกค้าขาย Scoin คืนโฮส</div></div><div class="print-sub">พิมพ์เมื่อ: ${new Date().toLocaleString('th-TH')}</div></div><table class="print-table"><thead><tr><th>ID</th><th>ผู้ใช้</th><th>Scoin</th><th>บัญชีรับเงิน</th><th>จ่ายสุทธิ</th><th>สถานะ</th><th>วันที่</th></tr></thead><tbody>${html}</tbody></table></div>`;
+    window.print();
+  });
+
+  const modal = document.getElementById('scoinDetailModal');
+  const modalBody = document.getElementById('scoinModalBody');
+
+  document.querySelectorAll('.scoin-detail-btn').forEach(btn => {
+    btn.addEventListener('click', function(){
+      const d = btn.dataset;
+      modalBody.innerHTML = [
+        ['ID',d.id],['ผู้ขาย',d.name],['Email',d.email],['Scoin',Number(d.scoin||0).toLocaleString('th-TH')],
+        ['ราคา/เหรียญ','฿'+Number(d.price||0).toLocaleString('th-TH')],['ยอดก่อนหัก','฿'+Number(d.gross||0).toLocaleString('th-TH')],
+        ['ค่าธรรมเนียม','฿'+Number(d.fee||0).toLocaleString('th-TH')],['จ่ายสุทธิ','฿'+Number(d.net||0).toLocaleString('th-TH')],
+        ['ธนาคาร',d.bank],['บัญชีรับเงิน',d.account],['สถานะ',d.status],['สถานะจ่าย',d.payout],['วันที่',d.date]
+      ].map(x => `<div class="scoin-detail-line"><span>${x[0]}</span><strong>${x[1]}</strong></div>`).join('');
+      modal.style.display = 'grid';
+    });
+  });
+
+  document.getElementById('scoinModalClose')?.addEventListener('click', () => modal.style.display = 'none');
+  document.getElementById('scoinModalPrint')?.addEventListener('click', () => window.print());
+})();
+</script>
+
+
+<%- include('../partials/admin-shell-end') %>

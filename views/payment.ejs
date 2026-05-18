@@ -1,0 +1,31 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+%>
+
+<%- include('partials/head', { pageCss: 'payment.css' }) %>
+<%- include('partials/nav') %>
+<main class="container section">
+  <div class="page-head">
+    <span class="badge"><%= safeT('payment.title','Payment') %></span>
+    <h1 class="gradient-text"><%= safeT('payment.title','Package Payment') %></h1>
+  </div>
+  <div class="grid grid-2">
+    <div class="card">
+      <h2><%= safeT('payment.package','Package') %></h2>
+      <div class="stack">
+        <div class="metric-item"><div class="caption"><%= safeT('payment.package','Package') %></div><strong><%= paymentItem && paymentItem.packageName || '-' %></strong></div>
+        <div class="metric-item"><div class="caption"><%= safeT('payment.duration','Duration') %></div><strong><%= paymentItem && paymentItem.days || '-' %></strong></div>
+        <div class="metric-item"><div class="caption"><%= safeT('payment.total','Total') %></div><strong>฿<%= Number(paymentItem && paymentItem.amount || 0).toLocaleString('th-TH') %></strong></div>
+      </div>
+    </div>
+    <div class="card">
+      <h2><%= safeT('payment.choose_method','Choose payment method') %></h2>
+      <div class="stack">
+        <a class="btn primary" href="#qr"><%= safeT('payment.qr','Pay via QR Code') %></a>
+        <a class="btn" href="#paypal"><%= safeT('payment.paypal','Pay via PayPal') %></a>
+      </div>
+      <p class="muted" style="margin-top:14px"><%= safeT('payment.qr_desc','Scan the QR code and confirm payment. An admin will review and approve it.') %></p>
+    </div>
+  </div>
+</main>
+<%- include('partials/footer') %>

@@ -1,0 +1,46 @@
+<%- include('../partials/admin-shell') %>
+<div class="grid-2">
+  <section class="card form-card">
+    <div class="card-head"><div><h3>สร้างคูปอง</h3><p>พร้อมทำชุดสำหรับสั่งพิมพ์</p></div></div>
+    <form method="POST" action="/admin/coupons/create" class="form-grid two">
+      <label>ชื่อคูปอง<input type="text" name="coupon_name" required /></label>
+      <label>Prefix<input type="text" name="prefix" value="AVL" /></label>
+      <label>ประเภท<select name="coupon_type"><option value="free">ฟรี</option><option value="discount">ส่วนลด</option></select></label>
+      <label>จำนวนที่สร้าง<input type="number" name="generate_total" value="1" min="1" max="200" /></label>
+      <label>ส่วนลดแบบบาท<input type="number" step="0.01" name="discount_amount" value="0" /></label>
+      <label>ส่วนลดแบบ %<input type="number" step="0.01" name="discount_percent" value="0" /></label>
+      <label>วันหมดอายุ<input type="datetime-local" name="expires_at" /></label>
+      <label>ข้อความบนการ์ด<input type="text" name="print_note" placeholder="เช่น ใช้ได้ 1 ครั้ง / กรุณาใช้ภายในกำหนด" /></label>
+      <div class="form-actions full"><button class="btn primary">สร้างคูปอง</button><a class="btn secondary" href="/admin/coupons/print/latest">พิมพ์ชุดล่าสุด</a></div>
+    </form>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h3>ประวัติการใช้งานล่าสุด</h3><p>ใช้งานได้กี่ครั้ง ใครใช้</p></div></div>
+    <div class="table-compact">
+      <% if (!(usages || []).length) { %><div class="empty-box">ยังไม่มีการใช้งาน</div><% } %>
+      <% (usages || []).forEach(function(u){ %>
+        <div class="list-item"><strong><%= u.coupon_code %></strong><div class="muted"><%= u.coupon_name || '-' %> · <%= u.full_name || '-' %> · <%= u.used_at ? new Date(u.used_at).toLocaleString('th-TH') : '-' %></div></div>
+      <% }) %>
+    </div>
+  </section>
+</div>
+<section class="accordion-list">
+  <% if (!(coupons || []).length) { %><section class="card"><div class="empty-box">ยังไม่มีคูปอง</div></section><% } %>
+  <% (coupons || []).forEach(function(c){ %>
+    <details class="accordion-item">
+      <summary>
+        <div><div class="cell-title"><%= c.coupon_name %></div><div class="cell-sub">โค้ด <%= c.coupon_code %></div></div>
+        <div><strong><%= c.coupon_type %></strong><div class="cell-sub">ประเภท</div></div>
+        <div><strong><%= c.discount_amount || 0 %> / <%= c.discount_percent || 0 %>%</strong><div class="cell-sub">ส่วนลด</div></div>
+        <div><strong><%= c.used_count %> / <%= c.usage_limit %></strong><div class="cell-sub">การใช้งาน</div></div>
+        <div><span class="badge <%= c.is_active ? 'green' : 'gray' %>"><%= c.is_active ? 'active' : 'inactive' %></span></div>
+        <div class="inline-actions"><span class="cell-sub"><%= c.expires_at ? new Date(c.expires_at).toLocaleString('th-TH') : '-' %></span></div>
+      </summary>
+      <div class="accordion-body">
+        <div class="data-panel">ใช้ได้ 1 ครั้งต่อ 1 โค้ด · วันสร้าง <%= c.created_at ? new Date(c.created_at).toLocaleString('th-TH') : '-' %></div>
+        <form method="POST" action="/admin/coupons/<%= c.id %>/delete" onsubmit="return confirm('ยืนยันลบคูปอง?')"><button class="btn danger">ลบคูปอง</button></form>
+      </div>
+    </details>
+  <% }) %>
+</section>
+<%- include('../partials/admin-shell-end') %>

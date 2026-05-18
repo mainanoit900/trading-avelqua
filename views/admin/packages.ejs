@@ -1,0 +1,145 @@
+<%- include('../partials/admin-shell') %>
+<%
+  const fmt = function(v, digits = 2) {
+    return Number(v || 0).toLocaleString('th-TH', { minimumFractionDigits: digits, maximumFractionDigits: digits });
+  };
+  const pg = pagination || { page: 1, totalPages: 1, total: (packages || []).length, perPage: 10 };
+%>
+<section class="card form-card">
+  <div class="card-head">
+    <div>
+      <h3 data-i18n="admin.packages.create_title"><%= t('admin.packages.create_title', 'Create Package') %></h3>
+      <p>จัดการแพ็กเกจ + Scoin Economy: ลูกค้าได้ 80%, แนะนำครั้งแรก 60%, ลูกค้าเก่าแบ่งสายงาน 20%</p>
+    </div>
+    <div class="kpi-row">
+      <span class="kpi-chip"><span data-i18n="admin.dashboard.packages"><%= t('admin.dashboard.packages', 'Packages') %></span> <%= counts.total || 0 %></span>
+      <span class="kpi-chip"><span data-i18n="admin.dashboard.enabled"><%= t('admin.dashboard.enabled', 'Enabled') %></span> <%= counts.enabled || 0 %></span>
+      <span class="kpi-chip">หน้า <%= pg.page %>/<%= pg.totalPages %></span>
+    </div>
+  </div>
+
+  <div class="empty-box" style="margin-bottom:14px;text-align:left">
+    <strong>สูตร Scoin:</strong>
+    ลูกค้าได้ <strong>80%</strong> ของราคาแพ็กเกจ ·
+    ผู้แนะนำตรงครั้งแรกได้ <strong>60%</strong> ครั้งเดียว ไม่แบ่งให้ใคร ·
+    ลูกค้าเก่าซื้อซ้ำแบ่งสายงาน <strong>8% / 5% / 3% / 2% / 2%</strong> รวม 20%
+  </div>
+
+  <form method="POST" action="/admin/packages/create" class="form-grid three">
+    <label><span data-i18n="admin.packages.code"><%= t('admin.packages.code', 'Code') %></span><input type="text" name="package_code" /></label>
+    <label><span data-i18n="admin.packages.group"><%= t('admin.packages.group', 'Group') %></span><select name="group_name"><option>BASIC</option><option>PRO</option><option>ADVANCED</option></select></label>
+    <label><span data-i18n="admin.packages.sort"><%= t('admin.packages.sort', 'Sort Order') %></span><input type="number" name="sort_order" value="0" /></label>
+    <label><span data-i18n="admin.packages.name_th"><%= t('admin.packages.name_th', 'Name TH') %></span><input type="text" name="name_th" required /></label>
+    <label><span data-i18n="admin.packages.name_en"><%= t('admin.packages.name_en', 'Name EN') %></span><input type="text" name="name_en" /></label>
+    <label><span data-i18n="admin.packages.days"><%= t('admin.packages.days', 'Days') %></span><input type="number" name="days" min="0" value="0" /></label>
+    <label><span data-i18n="admin.packages.price"><%= t('admin.packages.price', 'Price') %></span><input type="number" step="0.01" name="price" value="0" /></label>
+    <label>ลูกค้าได้รับ Scoin<input type="number" step="0.0001" name="reward_scoin" placeholder="เว้นว่าง = ราคา x % ลูกค้า" /></label>
+    <label>% ลูกค้าได้รับ<input type="number" step="0.0001" name="customer_reward_percent" value="80" /></label>
+    <label>% แนะนำตรงครั้งแรก<input type="number" step="0.0001" name="first_referral_percent" value="60" /></label>
+    <label>% สายงานรวม<input type="number" step="0.0001" name="network_bonus_percent" value="20" /></label>
+    <label>ชั้น 1 %<input type="number" step="0.0001" name="level1_percent" value="8" /></label>
+    <label>ชั้น 2 %<input type="number" step="0.0001" name="level2_percent" value="5" /></label>
+    <label>ชั้น 3 %<input type="number" step="0.0001" name="level3_percent" value="3" /></label>
+    <label>ชั้น 4 %<input type="number" step="0.0001" name="level4_percent" value="2" /></label>
+    <label>ชั้น 5 %<input type="number" step="0.0001" name="level5_percent" value="2" /></label>
+    <label>% บริษัทกำไร<input type="number" step="0.0001" name="company_profit_percent" value="35" /></label>
+    <label>% สำรองรับซื้อคืน<input type="number" step="0.0001" name="buyback_reserve_percent" value="20" /></label>
+    <label>% Burn / Liquidity<input type="number" step="0.0001" name="burn_liquidity_percent" value="10" /></label>
+    <label>% โปรโมชั่น<input type="number" step="0.0001" name="promotion_percent" value="10" /></label>
+    <label>% ระบบ / Server / Marketing<input type="number" step="0.0001" name="system_marketing_percent" value="5" /></label>
+    <label>Lot Min<input type="number" step="0.01" name="lot_min" value="0" /></label>
+    <label>Lot Max<input type="number" step="0.01" name="lot_max" value="0" /></label>
+    <label>Ports Min<input type="number" name="ports_min" value="0" /></label>
+    <label>Ports Max<input type="number" name="ports_max" value="0" /></label>
+    <label>Profit TH<input type="text" name="profit_label_th" /></label>
+    <label>Profit EN<input type="text" name="profit_label_en" /></label>
+    <label>Support TH<input type="text" name="support_th" /></label>
+    <label>Support EN<input type="text" name="support_en" /></label>
+    <label class="full">Summary TH<textarea name="summary_th"></textarea></label>
+    <label class="full">Summary EN<textarea name="summary_en"></textarea></label>
+    <label class="checkbox-row"><input type="checkbox" name="is_enabled" checked /> <span data-i18n="admin.packages.enable"><%= t('admin.packages.enable', 'Enable') %></span></label>
+    <label class="checkbox-row"><input type="checkbox" name="is_popular" /> <span data-i18n="admin.packages.popular"><%= t('admin.packages.popular', 'Popular') %></span></label>
+    <div class="form-actions full"><button class="btn primary" data-i18n="admin.packages.add"><%= t('admin.packages.add', 'Add package') %></button></div>
+  </form>
+</section>
+
+<section class="accordion-list">
+  <% if (!(packages || []).length) { %><section class="card"><div class="empty-box">No packages</div></section><% } %>
+  <% (packages || []).forEach(function(p){ %>
+    <details class="accordion-item">
+      <summary>
+        <div>
+          <div class="cell-title"><%= p.name_th %> <span class="muted">(<%= p.name_en || '-' %>)</span></div>
+          <div class="cell-sub">#<%= p.display_id || p.id %> · <%= p.package_code || '-' %></div>
+        </div>
+        <div><strong><%= p.group_name %></strong><div class="cell-sub" data-i18n="admin.packages.group"><%= t('admin.packages.group', 'Group') %></div></div>
+        <div><strong><%= p.days %> วัน</strong><div class="cell-sub" data-i18n="admin.packages.days"><%= t('admin.packages.days', 'Days') %></div></div>
+        <div><strong>฿<%= fmt(p.price, 0) %></strong><div class="cell-sub" data-i18n="admin.packages.price"><%= t('admin.packages.price', 'Price') %></div></div>
+        <div><strong><%= fmt(p.customer_reward_scoin, 2) %> Scoin</strong><div class="cell-sub">ลูกค้า 80%</div></div>
+        <div><span class="badge <%= p.is_enabled ? 'green' : 'gray' %>"><%= p.is_enabled ? 'enabled' : 'disabled' %></span></div>
+      </summary>
+
+      <div class="accordion-body">
+        <div class="kpi-row" style="margin-bottom:14px">
+          <span class="kpi-chip">ลูกค้าได้ <%= fmt(p.customer_reward_scoin, 2) %> Scoin</span>
+          <span class="kpi-chip">แนะนำครั้งแรก 60% = <%= fmt(p.first_referral_bonus_scoin, 2) %> Scoin</span>
+          <span class="kpi-chip">สายงานรวม 20% = <%= fmt(p.network_bonus_pool_scoin, 2) %> Scoin</span>
+          <span class="kpi-chip">บริษัท 35% = ฿<%= fmt(p.company_profit_thb, 2) %></span>
+          <span class="kpi-chip">สำรองซื้อคืน 20% = ฿<%= fmt(p.buyback_reserve_thb, 2) %></span>
+          <span class="kpi-chip">Burn/Liquidity 10% = ฿<%= fmt(p.burn_liquidity_thb, 2) %></span>
+          <span class="kpi-chip">โปรโมชั่น 10% = ฿<%= fmt(p.promotion_thb, 2) %></span>
+          <span class="kpi-chip">ระบบ/Server/Marketing 5% = ฿<%= fmt(p.system_marketing_thb, 2) %></span>
+        </div>
+
+        <form method="POST" action="/admin/packages/<%= p.id %>/update" class="form-grid three">
+          <label><span data-i18n="admin.packages.code"><%= t('admin.packages.code', 'Code') %></span><input type="text" name="package_code" value="<%= p.package_code || '' %>" /></label>
+          <label><span data-i18n="admin.packages.group"><%= t('admin.packages.group', 'Group') %></span><select name="group_name"><option value="BASIC" <%= p.group_name==='BASIC' ? 'selected' : '' %>>BASIC</option><option value="PRO" <%= p.group_name==='PRO' ? 'selected' : '' %>>PRO</option><option value="ADVANCED" <%= p.group_name==='ADVANCED' ? 'selected' : '' %>>ADVANCED</option></select></label>
+          <label><span data-i18n="admin.packages.sort"><%= t('admin.packages.sort', 'Sort Order') %></span><input type="number" name="sort_order" value="<%= p.sort_order || 0 %>" /></label>
+          <label><span data-i18n="admin.packages.name_th"><%= t('admin.packages.name_th', 'Name TH') %></span><input type="text" name="name_th" value="<%= p.name_th || '' %>" /></label>
+          <label><span data-i18n="admin.packages.name_en"><%= t('admin.packages.name_en', 'Name EN') %></span><input type="text" name="name_en" value="<%= p.name_en || '' %>" /></label>
+          <label><span data-i18n="admin.packages.days"><%= t('admin.packages.days', 'Days') %></span><input type="number" name="days" value="<%= p.days || 0 %>" /></label>
+          <label><span data-i18n="admin.packages.price"><%= t('admin.packages.price', 'Price') %></span><input type="number" step="0.01" name="price" value="<%= p.price || 0 %>" /></label>
+          <label>ลูกค้าได้รับ Scoin<input type="number" step="0.0001" name="reward_scoin" value="<%= p.customer_reward_scoin || 0 %>" /></label>
+          <label>% ลูกค้าได้รับ<input type="number" step="0.0001" name="customer_reward_percent" value="<%= p.customer_reward_percent || 80 %>" /></label>
+          <label>% แนะนำตรงครั้งแรก<input type="number" step="0.0001" name="first_referral_percent" value="<%= p.first_referral_percent || 60 %>" /></label>
+          <label>% สายงานรวม<input type="number" step="0.0001" name="network_bonus_percent" value="<%= p.network_bonus_percent || 20 %>" /></label>
+          <label>ชั้น 1 %<input type="number" step="0.0001" name="level1_percent" value="<%= p.level1_percent || 8 %>" /></label>
+          <label>ชั้น 2 %<input type="number" step="0.0001" name="level2_percent" value="<%= p.level2_percent || 5 %>" /></label>
+          <label>ชั้น 3 %<input type="number" step="0.0001" name="level3_percent" value="<%= p.level3_percent || 3 %>" /></label>
+          <label>ชั้น 4 %<input type="number" step="0.0001" name="level4_percent" value="<%= p.level4_percent || 2 %>" /></label>
+          <label>ชั้น 5 %<input type="number" step="0.0001" name="level5_percent" value="<%= p.level5_percent || 2 %>" /></label>
+          <label>% บริษัทกำไร<input type="number" step="0.0001" name="company_profit_percent" value="<%= p.company_profit_percent || 35 %>" /></label>
+          <label>% สำรองรับซื้อคืน<input type="number" step="0.0001" name="buyback_reserve_percent" value="<%= p.buyback_reserve_percent || 20 %>" /></label>
+          <label>% Burn / Liquidity<input type="number" step="0.0001" name="burn_liquidity_percent" value="<%= p.burn_liquidity_percent || 10 %>" /></label>
+          <label>% โปรโมชั่น<input type="number" step="0.0001" name="promotion_percent" value="<%= p.promotion_percent || 10 %>" /></label>
+          <label>% ระบบ / Server / Marketing<input type="number" step="0.0001" name="system_marketing_percent" value="<%= p.system_marketing_percent || 5 %>" /></label>
+          <label>Lot Min<input type="number" step="0.01" name="lot_min" value="<%= p.lot_min || 0 %>" /></label>
+          <label>Lot Max<input type="number" step="0.01" name="lot_max" value="<%= p.lot_max || 0 %>" /></label>
+          <label>Ports Min<input type="number" name="ports_min" value="<%= p.ports_min || 0 %>" /></label>
+          <label>Ports Max<input type="number" name="ports_max" value="<%= p.ports_max || 0 %>" /></label>
+          <label>Profit TH<input type="text" name="profit_label_th" value="<%= p.profit_label_th || '' %>" /></label>
+          <label>Profit EN<input type="text" name="profit_label_en" value="<%= p.profit_label_en || '' %>" /></label>
+          <label>Support TH<input type="text" name="support_th" value="<%= p.support_th || '' %>" /></label>
+          <label>Support EN<input type="text" name="support_en" value="<%= p.support_en || '' %>" /></label>
+          <label class="full">Summary TH<textarea name="summary_th"><%= p.summary_th || '' %></textarea></label>
+          <label class="full">Summary EN<textarea name="summary_en"><%= p.summary_en || '' %></textarea></label>
+          <label class="checkbox-row"><input type="checkbox" name="is_enabled" <%= p.is_enabled ? 'checked' : '' %> /> <span data-i18n="admin.packages.enable"><%= t('admin.packages.enable', 'Enable') %></span></label>
+          <label class="checkbox-row"><input type="checkbox" name="is_popular" <%= p.is_popular ? 'checked' : '' %> /> <span data-i18n="admin.packages.popular"><%= t('admin.packages.popular', 'Popular') %></span></label>
+          <div class="form-actions full"><button class="btn primary" data-i18n="common.save"><%= t('common.save', 'Save') %></button></div>
+        </form>
+        <form method="POST" action="/admin/packages/<%= p.id %>/delete" onsubmit="return confirm('ยืนยันลบแพ็กเกจ?')"><button class="btn danger" data-i18n="common.delete"><%= t('common.delete', 'Delete') %></button></form>
+      </div>
+    </details>
+  <% }) %>
+
+  <% if (pg.totalPages > 1) { %>
+    <section class="card" style="margin-top:14px">
+      <div class="form-actions" style="justify-content:center;gap:8px;flex-wrap:wrap">
+        <% for (let i = 1; i <= pg.totalPages; i++) { %>
+          <a class="btn <%= i === pg.page ? 'primary' : '' %>" href="/admin/packages?page=<%= i %>"><%= i %></a>
+        <% } %>
+      </div>
+    </section>
+  <% } %>
+</section>
+<%- include('../partials/admin-shell-end') %>

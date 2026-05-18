@@ -1,0 +1,262 @@
+.vps-page{padding:24px;color:#eef4ff}
+.vps-hero,.vps-card,.sum-card,.vps-mini-card{
+  background:linear-gradient(145deg,#0b1224,#070b16);
+  border:1px solid rgba(120,150,255,.18);
+  border-radius:24px;
+  box-shadow:0 20px 55px rgba(0,0,0,.28);
+}
+.vps-hero{padding:30px;display:flex;justify-content:space-between;align-items:center;gap:20px;margin-bottom:18px}
+.vps-hero.premium{background:radial-gradient(circle at top right,rgba(99,102,241,.26),transparent 38%),linear-gradient(145deg,#10172a,#070b16)}
+.vps-kicker{color:#38bdf8;font-size:12px;letter-spacing:.16em;font-weight:900}
+.vps-hero h1{margin:8px 0;font-size:32px}
+.vps-hero p{color:#9fb0d0;line-height:1.7;max-width:850px}
+.vps-summary{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-bottom:18px}
+.sum-card{padding:22px;min-height:132px;position:relative;overflow:hidden}
+.sum-card:after{content:"";position:absolute;right:-36px;top:-36px;width:120px;height:120px;background:radial-gradient(circle,rgba(99,102,241,.28),transparent 70%)}
+.sum-card span{color:#a9b8d8;font-size:14px;font-weight:800}
+.sum-card strong{display:block;font-size:40px;line-height:1;margin:12px 0 8px}
+.sum-card small{display:block;color:#8ea0c2;font-size:13px}
+.vps-card{padding:24px;margin-bottom:20px}
+.card-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:18px}
+.card-head h2{margin:0;font-size:24px}
+.card-head p{margin:7px 0 0;color:#93a4c7}
+.btn{border:0;border-radius:13px;padding:11px 15px;color:#fff;text-decoration:none;cursor:pointer;display:inline-flex;align-items:center;justify-content:center;gap:6px;font-weight:900;white-space:nowrap}
+.btn.primary{background:linear-gradient(135deg,#2563eb,#7c3aed)}
+.btn.soft{background:#243145}
+.btn.warn{background:#b45309}
+.btn.danger{background:#dc2626}
+.vps-compact-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(380px,1fr));gap:18px}
+.vps-mini-card{padding:18px;transition:.18s ease}
+.vps-mini-card:hover{transform:translateY(-3px);border-color:rgba(99,102,241,.7);box-shadow:0 22px 60px rgba(37,99,235,.18)}
+.vps-mini-card.is-warning{border-color:rgba(251,191,36,.65)}
+.vps-mini-top{display:flex;justify-content:space-between;gap:12px;margin-bottom:16px}
+.vps-mini-top h3{margin:0;font-size:21px;color:#fff}
+.vps-mini-top p{margin:5px 0 0;color:#93a4c7}
+.pill{border-radius:999px;padding:9px 13px;font-size:12px;background:#334155;color:#fff;font-weight:900;height:max-content}
+.pill.available,.pill.online,.pill.running{background:#166534}
+.pill.maintenance,.pill.warning{background:#92400e}
+.pill.offline,.pill.error,.pill.stopped{background:#991b1b}
+.vps-chart-grid{display:grid;grid-template-columns:repeat(2,1fr);gap:12px}
+.chart-box{background:rgba(15,23,42,.82);border:1px solid rgba(148,163,184,.14);border-radius:17px;padding:14px;min-height:100px}
+.chart-head{display:flex;justify-content:space-between;align-items:end;gap:10px}
+.chart-head span{color:#9fb0d0;font-size:13px;font-weight:800}
+.chart-head b{font-size:25px;color:#fff;line-height:1}
+.chart-box small{display:block;margin-top:8px;color:#8ea0c2;font-size:12px}
+
+/* กราฟใหม่ แก้อาการเพี้ยน */
+.lux-bar{
+  width:100%;
+  height:13px;
+  background:#111a2d;
+  border:1px solid rgba(148,163,184,.18);
+  border-radius:999px;
+  overflow:hidden;
+  margin-top:12px;
+  box-shadow:inset 0 1px 6px rgba(0,0,0,.45);
+}
+.lux-bar i{
+  display:block;
+  height:100%;
+  min-width:0;
+  max-width:100%;
+  border-radius:999px;
+  background:linear-gradient(90deg,#22c55e 0%,#84cc16 50%,#f59e0b 78%,#ef4444 100%);
+  box-shadow:0 0 14px rgba(34,197,94,.4);
+}
+.vps-mini-net{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+.vps-mini-net span{background:rgba(59,130,246,.12);color:#bfdbfe;border:1px solid rgba(59,130,246,.18);padding:7px 10px;border-radius:999px;font-size:12px}
+.vps-mini-net b{color:#fff}
+.vps-mini-actions{display:flex;flex-wrap:wrap;gap:9px;margin-top:16px;padding-top:15px;border-top:1px solid rgba(148,163,184,.14)}
+.empty{padding:30px;text-align:center;color:#94a3b8}
+.pager{margin-top:20px;display:flex;justify-content:center;align-items:center;gap:12px;color:#cbd5e1}
+@media(max-width:1200px){.vps-summary{grid-template-columns:repeat(2,1fr)}}
+@media(max-width:700px){
+  .vps-page{padding:14px}
+  .vps-hero,.card-head{flex-direction:column;align-items:flex-start}
+  .vps-summary,.vps-compact-grid,.vps-chart-grid{grid-template-columns:1fr}
+}
+
+.clickable-card{
+  display:block;
+  text-decoration:none;
+  color:inherit;
+  transition:.18s ease;
+}
+
+.clickable-card:hover{
+  transform:translateY(-3px);
+  border-color:rgba(239,68,68,.75);
+  box-shadow:0 22px 60px rgba(239,68,68,.18);
+}
+
+.table-wrap{
+  overflow:auto;
+}
+
+.vps-table{
+  width:100%;
+  border-collapse:collapse;
+  min-width:980px;
+}
+
+.vps-table th,
+.vps-table td{
+  border-bottom:1px solid rgba(148,163,184,.14);
+  padding:14px;
+  text-align:left;
+  vertical-align:top;
+}
+
+.vps-table th{
+  color:#93c5fd;
+  background:rgba(15,23,42,.75);
+  font-weight:900;
+}
+
+.vps-table td{
+  color:#dbeafe;
+}
+
+.pager{
+  margin-top:20px;
+  display:flex;
+  justify-content:center;
+  align-items:center;
+  gap:12px;
+  color:#cbd5e1;
+}
+
+/* ===== PREMIUM VPS CARD UPGRADE ===== */
+.vps-mini-card{
+  position:relative;
+  overflow:hidden;
+  background:
+    radial-gradient(circle at 85% 10%,rgba(99,102,241,.30),transparent 32%),
+    radial-gradient(circle at 10% 90%,rgba(14,165,233,.16),transparent 35%),
+    linear-gradient(145deg,#111a31,#050916);
+  border:1px solid rgba(148,163,184,.18);
+}
+
+.vps-mini-card:before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:linear-gradient(120deg,rgba(255,255,255,.08),transparent 35%,rgba(255,255,255,.03));
+  pointer-events:none;
+}
+
+.vps-mini-top,
+.vps-chart-grid,
+.vps-mini-net,
+.vps-mini-actions{
+  position:relative;
+  z-index:2;
+}
+
+.vps-mini-top h3{
+  font-size:23px;
+  letter-spacing:-.03em;
+}
+
+.vps-mini-top p{
+  color:#9ec5ff;
+}
+
+.pill.online,
+.pill.available{
+  background:linear-gradient(135deg,#16a34a,#22c55e);
+  box-shadow:0 0 18px rgba(34,197,94,.28);
+}
+
+.pill.offline{
+  background:linear-gradient(135deg,#991b1b,#ef4444);
+  box-shadow:0 0 18px rgba(239,68,68,.22);
+}
+
+.pill.maintenance{
+  background:linear-gradient(135deg,#92400e,#f59e0b);
+  box-shadow:0 0 18px rgba(245,158,11,.22);
+}
+
+.chart-box{
+  background:linear-gradient(180deg,rgba(15,23,42,.92),rgba(8,13,25,.92));
+  border:1px solid rgba(148,163,184,.18);
+  box-shadow:inset 0 1px 0 rgba(255,255,255,.04);
+}
+
+.chart-head b{
+  font-size:28px;
+}
+
+.lux-bar{
+  height:15px;
+  background:#0a1020;
+}
+
+.lux-bar i{
+  background:linear-gradient(90deg,#38bdf8 0%,#22c55e 45%,#f59e0b 75%,#ef4444 100%);
+}
+
+.btn.connect{
+  background:linear-gradient(135deg,#0891b2,#2563eb);
+  box-shadow:0 10px 22px rgba(37,99,235,.25);
+}
+
+.btn.connect:hover,
+.btn.primary:hover,
+.btn.soft:hover,
+.btn.warn:hover,
+.btn.danger:hover{
+  filter:brightness(1.12);
+  transform:translateY(-1px);
+}
+
+.vps-mini-actions .btn,
+.vps-mini-actions button{
+  min-height:42px;
+}
+
+.vps-mini-net span{
+  background:rgba(37,99,235,.16);
+  border-color:rgba(96,165,250,.24);
+}
+
+
+.vps-last-seen{
+  margin-bottom:14px;
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(59,130,246,.10);
+  border:1px solid rgba(96,165,250,.18);
+  display:flex;
+  justify-content:space-between;
+  gap:10px;
+  color:#bfdbfe;
+  font-size:13px;
+}
+
+.vps-last-seen b{
+  color:#fff;
+}
+
+.vps-mini-alert{
+  margin-top:14px;
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(239,68,68,.10);
+  border:1px solid rgba(239,68,68,.25);
+  color:#fecaca;
+  font-size:13px;
+}
+
+.btn.connect{
+  background:linear-gradient(135deg,#0891b2,#2563eb);
+}
+
+.vps-mini-actions{
+  gap:10px;
+}
+
+.vps-mini-actions .btn{
+  min-height:44px;
+}

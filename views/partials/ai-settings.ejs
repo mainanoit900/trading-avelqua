@@ -1,0 +1,36 @@
+<%- include('../partials/admin-shell') %>
+<div class="grid-2">
+  <section class="card form-card">
+    <div class="card-head"><div><h3>AI Identity</h3><p>บุคลิกและโมเดล</p></div></div>
+    <form method="POST" action="/admin/ai-settings" class="form-grid two">
+      <label>OPENAI_API_KEY<input type="text" name="openai_api_key" value="<%= settings.openai_api_key || '' %>" /></label>
+      <label>Model<input type="text" name="model_name" value="<%= settings.model_name || 'gpt-5.4-mini' %>" /></label>
+      <label>ชื่อแชท<input type="text" name="bot_name" value="<%= settings.bot_name || 'สายฝน' %>" /></label>
+      <label class="full">บุคลิก<textarea name="persona_th"><%= settings.persona_th || 'สุภาพ ลงท้ายด้วยคำว่าค่ะ' %></textarea></label>
+      <label class="full">ข้อห้ามเพิ่มเติม<textarea name="forbidden_topics_th" placeholder="ตัวอย่าง: ห้ามสัญญาผลกำไร, ห้ามเปิดเผยโค้ด, ห้ามตอบข้อมูลแอดมินภายใน"><%= settings.forbidden_topics_th || '' %></textarea></label>
+      <div class="checkbox-grid full">
+        <label class="checkbox-row"><input type="checkbox" name="is_enabled" <%= settings.is_enabled ? 'checked' : '' %> /> เปิด AI</label>
+        <label class="checkbox-row"><input type="checkbox" name="save_chat_history" <%= settings.save_chat_history ? 'checked' : '' %> /> บันทึกประวัติแชท</label>
+        <label class="checkbox-row"><input type="checkbox" name="hide_system_structure" <%= settings.hide_system_structure ? 'checked' : '' %> /> ห้ามเปิดเผยโครงสร้างระบบ/โค้ด</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_web_usage" <%= settings.scope_web_usage ? 'checked' : '' %> /> การใช้งานเว็บ</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_settings" <%= settings.scope_settings ? 'checked' : '' %> /> การตั้งค่า</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_bot" <%= settings.scope_bot ? 'checked' : '' %> /> บอท</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_payment" <%= settings.scope_payment ? 'checked' : '' %> /> การจ่ายเงิน</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_packages" <%= settings.scope_packages ? 'checked' : '' %> /> แพ็กเกจ</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_news" <%= settings.scope_news ? 'checked' : '' %> /> ข่าว</label>
+        <label class="checkbox-row"><input type="checkbox" name="scope_ticket" <%= settings.scope_ticket ? 'checked' : '' %> /> รับเรื่อง</label>
+      </div>
+      <div class="form-actions full"><button class="btn primary">บันทึก AI Settings</button></div>
+    </form>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h3>แนวทางการตอบ</h3><p>อ่านง่ายขึ้นเป็นรายการ</p></div></div>
+    <div class="list-stack">
+      <div class="list-item">ชื่อบอทปัจจุบัน: <strong><%= settings.bot_name || 'สายฝน' %></strong></div>
+      <div class="list-item">บุคลิก: <%= settings.persona_th || '-' %></div>
+      <div class="list-item">ข้อห้าม: <%= settings.forbidden_topics_th || 'ยังไม่ได้ระบุ' %></div>
+      <div class="list-item">Scope ที่เปิด: Web <%= settings.scope_web_usage ? '✓' : '✕' %> · Settings <%= settings.scope_settings ? '✓' : '✕' %> · Bot <%= settings.scope_bot ? '✓' : '✕' %> · Payment <%= settings.scope_payment ? '✓' : '✕' %></div>
+    </div>
+  </section>
+</div>
+<%- include('../partials/admin-shell-end') %>

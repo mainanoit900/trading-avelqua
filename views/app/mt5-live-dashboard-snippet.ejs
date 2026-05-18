@@ -1,0 +1,63 @@
+<!-- ===== LIVE MT5 DASHBOARD: วางก่อน </body> ใน /views/app/mt5.ejs ===== -->
+<div class="mt5-live-dashboard">
+  <h2>📊 Live MT5 Dashboard</h2>
+  <div id="liveGrid" class="live-grid"></div>
+</div>
+
+<script>
+async function loadLive() {
+  try {
+    const res = await fetch('/app/mt5/live-dashboard', {
+      headers: { 'Accept': 'application/json' },
+      cache: 'no-store'
+    });
+    const data = await res.json();
+    if (!data.ok) return;
+
+    const grid = document.getElementById('liveGrid');
+    if (!grid) return;
+
+    if (!data.instances || data.instances.length === 0) {
+      grid.innerHTML = '<div class="live-card live-empty">ยังไม่มี BOT ที่กำลังทำงาน</div>';
+      return;
+    }
+
+    grid.innerHTML = data.instances.map((i) => {
+      let statusColor = 'live-yellow';
+      if (i.status === 'running') statusColor = 'live-green';
+      if (i.status === 'error' || i.status === 'failed') statusColor = 'live-red';
+
+      const pingSec = Number(i.last_ping_sec || 999);
+      const isDead = pingSec > 120;
+      const name = i.display_name || i.bot_name || i.bot_code || 'MT5 BOT';
+      const port = i.assigned_port_no || '-';
+      const nodeName = i.node_name || '-';
+      const balance = Number(i.mt5_balance || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+      const equity = Number(i.mt5_equity || 0).toLocaleString('en-US', { maximumFractionDigits: 2 });
+
+      return `
+        <div class="live-card ${isDead ? 'is-dead' : ''}">
+          <div class="live-card-top">
+            <h3>${name}</h3>
+            <span class="live-pill ${statusColor}">${isDead ? '⚠ ค้าง' : (i.status || '-')}</span>
+          </div>
+          <div class="live-row"><span>PORT</span><strong>${port}</strong></div>
+          <div class="live-row"><span>EA</span><strong>${i.ea_status || '-'}</strong></div>
+          <div class="live-row"><span>Balance</span><strong>💰 ${balance}</strong></div>
+          <div class="live-row"><span>Equity</span><strong>📊 ${equity}</strong></div>
+          <div class="live-row"><span>Lot</span><strong>${i.lot_used || '-'}</strong></div>
+          <div class="live-row"><span>Level</span><strong>${i.trade_level || '-'}</strong></div>
+          <div class="live-vps">
+            <div>⚡ ${nodeName}</div>
+            <div>CPU ${i.cpu_percent || 0}% · RAM ${i.ram_percent || 0}% · PING ${i.ping_ms || 0} ms</div>
+          </div>
+          ${i.last_error ? `<div class="live-error">${i.last_error}</div>` : ''}
+        </div>
+      `;
+    }).join('');
+  } catch (e) {}
+}
+
+loadLive();
+setInterval(loadLive, 3000);
+</script>

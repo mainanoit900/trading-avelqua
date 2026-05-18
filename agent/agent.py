@@ -1,0 +1,1886 @@
+# Avelqua Python Windows VPS Agent - Production (journal-gate-v4)
+# Path: C:\\avelqua-python-agent\\agent.py
+# Mount: https://trading.avelqua.com/api/vps-agent
+# MT5 login: ยืนยันจาก Journal เท่านั้น (authorized on / authorization failed)
+
+import json
+import base64
+import os
+import platform
+import re
+import shutil
+import subprocess
+import sys
+import signal
+import time
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, Tuple
+
+
+def load_env_file(path: Path) -> None:
+    try:
+        if not path.exists():
+            return
+        for line in path.read_text(encoding="utf-8", errors="ignore").splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, v = line.split("=", 1)
+            k = k.strip()
+            v = v.strip().strip('"').strip("'")
+            if k and not os.getenv(k):
+                os.environ[k] = v
+    except Exception:
+        pass
+
+
+ENV_FILE = Path(r"C:\avelqua-python-agent\.env")
+load_env_file(ENV_FILE)
+
+import requests  # noqa: E402
+
+try:
+    import psutil  # type: ignore
+except Exception:  # pragma: no cover - psutil may not be installed yet
+    psutil = None
+
+
+# ===== CONFIG =====
+SERVER_URL = os.getenv("AVELQUA_SERVER_URL", "https://trading.avelqua.com/api/vps-agent").rstrip("/")
+AGENT_TOKEN = os.getenv("AVELQUA_AGENT_TOKEN", "PUT_YOUR_AGENT_TOKEN_HERE")
+SERVICE_NAME = os.getenv("AVELQUA_SERVICE_NAME", "AvelquaPythonAgent")
+AGENT_DIR = Path(os.getenv("AVELQUA_AGENT_DIR", r"C:\avelqua-python-agent"))
+AGENT_FILE = Path(os.getenv("AVELQUA_AGENT_FILE", str(AGENT_DIR / "agent.py")))
+MT5_ROOT = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
+LOG_DIR = AGENT_DIR / "logs"
+LOG_FILE = AGENT_DIR / "agent.log"
+STOP_FLAG = AGENT_DIR / "agent.disabled"
+MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
+LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
+HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
+CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
+JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
+JOURNAL_FAIL_MSG = "MT5 Login หรือ Password ไม่ถูกต้อง"
+JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
+DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
+AGENT_BUILD_ID = "2026-05-16-net-metrics-v5"
+# รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
+AGENT_VERSION = AGENT_BUILD_ID
+# ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
+_MT5_LOGIN_INI = os.getenv("AVELQUA_MT5_LOGIN_INI", "startup.ini").strip()
+MT5_LOGIN_INI_NAME = _MT5_LOGIN_INI if _MT5_LOGIN_INI else "startup.ini"
+LEGACY_MT5_LOGIN_INI = "avelqua-login.ini"
+# Windows: true = เปิด MT5 ในคอนโซลใหม่โชว์หน้าจอชั่วคราว (ดีบัก/ล็อกอิน); false = ไม่โชว์หน้าต่างคอนโซล
+SHOW_MT5_WINDOW = os.getenv("AVELQUA_MT5_SHOW_WINDOW", "false").lower() == "true"
+
+AGENT_DIR.mkdir(parents=True, exist_ok=True)
+LOG_DIR.mkdir(parents=True, exist_ok=True)
+
+# ตัวอย่าง bytes_sent/recv ครั้งก่อน — คำนวณ Mbps ระหว่าง heartbeat
+_NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
+
+
+def has_journal_gate_marker(version_or_build: str) -> bool:
+    v = str(version_or_build or "").strip()
+    return bool(v) and "journal-gate" in v
+
+
+def mt5_startup_ini_path(port_dir: Path) -> Path:
+    return port_dir / MT5_LOGIN_INI_NAME
+
+
+def mt5_existing_login_config(port_dir: Path) -> Optional[Path]:
+    """ไฟล์ที่มีอยู่สำหรับส่ง /config: — ใช้ startUp.ini ก่อน แล้วจึง avelqua-login.ini เดิม"""
+    primary = port_dir / MT5_LOGIN_INI_NAME
+    if primary.exists():
+        return primary
+    legacy = port_dir / LEGACY_MT5_LOGIN_INI
+    if legacy.exists():
+        return legacy
+    return None
+
+
+def log(msg: str) -> None:
+    text = f"{datetime.now():%Y-%m-%d %H:%M:%S} - {msg}"
+    print(text, flush=True)
+    try:
+        with LOG_FILE.open("a", encoding="utf-8") as f:
+            f.write(text + "\n")
+    except Exception:
+        pass
+
+def handle_exit(sig, frame):
+    log(f"AGENT EXIT SAFE signal={sig}")
+    sys.exit(0)
+
+
+signal.signal(signal.SIGTERM, handle_exit)
+
+if hasattr(signal, "SIGBREAK"):
+    signal.signal(signal.SIGBREAK, handle_exit)
+
+
+def safe_json(data: Any) -> str:
+    try:
+        return json.dumps(data, ensure_ascii=False, default=str)
+    except Exception:
+        return str(data)
+
+
+def api(method: str, path_or_url: str, body: Optional[Dict[str, Any]] = None, timeout: int = 25) -> Dict[str, Any]:
+    if not SERVER_URL and not path_or_url.startswith("http"):
+        raise RuntimeError("Missing AVELQUA_SERVER_URL")
+    url = path_or_url if path_or_url.startswith("http") else f"{SERVER_URL}{path_or_url}"
+    headers = {
+        "x-agent-token": AGENT_TOKEN,
+        "Authorization": f"Bearer {AGENT_TOKEN}",
+        "Accept": "application/json",
+        "User-Agent": f"AvelquaPythonAgent/{AGENT_VERSION}",
+    }
+    if body is not None:
+        headers["Content-Type"] = "application/json"
+    r = requests.request(method.upper(), url, headers=headers, json=body, timeout=timeout)
+    r.raise_for_status()
+    if not r.text:
+        return {}
+    try:
+        return r.json()
+    except Exception:
+        return {"raw": r.text}
+
+def post_json(path, payload):
+    return api("POST", path, payload)
+
+def command_result(cmd_id: Any, ok: bool = True, result: Optional[Dict[str, Any]] = None, error: str = "") -> None:
+    try:
+        api("POST", f"/commands/{cmd_id}/result", {"ok": ok, "result": result or {}, "error": error})
+        log(f"RESULT SENT CommandID={cmd_id} Ok={ok}")
+    except Exception as e:
+        log(f"RESULT ERROR CommandID={cmd_id}: {e}")
+
+
+def _sample_network_mbps() -> Tuple[float, float]:
+    """Download/Upload Mbps จาก delta ของ psutil.net_io_counters ระหว่าง heartbeat"""
+    if not psutil:
+        return 0.0, 0.0
+    try:
+        counters = psutil.net_io_counters()
+        now = time.time()
+        sent = float(getattr(counters, "bytes_sent", 0) or 0)
+        recv = float(getattr(counters, "bytes_recv", 0) or 0)
+        prev_ts = float(_NET_IO_SAMPLE.get("ts") or 0.0)
+        prev_sent = float(_NET_IO_SAMPLE.get("bytes_sent") or 0.0)
+        prev_recv = float(_NET_IO_SAMPLE.get("bytes_recv") or 0.0)
+        _NET_IO_SAMPLE["ts"] = now
+        _NET_IO_SAMPLE["bytes_sent"] = sent
+        _NET_IO_SAMPLE["bytes_recv"] = recv
+        if prev_ts <= 0:
+            return 0.0, 0.0
+        dt = max(0.5, now - prev_ts)
+        d_recv = recv - prev_recv
+        d_sent = sent - prev_sent
+        if d_recv < 0 or d_sent < 0:
+            return 0.0, 0.0
+        down_mbps = (d_recv * 8.0) / dt / 1_000_000.0
+        up_mbps = (d_sent * 8.0) / dt / 1_000_000.0
+        return round(down_mbps, 2), round(up_mbps, 2)
+    except Exception as e:
+        log(f"NET SAMPLE ERROR: {e}")
+        return 0.0, 0.0
+
+
+def clean_old_logs() -> None:
+    cutoff = time.time() - MAX_LOG_DAYS * 86400
+    try:
+        for p in LOG_DIR.glob("*"):
+            if p.is_file() and p.stat().st_mtime < cutoff:
+                p.unlink(missing_ok=True)
+    except Exception as e:
+        log(f"CLEAR OLD LOG ERROR: {e}")
+
+
+def metrics() -> Dict[str, Any]:
+    cpu = ram = ping = 0.0
+    err = ""
+    try:
+        if psutil:
+            cpu = float(psutil.cpu_percent(interval=0.2))
+            ram = float(psutil.virtual_memory().percent)
+        try:
+            cmd = ["ping", "-n", "1", "8.8.8.8"] if os.name == "nt" else ["ping", "-c", "1", "8.8.8.8"]
+            out = subprocess.run(cmd, capture_output=True, text=True, timeout=4).stdout
+            m = re.search(r"time[=<]([0-9]+(?:\.[0-9]+)?)\s*ms", out, re.I)
+            if m:
+                ping = float(m.group(1))
+        except Exception:
+            ping = 0.0
+    except Exception as e:
+        err = str(e)
+    net_down, net_up = _sample_network_mbps()
+    return {
+        "status": "online",
+        "cpu_percent": cpu,
+        "ram_percent": ram,
+        "ping_ms": ping,
+        "net_down_mbps": net_down,
+        "net_up_mbps": net_up,
+        "service_name": SERVICE_NAME,
+        "computer_name": platform.node(),
+        "agent_type": "python",
+        "agent_version": AGENT_VERSION,
+        "agent_build_id": AGENT_BUILD_ID,
+        "journal_gate": True,
+        "last_error": err,
+    }
+
+
+def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dict[str, Any]]:
+    body = metrics()
+    body["status"] = status
+    if last_error:
+        body["last_error"] = last_error
+    try:
+        res = api("POST", "/heartbeat", body)
+        log(f"HEARTBEAT status={body['status']} agent_enabled={res.get('agent_enabled')}")
+        if (
+            os.getenv("AVELQUA_SELF_DEPLOY_ON_HEARTBEAT", "false").lower() in ("1", "true", "yes")
+            and res.get("deploy_required")
+            and not STOP_FLAG.exists()
+        ):
+            _maybe_self_deploy_agent(res)
+        return res
+    except Exception as e:
+        log(f"HEARTBEAT ERROR: {e}")
+        return None
+
+
+def _maybe_self_deploy_agent(heartbeat_res: Dict[str, Any]) -> None:
+    """ดาวน์โหลด agent.py ล่าสุดเมื่อเซิร์ฟเวอร์บอกว่าเวอร์ชันเก่า (กัน deploy ค้างแต่ service ไม่รีสตาร์ท)"""
+    global _LAST_SELF_DEPLOY_AT
+    now = time.time()
+    if now - _LAST_SELF_DEPLOY_AT < float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "3600")):
+        return
+    _LAST_SELF_DEPLOY_AT = now
+    required = str(
+        heartbeat_res.get("required_agent_version")
+        or heartbeat_res.get("requiredAgentVersion")
+        or AGENT_BUILD_ID
+    ).strip()
+    if has_journal_gate_marker(AGENT_BUILD_ID) and has_journal_gate_marker(required):
+        return
+    script_url = str(heartbeat_res.get("agent_script_url") or heartbeat_res.get("scriptUrl") or "").strip()
+    if not script_url:
+        script_url = f"{SERVER_URL}/agent-script"
+    try:
+        log(f"SELF DEPLOY start required={required} url={script_url}")
+        update_agent_script({
+            "scriptUrl": script_url,
+            "targetPath": str(AGENT_FILE),
+            "agent_path": str(AGENT_FILE),
+            "service_name": SERVICE_NAME,
+            "restartService": True,
+        })
+    except Exception as e:
+        log(f"SELF DEPLOY ERROR: {e}")
+
+
+_LAST_SELF_DEPLOY_AT = 0.0
+
+
+def extract_port_no(path_text):
+    text = str(path_text or "")
+
+    m = re.search(r"PORT[-_ ]?(\d+)", text, re.I)
+    if m:
+        return int(m.group(1))
+
+    m = re.search(r"PORT(\d+)", text, re.I)
+    if m:
+        return int(m.group(1))
+
+    return 0
+
+
+def send_port_health():
+    ports = []
+
+    try:
+        mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
+
+        running_map = {}
+
+        for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+            try:
+                name = (p.info.get("name") or "").lower()
+                exe = (p.info.get("exe") or "")
+
+                if name != "terminal64.exe":
+                    continue
+
+                exe_norm = exe.lower().replace("/", "\\")
+
+                for folder in mt5_root.glob("*PORT*"):
+                    folder_norm = str(folder).lower().replace("/", "\\")
+
+                    if folder_norm in exe_norm:
+                        port_no = extract_port_no(str(folder))
+
+                        running_map[port_no] = {
+                            "process_id": p.pid,
+                            "exe_path": exe,
+                            "folder_path": str(folder)
+                        }
+
+            except Exception:
+                pass
+
+        for folder in sorted(mt5_root.glob("*PORT*")):
+            port_no = extract_port_no(str(folder))
+
+            if not port_no:
+                continue
+
+            run = running_map.get(port_no)
+
+            mt5_login = ""
+            if run and run.get("process_id"):
+                try:
+                    ps = f"(Get-Process -Id {run['process_id']} -ErrorAction SilentlyContinue).MainWindowTitle"
+                    title = (_run_powershell(ps, timeout=4) or "").strip()
+                    m = re.match(r"^(\d{4,})\s*[-–]", title)
+                    if m:
+                        mt5_login = m.group(1)
+                except Exception:
+                    pass
+
+            ports.append({
+                "port_no": port_no,
+                "port_number": port_no,
+                "folder_path": str(folder),
+                "running": bool(run),
+                "is_running": bool(run),
+                "process_id": run.get("process_id") if run else None,
+                "mt5_login": mt5_login or None,
+                "exe_path": run.get("exe_path") if run else "",
+                "status": "running" if run else "free",
+            })
+
+        post_json("/port-health", {
+            "ports": ports
+        })
+
+        log(f"PORT HEALTH SENT count={len(ports)}")
+
+    except Exception as e:
+        log(f"PORT HEALTH ERROR {e}")
+
+
+def payload_get(payload: Optional[Dict[str, Any]], *names: str, default: str = "") -> str:
+    payload = payload or {}
+    for name in names:
+        v = payload.get(name)
+        if v is not None and str(v).strip() != "":
+            return str(v)
+    return default
+
+
+def normalize_port(port: Any) -> int:
+    s = str(port or "")
+    n = int(re.sub(r"[^0-9]", "", s) or "0")
+    if n > 20:
+        n = n % 100
+    if n <= 0:
+        raise RuntimeError(f"invalid port: {port}")
+    return n
+
+
+def resolve_mt5_port_dir(port: Any, payload: Optional[Dict[str, Any]] = None) -> Path:
+    payload = payload or {}
+
+    # ✅ ใช้ path จริงจากเว็บ (รองรับหลาย VPS)
+    folder = payload_get(payload, "vpsFolderPath", "folder_path", "path")
+    if folder:
+        p = Path(folder).expanduser()
+
+        if str(p).lower().endswith(r"mql5\experts"):
+            p = p.parent.parent
+
+        if not p.exists():
+            raise RuntimeError(f"PORT not found: {p}")
+
+        # 🔒 เช็คว่า port ตรงกันจริง
+        n = normalize_port(port)
+        m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", p.name)
+
+        if not m or int(m.group(1)) != n:
+            raise RuntimeError(f"PORT mismatch: selected={n} folder={p}")
+
+        return p
+
+    # fallback แบบไม่ scan
+    name = payload_get(payload, "vpsPortName")
+    if name:
+        p = MT5_ROOT / name
+        if not p.exists():
+            raise RuntimeError(f"PORT not found: {p}")
+        return p
+
+    raise RuntimeError("Missing vpsFolderPath (strict mode)")
+
+def iter_terminal_processes() -> Iterable[Any]:
+    if not psutil:
+        return []
+    out: List[Any] = []
+    for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+        try:
+            if (p.info.get("name") or "").lower() == "terminal64.exe":
+                out.append(p)
+        except Exception:
+            continue
+    return out
+
+def stop_mt5_by_folder(folder_path):
+    if not folder_path:
+        raise Exception("missing folder_path")
+
+    folder_path = str(folder_path).lower().replace("/", "\\")
+    stopped = []
+
+    for p in iter_terminal_processes():
+        try:
+            name = (p.info.get("name") or "").lower()
+            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
+            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
+
+            if name == "terminal64.exe" and (folder_path in exe or folder_path in cmd):
+                p.kill()
+                stopped.append(p.pid)
+                log(f"KILLED MT5 PID={p.pid} FOLDER={folder_path}")
+
+        except Exception:
+            pass
+
+    return {
+        "ok": True,
+        "message": "MT5 stopped",
+        "folder_path": folder_path,
+        "stopped": stopped
+    }
+
+def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    port_dir = resolve_mt5_port_dir(port, payload)
+    root = str(port_dir).rstrip("\\/").lower()
+    stopped: List[int] = []
+    for p in list(iter_terminal_processes()):
+        try:
+            exe = (p.info.get("exe") or "").lower()
+            cmd = " ".join(p.info.get("cmdline") or []).lower()
+            if exe.startswith(root) or root in cmd:
+                log(f"STOP MT5 PORT={port} PID={p.pid} PATH={exe}")
+                p.kill()
+                stopped.append(p.pid)
+        except Exception as e:
+            log(f"STOP PROCESS ERROR PID={getattr(p, 'pid', '')}: {e}")
+    time.sleep(2)
+
+    # kill ghost terminal ของ PORT นี้อีกรอบ
+    for p in list(iter_terminal_processes()):
+        try:
+            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
+            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
+
+            if exe.startswith(root) or root in cmd or str(port_dir).lower().replace("/", "\\") in cmd:
+                log(f"KILL GHOST MT5 PORT={port} PID={p.pid}")
+                p.kill()
+                if p.pid not in stopped:
+                    stopped.append(p.pid)
+        except Exception:
+            pass
+
+    return {"action": "stop_mt5", "port": port, "port_dir": str(port_dir), "stopped": stopped}
+
+
+def latest_log_text(port_dir: Path) -> Tuple[Optional[Path], str]:
+    # MT5 may write logs in different folders depending on portable mode/version.
+    log_dirs = [
+        port_dir / "logs",
+        port_dir / "Logs",
+        port_dir / "MQL5" / "Logs",
+        port_dir / "MQL5" / "logs",
+    ]
+    files: List[Path] = []
+    for d in log_dirs:
+        if d.exists():
+            files.extend(d.rglob("*.log"))
+    if not files:
+        return None, ""
+    latest = max(files, key=lambda x: x.stat().st_mtime)
+    try:
+        data = latest.read_text(errors="ignore")
+        return latest, "\n".join(data.splitlines()[-300:])
+    except Exception:
+        return latest, ""
+
+
+def clear_mt5_logs(port_dir: Path) -> None:
+    for d in [
+        port_dir / "Logs",
+        port_dir / "logs",
+        port_dir / "MQL5" / "Logs",
+        port_dir / "MQL5" / "logs",
+    ]:
+        if d.exists():
+            for f in d.rglob("*.log"):
+                try:
+                    f.unlink()
+                except Exception:
+                    pass
+
+
+def clear_mt5_login_cache(port_dir: Path) -> None:
+    """ลบ cache บัญชีที่ MT5 จำไว้ — บังคับใช้ Login/Password จาก INI ล่าสุดเท่านั้น"""
+    for rel in (
+        "config/accounts.dat",
+        "config/servers.dat",
+        "config/account.ini",
+        "config/common.ini",
+        "config/settings.ini",
+    ):
+        p = port_dir / rel
+        if p.is_file():
+            try:
+                p.unlink()
+                log(f"CLEAR MT5 CACHE FILE {p}")
+            except Exception as e:
+                log(f"CLEAR MT5 CACHE ERROR {p}: {e}")
+
+
+def write_mt5_login_ini(port_dir: Path, login: str, password: str, server: str) -> Path:
+    """เขียน startUp.ini ใหม่ทุกครั้ง — ลบ INI เก่าที่อาจมีรหัสผ่านค้าง"""
+    config_file = mt5_startup_ini_path(port_dir)
+    for stale in (port_dir / LEGACY_MT5_LOGIN_INI, port_dir / "startup.ini", port_dir / "avelqua-login.ini"):
+        if stale.is_file():
+            try:
+                if stale.resolve() != config_file.resolve():
+                    stale.unlink()
+                    log(f"REMOVE STALE INI {stale}")
+            except Exception:
+                pass
+    ini = f"""[Common]
+Login={login}
+Password={password}
+Server={server}
+AutoConfiguration=false
+
+[Experts]
+AllowLiveTrading=true
+AllowDllImport=true
+Enabled=true
+"""
+    config_file.write_text(ini, encoding="ascii", errors="ignore")
+    for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
+        if alias.resolve() != config_file.resolve():
+            try:
+                alias.write_text(ini, encoding="ascii", errors="ignore")
+            except Exception:
+                pass
+    log(f"WRITE MT5 INI {config_file} LOGIN={login} SERVER={server} PW_LEN={len(password)}")
+    return config_file
+
+
+def remove_mt5_login_ini(port_dir: Path) -> None:
+    """หลัง login ล้มเหลว — กัน restart ด้วยรหัสผ่านเก่าใน INI"""
+    for p in (
+        mt5_startup_ini_path(port_dir),
+        port_dir / LEGACY_MT5_LOGIN_INI,
+        port_dir / "startup.ini",
+        port_dir / "avelqua-login.ini",
+    ):
+        if p.is_file():
+            try:
+                p.unlink()
+                log(f"REMOVE INI AFTER FAIL {p}")
+            except Exception:
+                pass
+
+
+def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    snap = {"balance": None, "equity": None, "currency": ""}
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        latest, text = latest_log_text(port_dir)
+        if text:
+            mb = re.search(r"(?i)balance\s*[:= ]\s*([0-9]+(?:\.[0-9]+)?)", text)
+            me = re.search(r"(?i)equity\s*[:= ]\s*([0-9]+(?:\.[0-9]+)?)", text)
+            mc = re.search(r"(?i)currency\s*[:= ]\s*([A-Z]{3})", text)
+            if mb:
+                snap["balance"] = float(mb.group(1))
+            if me:
+                snap["equity"] = float(me.group(1))
+            if mc:
+                snap["currency"] = mc.group(1)
+            log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap['balance']} EQUITY={snap['equity']} LOG={latest}")
+    except Exception as e:
+        log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
+    return snap
+
+
+
+def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Popen:
+    """Start MT5 (terminal64). On Windows: AVELQUA_MT5_SHOW_WINDOW=true → new console (visible); else no extra console."""
+    creationflags = 0
+    startupinfo = None
+    if os.name == "nt":
+        if SHOW_MT5_WINDOW:
+            creationflags = subprocess.CREATE_NEW_CONSOLE
+        else:
+            creationflags = subprocess.CREATE_NO_WINDOW
+        return subprocess.Popen(
+            args,
+            cwd=cwd,
+            creationflags=creationflags,
+            startupinfo=startupinfo,
+            close_fds=True,
+        )
+    return subprocess.Popen(
+        args,
+        cwd=cwd,
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        stdin=subprocess.DEVNULL,
+        close_fds=True,
+    )
+
+
+def _run_powershell(command: str, timeout: int = 8) -> str:
+    try:
+        return subprocess.check_output(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", command],
+            stderr=subprocess.DEVNULL,
+            timeout=timeout,
+        ).decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[str]:
+    """Return MainWindowTitle values for terminal64.exe matched to this PORT folder."""
+    titles: List[str] = []
+    port_dir = resolve_mt5_port_dir(port, payload)
+    root = str(port_dir).rstrip("\\/").lower()
+
+    # Primary: psutil gives path + pid, then PowerShell gives MainWindowTitle.
+    pid_set = set()
+    for proc in mt5_port_processes(port, payload):
+        try:
+            pid_set.add(int(proc.pid))
+        except Exception:
+            pass
+
+    if pid_set:
+        ps = "Get-Process terminal64 -ErrorAction SilentlyContinue | Select-Object Id,MainWindowTitle,Path | ConvertTo-Json -Compress"
+        out = _run_powershell(ps)
+        try:
+            data = json.loads(out) if out.strip() else []
+            if isinstance(data, dict):
+                data = [data]
+            for item in data:
+                try:
+                    if int(item.get("Id") or 0) in pid_set:
+                        title = str(item.get("MainWindowTitle") or "").strip()
+                        if title:
+                            titles.append(title)
+                except Exception:
+                    pass
+        except Exception:
+            pass
+
+    # Fallback: tasklist /v can see window title even when PowerShell returns empty.
+    if not titles:
+        try:
+            out = subprocess.check_output(
+                'tasklist /v /fi "imagename eq terminal64.exe"',
+                shell=True,
+                stderr=subprocess.DEVNULL,
+                timeout=8,
+            ).decode(errors="ignore")
+            for line in out.splitlines():
+                low = line.lower()
+                if "terminal64.exe" in low and (root in low or not pid_set):
+                    titles.append(line.strip())
+        except Exception:
+            pass
+    return titles
+
+
+def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bool, str]:
+    login = str(payload_get(payload, "mt5Login", "login", default="") or "").strip()
+    server = str(payload_get(payload, "serverName", default="") or "").strip().lower()
+    titles = mt5_window_titles(port, payload)
+    joined = " | ".join(titles)
+    low = joined.lower()
+
+    if login and (
+        login in joined
+        or f"#{login}" in joined
+    ):
+        if not server or server in low or "demo account" in low or "real account" in low or "hedge" in low:
+            return True, joined
+
+    try:
+        procs = mt5_port_processes(port, payload)
+        if procs and len(procs) > 0:
+            latest, text = latest_log_text(resolve_mt5_port_dir(port, payload))
+            low_text = text.lower()
+
+            if (
+                login in text
+                and (
+                    "authorized" in low_text
+                    or "authorization" in low_text
+                    or "login successful" in low_text
+                )
+            ):
+                return True, "log authorized fallback with login"
+
+    except Exception:
+        pass
+
+    return False, joined
+
+def mt5_socket_established(port: Any, payload: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
+    """Detect whether the terminal matched to this PORT has an established broker socket."""
+    if psutil is None:
+        return False, "psutil not installed"
+    pids = set()
+    for proc in mt5_port_processes(port, payload):
+        try:
+            pids.add(int(proc.pid))
+        except Exception:
+            pass
+    if not pids:
+        return False, "no process"
+    hits = []
+    try:
+        for c in psutil.net_connections(kind="inet"):
+            try:
+                if c.pid in pids and str(c.status).upper() == "ESTABLISHED":
+                    raddr = getattr(c, "raddr", None)
+                    if raddr:
+                        hits.append(f"pid={c.pid} {raddr.ip}:{raddr.port}")
+            except Exception:
+                pass
+    except Exception as e:
+        return False, str(e)
+    return len(hits) > 0, ", ".join(hits[:5])
+
+
+def mt5_has_login_failure_text(text: str) -> bool:
+    if not text:
+        return False
+    failed_rx = re.compile(
+        r"authorization failed|invalid account|invalid password|login failed|failed authorization|account disabled|not authorized|trade account .*? disabled|no connection|network failed|server not found",
+        re.I,
+    )
+    return bool(failed_rx.search(text))
+
+
+def mt5_title_suggests_auth_failure(title_joined: str) -> bool:
+    """Window title hints at failed login (do not treat TCP ESTABLISHED as proof of login)."""
+    if not title_joined:
+        return False
+    low = title_joined.lower()
+    if re.search(
+        r"invalid\s+account|invalid\s+password|wrong\s+password|authorization\s+failed|failed\s+authorization|"
+        r"account\s+disabled|not\s+authorized|login\s+failed|no\s+connection|access\s+denied",
+        low,
+    ):
+        return True
+    for frag in ("ไม่ถูกต้อง", "รหัสผ่านไม่ถูกต้อง", "บัญชีไม่ถูกต้อง"):
+        if frag in title_joined:
+            return True
+    return False
+
+def send_connect_result(
+    payload: Dict[str, Any],
+    status: str,
+    message: str,
+    port: Any = "",
+    process_id: Any = None,
+    journal_evidence: str = "",
+) -> None:
+    try:
+        callback = payload_get(payload, "callbackUrl", default=DEFAULT_CALLBACK_URL)
+        port = str(port or payload_get(payload, "port", "portNumber", "vpsPortNumber", "folderPort"))
+        port_slot = payload_get(payload, "portSlot")
+        # ห้ามแปลง port_no เป็น portSlot: port_no คือเลข PORT จริงของ VPS/Folder
+        # portSlot ใช้แสดงลำดับตามแพ็กเกจผู้ใช้เท่านั้น
+        body: Dict[str, Any] = {
+            "nodeId": payload_get(payload, "nodeId"),
+            "userId": payload_get(payload, "userId"),
+            "accountId": payload_get(payload, "accountId"),
+            "portId": payload_get(payload, "portId", "port_id"),
+            "portSlot": port_slot,
+            "portNumber": port,
+            "mt5Login": payload_get(payload, "mt5Login", "login"),
+            "mt5Password": payload_get(payload, "mt5Password", "password"),
+            "serverName": payload_get(payload, "serverName", default="MohicansMarkets-Live"),
+            "status": status,
+            "message": message,
+            "process_id": process_id,
+            "balance": None,
+            "equity": None,
+            "accountCurrency": "",
+            "loginVerified": status == "connected",
+            "journalEvidence": (journal_evidence or "")[:8000],
+            "agentVersion": AGENT_BUILD_ID,
+            "agentBuildId": AGENT_BUILD_ID,
+        }
+        if status == "connected" and port:
+            snap = account_snapshot(port, payload)
+            body["balance"] = snap.get("balance")
+            body["equity"] = snap.get("equity")
+            body["accountCurrency"] = snap.get("currency", "")
+        api("POST", callback, body)
+        log(f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} login={body['mt5Login']} port={port}")
+    except Exception as e:
+        log(f"CONNECT CALLBACK ERROR: {e}")
+
+
+def kill_mt5_by_folder(port_dir: Path) -> None:
+    """Stop terminal64 for this portable folder (alias for stop_mt5_by_folder)."""
+    stop_mt5_by_folder(str(port_dir))
+
+
+def _read_log_tail(path: Path, max_bytes: int = 262144) -> str:
+    try:
+        with open(path, "rb") as fh:
+            fh.seek(0, 2)
+            size = fh.tell()
+            fh.seek(max(0, size - max_bytes))
+            return fh.read().decode("utf-8", errors="ignore")
+    except Exception:
+        try:
+            return path.read_text(errors="ignore")
+        except Exception:
+            return ""
+
+
+def _journal_outcome_for_login(text: str, login: str, failed_words: List[str]) -> Optional[bool]:
+    """
+    อ่าน Journal ตามรูปแบบ MT5 จริง:
+      ล้มเหลว: '12345': authorization on Server failed [Invalid account]
+      สำเร็จ:  '12345': authorized on ServerName
+    ห้ามสับสน authorization (กำลังล็อกอิน/ล้มเหลว) กับ authorized (สำเร็จ)
+    """
+    login = str(login).strip()
+    if not login or not text:
+        return None
+
+    login_esc = re.escape(login)
+    fail_rx = re.compile(
+        rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorization on\b.*\bfailed\b",
+        re.I,
+    )
+    ok_rx = re.compile(
+        rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorized on\b",
+        re.I,
+    )
+
+    last: Optional[bool] = None
+    for line in text.splitlines():
+        low = line.lower()
+        if login.lower() not in low:
+            continue
+        if fail_rx.search(line):
+            last = False
+            continue
+        if any(w in low for w in failed_words):
+            last = False
+            continue
+        if "authorization on" in low and "failed" in low:
+            last = False
+            continue
+        if ok_rx.search(line):
+            last = True
+    return last
+
+
+def check_mt5_journal_login_result(
+    port_dir: Path,
+    mt5_login: str,
+    timeout_sec: int = 60,
+    since_ts: float = 0.0,
+    progress_callback: Any = None,
+) -> Tuple[bool, str, str]:
+    """
+    อ่าน Journal (.log) เท่านั้น — ไม่ถือ process / socket / หน้าต่างเป็นสำเร็จ
+    สำเร็จ: บรรทัดล่าสุดของ login นี้มี authorized on
+    ล้มเหลว: บรรทัดล่าสุดมี authorization failed / invalid account ฯลฯ
+    """
+    login = str(mt5_login).strip()
+    if not login:
+        return False, "MT5 Login หรือ Password ไม่ถูกต้อง", ""
+    deadline = time.time() + timeout_sec
+    since_ts = since_ts or 0.0
+
+    journal_dirs = [
+        Path(port_dir) / "Logs",
+        Path(port_dir) / "logs",
+        Path(port_dir) / "MQL5" / "Logs",
+        Path(port_dir) / "MQL5" / "logs",
+    ]
+
+    failed_words = [
+        "authorization failed",
+        "failed (invalid account)",
+        "failed [invalid account]",
+        "invalid account",
+        "invalid password",
+        "wrong password",
+        "login failed",
+        "not authorized",
+    ]
+    today_name = datetime.now().strftime("%Y%m%d")
+    last_progress_at = 0.0
+    wait_start = time.time()
+
+    while time.time() < deadline:
+        if progress_callback and (time.time() - last_progress_at) >= 10:
+            try:
+                progress_callback(int(time.time() - wait_start))
+            except Exception as e:
+                log(f"JOURNAL PROGRESS CB ERROR: {e}")
+            last_progress_at = time.time()
+
+        log_files: List[Path] = []
+        for d in journal_dirs:
+            if not d.exists():
+                continue
+            today_log = d / f"{today_name}.log"
+            if today_log.exists():
+                log_files.append(today_log)
+            log_files.extend(d.rglob("*.log"))
+
+        seen = set()
+        uniq: List[Path] = []
+        for f in log_files:
+            try:
+                if since_ts and f.stat().st_mtime < since_ts - 10:
+                    continue
+            except Exception:
+                pass
+            try:
+                k = str(f.resolve())
+            except Exception:
+                k = str(f)
+            if k not in seen:
+                seen.add(k)
+                uniq.append(f)
+
+        if not uniq:
+            time.sleep(JOURNAL_POLL_INTERVAL_SEC)
+            continue
+
+        uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        newest = uniq[0]
+        chunk = _read_log_tail(newest)
+        outcome = _journal_outcome_for_login(chunk, login, failed_words)
+        if outcome is False:
+            log(f"MT5 JOURNAL FAIL login={login} file={newest.name}")
+            return False, JOURNAL_FAIL_MSG, chunk
+        if outcome is True:
+            log(f"MT5 JOURNAL OK login={login} file={newest.name}")
+            return True, "MT5 Login สำเร็จจริง", chunk
+
+        time.sleep(JOURNAL_POLL_INTERVAL_SEC)
+
+    log(f"MT5 JOURNAL TIMEOUT login={login} port_dir={port_dir}")
+    return False, JOURNAL_TIMEOUT_MSG, ""
+
+
+def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """
+    PRO MT5 Engine V2:
+    - exact PORT isolation
+    - ยืนยันล็อกอินสำเร็จเฉพาะจาก Journal: เลข login + "authorized on" เท่านั้น
+    """
+    port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
+    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
+    password = str(payload_get(payload, "mt5Password", "password") or "")
+    server = str(payload_get(payload, "serverName", default="MohicansMarkets-Live") or "MohicansMarkets-Live")
+    bot = payload_get(payload, "botCode", default="LOGIN_ONLY")
+    if not port:
+        raise RuntimeError("payload.port is required")
+    if not login:
+        raise RuntimeError("payload.mt5Login is required")
+    if not password:
+        raise RuntimeError("payload.mt5Password is required")
+
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    config_file = mt5_startup_ini_path(port_dir)
+    if not terminal.exists():
+        raise RuntimeError(f"terminal64.exe not found: {terminal}")
+
+    log(f"USING PORT DIR={port_dir}")
+    log(f"MT5 TERMINAL={terminal}")
+
+    config_file = write_mt5_login_ini(port_dir, login, password, server)
+
+    # ====================================
+    # BLOCK SAME LOGIN ON ANOTHER PORT (not this port_dir)
+    # cmdline ไม่มีเลข login — ใช้ window title หลังล็อกอินแล้วเท่านั้น
+    # ====================================
+    def _norm_path(p: str) -> str:
+        try:
+            return os.path.normcase(os.path.normpath(str(p or "")))
+        except Exception:
+            return str(p or "").strip().lower()
+
+    port_self_n = _norm_path(str(port_dir))
+
+    for p in list(iter_terminal_processes()):
+        try:
+            exe = p.info.get("exe") or ""
+            exe_n = _norm_path(exe)
+            if port_self_n and exe_n and exe_n.startswith(port_self_n):
+                continue
+            args = p.info.get("cmdline") or []
+            if port_self_n and any(port_self_n in _norm_path(str(a)) for a in args if a):
+                continue
+            cmd_low = " ".join(args).lower()
+            port_dir_low = str(port_dir).rstrip("\\/").lower()
+            if port_dir_low and port_dir_low in cmd_low:
+                continue
+
+            title_text = ""
+            try:
+                ps = f"(Get-Process -Id {p.pid} -ErrorAction SilentlyContinue).MainWindowTitle"
+                title_text = _run_powershell(ps, timeout=3)
+            except Exception:
+                pass
+
+            if login and title_text and title_text.strip() and login in title_text:
+                log(
+                    f"BLOCK DUPLICATE LOGIN OTHER PORT login={login} pid={p.pid} "
+                    f"title={(title_text or '')[:80]}"
+                )
+                send_connect_result(
+                    payload,
+                    "failed",
+                    f"MT5 login={login} กำลังทำงานอยู่ใน PORT อื่น กรุณาปิดก่อน",
+                    port,
+                )
+                raise RuntimeError(f"MT5 login already running on another port login={login}")
+
+        except RuntimeError:
+            raise
+        except Exception:
+            pass
+
+    def result_ok(message: str, process_id: Any = None) -> Dict[str, Any]:
+        send_connect_result(payload, "connected", message, port, process_id=process_id)
+        log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={message}")
+        return {
+            "action": "run_mt5_bot",
+            "status": "started",
+            "port": port,
+            "login": login,
+            "server": server,
+            "bot": bot,
+            "config": str(config_file),
+            "terminal": str(terminal),
+        }
+
+    def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
+        try:
+            stop_mt5_port_only(port, payload)
+        except Exception as e:
+            log(f"STOP OLD MT5 ERROR: {e}")
+        time.sleep(2)
+        write_mt5_login_ini(port_dir, login, password, server)
+        clear_mt5_login_cache(port_dir)
+        # ไม่ลบ log ก่อนเปิด MT5 — เก็บบรรทัด authorized on ให้ตรวจได้
+        cfg = mt5_startup_ini_path(port_dir)
+        args = [str(terminal), "/portable", f"/config:{cfg}"]
+        log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
+        return _popen_hidden(args, cwd=str(port_dir))
+
+    journal_since = time.time()
+    proc = launch_mt5("initial")
+    proc_pid = proc.pid if proc else None
+    send_connect_result(
+        payload,
+        "starting",
+        "กำลังเปิด MT5 และตรวจสอบ Login (ประมาณ 15–45 วินาที)",
+        port,
+        process_id=proc_pid,
+    )
+
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", str(CONNECT_TIMEOUT_SECONDS)))
+    log(f"MT5 JOURNAL VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout} since={journal_since:.0f}")
+
+    def _journal_progress_cb(elapsed_sec: int) -> None:
+        send_connect_result(
+            payload,
+            "checking",
+            f"กำลังตรวจสอบ Login MT5 จาก Journal ({elapsed_sec} วินาที)...",
+            port,
+            process_id=proc_pid,
+        )
+
+    ok, msg, journal_chunk = check_mt5_journal_login_result(
+        port_dir,
+        login,
+        timeout_sec=journal_timeout,
+        since_ts=journal_since,
+        progress_callback=_journal_progress_cb,
+    )
+    if not ok:
+        try:
+            kill_mt5_by_folder(port_dir)
+        except Exception as e:
+            log(f"kill failed login mt5 error: {e}")
+        try:
+            stop_mt5_port_only(port, payload)
+        except Exception as e:
+            log(f"stop_mt5_port_only after failed login: {e}")
+        remove_mt5_login_ini(port_dir)
+        clear_mt5_login_cache(port_dir)
+        send_connect_result(payload, "failed", msg, port, process_id=None, journal_evidence=journal_chunk)
+        raise RuntimeError(msg)
+
+    # ยืนยันซ้ำจาก Journal ช่วง session เดิม (ไม่อ่าน log เก่าของ PORT อื่น)
+    time.sleep(1)
+    ok2, msg2, journal_chunk2 = check_mt5_journal_login_result(
+        port_dir, login, timeout_sec=4, since_ts=journal_since
+    )
+    journal_final = journal_chunk2 or journal_chunk
+    if not ok2:
+        log(f"MT5 JOURNAL FINAL CHECK BLOCKED login={login}")
+        try:
+            kill_mt5_by_folder(port_dir)
+            stop_mt5_port_only(port, payload)
+        except Exception:
+            pass
+        remove_mt5_login_ini(port_dir)
+        fail_final = msg2 or "MT5 Login หรือ Password ไม่ถูกต้อง"
+        send_connect_result(payload, "failed", fail_final, port, process_id=None, journal_evidence=journal_final)
+        raise RuntimeError(fail_final)
+
+    send_connect_result(
+        payload,
+        "connected",
+        "เชื่อมต่อ MT5 สำเร็จ",
+        port,
+        process_id=proc_pid,
+        journal_evidence=journal_final,
+    )
+    log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE=เชื่อมต่อ MT5 สำเร็จ")
+    return {
+        "action": "run_mt5_bot",
+        "status": "started",
+        "port": port,
+        "login": login,
+        "server": server,
+        "bot": bot,
+        "config": str(config_file),
+        "terminal": str(terminal),
+        "journalEvidence": journal_final,
+        "journalVerified": True,
+        "loginVerified": True,
+    }
+
+def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
+    folder = Path(payload_get(payload, "folder_path", default=str(AGENT_DIR)))
+    items = []
+    if folder.exists():
+        for p in folder.iterdir():
+            items.append({
+                "Name": p.name,
+                "FullName": str(p),
+                "Length": p.stat().st_size if p.is_file() else 0,
+                "LastWriteTime": datetime.fromtimestamp(p.stat().st_mtime).isoformat(timespec="seconds"),
+                "PSIsContainer": p.is_dir(),
+            })
+    return {"folder_path": str(folder), "files": items}
+
+
+def mt5_port_processes(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[Any]:
+    port_dir = resolve_mt5_port_dir(port, payload)
+    root = str(port_dir).rstrip("\\/").lower()
+    out = []
+    for p in list(iter_terminal_processes()):
+        try:
+            exe = (p.info.get("exe") or "").lower()
+            cmd = " ".join(p.info.get("cmdline") or []).lower()
+            if exe.startswith(root) or root in cmd:
+                out.append(p)
+        except Exception:
+            pass
+    return out
+
+
+def mt5_port_status_one(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    port_dir = resolve_mt5_port_dir(port, payload)
+    n = normalize_port(port)
+    procs = mt5_port_processes(port, payload)
+    running = len(procs) > 0
+    return {
+        "port": n,
+        "portNumber": n,
+        "name": f"PORT{n:02d}",
+        "path": str(port_dir),
+        "running": running,
+        "busy": running,
+        "status": "full" if running else "free",
+        "pid": [x.pid for x in procs],
+    }
+
+def scan_all_mt5_ports() -> List[Dict[str, Any]]:
+    ports: List[Dict[str, Any]] = []
+
+    for folder in MT5_ROOT.glob("*PORT*"):
+        try:
+            if not folder.is_dir():
+                continue
+
+            m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", folder.name)
+            if not m:
+                continue
+
+            port_no = int(m.group(1))
+            terminal = folder / "terminal64.exe"
+
+            running_procs = []
+            root = str(folder).rstrip("\\/").lower()
+
+            for p in list(iter_terminal_processes()):
+                try:
+                    exe = (p.info.get("exe") or "").lower()
+                    cmd = " ".join(p.info.get("cmdline") or []).lower()
+                    if exe.startswith(root) or root in cmd:
+                        running_procs.append(p.pid)
+                except Exception:
+                    pass
+
+            ports.append({
+                "portNumber": port_no,
+                "folderPath": str(folder),
+                "terminalExists": terminal.exists(),
+                "running": len(running_procs) > 0,
+                "pid": running_procs,
+            })
+        except Exception as e:
+            log(f"SCAN PORT ERROR folder={folder}: {e}")
+
+    return sorted(ports, key=lambda x: int(x.get("portNumber") or 0))
+
+def mt5_ports_dashboard() -> Dict[str, Any]:
+    ports = []
+    used_lot = 0.0
+    for i in range(1, 21):
+        try:
+            port_dir = resolve_mt5_port_dir(str(i), {})
+            procs = mt5_port_processes(str(i), {})
+            running = len(procs) > 0
+            lot = 0.0
+            try:
+                profiles = port_dir / "MQL5" / "Profiles"
+                if profiles.exists():
+                    for set_file in profiles.rglob("*.set"):
+                        txt = set_file.read_text(errors="ignore")
+                        m = re.search(r"(?im)^\s*(Lots|Lot|lot)\s*=\s*([0-9.]+)", txt)
+                        if m:
+                            lot = float(m.group(2))
+                            break
+            except Exception:
+                pass
+            snap = account_snapshot(str(i), {})
+            used_lot += lot
+            ports.append({
+                "port": f"PORT{i:02d}",
+                "portNumber": i,
+                "path": str(port_dir),
+                "running": running,
+                "busy": running,
+                "status": "full" if running else "free",
+                "pid": [p.pid for p in procs],
+                "lot": lot,
+                "balance": snap.get("balance"),
+                "equity": snap.get("equity"),
+            })
+        except Exception:
+            port_dir = MT5_ROOT / f"PORT{i:02d}"
+            ports.append({
+                "port": f"PORT{i:02d}",
+                "portNumber": i,
+                "path": str(port_dir),
+                "running": False,
+                "busy": False,
+                "status": "missing",
+                "pid": [],
+                "lot": 0,
+                "balance": None,
+                "equity": None,
+            })
+    return {
+        "action": "dashboard",
+        "ports": ports,
+        "used_ports": len([p for p in ports if p["running"]]),
+        "used_lot": used_lot,
+        "at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
+def safe_port_file_path(payload: Dict[str, Any]) -> Tuple[str, Path, Path]:
+    port = payload_get(payload, "port", "portNumber", "portSlot")
+    file_path = payload_get(payload, "file_path", "filename", "full_path", "path")
+    target_dir = payload_get(payload, "target")
+    if not port:
+        raise RuntimeError("payload.port is required")
+    if not file_path:
+        raise RuntimeError("payload.file_path/filename is required")
+    port_dir = resolve_mt5_port_dir(port, payload)
+    root = port_dir.resolve()
+
+    # ถ้าเป็น filename ธรรมดา ให้ลงใน target เช่น MQL5\Experts ก่อน
+    if target_dir and not Path(file_path).is_absolute():
+        target = Path(target_dir) / file_path
+    else:
+        target = Path(file_path) if Path(file_path).is_absolute() else port_dir / file_path
+
+    full = target.resolve()
+    # กันแก้/ลบไฟล์ข้าม PORT: ต้องอยู่ใต้โฟลเดอร์ PORT เท่านั้น
+    if not str(full).lower().startswith(str(root).lower()):
+        raise RuntimeError(f"blocked path outside port folder: {full}")
+    return port, port_dir, full
+
+
+def port_list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port = payload_get(payload, "port", "portNumber", "portSlot")
+    sub = payload_get(payload, "path")
+    port_dir = resolve_mt5_port_dir(port, payload)
+    target = port_dir / sub if sub else port_dir
+    if not target.exists():
+        raise RuntimeError(f"folder not found: {target}")
+    files = []
+    for x in target.iterdir():
+        files.append({
+            "Name": x.name,
+            "FullName": str(x),
+            "Length": x.stat().st_size if x.is_file() else 0,
+            "LastWriteTime": datetime.fromtimestamp(x.stat().st_mtime).isoformat(timespec="seconds"),
+            "PSIsContainer": x.is_dir(),
+        })
+    return {"action": "port_list_files", "port": port, "folder": str(target), "files": files}
+
+
+def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port, _, full = safe_port_file_path(payload)
+    if not full.exists():
+        raise RuntimeError(f"file not found: {full}")
+    content = _read_log_tail(full, max_bytes=262144)
+    return {"action": "port_read_file", "port": port, "file_path": str(full), "content": content}
+
+
+def port_write_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port, _, full = safe_port_file_path(payload)
+    content = payload_get(payload, "content")
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_text(content, encoding="utf-8")
+    return {"action": "port_write_file", "port": port, "file_path": str(full), "status": "saved"}
+
+
+def port_upload_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port, _, full = safe_port_file_path(payload)
+    content_b64 = payload_get(payload, "content_b64", "base64")
+    if not content_b64:
+        raise RuntimeError("payload.content_b64 is required")
+    full.parent.mkdir(parents=True, exist_ok=True)
+    full.write_bytes(base64.b64decode(content_b64))
+    return {"action": "port_upload_file", "port": port, "file_path": str(full), "status": "uploaded"}
+
+
+def port_delete_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port, _, full = safe_port_file_path(payload)
+    if full.is_dir():
+        shutil.rmtree(full)
+    elif full.exists():
+        full.unlink()
+    return {"action": "port_delete_file", "port": port, "file_path": str(full), "status": "deleted"}
+
+
+def open_mt5_port_folder(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port = payload_get(payload, "port", "portNumber", "portSlot")
+    port_dir = resolve_mt5_port_dir(port, payload)
+    if os.name == "nt":
+        subprocess.Popen(["explorer.exe", str(port_dir)], close_fds=True)
+    return {"action": "port_open_folder", "port": port, "path": str(port_dir), "status": "opened"}
+
+
+def restart_mt5_port(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    payload = payload or {}
+
+    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
+    password = str(payload_get(payload, "mt5Password", "password") or "")
+    if login and password:
+        return start_mt5_bot(payload)
+
+    # ห้ามเปิด MT5 ด้วย INI เก่า (รหัสผ่านค้าง) — ต้องส่ง login+password มาด้วยเท่านั้น
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        raise RuntimeError(f"terminal64.exe not found: {terminal}")
+
+    stop_mt5_port_only(port, payload)
+    log(f"RESTART MT5 SKIPPED stale INI PORT={port} (missing credentials in payload)")
+    return {
+        "action": "restart_mt5_bot",
+        "port": port,
+        "status": "stopped",
+        "message": "ต้องเชื่อมต่อใหม่จากเว็บพร้อม Login/Password ล่าสุด (ไม่ใช้รหัสเก่าใน INI)",
+        "terminal": str(terminal),
+        "config": "",
+    }
+
+
+def remove_mt5_port_folder_safe(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    port_dir = resolve_mt5_port_dir(port, payload)
+    stop_mt5_port_only(port, payload)
+    time.sleep(1)
+    shutil.rmtree(port_dir)
+    return {"action": "delete_port", "port": port, "port_dir": str(port_dir), "status": "deleted"}
+
+
+def send_mt5_live_status(instance_id: Any, port: Any, status: str, ea_status: str = "", balance: float = 0, equity: float = 0, error_text: str = "") -> None:
+    try:
+        body = {
+            "instanceId": instance_id,
+            "port": port,
+            "status": status,
+            "eaStatus": ea_status,
+            "balance": balance,
+            "equity": equity,
+            "errorText": error_text,
+            "at": datetime.now().isoformat(timespec="seconds"),
+        }
+        api("POST", "https://trading.avelqua.com/app/mt5/live-status", body)
+        log(f"LIVE STATUS SENT PORT={port} STATUS={status} EA={ea_status}")
+    except Exception as e:
+        log(f"LIVE STATUS ERROR PORT={port}: {e}")
+
+
+def watch_mt5_instance(payload: Dict[str, Any]) -> None:
+    try:
+        port = payload_get(payload, "port", "portNumber", "portSlot")
+        if not port:
+            return
+        instance_id = payload_get(payload, "instanceId")
+        st = mt5_port_status_one(port, payload)
+        snap = account_snapshot(port, payload)
+        send_mt5_live_status(
+            instance_id,
+            port,
+            "running" if st["running"] else "stopped",
+            st["status"],
+            float(snap.get("balance") or 0),
+            float(snap.get("equity") or 0),
+            "",
+        )
+    except Exception as e:
+        log(f"WATCH INSTANCE ERROR: {e}")
+
+
+def poll_running_mt5_list() -> None:
+    # TEMP: Watchdog / AUTO RECONNECT OFF — MT5 only when web sends command via /queue.
+    # No watch_mt5_processes(); no start_mt5_v2(...) / start_mt5_command(...) from this loop.
+    # try:
+    #     running = api("GET", "https://trading.avelqua.com/app/mt5/agent-running-list")
+    #     if running.get("ok") is True:
+    #         for item in running.get("items", []):
+    #             # watch_mt5_processes()
+    #             # watch_mt5_instance(item)
+    # except Exception as e:
+    #     log(f"WATCH MT5 ERROR: {e}")
+    pass
+
+
+def restart_service_later(service_name: str, exit_process: bool = True) -> None:
+    """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
+    if os.name != "nt":
+        log("SERVICE RESTART SKIPPED: not Windows")
+        return
+    ps = (
+        f"Start-Sleep -Seconds 2; "
+        f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue; "
+        f"if (-not (Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ $_.Status -eq 'Running' }}) ) {{ "
+        f"net stop {service_name}; net start {service_name} }}"
+    )
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+    )
+    log(f"SERVICE RESTART SCHEDULED name={service_name} exit_process={exit_process}")
+
+    if exit_process:
+        def _exit_after_delay() -> None:
+            time.sleep(4)
+            log("AGENT EXIT after deploy/restart — loading new agent.py on service start")
+            os._exit(0)
+
+        import threading
+
+        threading.Thread(target=_exit_after_delay, daemon=True).start()
+
+
+def _sync_agent_env_build_id(build_id: str) -> None:
+    """อัปเดต .env ให้ AVELQUA_AGENT_VERSION ตรงกับ build จริง (กัน heartbeat รายงานเวอร์ชันเก่าค้าง)"""
+    try:
+        lines: List[str] = []
+        if ENV_FILE.exists():
+            lines = ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+        key = "AVELQUA_AGENT_VERSION"
+        found = False
+        out: List[str] = []
+        for line in lines:
+            if line.strip().startswith(f"{key}="):
+                out.append(f"{key}={build_id}")
+                found = True
+            else:
+                out.append(line)
+        if not found:
+            out.append(f"{key}={build_id}")
+        ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
+        os.environ[key] = build_id
+        log(f"AGENT ENV SYNC {key}={build_id}")
+    except Exception as e:
+        log(f"AGENT ENV SYNC ERROR: {e}")
+
+
+try:
+    _sync_agent_env_build_id(AGENT_BUILD_ID)
+except Exception:
+    pass
+
+
+def _fetch_agent_script_from_url(script_url: str) -> str:
+    url = str(script_url or "").strip()
+    if not url:
+        return ""
+    log(f"AGENT DEPLOY DOWNLOAD {url}")
+    r = requests.get(
+        url,
+        headers={
+            "x-agent-token": AGENT_TOKEN,
+            "Authorization": f"Bearer {AGENT_TOKEN}",
+            "Accept": "text/plain, application/json, */*",
+            "User-Agent": f"AvelquaPythonAgent/{AGENT_BUILD_ID}",
+        },
+        timeout=120,
+    )
+    r.raise_for_status()
+    text = r.text or ""
+    if not text.strip():
+        raise RuntimeError("downloaded agent script is empty")
+    return text
+
+
+def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
+    agent_path = Path(
+        str(payload_get(payload, "agent_path", "targetPath", "file_path", default=str(AGENT_FILE)) or AGENT_FILE)
+    )
+    service_name = str(
+        payload_get(payload, "service_name", "serviceName", default=SERVICE_NAME) or SERVICE_NAME
+    )
+    script_url = str(payload_get(payload, "scriptUrl", "script_url", "url", default="") or "").strip()
+    content = str(payload_get(payload, "content", default="") or "")
+    if script_url:
+        try:
+            content = _fetch_agent_script_from_url(script_url)
+        except Exception as e:
+            if not content.strip():
+                raise RuntimeError(f"scriptUrl download failed: {e}") from e
+            log(f"AGENT DEPLOY scriptUrl failed, use inline content: {e}")
+    if not content.strip():
+        raise RuntimeError("payload.content or payload.scriptUrl is required")
+
+    # Validate Python syntax before writing.
+    compile(content, str(agent_path), "exec")
+
+    backup = agent_path.with_suffix(agent_path.suffix + ".bak-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+    if agent_path.exists():
+        shutil.copy2(agent_path, backup)
+    agent_path.parent.mkdir(parents=True, exist_ok=True)
+
+    tmp = agent_path.with_suffix(agent_path.suffix + ".tmp")
+    tmp.write_text(content, encoding="utf-8")
+    tmp.replace(agent_path)
+
+    build_id = AGENT_BUILD_ID
+    m = re.search(r'AGENT_BUILD_ID\s*=\s*["\']([^"\']+)["\']', content)
+    if m:
+        build_id = m.group(1).strip()
+    _sync_agent_env_build_id(build_id)
+
+    log(f"PYTHON AGENT UPDATED path={agent_path} backup={backup} build={build_id}")
+
+    restart_service_later(service_name)
+
+    return {
+        "action": "update_agent_script",
+        "updated": True,
+        "agent_path": str(agent_path),
+        "backup": str(backup),
+        "service_name": service_name,
+        "agent_build_id": build_id,
+        "restart": "scheduled",
+    }
+
+
+def read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    paths: List[str] = []
+    primary = str(payload_get(payload, "file_path") or "").strip()
+    if primary:
+        paths.append(primary)
+    extra = payload.get("file_paths") or payload.get("filePaths") or []
+    if isinstance(extra, list):
+        paths.extend(str(p).strip() for p in extra if str(p).strip())
+    seen = set()
+    uniq: List[Path] = []
+    for p in paths:
+        if p in seen:
+            continue
+        seen.add(p)
+        uniq.append(Path(p))
+
+    for path in uniq:
+        if not path.exists():
+            continue
+        content = _read_log_tail(path, max_bytes=262144)
+        if content.strip():
+            return {"file_path": str(path), "content": content}
+    return {"file_path": primary, "content": ""}
+
+
+def write_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = Path(payload_get(payload, "file_path"))
+    content = payload_get(payload, "content")
+    if not str(path):
+        raise RuntimeError("payload.file_path is required")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(content, encoding="utf-8")
+    return {"file_path": str(path), "action": "write_file", "status": "saved"}
+
+
+def delete_file(payload: Dict[str, Any]) -> Dict[str, Any]:
+    path = Path(payload_get(payload, "file_path"))
+    if path.is_dir():
+        shutil.rmtree(path)
+    elif path.exists():
+        path.unlink()
+    return {"file_path": str(path), "action": "delete_file", "status": "deleted"}
+
+
+def handle_command(cmd: Dict[str, Any]) -> None:
+    cmd_id = cmd.get("id")
+    ctype = str(cmd.get("command_type") or "").lower()
+    payload = cmd.get("payload") or {}
+    log(f"COMMAND RECEIVED ID={cmd_id} TYPE={ctype} PAYLOAD={safe_json(payload)}")
+    try:
+        if ctype in ("status", "service_status"):
+            command_result(cmd_id, True, {
+                "service_name": SERVICE_NAME,
+                "status": "Running",
+                "agent_type": "python",
+                "agent_version": AGENT_VERSION,
+            })
+
+        elif ctype in ("log", "get_log", "service_logs", "service_log"):
+            lines: List[str] = []
+            if LOG_FILE.exists():
+                lines = LOG_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()[-120:]
+            command_result(cmd_id, True, {
+                "log_file": str(LOG_FILE),
+                "lines": lines,
+            })
+
+        elif ctype in ("update_agent_script", "update_python_agent", "deploy_agent"):
+            command_result(cmd_id, True, update_agent_script(payload))
+
+        elif ctype in ("restart_agent", "restart_service"):
+            command_result(cmd_id, True, {
+                "action": "restart_agent",
+                "service_name": SERVICE_NAME,
+                "restart": "scheduled"
+            })
+            log("RESTART_AGENT COMMAND RECEIVED")
+            restart_service_later(SERVICE_NAME)
+            return
+
+        elif ctype in ("health_check_mt5", "refresh_metrics", "status", "mt5_health"):
+            result = {
+                "service": SERVICE_NAME,
+                "agent": "online",
+                "mt5_root": str(MT5_ROOT),
+                "ports_found": [],
+                "checked_at": datetime.now().isoformat(),
+            }
+
+            for i in range(1, 21):
+                found = None
+                for p in [
+                    MT5_ROOT / f"VPS-WIN-01-PORT-{i:02d}",
+                    MT5_ROOT / f"VPS-WIN-01-PORT-{i}",
+                    MT5_ROOT / f"PORT{i:02d}",
+                    MT5_ROOT / f"PORT{i}",
+                ]:
+                    if p.exists():
+                        found = p
+                        break
+                if found:
+                    result["ports_found"].append({
+                        "port": i,
+                        "path": str(found),
+                        "terminal_exists": (found / "terminal64.exe").exists(),
+                    })
+
+            command_result(cmd_id, True, result)
+
+        elif ctype == "connect_agent":
+            STOP_FLAG.unlink(missing_ok=True)
+            command_result(cmd_id, True, {"action": "connect_agent", "status": "connected"})
+
+        elif ctype == "disconnect_agent":
+            STOP_FLAG.write_text("disabled by command", encoding="utf-8")
+            send_heartbeat("offline", "Agent disconnected by admin")
+            command_result(cmd_id, True, {"action": "disconnect_agent", "status": "offline"})
+
+        elif ctype == "list_files":
+            command_result(cmd_id, True, list_files(payload))
+
+        elif ctype == "read_file":
+            command_result(cmd_id, True, read_file(payload))
+
+        elif ctype == "write_file":
+            command_result(cmd_id, True, write_file(payload))
+
+        elif ctype == "delete_file":
+            command_result(cmd_id, True, delete_file(payload))
+
+        elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
+            command_result(cmd_id, True, start_mt5_bot(payload))
+
+        elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port"):
+            folder = payload_get(payload, "folder_path", "vpsFolderPath")
+
+            if folder:
+                command_result(cmd_id, True, stop_mt5_by_folder(folder))
+            else:
+                port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
+                command_result(cmd_id, True, stop_mt5_port_only(port, payload))
+
+        elif ctype in ("dashboard", "watchdog"):
+            command_result(cmd_id, True, mt5_ports_dashboard())
+
+        elif ctype == "port_open_folder":
+            command_result(cmd_id, True, open_mt5_port_folder(payload))
+
+        elif ctype == "port_list_files":
+            command_result(cmd_id, True, port_list_files(payload))
+
+        elif ctype == "port_read_file":
+            command_result(cmd_id, True, port_read_file(payload))
+
+        elif ctype == "port_write_file":
+            command_result(cmd_id, True, port_write_file(payload))
+
+        elif ctype == "port_upload_file":
+            command_result(cmd_id, True, port_upload_file(payload))
+
+        elif ctype == "port_delete_file":
+            command_result(cmd_id, True, port_delete_file(payload))
+
+        elif ctype in ("restart_mt5_bot", "restart_mt5", "restart_port"):
+            port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
+            instance_id = payload_get(payload, "instanceId")
+            res = restart_mt5_port(port, payload)
+            send_mt5_live_status(instance_id, port, "running", "manual_restart", 0, 0, "")
+            command_result(cmd_id, True, res)
+
+        elif ctype == "delete_port":
+            port = payload_get(payload, "port", "portSlot", "portNumber")
+            command_result(cmd_id, True, remove_mt5_port_folder_safe(port, payload))
+
+        elif ctype == "read_parameters":
+            folder = Path(payload_get(payload, "folder_path", default=str(MT5_ROOT)))
+            files = [str(x) for x in folder.rglob("*.set")] if folder.exists() else []
+            command_result(cmd_id, True, {"folder_path": str(folder), "files": files})
+
+        else:
+            command_result(cmd_id, False, {"command_type": ctype}, f"Unknown command_type: {ctype}")
+
+    except Exception as e:
+        log(f"COMMAND ERROR ID={cmd_id}: {e}")
+        if ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
+            try:
+                send_connect_result(payload, "failed", str(e))
+            except Exception:
+                pass
+        command_result(cmd_id, False, {}, str(e))
+
+def main() -> None:
+    log(f"PYTHON AGENT START Service={SERVICE_NAME} Computer={platform.node()} Server={SERVER_URL}")
+
+    if AGENT_TOKEN == "PUT_YOUR_AGENT_TOKEN_HERE":
+        log("ERROR: Please set AVELQUA_AGENT_TOKEN in C:\\avelqua-python-agent\\.env")
+
+    last_hb = 0.0
+
+    while True:
+        try:
+            clean_old_logs()
+
+            disabled = STOP_FLAG.exists()
+            now = time.time()
+
+            if now - last_hb > HEARTBEAT_SECONDS:
+                send_heartbeat(
+                    "offline" if disabled else "online",
+                    "Agent disabled" if disabled else ""
+                )
+                last_hb = now
+
+            send_port_health()
+
+            if not disabled:
+                # TEMP: auto reconnect / agent-running-list watchdog off (was: poll_running_mt5_list())
+                # poll_running_mt5_list()
+                pass
+
+            try:
+                res = api("GET", "/queue")
+                cmd = res.get("command")
+
+                if cmd:
+                    handle_command(cmd)
+
+            except Exception as e:
+                log(f"COMMAND POLL ERROR: {e}")
+
+            time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
+
+        except Exception as e:
+            log(f"MAIN LOOP ERROR: {e}")
+            time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
+if __name__ == "__main__":
+    try:
+        main()
+    except KeyboardInterrupt:
+        log("PYTHON AGENT STOP KeyboardInterrupt")
+    except Exception as exc:
+        log(f"PYTHON AGENT FATAL: {exc}")
+        sys.exit(1)

@@ -1,0 +1,222 @@
+<%- include('partials/head', { title: 'Market | TRADING AVELQUA', lang: lang }) %>
+<link rel="stylesheet" href="/public/css/market.css">
+
+<%- include('partials/nav', {
+  currentPath: '/market',
+  user: (typeof user !== 'undefined' ? user : null),
+  lang: (typeof lang !== 'undefined' ? lang : 'th')
+}) %>
+
+<main class="market-page">
+  <section class="market-hero">
+    <div class="container market-hero-grid">
+      <div class="market-hero-copy market-card">
+        <span class="market-chip"><%= t('market.hero_badge', 'LIVE MARKET') %></span>
+        <h1><%= t('market.hero_title', 'ติดตามตลาดแบบ Real-time ในหน้าเดียว') %></h1>
+        <p class="market-lead">
+          <%= t('market.hero_desc', 'ดูกราฟตลาดสด วิเคราะห์แนวโน้ม และติดตามสินทรัพย์สำคัญได้อย่างสะดวก เหมาะสำหรับลูกค้าที่ต้องการดูตลาดก่อนเลือกใช้งานระบบบอทหรือวางแผนการเทรด') %>
+        </p>
+
+        <div class="market-hero-actions">
+          <a href="/pricing?lang=<%= lang || 'th' %>" class="market-btn market-btn-primary">
+            <%= t('market.cta_pricing', 'ดูแพ็กเกจ') %>
+          </a>
+          <a href="/contact?lang=<%= lang || 'th' %>" class="market-btn market-btn-secondary">
+            <%= t('market.cta_contact', 'ปรึกษาฟรี') %>
+          </a>
+        </div>
+
+        <div class="market-mini-grid">
+          <div class="market-mini-box">
+            <span><%= t('market.mini1_title', 'ดูตลาดสด') %></span>
+            <strong><%= t('market.mini1_desc', 'ติดตามกราฟแบบ Real-time') %></strong>
+          </div>
+          <div class="market-mini-box">
+            <span><%= t('market.mini2_title', 'เลือกสินทรัพย์ง่าย') %></span>
+            <strong><%= t('market.mini2_desc', 'ทองคำ Forex Crypto และ Index') %></strong>
+          </div>
+          <div class="market-mini-box">
+            <span><%= t('market.mini3_title', 'เหมาะกับทุกระดับ') %></span>
+            <strong><%= t('market.mini3_desc', 'ทั้งมือใหม่และผู้ใช้งานจริง') %></strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="market-hero-visual market-card">
+        <div class="market-visual-wrap">
+          <div class="market-glow market-glow-1"></div>
+          <div class="market-glow market-glow-2"></div>
+          <img src="/public/images/logo.png" alt="TRADING AVELQUA">
+        </div>
+        <p class="market-visual-text">
+          <%= t('market.visual_desc', 'ภาพรวมตลาดที่ดูง่าย ช่วยให้ลูกค้าเข้าใจมากขึ้นก่อนเริ่มใช้งานระบบเทรดอัตโนมัติ') %>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="market-controls-section">
+    <div class="container">
+      <div class="market-controls market-card">
+        <div class="market-controls-head">
+          <div>
+            <span class="market-chip"><%= t('market.selector_badge', 'SYMBOL SELECTOR') %></span>
+            <h2><%= t('market.selector_title', 'เลือกสินทรัพย์ที่ต้องการดู') %></h2>
+          </div>
+        </div>
+
+        <div class="market-symbols" id="marketSymbols">
+          <button class="symbol-btn active" data-symbol="OANDA:XAUUSD"><%= lang === 'th' ? 'ทองคำ XAUUSD' : 'Gold XAUUSD' %></button>
+          <button class="symbol-btn" data-symbol="OANDA:EURUSD">EURUSD</button>
+          <button class="symbol-btn" data-symbol="OANDA:GBPUSD">GBPUSD</button>
+          <button class="symbol-btn" data-symbol="BITSTAMP:BTCUSD">BTCUSD</button>
+          <button class="symbol-btn" data-symbol="BITSTAMP:ETHUSD">ETHUSD</button>
+          <button class="symbol-btn" data-symbol="FOREXCOM:USOIL"><%= lang === 'th' ? 'น้ำมัน USOIL' : 'USOIL' %></button>
+          <button class="symbol-btn" data-symbol="TVC:DXY"><%= lang === 'th' ? 'ดัชนีดอลลาร์ DXY' : 'Dollar Index DXY' %></button>
+          <button class="symbol-btn" data-symbol="SP:SPX">S&amp;P 500</button>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="market-chart-section">
+    <div class="container">
+      <div class="market-card market-chart-card">
+        <div class="market-chart-head">
+          <div>
+            <span class="market-chip"><%= t('market.chart_badge', 'REAL-TIME CHART') %></span>
+            <h2 id="marketChartTitle"><%= t('market.chart_title', 'กราฟตลาดสด: ทองคำ XAUUSD') %></h2>
+            <p class="market-section-desc">
+              <%= t('market.chart_desc', 'ติดตามความเคลื่อนไหวของตลาดแบบสด ช่วยให้ลูกค้าเห็นภาพรวมได้อย่างชัดเจน') %>
+            </p>
+          </div>
+        </div>
+
+        <div class="market-tv-frame">
+          <div id="tvchart"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="market-insight-section">
+    <div class="container">
+      <div class="market-section-head">
+        <div>
+          <span class="market-chip"><%= t('market.why_badge', 'WHY THIS PAGE MATTERS') %></span>
+          <h2><%= t('market.why_title', 'ทำไมลูกค้าควรดูตลาดก่อนใช้งาน') %></h2>
+        </div>
+      </div>
+
+      <div class="market-insight-grid">
+        <div class="market-info-card market-card">
+          <div class="market-info-icon">📈</div>
+          <h3><%= t('market.info1_title', 'เข้าใจแนวโน้มตลาด') %></h3>
+          <p><%= t('market.info1_desc', 'ช่วยให้มองภาพรวมของสินทรัพย์ที่สนใจได้เร็วขึ้น และตัดสินใจได้มั่นใจขึ้น') %></p>
+        </div>
+
+        <div class="market-info-card market-card">
+          <div class="market-info-icon">⚡</div>
+          <h3><%= t('market.info2_title', 'วางแผนได้ดีขึ้น') %></h3>
+          <p><%= t('market.info2_desc', 'ก่อนเริ่มใช้งานระบบบอท ลูกค้าสามารถดูตลาดเพื่อวางแผนการใช้งานได้ชัดเจนกว่าเดิม') %></p>
+        </div>
+
+        <div class="market-info-card market-card">
+          <div class="market-info-icon">🤖</div>
+          <h3><%= t('market.info3_title', 'เสริมการใช้งานบอท') %></h3>
+          <p><%= t('market.info3_desc', 'หน้า Market ช่วยให้เห็นสภาพตลาดควบคู่กับการเลือกแพ็กเกจและการใช้งานระบบอัตโนมัติ') %></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="market-cta-section">
+    <div class="container">
+      <div class="market-cta-box market-card">
+        <span class="market-chip"><%= t('market.final_badge', 'START NOW') %></span>
+        <h2><%= t('market.final_title', 'พร้อมเริ่มใช้งานระบบแล้วหรือยัง?') %></h2>
+        <p>
+          <%= t('market.final_desc', 'เมื่อติดตามตลาดและเข้าใจภาพรวมแล้ว ขั้นตอนต่อไปคือเลือกแพ็กเกจที่เหมาะกับคุณ แล้วเริ่มต้นใช้งานระบบได้ทันที') %>
+        </p>
+
+        <div class="market-hero-actions market-cta-actions">
+          <a href="/pricing?lang=<%= lang || 'th' %>" class="market-btn market-btn-primary">
+            <%= t('market.final_pricing', 'ไปหน้าแพ็กเกจ') %>
+          </a>
+          <a href="/contact?lang=<%= lang || 'th' %>" class="market-btn market-btn-secondary">
+            <%= t('market.final_contact', 'ติดต่อทีมงาน') %>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+  let currentWidget = null;
+
+  const symbolTitles = {
+    "OANDA:XAUUSD": "<%= lang === 'th' ? 'กราฟตลาดสด: ทองคำ XAUUSD' : 'Live Market Chart: Gold XAUUSD' %>",
+    "OANDA:EURUSD": "<%= lang === 'th' ? 'กราฟตลาดสด: EURUSD' : 'Live Market Chart: EURUSD' %>",
+    "OANDA:GBPUSD": "<%= lang === 'th' ? 'กราฟตลาดสด: GBPUSD' : 'Live Market Chart: GBPUSD' %>",
+    "BITSTAMP:BTCUSD": "<%= lang === 'th' ? 'กราฟตลาดสด: Bitcoin BTCUSD' : 'Live Market Chart: Bitcoin BTCUSD' %>",
+    "BITSTAMP:ETHUSD": "<%= lang === 'th' ? 'กราฟตลาดสด: Ethereum ETHUSD' : 'Live Market Chart: Ethereum ETHUSD' %>",
+    "FOREXCOM:USOIL": "<%= lang === 'th' ? 'กราฟตลาดสด: น้ำมัน USOIL' : 'Live Market Chart: USOIL' %>",
+    "TVC:DXY": "<%= lang === 'th' ? 'กราฟตลาดสด: ดัชนีดอลลาร์ DXY' : 'Live Market Chart: Dollar Index DXY' %>",
+    "SP:SPX": "<%= lang === 'th' ? 'กราฟตลาดสด: S&P 500' : 'Live Market Chart: S&P 500' %>"
+  };
+
+  function loadTradingViewChart(symbol) {
+    const chartTitle = document.getElementById('marketChartTitle');
+    if (chartTitle) {
+      chartTitle.textContent = symbolTitles[symbol] || "<%= t('market.chart_title', 'กราฟตลาดสด') %>";
+    }
+
+    const container = document.getElementById('tvchart');
+    if (!container) return;
+
+    container.innerHTML = '';
+
+    if (typeof TradingView === 'undefined') return;
+
+    currentWidget = new TradingView.widget({
+      autosize: true,
+      symbol: symbol,
+      interval: "15",
+      timezone: "Asia/Bangkok",
+      theme: "dark",
+      style: "1",
+      locale: "<%= lang === 'en' ? 'en' : 'th_TH' %>",
+      toolbar_bg: "#0b1424",
+      enable_publishing: false,
+      hide_top_toolbar: false,
+      hide_legend: false,
+      allow_symbol_change: true,
+      save_image: false,
+      container_id: "tvchart"
+    });
+  }
+
+  function setActiveSymbol(button) {
+    const buttons = document.querySelectorAll('.symbol-btn');
+    buttons.forEach(btn => btn.classList.remove('active'));
+    button.classList.add('active');
+  }
+
+  document.addEventListener('DOMContentLoaded', function () {
+    const symbolButtons = document.querySelectorAll('.symbol-btn');
+
+    symbolButtons.forEach(button => {
+      button.addEventListener('click', function () {
+        const symbol = this.getAttribute('data-symbol');
+        setActiveSymbol(this);
+        loadTradingViewChart(symbol);
+      });
+    });
+
+    loadTradingViewChart('OANDA:XAUUSD');
+  });
+</script>
+
+<%- include('partials/footer') %>

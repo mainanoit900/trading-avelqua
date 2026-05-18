@@ -1,0 +1,32 @@
+<%
+const langNow = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+%>
+<!DOCTYPE html>
+<html lang="<%= langNow %>">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ยืนยันอีเมล</title>
+  <link rel="stylesheet" href="/public/css/auth.css">
+</head>
+<body>
+  <div class="auth-page">
+    <div class="auth-card">
+      <h1 class="auth-title">ยืนยันอีเมล</h1>
+      <p class="auth-sub">ระบบส่งรหัส 6 หลักไปยังอีเมลของคุณแล้ว กรุณากรอกรหัสเพื่อเปิดสิทธิ์ซื้อแพ็กเกจ</p>
+      <% if (error) { %><div class="auth-alert auth-alert-danger"><%= error %></div><% } %>
+      <% if (success) { %><div class="auth-alert auth-alert-success"><%= success %></div><% } %>
+      <form method="POST" action="/verify-email-code" class="auth-form">
+        <div class="auth-group"><label class="auth-label">อีเมล</label><input type="email" name="email" class="auth-input" value="<%= email || '' %>" required></div>
+        <div class="auth-group"><label class="auth-label">รหัสยืนยัน 6 หลัก</label><input type="text" name="code" class="auth-input" placeholder="เช่น 123456" maxlength="6" required></div>
+        <button type="submit" class="auth-btn">ยืนยันอีเมล</button>
+      </form>
+      <form method="POST" action="/resend-verification" class="auth-form" style="margin-top:12px">
+        <input type="hidden" name="email" value="<%= email || '' %>">
+        <button type="submit" class="auth-btn auth-btn-secondary">ส่งรหัสใหม่</button>
+      </form>
+      <div class="auth-register-text"><a href="/login">กลับไปหน้าเข้าสู่ระบบ</a></div>
+    </div>
+  </div>
+</body>
+</html>

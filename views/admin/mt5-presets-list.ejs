@@ -1,0 +1,33 @@
+<%- include('../partials/head', { pageTitle: pageTitle || 'MT5 Bot Presets', pageCss: 'admin-mt5-presets.css' }) %>
+<%- include('../partials/admin-shell') %>
+
+<div class="mt5-list-page">
+  <section class="mt5-list-hero">
+    <div>
+      <div class="mt5-kicker">BOT TRADING EA</div>
+      <h1>🤖 MT5 BOT PRESETS</h1>
+      <p>เลือกตารางตั้งค่าบอท เพื่อดูทุน / LOT / ความเสี่ยงของแต่ละระบบ</p>
+    </div>
+  </section>
+
+  <div class="mt5-preset-grid">
+    <% presets.forEach(function(p, index){ %>
+      <a class="mt5-preset-card" href="/admin/mt5-presets/<%= p.slug %>">
+        <div class="preset-top">
+          <div class="preset-icon">📊</div>
+          <div class="preset-badge">PRESET <%= index + 1 %></div>
+        </div>
+
+        <h2><%= p.name %></h2>
+        <p>ตารางทุน / LOT / Risk Setting</p>
+
+        <div class="preset-footer">
+          <span>เปิดตาราง</span>
+          <b>→</b>
+        </div>
+      </a>
+    <% }) %>
+  </div>
+</div>
+
+<%- include('../partials/admin-shell-end') %>

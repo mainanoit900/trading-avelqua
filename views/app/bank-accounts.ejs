@@ -1,0 +1,123 @@
+
+<%
+const bank = typeof bankAccount !== 'undefined' ? (bankAccount || null) : null;
+function fmtDate(value){ if(!value) return '-'; try { return new Date(value).toLocaleString('th-TH'); } catch(e){ return '-'; } }
+%>
+<%- include('../partials/app-shell') %>
+<style>
+.bank-page{display:grid;gap:20px}.bank-grid{display:grid;grid-template-columns:1.1fr .9fr;gap:20px}.bank-card{border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,rgba(8,18,36,.92) 0%,rgba(10,20,40,.78) 100%);border-radius:20px;padding:22px}.bank-form{display:grid;gap:14px}.bank-form-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px}.bank-form label{display:block;margin-bottom:7px;color:#8fa5ce;font-size:13px}.bank-form input{width:100%;height:46px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px}.bank-badge{display:inline-flex;align-items:center;justify-content:center;min-height:28px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid transparent}.bank-badge.ok{color:#9df2c2;background:rgba(23,201,100,.14);border-color:rgba(23,201,100,.22)}.bank-badge.wait{color:#ffe2a8;background:rgba(255,184,77,.14);border-color:rgba(255,184,77,.22)}.bank-note{color:#8fa5ce;line-height:1.8}.bank-kv{display:grid;gap:10px}.bank-kv div{display:flex;justify-content:space-between;gap:16px;border-bottom:1px dashed rgba(130,154,197,.14);padding-bottom:10px}.bank-kv div:last-child{border-bottom:0;padding-bottom:0}@media (max-width:900px){.bank-grid,.bank-form-grid{grid-template-columns:1fr}}
+</style>
+
+<div class="bank-page">
+  <section class="card"><div class="card-head"><h3>บัญชีรับเงิน</h3></div><p class="bank-note">หน้านี้ใช้สำหรับบันทึกบัญชีรับเงินเพื่อขาย Scoin คืนโฮส ระบบจะส่ง OTP ไปทางอีเมลก่อน และเมื่อยืนยันสำเร็จแล้วจึงจะสามารถส่งคำสั่งขายได้</p></section>
+  <section class="bank-grid">
+    <section class="bank-card">
+      <h3 style="margin-top:0;">บันทึกบัญชีและส่ง OTP</h3>
+      <form method="post" action="/app/bank-accounts/save" class="bank-form">
+        <div class="bank-form-grid">
+          <div><label>ธนาคาร</label><input type="text" name="bank_name" required value="<%= bank ? bank.bank_name : '' %>" placeholder="เช่น Kasikornbank"></div>
+          <div><label>ชื่อบัญชี</label><input type="text" name="account_name" required value="<%= bank ? bank.account_name : '' %>" placeholder="ชื่อเจ้าของบัญชี"></div>
+        </div>
+        <div class="bank-form-grid">
+          <div><label>เลขบัญชี</label><input type="text" name="account_number" required value="<%= bank && bank.account_number ? bank.account_number : '' %>" placeholder="เลขบัญชี"></div>
+          <div><label>อีเมลรับ OTP</label><input type="email" name="verify_email" required value="<%= bank ? bank.verify_email : (user && user.email) || '' %>" placeholder="email@example.com"></div>
+        </div>
+        <div><button type="submit" class="btn btn-primary">บันทึกข้อมูลและส่ง OTP</button></div>
+      </form>
+    </section>
+    <section class="bank-card">
+      <h3 style="margin-top:0;">ยืนยัน OTP</h3>
+      <form method="post" action="/app/bank-accounts/verify-otp" class="bank-form">
+        <div><label>รหัส OTP จากอีเมล</label><input type="text" name="otp_code" required placeholder="กรอกรหัส 6 หลัก"></div>
+        <div><button type="submit" class="btn btn-success">ยืนยันบัญชีรับเงิน</button></div>
+      </form>
+      <div class="bank-note" style="margin-top:12px;">OTP มีอายุ 10 นาที หากหมดอายุให้กดบันทึกข้อมูลและส่ง OTP ใหม่อีกครั้ง</div>
+    </section>
+  </section>
+  <section class="bank-card">
+    <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:center;">
+      <h3 style="margin:0;">สถานะบัญชีปัจจุบัน</h3>
+      <% if (bank && bank.is_verified) { %><span class="bank-badge ok">verified</span><% } else { %><span class="bank-badge wait">pending</span><% } %>
+    </div>
+    <% if (bank) { %>
+      <div class="bank-kv" style="margin-top:18px;">
+        <div><span>ธนาคาร</span><strong><%= bank.bank_name || '-' %></strong></div>
+        <div><span>ชื่อบัญชี</span><strong><%= bank.account_name || '-' %></strong></div>
+        <div><span>เลขบัญชี</span><strong><%= bank.account_number_masked || '-' %></strong></div>
+        <div><span>อีเมลยืนยัน</span><strong><%= bank.verify_email || '-' %></strong></div>
+        <div><span>สถานะ</span><strong><%= bank.status || '-' %></strong></div>
+        <div><span>ยืนยันเมื่อ</span><strong><%= fmtDate(bank.verified_at) %></strong></div>
+      </div>
+    <% } else { %>
+      <div class="bank-note" style="margin-top:16px;">ยังไม่มีข้อมูลบัญชีรับเงินในระบบ</div>
+    <% } %>
+  </section>
+
+  <section class="bank-card">
+    <div style="display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:center;">
+      <h3 style="margin:0;">บัตรเครดิต / เดบิต</h3>
+      <% if (typeof paymentCard !== 'undefined' && paymentCard && paymentCard.is_active) { %>
+        <span class="bank-badge ok">connected</span>
+      <% } else { %>
+        <span class="bank-badge wait">not connected</span>
+      <% } %>
+    </div>
+
+    <% if (typeof paymentCard !== 'undefined' && paymentCard && paymentCard.is_active) { %>
+      <div class="bank-kv" style="margin-top:18px;">
+        <div><span>ประเภทบัตร</span><strong><%= paymentCard.card_brand || 'Card' %></strong></div>
+        <div><span>เลขท้ายบัตร</span><strong>**** <%= paymentCard.card_last4 || '----' %></strong></div>
+        <div><span>ชื่อบนบัตร</span><strong><%= paymentCard.card_holder || '-' %></strong></div>
+        <div><span>สถานะ</span><strong><%= paymentCard.is_verified ? 'verified' : 'pending' %></strong></div>
+        <div><span>เชื่อมต่อเมื่อ</span><strong><%= fmtDate(paymentCard.verified_at || paymentCard.created_at) %></strong></div>
+      </div>
+
+      <form method="POST" action="/app/cards/<%= paymentCard.id %>/cancel" style="margin-top:16px;">
+        <button type="submit" class="btn btn-danger">ยกเลิกบัตร</button>
+      </form>
+    <% } else { %>
+      <form method="POST" action="/app/cards/bind" class="bank-form" style="margin-top:18px;">
+        <div class="bank-form-grid">
+          <div>
+            <label>ชื่อบนบัตร</label>
+            <input type="text" name="card_holder" required placeholder="CARD HOLDER">
+          </div>
+          <div>
+            <label>เลขบัตร</label>
+            <input type="text" name="card_number" required maxlength="19" placeholder="4242 4242 4242 4242">
+          </div>
+        </div>
+
+        <div class="bank-form-grid">
+          <div>
+            <label>เดือนหมดอายุ</label>
+            <input type="text" name="exp_month" required maxlength="2" placeholder="MM">
+          </div>
+          <div>
+            <label>ปีหมดอายุ</label>
+            <input type="text" name="exp_year" required maxlength="4" placeholder="YYYY">
+          </div>
+        </div>
+
+        <div class="bank-form-grid">
+          <div>
+            <label>CVC</label>
+            <input type="password" name="cvc" required maxlength="4" placeholder="123">
+          </div>
+          <div>
+            <label>ระบบตรวจสอบ</label>
+            <input type="text" disabled value="KBank Gateway / Mock Mode">
+          </div>
+        </div>
+
+        <div class="bank-note">
+          ระบบจะตรวจสอบบัตรผ่าน Payment Gateway ก่อนบันทึก โดยไม่เก็บเลขบัตรเต็มในฐานข้อมูล
+        </div>
+
+        <button type="submit" class="btn btn-primary">ยืนยันบัตรและเชื่อมต่อ</button>
+      </form>
+    <% } %>
+  </section>
+
+</div>
+<%- include('../partials/app-shell-end') %>

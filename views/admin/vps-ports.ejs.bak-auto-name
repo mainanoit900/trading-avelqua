@@ -1,0 +1,203 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+  <meta charset="UTF-8">
+  <title>VPS Ports</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial, Tahoma, sans-serif;
+      background: #0f172a;
+      color: #e5e7eb;
+    }
+    .wrap {
+      padding: 28px;
+      max-width: 1200px;
+      margin: auto;
+    }
+    .header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 22px;
+    }
+    h1 {
+      margin: 0;
+      font-size: 28px;
+    }
+    .card {
+      background: #111827;
+      border: 1px solid #1f2937;
+      border-radius: 16px;
+      padding: 20px;
+      box-shadow: 0 10px 30px rgba(0,0,0,.25);
+    }
+    .form {
+      display: flex;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    input {
+      background: #020617;
+      color: #fff;
+      border: 1px solid #334155;
+      border-radius: 10px;
+      padding: 11px 14px;
+      width: 180px;
+      outline: none;
+    }
+    button, .btn {
+      border: 0;
+      border-radius: 10px;
+      padding: 10px 14px;
+      cursor: pointer;
+      text-decoration: none;
+      display: inline-block;
+      font-weight: bold;
+    }
+    .btn-add { background: #22c55e; color: #052e16; }
+    .btn-file { background: #38bdf8; color: #082f49; }
+    .btn-edit { background: #facc15; color: #422006; }
+    .btn-del { background: #ef4444; color: #fff; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      overflow: hidden;
+      border-radius: 14px;
+    }
+    th {
+      background: #020617;
+      color: #93c5fd;
+      text-align: left;
+      padding: 14px;
+      font-size: 14px;
+    }
+    td {
+      padding: 14px;
+      border-top: 1px solid #1f2937;
+      color: #e5e7eb;
+      vertical-align: middle;
+    }
+    tr:hover { background: #172554; }
+    .path {
+      font-family: Consolas, monospace;
+      color: #bfdbfe;
+      font-size: 13px;
+    }
+    .actions {
+      display: flex;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .empty {
+      padding: 30px;
+      text-align: center;
+      color: #94a3b8;
+    }
+  </style>
+</head>
+<body>
+<div class="wrap">
+  <div class="header">
+    <h1>🚀 VPS PORT DASHBOARD</h1>
+  </div>
+
+  <div class="card">
+    <div class="form">
+      <input id="port_number" type="number" min="1" max="20" placeholder="ใส่เลข PORT เช่น 1">
+      <button class="btn btn-add" onclick="createPort()">➕ เพิ่ม PORT</button>
+    </div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width:120px;">PORT</th>
+          <th>โฟลเดอร์ MT5</th>
+          <th>Experts Path</th>
+          <th style="width:260px;">จัดการ</th>
+        </tr>
+      </thead>
+      <tbody id="ports">
+        <tr><td colspan="4" class="empty">กำลังโหลดข้อมูล...</td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const VPS_ID = <%- JSON.stringify(node.id) %>;
+
+async function load(){
+  const r = await fetch(`/admin/vps/${VPS_ID}/ports/api/list`, {
+    credentials: 'same-origin'
+  });
+
+  const data = await r.json();
+  const box = document.getElementById('ports');
+
+  if (!data.length) {
+    box.innerHTML = `<tr><td colspan="4" class="empty">ยังไม่มี PORT</td></tr>`;
+    return;
+  }
+
+  box.innerHTML = data.map(p => `
+    <tr>
+      <td><b>${p.port_name || ('PORT' + String(p.port_number).padStart(2,'0'))}</b></td>
+      <td class="path">${p.base_path || '-'}</td>
+      <td class="path">${p.experts_path || '-'}</td>
+      <td>
+        <div class="actions">
+          <a class="btn btn-file" href="/admin/vps/${VPS_ID}/ports/${p.id}/files">📁 จัดการไฟล์</a>
+          <button class="btn btn-edit" onclick="editPort(${p.id}, ${p.port_number})">✏️ แก้ไข</button>
+          <button class="btn btn-del" onclick="delPort(${p.id})">🗑 ลบ</button>
+        </div>
+      </td>
+    </tr>
+  `).join('');
+}
+
+async function createPort(){
+  const n = Number(document.getElementById('port_number').value);
+  if (!n || n < 1 || n > 20) {
+    alert('ใส่เลข PORT 1-20');
+    return;
+  }
+
+  await fetch(`/admin/vps/${VPS_ID}/ports/api/create`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    credentials: 'same-origin',
+    body: JSON.stringify({ port_number:n })
+  });
+
+  document.getElementById('port_number').value = '';
+  load();
+}
+
+function editPort(id, oldNumber){
+  const n = prompt('แก้เลข PORT 1-20', oldNumber);
+  if (!n) return;
+
+  fetch(`/admin/vps/ports/api/update/${id}`,{
+    method:'POST',
+    headers:{'Content-Type':'application/json'},
+    credentials: 'same-origin',
+    body: JSON.stringify({ port_number:Number(n) })
+  }).then(load);
+}
+
+async function delPort(id){
+  if (!confirm('ต้องการลบ PORT นี้ใช่ไหม?')) return;
+
+  await fetch(`/admin/vps/ports/api/delete/${id}`,{
+    method:'POST',
+    credentials:'same-origin'
+  });
+
+  load();
+}
+
+load();
+</script>
+</body>
+</html>

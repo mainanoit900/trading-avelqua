@@ -1,0 +1,277 @@
+<%- include('../partials/head', { pageTitle: pageTitle || 'ตารางทุน / LOT', pageCss: 'admin-vps-strategy.css' }) %>
+<%- include('../partials/admin-shell') %>
+
+<%
+  const money = (v) => Number(v || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 });
+  const val = (v) => v === null || v === undefined ? '' : v;
+%>
+
+<div class="strategy-page">
+  <div class="strategy-hero">
+    <div>
+      <div class="strategy-kicker">BOT STRATEGY TABLE</div>
+      <h1>ตารางทุน / LOT / T START / T STOP</h1>
+      <p>ใช้คำนวณค่า Auto ให้หน้า /admin/bots ถ้า Lot หรือ Port ว่าง ระบบจะอิงจากตารางนี้</p>
+    </div>
+
+    <div class="strategy-actions-top">
+      <a href="/admin/vps" class="btn ghost">← กลับหน้า VPS</a>
+      <button type="button" class="btn primary" onclick="openCreateForm()">+ เพิ่มแถวใหม่</button>
+    </div>
+  </div>
+
+  <% if (success) { %>
+    <div class="alert success"><%= success %></div>
+  <% } %>
+
+  <% if (error) { %>
+    <div class="alert error"><%= error %></div>
+  <% } %>
+
+  <div id="createBox" class="strategy-card create-box" hidden>
+    <h2>เพิ่มแถวใหม่</h2>
+
+    <form method="POST" action="/admin/vps/strategy/create" class="strategy-form">
+      <label>ทุนแนะนำ
+        <input name="capital_recommend" type="number" step="0.01" required>
+      </label>
+
+      <label>ทุนเซฟ
+        <input name="capital_safe" type="number" step="0.01" required>
+      </label>
+
+      <label>ทุนเซฟสูงสุด
+        <input name="capital_max_safe" type="number" step="0.01" required>
+      </label>
+
+      <label>LOT SIZE
+        <input name="lot_size" type="number" step="0.01" required>
+      </label>
+
+      <label>LOT PLUS
+        <input name="lot_plus" type="number" step="0.01" required>
+      </label>
+
+      <label>เซฟ T START
+        <input name="t_start" type="number" step="1">
+      </label>
+
+      <label>เซฟ T STOP
+        <input name="t_stop" type="number" step="1">
+      </label>
+
+      <label>กลาง T START
+        <input name="medium_t_start" type="number" step="1">
+      </label>
+
+      <label>กลาง T STOP
+        <input name="medium_t_stop" type="number" step="1">
+      </label>
+
+      <label>รวบไว T START
+        <input name="fast_t_start" type="number" step="1">
+      </label>
+
+      <label>รวบไว T STOP
+        <input name="fast_t_stop" type="number" step="1">
+      </label>
+
+      <label class="check-row">
+        <input name="is_active" type="checkbox" checked>
+        เปิดใช้งาน
+      </label>
+
+      <div class="form-actions">
+        <button class="btn primary" type="submit">บันทึกเพิ่มแถว</button>
+        <button class="btn ghost" type="button" onclick="closeCreateForm()">ยกเลิก</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="strategy-card">
+    <div class="table-head">
+      <div>
+        <h2>รายการตารางทุน</h2>
+        <p>แบ่งเป็นทุน / Lot / โหมดเซฟ / โหมดกลาง / โหมดรวบไว เพื่อให้อ่านง่าย</p>
+      </div>
+
+      <input id="strategySearch" class="search-input" placeholder="ค้นหา ทุน / Lot เช่น 300 หรือ 0.10">
+    </div>
+
+    <div class="strategy-table-wrap">
+      <table class="strategy-table">
+        <thead>
+          <tr>
+            <th>ทุน</th>
+            <th>LOT</th>
+            <th>โหมดเซฟ</th>
+            <th>โหมดกลาง</th>
+            <th>โหมดรวบไว</th>
+            <th>สถานะ</th>
+            <th>จัดการ</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <% if (!(strategyRows || []).length) { %>
+            <tr>
+              <td colspan="7" class="empty">ยังไม่มีข้อมูลตารางทุน</td>
+            </tr>
+          <% } %>
+
+          <% (strategyRows || []).forEach(function(r){ %>
+            <tr class="data-row">
+              <td>
+                <div class="capital-box">
+                  <strong><%= money(r.capital_recommend) %></strong>
+                  <span>แนะนำ</span>
+                </div>
+                <div class="mini-line">เซฟ: <b><%= money(r.capital_safe) %></b></div>
+                <div class="mini-line">เซฟสูงสุด: <b><%= money(r.capital_max_safe) %></b></div>
+              </td>
+
+              <td>
+                <div class="lot-main"><%= r.lot_size %></div>
+                <div class="mini-line">Plus: <%= r.lot_plus %></div>
+              </td>
+
+              <td>
+                <span class="mode-pill safe">SAFE</span>
+                <div class="tline">T START: <b><%= val(r.t_start) || '-' %></b></div>
+                <div class="tline">T STOP: <b><%= val(r.t_stop) || '-' %></b></div>
+              </td>
+
+              <td>
+                <span class="mode-pill medium">MEDIUM</span>
+                <div class="tline">T START: <b><%= val(r.medium_t_start) || '-' %></b></div>
+                <div class="tline">T STOP: <b><%= val(r.medium_t_stop) || '-' %></b></div>
+              </td>
+
+              <td>
+                <span class="mode-pill fast">FAST</span>
+                <div class="tline">T START: <b><%= val(r.fast_t_start) || '-' %></b></div>
+                <div class="tline">T STOP: <b><%= val(r.fast_t_stop) || '-' %></b></div>
+              </td>
+
+              <td>
+                <% if (r.is_active) { %>
+                  <span class="status active">ใช้งาน</span>
+                <% } else { %>
+                  <span class="status off">ปิด</span>
+                <% } %>
+              </td>
+
+              <td>
+                <div class="row-actions">
+                  <button type="button" class="btn small ghost" onclick="toggleEdit('edit-<%= r.id %>')">แก้ไข</button>
+
+                  <form method="POST" action="/admin/vps/strategy/<%= r.id %>/delete" onsubmit="return confirm('ยืนยันลบแถวทุน <%= r.capital_recommend %> ?')">
+                    <button class="btn small danger" type="submit">ลบ</button>
+                  </form>
+                </div>
+              </td>
+            </tr>
+
+            <tr id="edit-<%= r.id %>" class="edit-row" hidden>
+              <td colspan="7">
+                <form method="POST" action="/admin/vps/strategy/<%= r.id %>/update" class="strategy-form">
+                  <label>ทุนแนะนำ
+                    <input name="capital_recommend" type="number" step="0.01" value="<%= r.capital_recommend %>" required>
+                  </label>
+
+                  <label>ทุนเซฟ
+                    <input name="capital_safe" type="number" step="0.01" value="<%= r.capital_safe %>" required>
+                  </label>
+
+                  <label>ทุนเซฟสูงสุด
+                    <input name="capital_max_safe" type="number" step="0.01" value="<%= r.capital_max_safe %>" required>
+                  </label>
+
+                  <label>LOT SIZE
+                    <input name="lot_size" type="number" step="0.01" value="<%= r.lot_size %>" required>
+                  </label>
+
+                  <label>LOT PLUS
+                    <input name="lot_plus" type="number" step="0.01" value="<%= r.lot_plus %>" required>
+                  </label>
+
+                  <label>เซฟ T START
+                    <input name="t_start" type="number" step="1" value="<%= val(r.t_start) %>">
+                  </label>
+
+                  <label>เซฟ T STOP
+                    <input name="t_stop" type="number" step="1" value="<%= val(r.t_stop) %>">
+                  </label>
+
+                  <label>กลาง T START
+                    <input name="medium_t_start" type="number" step="1" value="<%= val(r.medium_t_start) %>">
+                  </label>
+
+                  <label>กลาง T STOP
+                    <input name="medium_t_stop" type="number" step="1" value="<%= val(r.medium_t_stop) %>">
+                  </label>
+
+                  <label>รวบไว T START
+                    <input name="fast_t_start" type="number" step="1" value="<%= val(r.fast_t_start) %>">
+                  </label>
+
+                  <label>รวบไว T STOP
+                    <input name="fast_t_stop" type="number" step="1" value="<%= val(r.fast_t_stop) %>">
+                  </label>
+
+                  <label class="check-row">
+                    <input name="is_active" type="checkbox" <%= r.is_active ? 'checked' : '' %>>
+                    เปิดใช้งาน
+                  </label>
+
+                  <div class="form-actions">
+                    <button class="btn primary" type="submit">บันทึกแก้ไข</button>
+                    <button class="btn ghost" type="button" onclick="toggleEdit('edit-<%= r.id %>')">ปิด</button>
+                  </div>
+                </form>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function openCreateForm() {
+  const box = document.getElementById('createBox');
+  if (box) box.hidden = false;
+}
+
+function closeCreateForm() {
+  const box = document.getElementById('createBox');
+  if (box) box.hidden = true;
+}
+
+function toggleEdit(id) {
+  const row = document.getElementById(id);
+  if (!row) return;
+  row.hidden = !row.hidden;
+}
+
+document.addEventListener('DOMContentLoaded', function () {
+  const search = document.getElementById('strategySearch');
+  if (!search) return;
+
+  search.addEventListener('input', function () {
+    const q = search.value.toLowerCase().trim();
+    document.querySelectorAll('.data-row').forEach(function (row) {
+      const text = row.innerText.toLowerCase();
+      row.style.display = text.includes(q) ? '' : 'none';
+
+      const next = row.nextElementSibling;
+      if (next && next.classList.contains('edit-row')) {
+        next.hidden = true;
+      }
+    });
+  });
+});
+</script>
+
+<%- include('../partials/admin-shell-end') %>

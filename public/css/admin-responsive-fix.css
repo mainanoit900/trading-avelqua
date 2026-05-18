@@ -1,0 +1,400 @@
+/* =========================================================
+   ADMIN RESPONSIVE FIX - TRADING AVELQUA
+   ปรับเฉพาะหน้าผู้ดูแลระบบให้พอดีกับทุกหน้าจอ
+   ไม่แตะ route / data / form name / logic ใด ๆ
+   ========================================================= */
+
+html{
+  width:100%;
+  min-height:100%;
+  overflow-x:hidden;
+  -webkit-text-size-adjust:100%;
+}
+
+body{
+  width:100%;
+  min-height:100%;
+  max-width:100vw;
+  overflow-x:hidden;
+}
+
+/* ===== Desktop layout: เมนูซ้ายไม่เลื่อนเอง พื้นหลังยืดตามเนื้อหากลาง ===== */
+.admin-shell,
+.portal-shell{
+  display:grid !important;
+  grid-template-columns:clamp(250px, 19vw, 300px) minmax(0, 1fr) !important;
+  width:100% !important;
+  max-width:100vw !important;
+  min-height:100vh !important;
+  align-items:stretch !important;
+}
+
+.sidebar{
+  position:relative !important;
+  top:auto !important;
+  height:auto !important;
+  min-height:100% !important;
+  max-height:none !important;
+  align-self:stretch !important;
+  overflow:visible !important;
+  overflow-y:visible !important;
+  overflow-x:hidden !important;
+  background:linear-gradient(180deg,rgba(5,11,22,.98),rgba(8,16,31,.96)) !important;
+  border-right:1px solid rgba(148,163,184,.16) !important;
+  box-sizing:border-box !important;
+}
+
+.sidebar-footer{
+  margin-top:auto !important;
+}
+
+.content-shell{
+  width:100% !important;
+  max-width:100% !important;
+  min-width:0 !important;
+  overflow:visible !important;
+}
+
+.content-shell,
+.card,
+.form-card,
+.topbar,
+.grid-2,
+.grid-3,
+.two-col,
+.three-col,
+.stats-grid,
+.data-panel,
+.accordion-item,
+.accordion-body,
+.table-wrap,
+.coupon-table-wrap,
+.admin-users-page,
+.admin-users-card,
+.admin-scoin-page,
+.scoin-admin-page,
+.coupon-admin-page,
+.coupon-card{
+  min-width:0 !important;
+  max-width:100% !important;
+}
+
+.card,
+.form-card,
+.data-panel,
+.list-item,
+.row-card,
+.stat-card,
+.coupon-card{
+  overflow-wrap:anywhere;
+}
+
+.card-head,
+.coupon-page-head,
+.coupon-section-head,
+.admin-users-head,
+.scoin-head,
+.print-toolbar,
+.topbar{
+  display:flex;
+  align-items:flex-start;
+  justify-content:space-between;
+  gap:14px;
+  flex-wrap:wrap;
+}
+
+.topbar-actions,
+.form-actions,
+.inline-actions,
+.toolbar,
+.coupon-bulk-actions,
+.kpi-row{
+  max-width:100%;
+  min-width:0;
+}
+
+.topbar-actions .ghost-btn,
+.form-actions .btn,
+.inline-actions .btn,
+.toolbar .btn,
+.coupon-bulk-actions .btn{
+  white-space:normal;
+  text-align:center;
+}
+
+input,
+select,
+textarea,
+button,
+.btn,
+.ghost-btn{
+  max-width:100%;
+}
+
+.form-grid,
+.coupon-form-grid,
+.admin-user-form,
+.admin-filter-form{
+  min-width:0;
+}
+
+.form-grid > *,
+.coupon-form-grid > *,
+.admin-user-form > *,
+.admin-filter-form > *{
+  min-width:0;
+}
+
+.table-wrap,
+.coupon-table-wrap,
+.admin-users-table-wrap,
+.scoin-table-wrap,
+.receipt-table-wrap{
+  width:100%;
+  max-width:100%;
+  overflow-x:auto !important;
+  overflow-y:hidden !important;
+  -webkit-overflow-scrolling:touch;
+}
+
+table,
+.coupon-table,
+.admin-users-table,
+.scoin-table{
+  max-width:none;
+}
+
+.chart-row{
+  grid-template-columns:minmax(72px, 110px) minmax(0,1fr) minmax(76px, 110px) !important;
+}
+
+.lang-menu{
+  max-width:calc(100vw - 28px);
+}
+
+/* Tablet: เมนูซ้ายอยู่บน แต่ไม่ทำ sidebar scroll แยก */
+@media (max-width: 1100px){
+  .admin-shell,
+  .portal-shell{
+    grid-template-columns:1fr !important;
+  }
+
+  .sidebar{
+    position:relative !important;
+    top:auto !important;
+    height:auto !important;
+    min-height:auto !important;
+    max-height:none !important;
+    overflow:visible !important;
+    border-right:0 !important;
+    border-bottom:1px solid var(--line);
+    padding:12px !important;
+    gap:10px !important;
+  }
+
+  .brand-box{
+    width:max-content;
+    max-width:100%;
+    padding:12px 14px !important;
+    border-radius:18px !important;
+  }
+
+  .brand-mark{
+    width:44px !important;
+    height:44px !important;
+    border-radius:14px !important;
+  }
+
+  .brand-title{
+    font-size:17px !important;
+    white-space:nowrap;
+  }
+
+  .nav-group{
+    display:block !important;
+  }
+
+  .nav-group-title{
+    display:none !important;
+  }
+
+  .nav-links{
+    display:flex !important;
+    gap:8px !important;
+    overflow-x:auto;
+    overflow-y:hidden;
+    padding-bottom:4px;
+    scrollbar-width:thin;
+  }
+
+  .nav-links a{
+    flex:0 0 auto;
+    white-space:nowrap;
+    padding:10px 12px !important;
+    border-radius:14px !important;
+    transform:none !important;
+  }
+
+  .sidebar-footer{
+    display:none !important;
+  }
+
+  .content-shell{
+    padding:16px !important;
+  }
+
+  .stats-grid.cols-6,
+  .stats-grid.cols-4{
+    grid-template-columns:repeat(2, minmax(0,1fr)) !important;
+  }
+
+  .grid-2,
+  .grid-3,
+  .two-col,
+  .three-col,
+  .coupon-grid-top,
+  .receipt-grid,
+  .admin-users-grid,
+  .scoin-admin-grid{
+    grid-template-columns:1fr !important;
+  }
+
+  .form-grid.three,
+  .form-grid.two,
+  .coupon-form-grid,
+  .admin-user-form,
+  .checkbox-grid{
+    grid-template-columns:repeat(2, minmax(0,1fr)) !important;
+  }
+}
+
+/* Mobile */
+@media (max-width: 640px){
+  :root{ --radius:20px; }
+
+  .sidebar{ padding:10px !important; }
+
+  .brand-box{ width:100%; }
+
+  .brand-kicker{ font-size:10px !important; }
+
+  .brand-title{ font-size:16px !important; }
+
+  .nav-links a{
+    font-size:13px;
+    padding:9px 10px !important;
+  }
+
+  .content-shell{
+    padding:12px !important;
+    gap:12px !important;
+  }
+
+  .topbar{
+    padding:16px !important;
+    border-radius:20px !important;
+  }
+
+  .topbar h1{ font-size:22px !important; }
+
+  .topbar-actions{
+    width:100%;
+    display:grid !important;
+    grid-template-columns:1fr 1fr;
+    gap:8px !important;
+  }
+
+  .lang-dropdown{ grid-column:1 / -1; }
+
+  .lang-trigger,
+  .topbar-actions .ghost-btn{
+    width:100%;
+    justify-content:center;
+  }
+
+  .lang-menu{
+    left:0;
+    right:auto;
+    width:100%;
+    min-width:0 !important;
+  }
+
+  .stats-grid.cols-6,
+  .stats-grid.cols-4,
+  .grid-2,
+  .grid-3,
+  .two-col,
+  .three-col,
+  .coupon-grid-top,
+  .coupon-head-stats,
+  .form-grid.two,
+  .form-grid.three,
+  .coupon-form-grid,
+  .admin-user-form,
+  .admin-filter-form,
+  .checkbox-grid,
+  .row-card,
+  .receipt-grid,
+  .scoin-admin-grid{
+    grid-template-columns:1fr !important;
+  }
+
+  .card,
+  .form-card,
+  .data-panel,
+  .stat-card,
+  .coupon-card{
+    padding:16px !important;
+    border-radius:20px !important;
+  }
+
+  .card-head h3,
+  .coupon-page-head h1,
+  .coupon-section-head h2{
+    font-size:20px !important;
+  }
+
+  .form-actions,
+  .inline-actions,
+  .coupon-bulk-actions,
+  .toolbar{
+    width:100%;
+    display:grid !important;
+    grid-template-columns:1fr;
+  }
+
+  .form-actions .btn,
+  .inline-actions .btn,
+  .coupon-bulk-actions .btn,
+  .toolbar .btn,
+  .toolbar input,
+  .toolbar select{
+    width:100% !important;
+  }
+
+  .accordion-item summary{
+    grid-template-columns:1fr !important;
+    gap:8px !important;
+    padding:14px 16px !important;
+  }
+
+  .accordion-body{
+    padding:0 16px 16px !important;
+  }
+
+  .chart-row{
+    grid-template-columns:1fr !important;
+    gap:6px !important;
+  }
+
+  .coupon-code{ font-size:20px !important; }
+}
+
+@media (max-width: 420px){
+  .topbar-actions{ grid-template-columns:1fr; }
+  .stat-card strong{ font-size:26px !important; }
+  .brand-mark{
+    width:40px !important;
+    height:40px !important;
+  }
+}

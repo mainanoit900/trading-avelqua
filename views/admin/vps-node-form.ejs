@@ -1,0 +1,133 @@
+<%- include('../partials/head', { pageTitle: pageTitle || 'แก้ไข Windows VPS', pageCss: 'admin-panel.css' }) %>
+<%- include('../partials/admin-shell') %>
+
+<%
+const n = node || {};
+const nodeId = n.id || '';
+const token = n.agent_token || '';
+const tokenMasked = token ? ('•'.repeat(Math.max(12, token.length - 8)) + token.slice(-8)) : '-';
+%>
+
+<section class="admin-page">
+  <div class="admin-page-header">
+    <div>
+      <div class="admin-kicker">ศูนย์ควบคุมระบบ</div>
+      <h1>แก้ไข Windows VPS</h1>
+    </div>
+    <div class="admin-actions">
+      <a class="btn btn-secondary" href="/admin/vps">ภาพรวม</a>
+      <a class="btn btn-secondary" href="/logout">ออกจากระบบ</a>
+    </div>
+  </div>
+
+  <% if (success) { %>
+    <div class="alert alert-success"><%= success %></div>
+  <% } %>
+  <% if (error) { %>
+    <div class="alert alert-danger"><%= error %></div>
+  <% } %>
+
+  <h2>แก้ไข Windows VPS</h2>
+  <p>ตั้งค่า Agent, Alarm, Folder สำหรับ Windows VPS</p>
+
+  <a class="btn btn-secondary" href="/admin/vps">กลับหน้า VPS</a>
+
+  <form method="POST" action="/admin/vps/<%= nodeId %>/update" class="admin-card" style="margin-top:24px;padding:24px;border-radius:22px;">
+    <h3>ข้อมูล Windows VPS</h3>
+
+    <label>ชื่อ VPS</label>
+    <input class="form-control" name="node_name" value="<%= n.node_name || '' %>">
+
+    <label>IP Address</label>
+    <input class="form-control" name="ip_address" value="<%= n.ip_address || '' %>">
+
+    <label>รองรับ Port สูงสุด</label>
+    <input class="form-control" name="max_ports" type="number" value="<%= n.max_ports || 20 %>">
+
+    <label>รองรับ Lot สูงสุด</label>
+    <input class="form-control" name="max_lots" type="number" step="0.01" value="<%= n.max_lots || n.max_lot || 30 %>">
+
+    <h3 style="margin-top:24px;">ตั้งค่า Alarm</h3>
+
+    <label>CPU เตือนเมื่อเกิน (%)</label>
+    <input class="form-control" name="cpu_alarm" type="number" step="0.01" value="<%= n.cpu_alarm || n.alarm_cpu_percent || 80 %>">
+
+    <label>RAM เตือนเมื่อเกิน (%)</label>
+    <input class="form-control" name="ram_alarm" type="number" step="0.01" value="<%= n.ram_alarm || n.alarm_ram_percent || 85 %>">
+
+    <label>Ping เตือนเมื่อเกิน (ms)</label>
+    <input class="form-control" name="ping_alarm" type="number" step="0.01" value="<%= n.ping_alarm || n.alarm_ping_ms || 150 %>">
+
+    <h3 style="margin-top:24px;">Folder บน Windows</h3>
+
+    <label>Folder Port หลัก</label>
+    <input class="form-control" name="bot_folder" value="<%= n.bot_folder || n.allowed_folder || 'C:\\AvelquaBots' %>">
+
+    <label>Folder Agent</label>
+    <input class="form-control" name="agent_folder" value="<%= n.agent_folder || 'C:\\avelqua-windows-agent' %>">
+
+    <label>Agent URL</label>
+    <input class="form-control" name="agent_url" value="<%= n.agent_url || '' %>">
+
+    <div style="margin-top:20px;display:flex;gap:10px;flex-wrap:wrap;">
+      <button class="btn btn-primary" type="submit">บันทึก VPS เท่านั้น</button>
+      <a class="btn btn-secondary" href="/admin/vps">ยกเลิก</a>
+    </div>
+  </form>
+
+  <div class="admin-card" style="margin-top:24px;padding:24px;border-radius:22px;">
+    <h3>Agent TOKEN</h3>
+    <p>สร้าง TOKEN ใหม่จะ revoke TOKEN เก่า และบันทึกประวัติผู้กดสร้าง</p>
+
+    <form method="POST" action="/admin/vps/<%= nodeId %>/regenerate-token" style="margin-bottom:16px;">
+      <button class="btn btn-primary" type="submit" onclick="return confirm('สร้าง Agent TOKEN ใหม่ และ revoke token เก่าใช่ไหม?')">
+        🔄 สร้าง Agent TOKEN ใหม่
+      </button>
+    </form>
+
+    <label>TOKEN ปัจจุบัน</label>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;">
+      <input id="agentTokenInput" class="form-control" style="flex:1;min-width:280px;" type="password" value="<%= token %>" readonly>
+      <button class="btn btn-secondary" type="button" onclick="toggleToken()">👁️ แสดง/ซ่อน</button>
+      <button class="btn btn-secondary" type="button" onclick="copyToken()">📋 Copy TOKEN</button>
+    </div>
+    <small style="display:block;margin-top:8px;opacity:.75;">Masked: <%= tokenMasked %></small>
+  </div>
+
+  <div class="admin-card" style="margin-top:24px;padding:24px;border-radius:22px;">
+    <h3>Agent Update</h3>
+    <p>อัปเดต agent.ps1 จากไฟล์กลางบน Server โดยไม่แก้ผ่าน textarea เพื่อป้องกัน encoding พัง</p>
+
+    <div style="display:flex;gap:10px;flex-wrap:wrap;">
+      <form method="POST" action="/admin/vps/<%= nodeId %>/update-agent-file">
+        <button class="btn btn-primary" type="submit" onclick="return confirm('อัปเดต agent.ps1 จากไฟล์กลางไปยัง VPS นี้ใช่ไหม?')">
+          🚀 อัปเดต Agent จากไฟล์กลาง
+        </button>
+      </form>
+
+      <a class="btn btn-secondary" href="/admin/vps/<%= nodeId %>/ports">ไปหน้า Port</a>
+    </div>
+  </div>
+</section>
+
+<script>
+function toggleToken(){
+  const el = document.getElementById('agentTokenInput');
+  el.type = el.type === 'password' ? 'text' : 'password';
+}
+
+async function copyToken(){
+  const el = document.getElementById('agentTokenInput');
+  try {
+    await navigator.clipboard.writeText(el.value || '');
+    alert('Copy TOKEN แล้ว');
+  } catch(e) {
+    el.type = 'text';
+    el.select();
+    document.execCommand('copy');
+    alert('Copy TOKEN แล้ว');
+  }
+}
+</script>
+
+<%- include('../partials/admin-shell-end') %>

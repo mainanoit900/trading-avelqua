@@ -1,0 +1,374 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const txs = Array.isArray(transactions) ? transactions : [];
+const orders = Array.isArray(marketOrders) ? marketOrders : [];
+const summary = marketSummary || {};
+const walletCode = (wallet && wallet.wallet_code) || '';
+const localeCode = String(lang || 'th').toLowerCase() === 'th' ? 'th-TH' : 'en-US';
+const verifiedBank = typeof bankAccount !== 'undefined' ? (bankAccount || null) : null;
+
+function fmtNum(value, min = 2, max = 4) {
+  return Number(value || 0).toLocaleString(localeCode, {
+    minimumFractionDigits: min,
+    maximumFractionDigits: max
+  });
+}
+function fmtMoney(value) {
+  return Number(value || 0).toLocaleString(localeCode, {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2
+  });
+}
+
+function txLabel(tx) {
+  const type = String((tx && tx.tx_type) || '');
+  const level = Number((tx && tx.level_no) || 0);
+  if (/^referral_level_[1-5]_bonus$/.test(type)) {
+    const foundLevel = type.match(/^referral_level_([1-5])_bonus$/);
+    return `โบนัสสายงานชั้น ${foundLevel ? foundLevel[1] : level}`;
+  }
+  const labels = {
+    package_reward: 'ซื้อแพ็กเกจ ได้ Scoin 30%',
+    referral_first_purchase_bonus: 'โบนัสแนะนำตรงครั้งแรก 60%',
+    referral_level_bonus: level ? `โบนัสสายงานชั้น ${level}` : 'โบนัสสายงาน 5 ชั้น',
+    referral_reward: level ? `โบนัสสายงานชั้น ${level}` : 'โบนัสสายงาน',
+    qualified_referral_bonus: 'โบนัสแนะนำตรงครั้งแรก 60%',
+    market_buy: 'ซื้อ Scoin จากโฮส',
+    market_sell: 'ขาย Scoin ให้โฮส',
+    host_buy_scoin: 'ซื้อ Scoin จากโฮส',
+    host_sell_scoin: 'ขาย Scoin ให้โฮส',
+    package_purchase_scoin: 'ชำระแพ็กเกจด้วย Scoin',
+    transfer_in: 'รับโอน Scoin',
+    transfer_out: 'โอน Scoin',
+    burn_liquidity: 'Burn / Liquidity',
+    burn: 'Burn Scoin'
+  };
+  return labels[type] || type || '-';
+}
+function txSource(tx) {
+  const type = String((tx && tx.tx_type) || '');
+  const meta = (tx && tx.meta_json && typeof tx.meta_json === 'object') ? tx.meta_json : {};
+  if (type === 'package_reward') return `จากการซื้อแพ็กเกจ${meta.percent ? ' ' + meta.percent + '%' : ' 30%'}`;
+  if (type === 'referral_first_purchase_bonus' || type === 'qualified_referral_bonus') return 'จากเพื่อนแนะนำตรงซื้อแพ็กเกจครั้งแรก 60%';
+  if (/^referral_level_[1-5]_bonus$/.test(type)) {
+    const foundLevel = type.match(/^referral_level_([1-5])_bonus$/);
+    return `จากโบนัสสายงานชั้น ${foundLevel ? foundLevel[1] : Number((tx && tx.level_no) || meta.level || 0) || '-'}`;
+  }
+  if (type === 'referral_level_bonus' || type === 'referral_reward') return `จากโบนัสสายงานชั้น ${Number((tx && tx.level_no) || meta.level || 0) || '-'}`;
+  if (type === 'market_buy' || type === 'host_buy_scoin') return 'ซื้อ Scoin จากโฮส / ระบบ';
+  if (type === 'market_sell' || type === 'host_sell_scoin') return 'ขาย Scoin ให้โฮส / ระบบ';
+  if (type === 'package_purchase_scoin') return 'ใช้ Scoin ชำระแพ็กเกจ';
+  if (type === 'burn_liquidity' || type === 'burn') return 'เผาเหรียญ / เติมสภาพคล่อง';
+  return (tx && (tx.ref_user_name || tx.ref_user_email)) || '-';
+}
+
+function fmtDate(value) {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+      hour12: false
+    });
+  } catch (e) {
+    return '-';
+  }
+}
+%>
+<%- include('../partials/app-shell') %>
+
+<style>
+.wallet-page{display:grid;gap:20px}.wallet-hero{position:relative;overflow:hidden}.wallet-hero::before,.wallet-hero::after{content:"";position:absolute;border-radius:999px;pointer-events:none;filter:blur(10px);opacity:.45}.wallet-hero::before{width:260px;height:260px;right:-70px;top:-80px;background:radial-gradient(circle,rgba(91,128,255,.30),transparent 70%)}.wallet-hero::after{width:220px;height:220px;left:-60px;bottom:-80px;background:radial-gradient(circle,rgba(130,82,255,.22),transparent 70%)}.wallet-hero-inner{position:relative;z-index:1;display:flex;justify-content:space-between;gap:16px;flex-wrap:wrap;align-items:center}.wallet-title-wrap h3{margin:0;font-size:28px;line-height:1.15}.wallet-title-wrap p{margin:8px 0 0}.wallet-chip{display:inline-flex;align-items:center;gap:8px;min-height:32px;padding:6px 12px;border-radius:999px;background:rgba(109,84,255,.18);border:1px solid rgba(120,118,255,.24);color:#d9d1ff;font-size:12px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;margin-bottom:12px}.wallet-kpis,.wallet-grid-3{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}.wallet-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}.wallet-stat,.wallet-summary-card,.wallet-mini-card{border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,rgba(8,18,36,.92) 0%,rgba(10,20,40,.78) 100%);border-radius:18px;padding:18px}.wallet-stat span,.wallet-summary-card span,.wallet-mini-card span{display:block;color:#8fa5ce;font-size:13px;margin-bottom:10px}.wallet-stat strong,.wallet-summary-card strong,.wallet-mini-card strong{display:block;font-size:24px;line-height:1.2;color:#fff;word-break:break-word}.wallet-code-box{border:1px solid rgba(130,154,197,.16);background:linear-gradient(180deg,rgba(10,22,43,.96) 0%,rgba(11,24,48,.82) 100%);border-radius:18px;padding:18px}.wallet-code-label{color:#8fa5ce;font-size:13px;margin-bottom:10px}.wallet-code-row{display:flex;gap:12px;align-items:center;justify-content:space-between;flex-wrap:wrap}.wallet-code-value{font-size:24px;font-weight:800;letter-spacing:.06em;color:#fff;word-break:break-word}.wallet-actions,.wallet-btn-row,.wallet-market-actions{display:flex;gap:10px;flex-wrap:wrap;align-items:center}.wallet-note{margin-top:12px;color:#8fa5ce;font-size:13px;line-height:1.7}.wallet-form{display:grid;gap:16px;margin-top:16px}.wallet-form-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:14px}.wallet-form label{display:block;margin-bottom:8px;color:#8fa5ce;font-size:13px}.wallet-form input,.wallet-form select,.wallet-form textarea{width:100%;height:46px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px}.wallet-form textarea{min-height:96px;padding:12px 14px;resize:vertical}.wallet-table-wrap{overflow:auto;margin-top:16px;border-radius:16px;border:1px solid rgba(130,154,197,.12)}.wallet-table{width:100%;min-width:1080px;border-collapse:collapse}.wallet-table th,.wallet-table td{padding:12px;text-align:left;border-top:1px solid rgba(130,154,197,.12);vertical-align:middle}.wallet-table th{color:#8fa5ce;font-weight:700;background:rgba(255,255,255,.02)}.wallet-badge{display:inline-flex;align-items:center;justify-content:center;min-height:28px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:700;border:1px solid transparent}.wallet-badge.buy,.wallet-badge.approved,.wallet-badge.in,.wallet-badge.verified{color:#9df2c2;background:rgba(23,201,100,.14);border-color:rgba(23,201,100,.22)}.wallet-badge.sell,.wallet-badge.cancelled,.wallet-badge.out{color:#ffb8c6;background:rgba(255,92,122,.14);border-color:rgba(255,92,122,.22)}.wallet-badge.pending,.wallet-badge.pending_payment{color:#ffe2a8;background:rgba(255,184,77,.14);border-color:rgba(255,184,77,.22)}.wallet-empty{padding:18px;color:#8fa5ce}.wallet-muted{color:#8fa5ce}.wallet-info-bar{display:flex;gap:14px;flex-wrap:wrap;align-items:center;justify-content:space-between;border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,rgba(9,20,40,.96) 0%,rgba(8,18,36,.86) 100%);border-radius:18px;padding:18px}.wallet-info-status{display:grid;gap:8px}.wallet-link-btn{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;border-radius:12px;text-decoration:none;font-weight:700;color:#fff;background:linear-gradient(135deg,#3456ff 0%,#6d3dff 100%)}.wallet-cancel-btn{display:inline-flex;align-items:center;justify-content:center;min-height:42px;padding:0 16px;border-radius:12px;border:1px solid rgba(255,92,122,.28);text-decoration:none;font-weight:700;color:#ffb8c6;background:rgba(255,92,122,.12);cursor:pointer}
+@media (max-width:1100px){.wallet-kpis,.wallet-grid-3,.wallet-grid-2,.wallet-form-grid-2{grid-template-columns:1fr 1fr}}
+@media (max-width:720px){.wallet-kpis,.wallet-grid-3,.wallet-grid-2,.wallet-form-grid-2{grid-template-columns:1fr}.wallet-code-value{font-size:18px}.wallet-title-wrap h3{font-size:22px}}
+.wallet-main-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:46px;
+  padding:0 18px;
+  border-radius:14px;
+  border:1px solid rgba(130,154,197,.18);
+  font-weight:800;
+  color:#fff;
+  text-decoration:none;
+  cursor:pointer;
+  box-shadow:0 12px 24px rgba(0,0,0,.18);
+}
+
+.wallet-main-btn.buy{
+  background:linear-gradient(135deg,#17c964 0%,#22d3ee 100%);
+}
+
+.wallet-main-btn.sell{
+  background:linear-gradient(135deg,#ff5c7a 0%,#f59e0b 100%);
+}
+
+.wallet-main-btn.transfer{
+  background:linear-gradient(135deg,#3456ff 0%,#6d3dff 100%);
+}
+
+.wallet-main-btn.wallet{
+  background:linear-gradient(135deg,#8b5cf6 0%,#38bdf8 100%);
+}
+
+.wallet-main-btn.secondary{
+  background:rgba(255,255,255,.08);
+  color:#dbeafe;
+}
+
+.wallet-main-btn:hover{
+  transform:translateY(-1px);
+  filter:brightness(1.08);
+}
+</style>
+
+<div class="wallet-page">
+  <section class="card wallet-hero">
+    <div class="card-head wallet-hero-inner">
+      <div class="wallet-title-wrap">
+        <div class="wallet-chip">กระเป๋า Scoin</div>
+        <h3>ระบบซื้อขาย Scoin กับโฮส</h3>
+        <p class="muted">ซื้อ Scoin, ขายคืนโฮส, โอนให้ผู้ใช้อื่น, และจัดการบัญชีรับเงินในหน้าเดียว</p>
+      </div>
+    </div>
+
+    <div class="wallet-kpis" style="margin-top:16px;">
+      <div class="wallet-stat"><span>ยอดคงเหลือ Scoin</span><strong><%= fmtNum(scoinBalance, 2, 4) %> <%= (scoinSettings && scoinSettings.coin_symbol) || 'SCOIN' %></strong></div>
+      <div class="wallet-stat"><span>มูลค่าโดยประมาณ</span><strong>฿<%= fmtMoney(scoinValueThb) %></strong></div>
+      <div class="wallet-stat"><span>ราคา 1 Scoin</span><strong>฿<%= fmtNum((scoinSettings && scoinSettings.current_price_thb) || 0.10, 2, 4) %></strong></div>
+      <div class="wallet-stat"><span>ค่าธรรมเนียมตลาด/โอน</span><strong><%= fmtNum((scoinSettings && scoinSettings.transfer_fee_percent) || 1.2, 2, 2) %>%</strong></div>
+    </div>
+  </section>
+
+  <section class="wallet-info-bar">
+    <div class="wallet-info-status">
+      <div class="wallet-muted">บัญชีรับเงินสำหรับขาย Scoin</div>
+      <% if (verifiedBank && verifiedBank.is_verified) { %>
+        <div><span class="wallet-badge verified">verified</span> <strong><%= verifiedBank.bank_name %></strong> / <%= verifiedBank.account_name %> / <%= verifiedBank.account_number_masked %></div>
+      <% } else { %>
+        <div><span class="wallet-badge pending">ยังไม่ verified</span> ต้องยืนยัน OTP ทางอีเมลก่อนจึงจะขาย Scoin ได้</div>
+      <% } %>
+    </div>
+    <div class="wallet-actions">
+      <a class="wallet-link-btn" href="/app/bank-accounts">ไปหน้าบัญชีรับเงิน</a>
+    </div>
+  </section>
+
+  <section class="wallet-grid-2">
+    <section class="card">
+      <div class="card-head"><h3>รหัสกระเป๋า Scoin</h3></div>
+      <div class="wallet-code-box">
+        <div class="wallet-code-label">ใช้รหัสนี้สำหรับรับและโอน Scoin</div>
+        <div class="wallet-code-row">
+          <div class="wallet-code-value" id="walletCodeText"><%= walletCode || 'ยังไม่มีรหัสกระเป๋า' %></div>
+          <div class="wallet-actions">
+            <form method="post" action="/app/scoin-wallet/create-wallet"><button type="submit" class="wallet-main-btn wallet">💳 สร้างรหัสกระเป๋า Scoin</button></form>
+            <button type="button" class="wallet-main-btn secondary" onclick="copyWalletCode()">📋 คัดลอกรหัส</button>
+          </div>
+        </div>
+        <div class="wallet-note">รูปแบบรหัสกระเป๋า: <strong>SCN-XXXX-XXXX-XXXX-XXXX</strong></div>
+      </div>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h3>สถานะตลาดของฉัน</h3></div>
+      <div class="wallet-grid-3" style="margin-top:16px;grid-template-columns:repeat(2,1fr);">
+        <div class="wallet-summary-card"><span>คำสั่งทั้งหมด</span><strong><%= Number(summary.total_orders || 0) %></strong></div>
+        <div class="wallet-summary-card"><span>รออนุมัติ</span><strong><%= Number(summary.pending_orders || 0) %></strong></div>
+        <div class="wallet-summary-card"><span>สำเร็จ</span><strong><%= Number(summary.approved_orders || 0) %></strong></div>
+        <div class="wallet-summary-card"><span>ยกเลิก/ปฏิเสธ</span><strong><%= Number(summary.cancelled_orders || 0) %></strong></div>
+      </div>
+    </section>
+  </section>
+
+  <section class="wallet-grid-2">
+    <section class="card">
+      <div class="card-head"><h3>โอน Scoin ให้ผู้ใช้อื่น</h3></div>
+      <form method="POST" action="/app/scoin-wallet/transfer-by-wallet" class="wallet-form">
+        <div><label>รหัสกระเป๋าปลายทาง</label><input type="text" name="to_wallet_code" required placeholder="SCN-XXXX-XXXX-XXXX-XXXX"></div>
+        <div><label>จำนวน Scoin</label><input type="number" name="amount" min="0.0001" step="0.0001" required placeholder="0.0000"></div>
+        <div class="wallet-btn-row"><button type="submit" class="wallet-main-btn transfer">🔁 โอน Scoin ให้ผู้ใช้อื่น</button></div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h3>ซื้อ Scoin</h3></div>
+      <form method="POST" action="/app/scoin-market/order" class="wallet-form">
+        <input type="hidden" name="order_type" value="buy">
+        <div class="wallet-form-grid-2">
+          <div><label>จำนวน Scoin</label><input id="buy_scoin_amount" type="number" name="scoin_amount" min="0" step="0.0001" placeholder="0.0000"></div>
+          <div><label>จำนวนเงินบาท</label><input id="buy_amount_thb" type="number" name="amount_thb" min="0" step="0.01" placeholder="0.00"></div>
+        </div>
+        <div>
+          <label>ช่องทางชำระเงิน</label>
+          <select name="payment_method" required>
+            <option value="">เลือกช่องทางชำระเงิน</option>
+            <option value="promptpay_qr">PromptPay QR</option>
+            <option value="credit_card">บัตรเครดิต / เดบิต</option>
+          </select>
+        </div>
+        <div><label>หมายเหตุ</label><input type="text" name="note" placeholder="เช่น ซื้อเข้ากระเป๋าหลัก"></div>
+        <div class="wallet-btn-row"><button type="submit" class="wallet-main-btn buy">🟢 ซื้อ Scoin</button></div>
+      </form>
+    </section>
+  </section>
+
+  <section class="wallet-grid-2">
+    <section class="card">
+      <div class="card-head"><h3>ขาย Scoin คืนโฮส</h3></div>
+      <form method="POST" action="/app/scoin-market/order" class="wallet-form">
+        <input type="hidden" name="order_type" value="sell">
+        <div class="wallet-form-grid-2">
+          <div><label>จำนวน Scoin</label><input id="sell_scoin_amount" type="number" name="scoin_amount" min="0" step="0.0001" placeholder="0.0000"></div>
+          <div><label>จำนวนเงินบาท</label><input id="sell_amount_thb" type="number" name="amount_thb" min="0" step="0.01" placeholder="0.00"></div>
+        </div>
+        <div><label>บัญชีรับเงิน</label><input type="text" readonly value="<%= verifiedBank ? [verifiedBank.bank_name, verifiedBank.account_name, verifiedBank.account_number_masked].filter(Boolean).join(' / ') : 'ยังไม่มีบัญชีรับเงิน verified' %>"></div>
+        <div><label>หมายเหตุ</label><input type="text" name="note" placeholder="เช่น ขายคืนโฮส รอ admin อนุมัติ"></div>
+        <div class="wallet-btn-row">
+          <% if (verifiedBank && verifiedBank.is_verified) { %>
+            <button type="submit" class="wallet-main-btn sell">🔴 ขาย Scoin คืนโฮส</button>
+          <% } else { %>
+            <a class="wallet-link-btn" href="/app/bank-accounts">เพิ่มและยืนยันบัญชีรับเงินก่อน</a>
+          <% } %>
+        </div>
+      </form>
+    </section>
+
+    <section class="card">
+      <div class="card-head"><h3>สิ่งที่จะเกิดขึ้น</h3></div>
+      <div class="wallet-form" style="margin-top:0;">
+        <div class="wallet-mini-card"><span>ซื้อ Scoin</span><strong>สร้างคำสั่ง → ไปหน้าชำระเงิน → callback/gateway → เติม Scoin</strong></div>
+        <div class="wallet-mini-card"><span>ขาย Scoin</span><strong>ต้องมีบัญชีรับเงิน verified → ส่งคำสั่งขาย → รอ admin อนุมัติ</strong></div>
+        <div class="wallet-mini-card"><span>บัญชีรับเงิน</span><strong>บันทึกบัญชี → ส่ง OTP ไป Email → ยืนยันแล้วค่อยขายได้</strong></div>
+      </div>
+    </section>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h3>ประวัติคำสั่งตลาด</h3></div>
+    <div class="wallet-table-wrap">
+      <table class="wallet-table">
+        <thead>
+          <tr>
+            <th>วันเวลา</th>
+            <th>ประเภท</th>
+            <th>จำนวน</th>
+            <th>ราคา</th>
+            <th>สุทธิ</th>
+            <th>ช่องทาง</th>
+            <th>สถานะ</th>
+            <th>หมายเหตุ</th>
+            <th>จัดการ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!orders.length) { %>
+            <tr><td colspan="9" class="wallet-empty">ยังไม่มีประวัติคำสั่งตลาด</td></tr>
+          <% } %>
+
+          <% orders.forEach(function(order){ %>
+            <tr>
+              <td><%= fmtDate(order.created_at) %></td>
+              <td><span class="wallet-badge <%= String(order.order_type || '').toLowerCase() %>"><%= order.order_type || '-' %></span></td>
+              <td><%= fmtNum(order.scoin_amount, 2, 4) %></td>
+              <td>฿<%= fmtNum(order.price_thb, 2, 4) %></td>
+              <td>฿<%= fmtMoney(order.net_amount_thb) %></td>
+              <td><%= order.payment_method || '-' %></td>
+              <td><span class="wallet-badge <%= String(order.status || '').toLowerCase() %>"><%= order.status || '-' %></span></td>
+              <td><%= order.note || '-' %></td>
+              <td>
+                <% if (
+                  String(order.order_type || '').toLowerCase() === 'buy' &&
+                  String(order.status || '').toLowerCase() === 'pending' &&
+                  String(order.payment_status || '').toLowerCase() === 'pending'
+                ) { %>
+                  <div class="wallet-market-actions">
+                    <a class="wallet-link-btn" href="/app/scoin-market/payment/<%= order.id %>">ชำระเงินต่อ</a>
+                    <form method="POST" action="/app/scoin-market/order/<%= order.id %>/cancel" style="margin:0;">
+                      <button class="wallet-cancel-btn" type="submit">ยกเลิก</button>
+                    </form>
+                  </div>
+                <% } else { %>
+                  -
+                <% } %>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+<div class="wallet-actions" style="justify-content:flex-end;margin-top:12px;">
+  <% if (ordersPagination && ordersPagination.page > 1) { %>
+    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page - 1 %>&txs_page=<%= txsPagination.page %>">ก่อนหน้า</a>
+  <% } %>
+
+  <span class="wallet-muted">หน้า <%= ordersPagination.page %> / <%= ordersPagination.totalPages %></span>
+
+  <% if (ordersPagination && ordersPagination.page < ordersPagination.totalPages) { %>
+    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page + 1 %>&txs_page=<%= txsPagination.page %>">ถัดไป</a>
+  <% } %>
+</div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><h3>ประวัติธุรกรรม</h3></div>
+    <div class="wallet-table-wrap">
+      <table class="wallet-table">
+        <thead>
+          <tr>
+            <th>วันเวลา</th>
+            <th>ที่มา Scoin</th>
+            <th>รายละเอียด</th>
+            <th>ทิศทาง</th>
+            <th>จำนวน</th>
+            <th>ยอดก่อน</th>
+            <th>ยอดหลัง</th>
+            <th>อ้างอิง</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!txs.length) { %><tr><td colspan="8" class="wallet-empty">ยังไม่มีประวัติธุรกรรม</td></tr><% } %>
+          <% txs.forEach(function(tx){ %>
+            <tr>
+              <td><%= fmtDate(tx.created_at) %></td>
+              <td><strong><%= txLabel(tx) %></strong><br><small class="wallet-muted"><%= tx.tx_type || '-' %></small></td>
+              <td><%= txSource(tx) %></td>
+              <td><span class="wallet-badge <%= String(tx.direction || '').toLowerCase() %>"><%= tx.direction || '-' %></span></td>
+              <td><%= fmtNum(tx.amount,2,4) %></td>
+              <td><%= fmtNum(tx.balance_before,2,4) %></td>
+              <td><%= fmtNum(tx.balance_after,2,4) %></td>
+              <td><%= tx.ref_user_name || tx.ref_user_email || (tx.ref_payment_id ? ('Payment #' + tx.ref_payment_id) : '-') %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+<div class="wallet-actions" style="justify-content:flex-end;margin-top:12px;">
+  <% if (txsPagination && txsPagination.page > 1) { %>
+    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page %>&txs_page=<%= txsPagination.page - 1 %>">ก่อนหน้า</a>
+  <% } %>
+
+  <span class="wallet-muted">หน้า <%= txsPagination.page %> / <%= txsPagination.totalPages %></span>
+
+  <% if (txsPagination && txsPagination.page < txsPagination.totalPages) { %>
+    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page %>&txs_page=<%= txsPagination.page + 1 %>">ถัดไป</a>
+  <% } %>
+</div>
+<script>
+function copyWalletCode(){const text=document.getElementById('walletCodeText')?.innerText?.trim();if(!text||text==='ยังไม่มีรหัสกระเป๋า')return;navigator.clipboard.writeText(text).then(()=>alert('คัดลอกรหัสแล้ว')).catch(()=>alert('คัดลอกไม่สำเร็จ'));}
+const SCOIN_PRICE=<%= Number((scoinSettings && scoinSettings.current_price_thb) || 1) %>;
+function bindScoinThbPair(scoinId,thbId){const s=document.getElementById(scoinId),t=document.getElementById(thbId);if(!s||!t)return;let syncing=false;s.addEventListener('input',()=>{if(syncing)return;syncing=true;const v=Number(s.value||0);t.value=v>0?(v*SCOIN_PRICE).toFixed(2):'';syncing=false;});t.addEventListener('input',()=>{if(syncing)return;syncing=true;const v=Number(t.value||0);s.value=v>0?(v/SCOIN_PRICE).toFixed(4):'';syncing=false;});}
+bindScoinThbPair('buy_scoin_amount','buy_amount_thb');
+bindScoinThbPair('sell_scoin_amount','sell_amount_thb');
+</script>
+
+<%- include('../partials/app-shell-end') %>

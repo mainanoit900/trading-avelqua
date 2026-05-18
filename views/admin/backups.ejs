@@ -1,0 +1,112 @@
+<%- include('../partials/admin-shell') %>
+
+<section class="backup-admin-page">
+  <div class="backup-hero">
+    <div>
+      <div class="backup-kicker">SYSTEM SAFETY CENTER</div>
+      <h2>Backup / Restore ระบบ</h2>
+      <p>สำรองไฟล์ <code>/root/trading-avelqua</code> และฐานข้อมูล PostgreSQL ทั้งหมด เก็บล่าสุดไม่เกิน 3 ชุดอัตโนมัติ</p>
+    </div>
+    <div class="backup-hero-actions">
+      <form method="POST" action="/admin/backups/create" onsubmit="return confirm('ยืนยัน Backup ไฟล์เว็บและฐานข้อมูลตอนนี้?');">
+        <button class="btn primary" type="submit">สร้าง Backup ตอนนี้</button>
+      </form>
+      <form method="POST" action="/admin/backups/cron" class="cron-inline">
+        <input type="hidden" name="enabled" value="1" />
+        <label>ทุกวันอาทิตย์ เวลาไทย</label>
+        <input type="time" name="time" value="<%= cronTime || '03:00' %>" />
+        <button class="btn" type="submit">เปิด/ปรับ Auto Backup</button>
+      </form>
+      <% if (cron && cron.enabled) { %>
+        <form method="POST" action="/admin/backups/cron" onsubmit="return confirm('ปิด Auto Backup รายสัปดาห์?');">
+          <input type="hidden" name="enabled" value="0" />
+          <button class="btn danger-soft" type="submit">ปิด Auto Backup</button>
+        </form>
+      <% } %>
+    </div>
+  </div>
+
+  <% if (success) { %><div class="alert success"><%= success %></div><% } %>
+  <% if (error) { %><div class="alert error"><%= error %></div><% } %>
+
+  <div class="backup-grid">
+    <article class="backup-card">
+      <span>ที่เก็บ Backup</span>
+      <strong><%= backupRoot %></strong>
+      <small>ระบบจะลบชุดเก่าสุดเมื่อเกิน <%= keepLatest %> ชุด</small>
+    </article>
+    <article class="backup-card">
+      <span>Auto Backup</span>
+      <strong><%= cron && cron.enabled ? 'เปิดใช้งาน' : 'ปิดอยู่' %></strong>
+      <small><%= cron && cron.line ? cron.line : 'ยังไม่ได้ตั้ง cron' %></small>
+    </article>
+    <article class="backup-card">
+      <span>จำนวน Backup</span>
+      <strong><%= backups.length %> / <%= keepLatest %></strong>
+      <small>ล่าสุดอยู่ด้านบน</small>
+    </article>
+  </div>
+
+  <div class="backup-warning">
+    <strong>ระบบ Restore ปลอดภัยขึ้น:</strong>
+    ก่อน Restore ระบบจะสร้าง Backup ปัจจุบันให้อัตโนมัติก่อนเสมอ แต่ควรใช้เมื่อจำเป็นเท่านั้น
+  </div>
+
+  <section class="backup-table-card">
+    <div class="table-headline">
+      <div>
+        <h3>รายการ Backup ล่าสุด</h3>
+        <p>ไฟล์เว็บ + ฐานข้อมูล อยู่เป็นชุดเดียวกัน</p>
+      </div>
+    </div>
+
+    <div class="table-wrap">
+      <table class="backup-table">
+        <thead>
+          <tr>
+            <th>ชื่อชุด</th>
+            <th>วันที่/เวลาไทย</th>
+            <th>ไฟล์เว็บ</th>
+            <th>ฐานข้อมูล</th>
+            <th>สถานะ</th>
+            <th>Restore</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% if (!backups.length) { %>
+            <tr><td colspan="6" class="empty-cell">ยังไม่มี Backup</td></tr>
+          <% } %>
+          <% backups.forEach(function(item){ %>
+            <tr>
+              <td><code><%= item.name %></code></td>
+              <td><%= formatThaiDateTime(item.created_at) %></td>
+              <td><%= formatBytes(item.app_size) %></td>
+              <td><%= formatBytes(item.db_size) %></td>
+              <td>
+                <% if (item.has_app && item.has_db) { %>
+                  <span class="badge ok">พร้อมใช้</span>
+                <% } else { %>
+                  <span class="badge bad">ไฟล์ไม่ครบ</span>
+                <% } %>
+              </td>
+              <td>
+                <form method="POST" action="/admin/backups/restore" class="restore-form" onsubmit="return confirm('ยืนยัน Restore ชุดนี้? ระบบจะ Backup ปัจจุบันก่อน แล้วค่อย Restore');">
+                  <input type="hidden" name="name" value="<%= item.name %>" />
+                  <select name="mode">
+                    <option value="all">ไฟล์ + DB</option>
+                    <option value="files">เฉพาะไฟล์</option>
+                    <option value="db">เฉพาะ DB</option>
+                  </select>
+                  <label class="confirm-tick"><input type="checkbox" name="confirm" value="YES" required /> ยืนยัน</label>
+                  <button class="btn danger" type="submit">Restore</button>
+                </form>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</section>
+
+<%- include('../partials/admin-shell-end') %>

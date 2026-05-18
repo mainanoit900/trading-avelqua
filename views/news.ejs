@@ -1,0 +1,200 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const currentLang = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+const list = news || [];
+const aiEnabled = newsSettings?.openaiEnabled !== false;
+const autoTranslate = newsSettings?.autoTranslate !== false;
+const autoRefreshMinutes = Number(newsSettings?.autoRefreshMinutes || 15);
+const perPage = Number(newsSettings?.newsLimitPerPage || 9);
+const isAdmin = !!(user && user.role === 'admin');
+%>
+
+<%- include('partials/head', { pageCss: 'news.css', pageTitle: 'News | TRADING AVELQUA', lang: currentLang }) %>
+<%- include('partials/nav', { currentPath: '/news', user: user, lang: currentLang }) %>
+
+<main class="news-shell">
+  <% if (isAdmin) { %>
+    <section class="news-hero">
+      <div class="container news-hero-grid">
+        <div class="hero-copy glass-card">
+          <span class="hero-badge"><%= safeT('news.badge','AI News Center') %></span>
+          <h1 class="hero-title"><%= safeT('news.title','Latest market intelligence') %></h1>
+          <p class="hero-desc"><%= safeT('news.desc','Latest market and economic updates with optional AI analysis and bilingual display.') %></p>
+
+          <div class="hero-meta">
+            <div class="meta-pill">
+              <span class="meta-label"><%= safeT('news.total','Total news') %></span>
+              <strong><%= pagination?.totalItems || list.length %></strong>
+            </div>
+            <div class="meta-pill">
+              <span class="meta-label"><%= safeT('news.refresh_every','Refresh every') %></span>
+              <strong><%= autoRefreshMinutes %> <%= safeT('common.minutes','minutes') %></strong>
+            </div>
+            <div class="meta-pill <%= aiEnabled ? 'is-on' : 'is-off' %>">
+              <span class="meta-label"><%= safeT('news.ai_mode','AI mode') %></span>
+              <strong><%= aiEnabled ? safeT('common.enabled','Enabled') : safeT('common.disabled','Disabled') %></strong>
+            </div>
+          </div>
+        </div>
+
+        <div class="hero-panel glass-card">
+          <div class="panel-top">
+            <div>
+              <p class="panel-kicker"><%= safeT('news.live_settings','Live settings') %></p>
+              <h3><%= safeT('news.smart_feed','Smart News Feed') %></h3>
+            </div>
+            <span class="status-dot <%= aiEnabled ? 'on' : 'off' %>"></span>
+          </div>
+
+          <div class="panel-list">
+            <div class="panel-item">
+              <span><%= safeT('news.lang','Language') %></span>
+              <strong><%= currentLang.toUpperCase() %></strong>
+            </div>
+            <div class="panel-item">
+              <span><%= safeT('news.translate','Auto Translate') %></span>
+              <strong><%= autoTranslate ? safeT('common.enabled','Enabled') : safeT('common.disabled','Disabled') %></strong>
+            </div>
+            <div class="panel-item">
+              <span><%= safeT('news.limit','News per page') %></span>
+              <strong><%= perPage %></strong>
+            </div>
+          </div>
+
+          <div class="hero-actions">
+            <a class="btn btn-primary" href="/news?lang=<%= currentLang %>"><%= safeT('news.refresh_now','Refresh now') %></a>
+            <a class="btn btn-secondary" href="/admin#news-settings"><%= safeT('news.manage_settings','Manage settings') %></a>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="container news-toolbar-wrap">
+      <div class="news-toolbar glass-card">
+        <div class="toolbar-left">
+          <div class="toolbar-chip">
+            <span class="chip-dot"></span>
+            <%= safeT('news.auto_update','Auto update ready') %>
+          </div>
+          <div class="toolbar-chip">
+            <%= safeT('news.current_language','Current language') %>: <strong><%= currentLang.toUpperCase() %></strong>
+          </div>
+        </div>
+
+        <div class="toolbar-right">
+          <% ['th','en','lo','vi','my'].forEach(function(code){ %>
+            <a class="lang-btn <%= currentLang === code ? 'active' : '' %>" href="/news?lang=<%= code %>&page=<%= pagination?.page || 1 %>"><%= code.toUpperCase() %></a>
+          <% }) %>
+        </div>
+      </div>
+    </section>
+  <% } %>
+
+  <section class="container news-content">
+    <% if (!list.length) { %>
+      <div class="glass-card empty-state">
+        <div class="empty-icon">📰</div>
+        <h3><%= safeT('news.empty','No news available') %></h3>
+        <p class="muted"><%= safeT('news.empty_desc','Please check API settings or refresh interval in admin panel.') %></p>
+      </div>
+    <% } else { %>
+      <div class="news-grid">
+        <% list.forEach(function(item, index){ %>
+          <article class="glass-card news-card">
+            <% if (item.imageUrl) { %>
+              <div class="news-image-wrap">
+                <img class="news-image" src="<%= item.imageUrl %>" alt="<%= currentLang === 'th' ? (item.translatedTitle || item.title || 'news') : (item.title || item.translatedTitle || 'news') %>">
+              </div>
+            <% } else { %>
+              <div class="news-image-wrap no-image">
+                <div class="no-image-text">NO IMAGE</div>
+              </div>
+            <% } %>
+
+            <div class="news-card-body">
+              <div class="news-card-top">
+                <span class="category-badge"><%= item.category || 'general' %></span>
+                <span class="news-index">#<%= ((pagination?.page || 1) - 1) * (pagination?.perPage || list.length) + index + 1 %></span>
+              </div>
+
+              <h3 class="news-title"><%= currentLang === 'th' ? (item.translatedTitle || item.title || '-') : (item.title || item.translatedTitle || '-') %></h3>
+
+              <p class="news-body"><%= currentLang === 'th' ? (item.translatedBody || item.body || '-') : (item.body || item.translatedBody || '-') %></p>
+
+              <% if (item.analysis) { %>
+                <div class="analysis-box">
+                  <div class="analysis-head">
+                    <span>AI</span>
+                    <strong><%= safeT('news.ai_analysis','AI Analysis') %></strong>
+                  </div>
+                  <p><%= item.analysis %></p>
+                </div>
+              <% } %>
+
+              <div class="news-footer">
+                <div class="news-meta">
+                  <span><%= item.source || 'NewsAPI' %></span>
+                  <% if (item.createdAt) { %>
+                    <span>•</span>
+                    <span><%= new Date(item.createdAt).toLocaleString(currentLang === 'th' ? 'th-TH' : 'en-US') %></span>
+                  <% } %>
+                </div>
+                <% if (item.url && item.url !== '#') { %>
+                  <a class="btn btn-outline" href="<%= item.url %>" target="_blank" rel="noopener noreferrer"><%= safeT('news.read_source','Read source') %></a>
+                <% } %>
+              </div>
+            </div>
+          </article>
+        <% }) %>
+      </div>
+
+      <% if (pagination && pagination.totalPages > 1) { %>
+  <div class="pagination-wrap">
+    <% 
+      const page = Number(pagination.page || 1);
+      const totalPages = Number(pagination.totalPages || 1);
+      const startPage = Math.max(1, page - 2);
+      const endPage = Math.min(totalPages, page + 2);
+    %>
+
+    <% if (page > 1) { %>
+      <a class="page-btn" href="/news?lang=<%= currentLang %>&page=<%= page - 1 %>">
+        ← <%= safeT('news.prev','Previous') %>
+      </a>
+    <% } %>
+
+    <% if (startPage > 1) { %>
+      <a class="page-btn" href="/news?lang=<%= currentLang %>&page=1">1</a>
+      <% if (startPage > 2) { %>
+        <span class="page-dots">...</span>
+      <% } %>
+    <% } %>
+
+    <% for (let i = startPage; i <= endPage; i++) { %>
+      <a class="page-btn <%= i === page ? 'active' : '' %>"
+         href="/news?lang=<%= currentLang %>&page=<%= i %>">
+        <%= i %>
+      </a>
+    <% } %>
+
+    <% if (endPage < totalPages) { %>
+      <% if (endPage < totalPages - 1) { %>
+        <span class="page-dots">...</span>
+      <% } %>
+      <a class="page-btn" href="/news?lang=<%= currentLang %>&page=<%= totalPages %>">
+        <%= totalPages %>
+      </a>
+    <% } %>
+
+    <% if (page < totalPages) { %>
+      <a class="page-btn" href="/news?lang=<%= currentLang %>&page=<%= page + 1 %>">
+        <%= safeT('news.next','Next') %> →
+      </a>
+    <% } %>
+  </div>
+<% } %>
+    <% } %>
+  </section>
+</main>
+
+<%- include('partials/footer') %>

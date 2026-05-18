@@ -1,0 +1,19 @@
+.admin-vps-page{
+  padding:20px;
+  color:#fff;
+}
+.grid{
+  display:grid;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr));
+  gap:20px;
+}
+.card{
+  background:linear-gradient(135deg,#111,#4b0082);
+  padding:30px;
+  border-radius:15px;
+  text-align:center;
+  color:#fff;
+  text-decoration:none;
+  font-size:20px;
+  font-weight:bold;
+}

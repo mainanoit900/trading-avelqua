@@ -1,0 +1,211 @@
+<%- include('../partials/head', { pageTitle: pageTitle || 'VPS History / Error / Alarm', pageCss: 'admin-panel.css' }) %>
+<%- include('../partials/admin-shell') %>
+
+<%
+  const fStatus = (filters && filters.status) || 'all';
+  const fNode = (filters && filters.node_id) || 0;
+  const page = pagination ? Number(pagination.page || 1) : 1;
+  const totalPages = pagination ? Number(pagination.totalPages || 1) : 1;
+  const totalRows = pagination ? Number(pagination.totalRows || 0) : 0;
+
+  function pageUrl(p) {
+    return '/admin/vps/errors?page=' + p + '&status=' + encodeURIComponent(fStatus) + '&node_id=' + encodeURIComponent(fNode);
+  }
+
+  const startPage = Math.max(1, page - 3);
+  const endPage = Math.min(totalPages, page + 3);
+%>
+
+<style>
+.vps-history-wrap{max-width:1280px;margin:0 auto;}
+.vps-history-top{display:flex;justify-content:space-between;gap:16px;align-items:center;margin-bottom:18px;padding:20px;border:1px solid rgba(255,255,255,.10);border-radius:22px;background:rgba(15,23,42,.72);}
+.vps-history-top h1{margin:0;font-size:28px;}
+.vps-history-top p{margin:6px 0 0;color:#9fb3d9;}
+.vps-actions{display:flex;gap:10px;flex-wrap:wrap;}
+.vps-summary{display:grid;grid-template-columns:repeat(4,minmax(140px,1fr));gap:12px;margin:14px 0 18px;}
+.vps-stat{padding:16px;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:rgba(15,23,42,.7);text-decoration:none;color:#fff;}
+.vps-stat small{color:#9fb3d9;}
+.vps-stat strong{display:block;margin-top:8px;font-size:30px;}
+.vps-filter{padding:16px;border:1px solid rgba(255,255,255,.10);border-radius:18px;background:rgba(15,23,42,.65);margin-bottom:16px;}
+.vps-filter form{display:flex;gap:10px;flex-wrap:wrap;align-items:end;}
+.vps-filter label{display:grid;gap:6px;min-width:180px;}
+.vps-log-card{padding:14px 16px;border:1px solid rgba(255,255,255,.10);border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.82),rgba(2,6,23,.7));margin-bottom:10px;}
+.vps-log-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:8px;}
+.vps-badge{font-weight:800;text-transform:uppercase;}
+.vps-badge.normal{color:#39e58c;}
+.vps-badge.alarm{color:#ffd166;}
+.vps-badge.error{color:#ff6b6b;}
+.vps-log-grid{display:grid;grid-template-columns:repeat(2,minmax(240px,1fr));gap:6px 18px;color:#dce7ff;}
+.vps-log-error{margin-top:8px;padding:10px;border-radius:12px;background:rgba(239,68,68,.12);color:#ffb4b4;white-space:pre-wrap;}
+.vps-pager{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-top:18px;padding-top:14px;border-top:1px solid rgba(255,255,255,.08);}
+.vps-pager a,.vps-pager span{min-width:42px;text-align:center;padding:10px 12px;border-radius:12px;text-decoration:none;background:#24364f;color:#fff;font-weight:700;}
+.vps-pager a.active{background:#4357ff;}
+.vps-pager .wide{min-width:auto;}
+.vps-pager span{background:transparent;color:#8fa4c7;}
+.vps-empty{padding:30px;text-align:center;color:#9fb3d9;}
+@media(max-width:800px){.vps-summary{grid-template-columns:repeat(2,1fr)}.vps-history-top{display:block}.vps-actions{margin-top:14px}.vps-log-grid{grid-template-columns:1fr}}
+</style>
+
+<section class="admin-page vps-history-wrap">
+  <div class="vps-history-top">
+    <div>
+      <small>ศูนย์ควบคุมระบบ</small>
+      <h1>VPS History / Error / Alarm</h1>
+      <p>เก็บประวัติค่าที่ Agent ส่งเข้ามา แยก Normal / Alarm / Error</p>
+    </div>
+    <div class="vps-actions">
+      <a class="btn btn-secondary" href="/admin/vps">กลับหน้า VPS</a>
+      <a class="btn btn-primary" href="/admin/vps/errors/export?status=<%= fStatus %>&node_id=<%= fNode %>">Export CSV</a>
+    </div>
+  </div>
+
+  <div id="vpsReportRefreshArea">
+  <div class="vps-summary">
+    <a class="vps-stat" href="/admin/vps/errors?status=all">
+      <small>ทั้งหมด</small>
+      <strong><%= summary.total || 0 %></strong>
+    </a>
+    <a class="vps-stat" href="/admin/vps/errors?status=normal">
+      <small>Normal</small>
+      <strong style="color:#39e58c;"><%= summary.normal_count || 0 %></strong>
+    </a>
+    <a class="vps-stat" href="/admin/vps/errors?status=alarm">
+      <small>Alarm</small>
+      <strong style="color:#ffd166;"><%= summary.alarm_count || 0 %></strong>
+    </a>
+    <a class="vps-stat" href="/admin/vps/errors?status=error">
+      <small>Error</small>
+      <strong style="color:#ff6b6b;"><%= summary.error_count || 0 %></strong>
+    </a>
+  </div>
+
+  <div class="vps-filter">
+    <form method="GET" action="/admin/vps/errors">
+      <label>
+        <span>สถานะ</span>
+        <select name="status" class="form-control">
+          <option value="all" <%= fStatus === 'all' ? 'selected' : '' %>>ทั้งหมด</option>
+          <option value="normal" <%= fStatus === 'normal' ? 'selected' : '' %>>Normal</option>
+          <option value="alarm" <%= fStatus === 'alarm' ? 'selected' : '' %>>Alarm</option>
+          <option value="error" <%= fStatus === 'error' ? 'selected' : '' %>>Error</option>
+        </select>
+      </label>
+
+      <label style="min-width:300px;">
+        <span>VPS</span>
+        <select name="node_id" class="form-control">
+          <option value="0">ทุก VPS</option>
+          <% (nodes || []).forEach(function(n){ %>
+            <option value="<%= n.id %>" <%= Number(fNode) === Number(n.id) ? 'selected' : '' %>>
+              #<%= n.id %> <%= n.node_name || '-' %> (<%= n.ip_address || '-' %>)
+            </option>
+          <% }) %>
+        </select>
+      </label>
+
+      <button class="btn btn-primary" type="submit">ค้นหา</button>
+      <a class="btn btn-secondary" href="/admin/vps/errors">ล้างตัวกรอง</a>
+    </form>
+  </div>
+
+  <div class="admin-card">
+    <h2 style="margin-top:0;">รายการย้อนหลัง <small style="opacity:.7;">ทั้งหมด <%= totalRows %> รายการ / แสดงครั้งละ 10 แถว</small></h2>
+
+    <% if (!logs || logs.length === 0) { %>
+      <div class="vps-empty">ยังไม่มีประวัติจาก Agent</div>
+    <% } %>
+
+    <% (logs || []).forEach(function(log){ 
+      const level = String(log.event_level || log.level || 'normal').toLowerCase();
+    %>
+      <div class="vps-log-card">
+        <div class="vps-log-head">
+          <b>#<%= log.id %> | <span class="vps-badge <%= level %>"><%= level %></span></b>
+          <small><%= log.created_at ? new Date(log.created_at).toLocaleString('th-TH') : '-' %></small>
+        </div>
+
+        <div class="vps-log-grid">
+          <div><b>VPS:</b> <%= log.node_name || '-' %></div>
+          <div><b>IP:</b> <%= log.ip_address || '-' %></div>
+          <div><b>Status:</b> <%= log.status || '-' %></div>
+          <div><b>Service:</b> <%= log.service_name || '-' %></div>
+          <div><b>CPU:</b> <%= log.cpu_percent || 0 %>% | <b>RAM:</b> <%= log.ram_percent || 0 %>%</div>
+          <div><b>Ping:</b> <%= log.ping_ms || 0 %> ms</div>
+          <div><b>Download:</b> <%= log.net_down_mbps || 0 %> Mbps</div>
+          <div><b>Upload:</b> <%= log.net_up_mbps || 0 %> Mbps</div>
+        </div>
+
+        <% if (log.last_error) { %>
+          <div class="vps-log-error"><%= log.last_error %></div>
+        <% } %>
+      </div>
+    <% }) %>
+
+    <% if (totalPages > 1) { %>
+      <div class="vps-pager">
+        <% if (page > 1) { %>
+          <a class="wide" href="<%= pageUrl(1) %>">หน้าแรก</a>
+          <a class="wide" href="<%= pageUrl(page - 1) %>">ก่อนหน้า</a>
+        <% } %>
+
+        <% if (startPage > 1) { %>
+          <a href="<%= pageUrl(1) %>">1</a>
+          <span>...</span>
+        <% } %>
+
+        <% for (let i = startPage; i <= endPage; i++) { %>
+          <a class="<%= i === page ? 'active' : '' %>" href="<%= pageUrl(i) %>"><%= i %></a>
+        <% } %>
+
+        <% if (endPage < totalPages) { %>
+          <span>...</span>
+          <a href="<%= pageUrl(totalPages) %>"><%= totalPages %></a>
+        <% } %>
+
+        <% if (page < totalPages) { %>
+          <a class="wide" href="<%= pageUrl(page + 1) %>">ถัดไป</a>
+          <a class="wide" href="<%= pageUrl(totalPages) %>">หน้าสุดท้าย</a>
+        <% } %>
+      </div>
+    <% } %>
+  </div>
+  </div>
+</section>
+
+<script>
+(function(){
+  const REFRESH_MS = 8000;
+  let loading = false;
+
+  async function refreshVpsReport(){
+    if (loading) return;
+    loading = true;
+
+    try {
+      const url = window.location.pathname + window.location.search;
+      const res = await fetch(url, {
+        headers: { 'X-Requested-With': 'fetch' },
+        cache: 'no-store'
+      });
+
+      const html = await res.text();
+      const doc = new DOMParser().parseFromString(html, 'text/html');
+
+      const newReport = doc.querySelector('#vpsReportRefreshArea');
+      const oldReport = document.querySelector('#vpsReportRefreshArea');
+
+      if (newReport && oldReport) {
+        oldReport.innerHTML = newReport.innerHTML;
+      }
+    } catch (err) {
+      console.warn('VPS report refresh failed:', err);
+    } finally {
+      loading = false;
+    }
+  }
+
+  setInterval(refreshVpsReport, REFRESH_MS);
+})();
+</script>
+
+<%- include('../partials/admin-shell-end') %>

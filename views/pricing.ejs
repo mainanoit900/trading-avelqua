@@ -1,0 +1,86 @@
+<%
+const currentLang = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+const isTH = String(currentLang).toLowerCase() === 'th';
+const dateLocale = isTH ? 'th-TH' : 'en-US';
+const safeGrouped = (typeof grouped !== 'undefined' && grouped) ? grouped : { basic: [], pro: [], advanced: [] };
+const orderedGroups = ['basic', 'pro', 'advanced'];
+const groupLabels = { basic: 'BASIC', pro: 'PRO', advanced: 'ADVANCED' };
+const viewer = (typeof user !== 'undefined' ? user : null);
+const buyTarget = viewer ? '/app/packages' : ('/register?lang=' + encodeURIComponent(currentLang));
+const labels = {
+  eyebrow: 'PREMIUM PRICING',
+  pageTitle: isTH ? 'แพ็กเกจการใช้งาน' : 'Pricing Plans',
+  pageDesc: isTH ? 'เลือกแพ็กเกจตามระยะเวลาที่ต้องการ หน้าตาเดียวกับหน้าซื้อแพ็กเกจในระบบ' : 'Choose a package by duration with the same premium style as the member package page.',
+  choose: isTH ? 'เลือกแผนที่เหมาะกับคุณ' : 'Choose the right plan',
+  chooseDesc: isTH ? 'เมื่อต้องการซื้อ ระบบจะให้สมัครสมาชิก เข้าสู่ระบบ และยืนยันตัวตนก่อนซื้อแพ็กเกจ' : 'To buy, please register or sign in and complete identity verification first.',
+  noPackage: isTH ? 'ยังไม่มีแพ็กเกจในหมวดนี้' : 'No packages in this group yet',
+  avgPerDay: isTH ? 'เฉลี่ย' : 'Average',
+  day: isTH ? 'วัน' : 'day',
+  days: isTH ? 'วัน' : 'days',
+  buyNow: isTH ? 'ซื้อแพ็กเกจ' : 'Buy Package',
+  recommended: isTH ? 'แนะนำ' : 'Recommended',
+  lot: isTH ? 'รองรับ lot' : 'Lot',
+  ports: isTH ? 'จำนวนพอร์ต' : 'Ports',
+  avgProfit: isTH ? 'กำไรเฉลี่ย' : 'Average Profit',
+  packageName: isTH ? 'ชื่อแพ็กเกจ' : 'Package Name',
+  duration: isTH ? 'ใช้งานระบบได้' : 'Access duration',
+  support: isTH ? 'การใช้งาน' : 'Support',
+  note: isTH ? 'สมัครสมาชิกและยืนยันตัวตนก่อน จึงจะซื้อแพ็กเกจได้' : 'Register and verify your identity before purchasing.'
+};
+function priceMoney(value){ return Number(value || 0).toLocaleString(dateLocale, { maximumFractionDigits: 0 }); }
+function groupTitle(groupKey){ return groupLabels[groupKey] || String(groupKey || '').toUpperCase(); }
+function pkgName(pkg, groupKey){ if(isTH && (pkg.nameTh || pkg.name_th)) return pkg.nameTh || pkg.name_th; if(!isTH && (pkg.nameEn || pkg.name_en)) return pkg.nameEn || pkg.name_en; return pkg.name || `${groupTitle(groupKey)} ${Number(pkg.days||0)} ${labels.days}`; }
+function groupDesc(groupKey){ return groupKey === 'basic' ? (isTH ? 'เริ่มต้นใช้งาน เหมาะสำหรับทดลองระบบ' : 'Starter plans for trying the system') : groupKey === 'pro' ? (isTH ? 'เหมาะสำหรับผู้ใช้งานจริง ต้องการเพิ่มพอร์ตและระยะเวลา' : 'For active users who need more ports and longer access') : (isTH ? 'สำหรับผู้ใช้งานระดับสูง ต้องการความยืดหยุ่นสูงสุด' : 'For advanced users who need maximum flexibility'); }
+function pkgSummary(pkg, groupKey){ return isTH ? (pkg.summaryTh || pkg.summary_th || pkg.summary || groupDesc(groupKey)) : (pkg.summaryEn || pkg.summary_en || pkg.summary || groupDesc(groupKey)); }
+function lotText(pkg){ if(pkg.lotRange || pkg.lot_range) return pkg.lotRange || pkg.lot_range; if(pkg.lot) return pkg.lot; return `${Number(pkg.lotMin ?? pkg.lot_min ?? 0).toLocaleString(dateLocale)} - ${Number(pkg.lotMax ?? pkg.lot_max ?? 0).toLocaleString(dateLocale)}`; }
+function portText(pkg){ if(pkg.portRange || pkg.port_range) return pkg.portRange || pkg.port_range; if(pkg.ports) return pkg.ports; return `${Number(pkg.portMin ?? pkg.ports_min ?? 0).toLocaleString(dateLocale)} - ${Number(pkg.portMax ?? pkg.ports_max ?? 0).toLocaleString(dateLocale)}`; }
+function profitText(pkg){ if(isTH && (pkg.profitRangeTh || pkg.profit_range_th)) return pkg.profitRangeTh || pkg.profit_range_th; if(!isTH && (pkg.profitRangeEn || pkg.profit_range_en)) return pkg.profitRangeEn || pkg.profit_range_en; return pkg.profitRange || pkg.profit_range || pkg.profit || '-'; }
+function supportText(pkg){ if(isTH && (pkg.supportTh || pkg.support_th)) return pkg.supportTh || pkg.support_th; if(!isTH && (pkg.supportEn || pkg.support_en)) return pkg.supportEn || pkg.support_en; return pkg.support || (isTH ? 'เริ่มใช้งานได้หลังชำระเงินและแอดมินอนุมัติ' : 'Ready after payment approval'); }
+function isPopular(pkg, groupKey, days){ return pkg.is_popular === true || pkg.is_popular === 't' || pkg.isPopular === true || (groupKey === 'pro' && Number(days) === 7); }
+%>
+<%- include('partials/head', { title: isTH ? 'แพ็กเกจ | TRADING AVELQUA' : 'Pricing | TRADING AVELQUA', lang: currentLang }) %>
+<link rel="stylesheet" href="/public/css/pricing.css">
+<link rel="stylesheet" href="/public/css/public-packages.css">
+<%- include('partials/nav', { currentPath: '/pricing', user: viewer, lang: currentLang }) %>
+<main class="pricing-premium-page public-package-page">
+  <section class="package-lux-hero public-package-hero">
+    <div class="package-hero-glow"></div>
+    <div class="package-hero-content">
+      <span class="package-kicker"><%= labels.eyebrow %></span>
+      <h2><%= labels.pageTitle %></h2>
+      <p><%= labels.pageDesc %></p>
+      <div class="package-hero-pills"><span><%= isTH ? 'เลือกตามระยะเวลา' : 'Choose by duration' %></span><span><%= isTH ? 'สมัคร + ยืนยันตัวตนก่อนซื้อ' : 'Register + verify before buying' %></span><span><%= isTH ? 'แสดงเฉพาะรายละเอียดแพ็กเกจ' : 'Package details only' %></span></div>
+    </div>
+    <div class="package-current-card public-package-info-card"><span><%= labels.choose %></span><strong><%= isTH ? 'พร้อมเริ่มใช้งาน' : 'Ready to start' %></strong><small><%= labels.chooseDesc %></small></div>
+  </section>
+  <% orderedGroups.forEach(function(groupKey){ const items = safeGrouped[groupKey] || []; %>
+    <section class="package-lux-section">
+      <div class="package-section-head"><div><span class="package-chip"><%= groupTitle(groupKey) %></span><h3><%= groupTitle(groupKey) %></h3></div><p><%= groupDesc(groupKey) %></p></div>
+      <% if (!items.length) { %>
+        <div class="package-empty"><%= labels.noPackage %></div>
+      <% } else { %>
+        <div class="package-lux-grid">
+          <% items.forEach(function(pkg){ const days = Number(pkg.days || 0); const price = Number(pkg.price || 0); const avgPerDay = days ? price / days : 0; const popular = isPopular(pkg, groupKey, days); %>
+            <article class="package-lux-card <%= popular ? 'popular' : '' %>">
+              <div class="package-card-top"><span class="package-id"><%= popular ? labels.recommended : (pkg.code || pkg.package_code || ('PK' + String(pkg.id || '').padStart(6, '0'))) %></span><span class="package-days"><%= groupTitle(groupKey) %></span></div>
+              <h4><%= days.toLocaleString(dateLocale) %> <%= labels.days %></h4>
+              <p class="package-summary"><%= pkgSummary(pkg, groupKey) %></p>
+              <div class="package-price"><strong>฿<%= priceMoney(price) %></strong><small><%= labels.avgPerDay %> ฿<%= Number(avgPerDay || 0).toLocaleString(dateLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %> / <%= labels.day %></small></div>
+              <div class="package-features">
+                <div><span><%= labels.packageName %></span><strong><%= pkgName(pkg, groupKey) %></strong></div>
+                <div><span><%= labels.lot %></span><strong><%= lotText(pkg) %></strong></div>
+                <div><span><%= labels.ports %></span><strong><%= portText(pkg) %></strong></div>
+                <div><span><%= labels.avgProfit %></span><strong><%= profitText(pkg) %></strong></div>
+                <div><span><%= labels.duration %></span><strong><%= days.toLocaleString(dateLocale) %> <%= labels.days %></strong></div>
+                <div><span><%= labels.support %></span><strong><%= supportText(pkg) %></strong></div>
+              </div>
+              <p class="package-note"><%= labels.note %></p>
+              <a href="<%= buyTarget %>" class="package-buy-btn public-package-buy"><span><%= labels.buyNow %></span></a>
+            </article>
+          <% }) %>
+        </div>
+      <% } %>
+    </section>
+  <% }) %>
+</main>
+<%- include('partials/footer') %>

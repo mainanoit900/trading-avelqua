@@ -1,0 +1,589 @@
+<%- include('../partials/admin-shell') %>
+
+<%
+  const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+  const couponRows = Array.isArray(typeof coupons !== 'undefined' ? coupons : null)
+    ? coupons
+    : (typeof db !== 'undefined' && db && Array.isArray(db.coupons) ? db.coupons : []);
+  const usageRows = Array.isArray(typeof usages !== 'undefined' ? usages : null) ? usages : [];
+
+  function toNumber(value, fallback = 0) {
+    const num = Number(value);
+    return Number.isFinite(num) ? num : fallback;
+  }
+
+  function truthyUsed(c) {
+    return !!(
+      c?.used ||
+      c?.is_used ||
+      c?.usedAt ||
+      c?.used_at ||
+      c?.redeemed_at ||
+      (typeof c?.usage_count !== 'undefined' && Number(c.usage_count) > 0)
+    );
+  }
+
+  function formatDateTime(value) {
+    if (!value) return '-';
+    try { return new Date(value).toLocaleString((typeof lang !== 'undefined' && lang === 'en') ? 'en-GB' : 'th-TH'); }
+    catch (e) { return String(value); }
+  }
+
+  function formatDateOnly(value) {
+    if (!value) return '-';
+    try { return new Date(value).toLocaleDateString((typeof lang !== 'undefined' && lang === 'en') ? 'en-GB' : 'th-TH'); }
+    catch (e) { return String(value); }
+  }
+
+  function getCouponCode(c, index, prefix) {
+    return c.coupon_code || c.code || `${prefix}-${index + 1}`;
+  }
+
+  function getCouponName(c) {
+    return c.coupon_name || c.name || 'Coupon';
+  }
+
+  function getCouponType(c) {
+    return c.coupon_type || c.type || 'discount';
+  }
+
+  function getCouponDiscount(c) {
+    const amount = toNumber(c.discount_amount || c.amount || c.discountAmount, 0);
+    const percent = toNumber(c.discount_percent || c.percent || c.discountPercent, 0);
+    if (percent > 0) return `${percent}%`;
+    if (amount > 0) return `฿${amount.toLocaleString('th-TH')}`;
+    return safeT('admin.coupons.type_free', 'ฟรี');
+  }
+
+  function getCouponNote(c) {
+    return c.print_note || c.note || c.description || safeT('admin.coupons.default_note', 'ใช้ได้ 1 ครั้ง');
+  }
+
+  const availableCoupons = couponRows.filter(c => !truthyUsed(c));
+  const usedCoupons = couponRows.filter(c => truthyUsed(c));
+  const freeCoupons = couponRows.filter(c => getCouponType(c) === 'free').length;
+  const discountCoupons = couponRows.filter(c => getCouponType(c) === 'discount').length;
+%>
+
+<section class="coupon-admin-page coupon-admin-upgraded">
+  <div class="coupon-hero-card">
+    <div>
+      <span class="coupon-page-kicker"><%= safeT('admin.menu.coupons', 'Coupons') %></span>
+      <h1><%= safeT('admin.coupons.title', 'จัดการคูปอง') %></h1>
+      <p><%= safeT('admin.coupons.subtitle', 'สร้างคูปอง ตรวจสอบสถานะ เลือกพิมพ์หรือ export เฉพาะใบที่ต้องการได้ง่ายขึ้น') %></p>
+    </div>
+    <div class="coupon-hero-actions">
+      <a href="#createCoupon" class="btn btn-primary"><%= safeT('admin.coupons.create', 'สร้างคูปอง') %></a>
+      <a href="/admin/coupons/print/latest" class="btn btn-secondary"><%= safeT('admin.coupons.print_latest', 'Print latest') %></a>
+    </div>
+  </div>
+
+  <div class="coupon-stat-grid">
+    <div class="coupon-stat-card is-green">
+      <span><%= safeT('admin.coupons.unused_title', 'ยังไม่ใช้') %></span>
+      <strong><%= availableCoupons.length %></strong>
+      <small><%= safeT('admin.coupons.ready_to_use', 'พร้อมใช้งาน') %></small>
+    </div>
+    <div class="coupon-stat-card is-blue">
+      <span><%= safeT('admin.coupons.used_title', 'ใช้แล้ว') %></span>
+      <strong><%= usedCoupons.length %></strong>
+      <small><%= safeT('admin.coupons.latest_usage', 'ประวัติการใช้งาน') %></small>
+    </div>
+    <div class="coupon-stat-card is-purple">
+      <span><%= safeT('admin.coupons.discount', 'ส่วนลด') %></span>
+      <strong><%= discountCoupons %></strong>
+      <small>discount</small>
+    </div>
+    <div class="coupon-stat-card is-gold">
+      <span><%= safeT('admin.coupons.type_free', 'ฟรี') %></span>
+      <strong><%= freeCoupons %></strong>
+      <small>free package</small>
+    </div>
+  </div>
+
+  <div class="coupon-grid-top">
+    <section class="coupon-card coupon-create-card" id="createCoupon">
+      <div class="coupon-section-head">
+        <div>
+          <h2><%= safeT('admin.coupons.create', 'สร้างคูปอง') %></h2>
+          <p><%= safeT('admin.coupons.create_desc', 'กรอกข้อมูลให้ครบ ระบบจะสร้างรหัสคูปองตาม Prefix และจำนวนที่ต้องการ') %></p>
+        </div>
+      </div>
+
+      <form method="POST" action="/admin/coupons/create" class="coupon-form-grid">
+        <label>
+          <span>ชื่อคูปอง</span>
+          <input type="text" name="coupon_name" placeholder="เช่น โปรโมชั่นเปิดระบบ" autocomplete="off">
+        </label>
+
+        <label>
+          <span>Prefix</span>
+          <input type="text" name="prefix" value="SSP" placeholder="SSP" autocomplete="off">
+        </label>
+
+        <label>
+          <span>ประเภท</span>
+          <select name="coupon_type" id="coupon_type" onchange="toggleCouponFields()">
+            <option value="free">ฟรี</option>
+            <option value="discount">ส่วนลด</option>
+          </select>
+        </label>
+
+        <label>
+          <span>จำนวนที่สร้าง</span>
+          <input type="number" name="generate_total" value="1" min="1" max="1000">
+        </label>
+
+        <div id="freeFields" class="form-row-2 full coupon-nested-fields">
+          <label>
+            <span>ระดับแพ็กเกจฟรี</span>
+            <select name="free_package_group">
+              <option value="">เลือกแพ็กเกจ</option>
+              <option value="BASIC">BASIC</option>
+              <option value="PRO">PRO</option>
+              <option value="ADVANCED">ADVANCED</option>
+            </select>
+          </label>
+
+          <label>
+            <span>ฟรีกี่วัน</span>
+            <input type="number" name="free_days" value="1" min="1">
+          </label>
+        </div>
+
+        <div id="discountFields" class="form-row-3 full coupon-nested-fields" style="display:none;">
+          <label>
+            <span>รูปแบบส่วนลด</span>
+            <select name="discount_mode" onchange="toggleDiscountMode()" id="discount_mode">
+              <option value="amount">บาท</option>
+              <option value="percent">%</option>
+            </select>
+          </label>
+
+          <label id="discountAmountBox">
+            <span>ลดเป็นบาท</span>
+            <input type="number" name="discount_amount" min="0" step="0.01">
+          </label>
+
+          <label id="discountPercentBox" style="display:none;">
+            <span>ลดเป็น %</span>
+            <input type="number" name="discount_percent" min="0" max="100" step="0.01">
+          </label>
+        </div>
+
+        <label class="full">
+          <span>วันหมดอายุ</span>
+          <input type="datetime-local" name="expires_at">
+        </label>
+
+        <label class="full">
+          <span>ข้อความบนคูปอง</span>
+          <textarea name="print_note" rows="3" placeholder="เช่น ใช้ได้ 1 ครั้งต่อ 1 ผู้ใช้"></textarea>
+        </label>
+
+        <div class="coupon-form-actions full">
+          <button type="submit" class="btn btn-primary">สร้างคูปอง</button>
+          <a href="/admin/coupons/print/latest" class="btn btn-secondary">Print latest</a>
+        </div>
+      </form>
+    </section>
+
+    <section class="coupon-card coupon-usage-card">
+      <div class="coupon-section-head">
+        <div>
+          <h2><%= safeT('admin.coupons.latest_usage', 'ประวัติการใช้งานล่าสุด') %></h2>
+          <p><%= safeT('admin.coupons.latest_usage_desc', 'รายการล่าสุดที่ลูกค้าใช้คูปอง') %></p>
+        </div>
+      </div>
+
+      <% if (!usageRows.length) { %>
+        <div class="coupon-empty-box"><%= safeT('admin.coupons.no_usage', 'ยังไม่มีการใช้งานคูปอง') %></div>
+      <% } else { %>
+        <div class="coupon-usage-list">
+          <% usageRows.slice(0, 12).forEach(function(u){ %>
+            <div class="coupon-usage-item">
+              <div>
+                <strong><%= u.coupon_code || u.code || '-' %></strong>
+                <div class="coupon-usage-meta"><%= u.coupon_name || '-' %> · <%= u.full_name || u.user_name || u.email || '-' %></div>
+              </div>
+              <span><%= formatDateTime(u.used_at || u.usedAt) %></span>
+            </div>
+          <% }) %>
+        </div>
+      <% } %>
+    </section>
+  </div>
+
+  <section class="coupon-card coupon-list-card">
+    <div class="coupon-section-head coupon-section-head-wrap">
+      <div>
+        <h2><%= safeT('admin.coupons.unused_title', 'คูปองที่ยังไม่ได้ใช้') %></h2>
+        <p><%= safeT('admin.coupons.unused_desc', 'ค้นหา ติ๊กเลือก แล้วพิมพ์หรือ export PDF เฉพาะใบที่เลือก') %></p>
+      </div>
+
+      <div class="coupon-bulk-actions">
+        <button type="button" class="btn btn-secondary" id="selectAllCoupons"><%= safeT('admin.coupons.select_all', 'เลือกทั้งหมด') %></button>
+        <button type="button" class="btn btn-secondary" id="clearAllCoupons"><%= safeT('admin.coupons.clear_selected', 'ล้างที่เลือก') %></button>
+        <button type="button" class="btn btn-secondary" id="printSelectedCoupons"><%= safeT('admin.coupons.print_selected', 'ปริ้นเฉพาะที่เลือก') %></button>
+        <button type="button" class="btn btn-primary" id="downloadSelectedPdf"><%= safeT('admin.coupons.export_pdf', 'Export PDF') %></button>
+      </div>
+    </div>
+
+    <div class="coupon-list-toolbar">
+      <label class="coupon-search-box">
+        <span>ค้นหาคูปอง</span>
+        <input type="search" id="couponSearch" placeholder="ค้นหาโค้ด / ชื่อ / ประเภท / หมายเหตุ">
+      </label>
+      <label class="coupon-filter-box">
+        <span>ประเภท</span>
+        <select id="couponTypeFilter">
+          <option value="all">ทั้งหมด</option>
+          <option value="free">ฟรี</option>
+          <option value="discount">ส่วนลด</option>
+        </select>
+      </label>
+      <div class="coupon-selected-counter"><strong id="selectedCouponCount">0</strong> ใบที่เลือก</div>
+    </div>
+
+    <% if (!availableCoupons.length) { %>
+      <div class="coupon-empty-box"><%= safeT('admin.coupons.no_unused', 'ยังไม่มีคูปองที่พร้อมใช้งาน') %></div>
+    <% } else { %>
+      <div class="coupon-table-wrap">
+        <table class="coupon-table">
+          <thead>
+            <tr>
+              <th style="width:54px;"><%= safeT('admin.coupons.select', 'เลือก') %></th>
+              <th><%= safeT('admin.coupons.code', 'โค้ด') %></th>
+              <th><%= safeT('admin.coupons.name', 'ชื่อคูปอง') %></th>
+              <th><%= safeT('admin.coupons.type', 'ประเภท') %></th>
+              <th><%= safeT('admin.coupons.discount', 'ส่วนลด') %></th>
+              <th><%= safeT('admin.coupons.expire', 'หมดอายุ') %></th>
+              <th><%= safeT('admin.coupons.note', 'หมายเหตุ') %></th>
+              <th style="width:96px;"><%= safeT('admin.coupons.delete', 'ลบ') %></th>
+            </tr>
+          </thead>
+          <tbody>
+            <% availableCoupons.forEach(function(c, index){
+              const code = getCouponCode(c, index, 'COUPON');
+              const name = getCouponName(c);
+              const type = getCouponType(c);
+              const expires = c.expires_at || c.expire_at || c.expiresAt || '';
+              const note = getCouponNote(c);
+              const printableDiscount = getCouponDiscount(c);
+              const searchText = `${code} ${name} ${type} ${printableDiscount} ${formatDateOnly(expires)} ${note}`.toLowerCase();
+            %>
+              <tr class="coupon-row" data-type="<%= type %>" data-search="<%= searchText %>">
+                <td>
+                  <input type="checkbox" class="coupon-checkbox" data-code="<%= code %>" data-name="<%= name %>" data-type="<%= type %>" data-discount="<%= printableDiscount %>" data-expires="<%= formatDateOnly(expires) %>" data-note="<%= note %>">
+                </td>
+                <td><strong class="coupon-code-text"><%= code %></strong><div class="cell-sub">#<%= c.display_id || c.id %></div></td>
+                <td><%= name %></td>
+                <td><span class="coupon-pill coupon-pill-<%= type %>"><%= type %></span></td>
+                <td><strong><%= printableDiscount %></strong></td>
+                <td><%= formatDateOnly(expires) %></td>
+                <td class="coupon-note-cell"><%= note %></td>
+                <td>
+                  <form method="POST" action="/admin/coupons/<%= c.id %>/delete" onsubmit="return confirm('<%= safeT('admin.coupons.confirm_delete', 'ต้องการลบคูปองนี้ใช่หรือไม่?') %>');">
+                    <button type="submit" class="btn btn-danger btn-small"><%= safeT('admin.coupons.delete', 'ลบ') %></button>
+                  </form>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="coupon-mobile-list">
+        <% availableCoupons.forEach(function(c, index){
+          const code = getCouponCode(c, index, 'COUPON');
+          const name = getCouponName(c);
+          const type = getCouponType(c);
+          const expires = c.expires_at || c.expire_at || c.expiresAt || '';
+          const note = getCouponNote(c);
+          const printableDiscount = getCouponDiscount(c);
+          const searchText = `${code} ${name} ${type} ${printableDiscount} ${formatDateOnly(expires)} ${note}`.toLowerCase();
+        %>
+          <div class="coupon-mobile-item coupon-row" data-type="<%= type %>" data-search="<%= searchText %>">
+            <div class="coupon-mobile-top">
+              <input type="checkbox" class="coupon-checkbox" data-code="<%= code %>" data-name="<%= name %>" data-type="<%= type %>" data-discount="<%= printableDiscount %>" data-expires="<%= formatDateOnly(expires) %>" data-note="<%= note %>">
+              <div>
+                <strong><%= code %></strong>
+                <div class="coupon-mobile-name">#<%= c.display_id || c.id %> · <%= name %></div>
+              </div>
+            </div>
+            <div class="coupon-mobile-meta">
+              <span><%= type %></span>
+              <span><%= printableDiscount %></span>
+              <span><%= safeT('admin.coupons.expire_prefix', 'หมดอายุ') %> <%= formatDateOnly(expires) %></span>
+            </div>
+            <div class="coupon-mobile-note"><%= note %></div>
+            <form method="POST" action="/admin/coupons/<%= c.id %>/delete" onsubmit="return confirm('<%= safeT('admin.coupons.confirm_delete', 'ต้องการลบคูปองนี้ใช่หรือไม่?') %>');">
+              <button type="submit" class="btn btn-danger btn-full"><%= safeT('admin.coupons.delete', 'ลบ') %></button>
+            </form>
+          </div>
+        <% }) %>
+      </div>
+    <% } %>
+  </section>
+
+  <% if (usedCoupons.length) { %>
+    <section class="coupon-card coupon-list-card">
+      <div class="coupon-section-head coupon-section-head-wrap">
+        <div>
+          <h2><%= safeT('admin.coupons.used_title', 'คูปองที่ใช้แล้ว') %></h2>
+          <p><%= safeT('admin.coupons.used_desc', 'แสดงรายการที่ถูกใช้ไปแล้วเพื่ออ้างอิง') %></p>
+        </div>
+        <input class="coupon-simple-search" type="search" id="usedCouponSearch" placeholder="ค้นหาโค้ดที่ใช้แล้ว">
+      </div>
+
+      <div class="coupon-table-wrap">
+        <table class="coupon-table">
+          <thead>
+            <tr>
+              <th><%= safeT('admin.coupons.code', 'โค้ด') %></th>
+              <th><%= safeT('admin.coupons.name', 'ชื่อคูปอง') %></th>
+              <th><%= safeT('admin.coupons.type', 'ประเภท') %></th>
+              <th><%= safeT('admin.coupons.discount', 'ส่วนลด') %></th>
+              <th><%= safeT('admin.coupons.expire', 'หมดอายุ') %></th>
+            </tr>
+          </thead>
+          <tbody>
+            <% usedCoupons.forEach(function(c, index){
+              const code = getCouponCode(c, index, 'USED');
+              const name = getCouponName(c);
+              const type = getCouponType(c);
+              const expires = c.expires_at || c.expire_at || c.expiresAt || '';
+              const printableDiscount = getCouponDiscount(c);
+              const searchText = `${code} ${name} ${type} ${printableDiscount} ${formatDateOnly(expires)}`.toLowerCase();
+            %>
+              <tr class="used-coupon-row" data-search="<%= searchText %>">
+                <td><strong class="coupon-code-text"><%= code %></strong><div class="cell-sub">#<%= c.display_id || c.id %></div></td>
+                <td><%= name %></td>
+                <td><span class="coupon-pill coupon-pill-<%= type %>"><%= type %></span></td>
+                <td><%= printableDiscount %></td>
+                <td><%= formatDateOnly(expires) %></td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+    </section>
+  <% } %>
+
+  <div class="card mt-4">
+    <div class="card-header">
+      ประวัติการใช้คูปองล่าสุด
+    </div>
+    <div class="table-responsive">
+      <table class="table table-dark table-striped align-middle mb-0">
+        <thead>
+          <tr>
+            <th>เวลา</th>
+            <th>คูปอง</th>
+            <th>User</th>
+            <th>Payment</th>
+            <th>หมายเหตุ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% (latestCouponUsages || []).forEach(row => { %>
+            <tr>
+              <td>
+                <%= row.created_at
+                  ? new Date(row.created_at).toLocaleString('th-TH')
+                  : '-' %>
+              </td>
+              <td><%= row.coupon_code || '-' %></td>
+              <td><%= row.username || '-' %></td>
+              <td><%= row.payment_code || '-' %></td>
+              <td><%= row.note || '-' %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="printArea" class="coupon-print-sheet" aria-hidden="true"></section>
+
+<script>
+  window.couponLocale = {
+    pleaseSelect: "<%= safeT('admin.coupons.please_select', 'กรุณาเลือกคูปองก่อน') %>",
+    unusedStatus: "<%= safeT('admin.coupons.unused_status', 'ยังไม่ได้ใช้') %>",
+    printSheetSub: "<%= safeT('admin.coupons.print_sheet_sub', 'Unused coupon print sheet') %>",
+    printedAt: "<%= safeT('admin.coupons.printed_at', 'พิมพ์เมื่อ') %>",
+    selectedCount: "<%= safeT('admin.coupons.selected_count', 'จำนวนที่เลือก') %>",
+    conditions: "<%= safeT('admin.coupons.conditions', 'เงื่อนไข') %>",
+    receiptCode: "<%= safeT('admin.coupons.receipt_code', 'Coupon Code') %>",
+    receiptName: "<%= safeT('admin.coupons.receipt_name', 'Coupon Name') %>",
+    receiptDiscount: "<%= safeT('admin.coupons.receipt_discount', 'Discount') %>",
+    receiptExpire: "<%= safeT('admin.coupons.receipt_expire', 'Expire Date') %>",
+    receiptStatus: "<%= safeT('admin.coupons.receipt_status', 'Status') %>"
+  };
+</script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+<script>
+  (function () {
+    const checkboxes = () => Array.from(document.querySelectorAll('.coupon-checkbox'));
+    const printArea = document.getElementById('printArea');
+    const selectedCounter = document.getElementById('selectedCouponCount');
+
+    function updateSelectedCounter() {
+      if (selectedCounter) selectedCounter.textContent = checkboxes().filter(cb => cb.checked).length;
+    }
+
+    function getVisibleCheckboxes() {
+      return checkboxes().filter(cb => !cb.closest('.coupon-row')?.classList.contains('is-hidden'));
+    }
+
+    function getSelectedCoupons() {
+      return checkboxes().filter(cb => cb.checked).map(cb => ({
+        code: cb.dataset.code || '-',
+        name: cb.dataset.name || 'Coupon',
+        type: cb.dataset.type || '-',
+        discount: cb.dataset.discount || '-',
+        expires: cb.dataset.expires || '-',
+        note: cb.dataset.note || '-'
+      }));
+    }
+
+    function escapeHtml(value) {
+      return String(value || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+
+    function buildReceiptHtml(items) {
+      const lang = window.couponLocale || {};
+      const now = new Date().toLocaleString('th-TH');
+      return `
+        <div class="print-wrapper">
+          <div class="print-header">
+            <div>
+              <div class="print-brand">TRADING AVELQUA</div>
+              <div class="print-sub">${escapeHtml(lang.printSheetSub || 'Unused coupon print sheet')}</div>
+            </div>
+            <div class="print-time">
+              <div>${escapeHtml(lang.selectedCount || 'จำนวนที่เลือก')}: ${items.length}</div>
+              <div>${escapeHtml(lang.printedAt || 'พิมพ์เมื่อ')}: ${escapeHtml(now)}</div>
+            </div>
+          </div>
+          <div class="receipt-grid">
+            ${items.map(item => `
+              <section class="receipt-card">
+                <div class="receipt-top">
+                  <div>
+                    <div class="receipt-badge">${escapeHtml(item.type)}</div>
+                    <p class="receipt-title">${escapeHtml(item.name)}</p>
+                    <p class="receipt-code">${escapeHtml(item.code)}</p>
+                  </div>
+                  <p class="receipt-discount">${escapeHtml(item.discount)}</p>
+                </div>
+                <table class="receipt-table">
+                  <tr><td>${escapeHtml(lang.receiptCode || 'Coupon Code')}</td><td>${escapeHtml(item.code)}</td></tr>
+                  <tr><td>${escapeHtml(lang.receiptName || 'Coupon Name')}</td><td>${escapeHtml(item.name)}</td></tr>
+                  <tr><td>${escapeHtml(lang.receiptDiscount || 'Discount')}</td><td>${escapeHtml(item.discount)}</td></tr>
+                  <tr><td>${escapeHtml(lang.receiptExpire || 'Expire Date')}</td><td>${escapeHtml(item.expires)}</td></tr>
+                  <tr><td>${escapeHtml(lang.receiptStatus || 'Status')}</td><td>${escapeHtml(lang.unusedStatus || 'ยังไม่ได้ใช้')}</td></tr>
+                </table>
+                <div class="receipt-note"><strong>${escapeHtml(lang.conditions || 'เงื่อนไข')}:</strong> ${escapeHtml(item.note)}</div>
+              </section>
+            `).join('')}
+          </div>
+        </div>`;
+    }
+
+    function ensureSelection(items) {
+      if (!items.length) {
+        alert(window.couponLocale?.pleaseSelect || 'กรุณาเลือกคูปองก่อน');
+        return false;
+      }
+      return true;
+    }
+
+    function filterCoupons() {
+      const search = (document.getElementById('couponSearch')?.value || '').toLowerCase().trim();
+      const type = document.getElementById('couponTypeFilter')?.value || 'all';
+      document.querySelectorAll('.coupon-row').forEach(row => {
+        const matchSearch = !search || (row.dataset.search || '').includes(search);
+        const matchType = type === 'all' || row.dataset.type === type;
+        row.classList.toggle('is-hidden', !(matchSearch && matchType));
+      });
+    }
+
+    function filterUsedCoupons() {
+      const search = (document.getElementById('usedCouponSearch')?.value || '').toLowerCase().trim();
+      document.querySelectorAll('.used-coupon-row').forEach(row => {
+        row.classList.toggle('is-hidden', !!search && !(row.dataset.search || '').includes(search));
+      });
+    }
+
+    document.addEventListener('change', function (event) {
+      if (event.target.classList.contains('coupon-checkbox')) updateSelectedCounter();
+    });
+
+    document.getElementById('couponSearch')?.addEventListener('input', filterCoupons);
+    document.getElementById('couponTypeFilter')?.addEventListener('change', filterCoupons);
+    document.getElementById('usedCouponSearch')?.addEventListener('input', filterUsedCoupons);
+
+    document.getElementById('selectAllCoupons')?.addEventListener('click', function () {
+      getVisibleCheckboxes().forEach(cb => { cb.checked = true; });
+      updateSelectedCounter();
+    });
+
+    document.getElementById('clearAllCoupons')?.addEventListener('click', function () {
+      checkboxes().forEach(cb => { cb.checked = false; });
+      updateSelectedCounter();
+    });
+
+    document.getElementById('printSelectedCoupons')?.addEventListener('click', function () {
+      const selected = getSelectedCoupons();
+      if (!ensureSelection(selected)) return;
+      printArea.innerHTML = buildReceiptHtml(selected);
+      window.print();
+    });
+
+    document.getElementById('downloadSelectedPdf')?.addEventListener('click', function () {
+      const selected = getSelectedCoupons();
+      if (!ensureSelection(selected)) return;
+      printArea.innerHTML = buildReceiptHtml(selected);
+      const target = printArea.querySelector('.print-wrapper');
+      if (!target || !window.html2pdf) return;
+      html2pdf().set({
+        margin: [8, 8, 8, 8],
+        filename: `avelqua-coupons-${Date.now()}.pdf`,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 2, useCORS: true },
+        jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] }
+      }).from(target).save();
+    });
+
+    updateSelectedCounter();
+  })();
+
+  function toggleCouponFields(){
+    const type = document.getElementById('coupon_type')?.value;
+    const discountFields = document.getElementById('discountFields');
+    const freeFields = document.getElementById('freeFields');
+    if (discountFields) discountFields.style.display = type === 'discount' ? 'grid' : 'none';
+    if (freeFields) freeFields.style.display = type === 'free' ? 'grid' : 'none';
+  }
+
+  function toggleDiscountMode(){
+    const mode = document.getElementById('discount_mode')?.value;
+    const amountBox = document.getElementById('discountAmountBox');
+    const percentBox = document.getElementById('discountPercentBox');
+    if (amountBox) amountBox.style.display = mode === 'amount' ? 'block' : 'none';
+    if (percentBox) percentBox.style.display = mode === 'percent' ? 'block' : 'none';
+  }
+
+  toggleCouponFields();
+  toggleDiscountMode();
+</script>
+
+<%- include('../partials/admin-shell-end') %>

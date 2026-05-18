@@ -1,0 +1,51 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+%>
+
+<%- include('partials/head', { pageCss: 'checkout.css' }) %>
+<%- include('partials/nav') %>
+<main class="container section">
+  <div class="page-head">
+    <span class="badge"><%= safeT('checkout.badge','CHECKOUT') %></span>
+    <h1 class="gradient-text"><%= safeT('checkout.title','Review order before payment') %></h1>
+    <p class="muted lead"><%= safeT('checkout.desc','Confirm package details, apply a discount code, and continue to payment.') %></p>
+  </div>
+  <div class="card">
+    <% if (discountError) { %><div class="inline-alert error"><%= discountError %></div><% } %>
+    <% if (discountMessage) { %><div class="inline-alert success"><%= discountMessage %></div><% } %>
+    <% if (!hasCart) { %>
+      <div class="empty-state">
+        <p><%= safeT('cart.empty', 'Your cart is empty') %></p>
+        <a class="btn primary" href="/pricing?lang=<%= lang || 'th' %>"><%= safeT('cart.choose_package','Choose package') %></a>
+      </div>
+    <% } else { %>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th><%= safeT('pricing.package_name','Package') %></th><th><%= safeT('payment.total','Price') %></th></tr></thead>
+          <tbody>
+            <% (cartItems || []).forEach(function(item){ %>
+              <tr><td><strong><%= item.packageName %></strong></td><td>฿<%= Number(item.price || 0).toLocaleString('th-TH') %></td></tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
+      <form class="form-grid" method="post" action="/payment/checkout?lang=<%= lang || 'th' %>" style="margin-top:16px">
+        <input name="discountCode" value="<%= discountCode || '' %>" placeholder="<%= safeT('payment.coupon_placeholder','Enter discount code') %>">
+        <button class="btn" type="submit"><%= safeT('payment.apply_coupon','Apply code') %></button>
+      </form>
+      <div class="grid grid-2" style="margin-top:18px">
+        <div class="metric-item"><div class="caption">Subtotal</div><strong>฿<%= Number(summary && summary.subtotal || 0).toLocaleString('th-TH') %></strong></div>
+        <div class="metric-item"><div class="caption"><%= safeT('payment.discount','Discount') %></div><strong>฿<%= Number(summary && summary.discountAmount || 0).toLocaleString('th-TH') %></strong></div>
+      </div>
+      <div class="card" style="margin-top:18px">
+        <div class="caption"><%= safeT('payment.total','Total') %></div>
+        <div class="price">฿<%= Number(summary && summary.total || 0).toLocaleString('th-TH') %></div>
+        <div class="btn-row" style="margin-top:14px">
+          <a class="btn primary" href="/payment/pay?discountCode=<%= encodeURIComponent(discountCode || '') %>&lang=<%= lang || 'th' %>"><%= safeT('checkout.confirm_payment','Confirm and pay') %></a>
+          <a class="btn" href="/cart?lang=<%= lang || 'th' %>"><%= safeT('checkout.back_cart','Back to cart') %></a>
+        </div>
+      </div>
+    <% } %>
+  </div>
+</main>
+<%- include('partials/footer') %>

@@ -1,0 +1,76 @@
+<%- include('../partials/app-shell') %>
+<link rel="stylesheet" href="../public/css/app-status.css">
+
+<section class="status-page delete-account-page">
+  <section class="status-hero card">
+    <div>
+      <span class="status-chip danger-chip">DELETE ACCOUNT</span>
+      <h3>ลบบัญชี</h3>
+      <p>ยืนยันด้วยรหัส OTP ก่อนลบบัญชี เพื่อความปลอดภัยของบัญชีคุณ</p>
+    </div>
+  </section>
+
+  <% if (success) { %>
+    <div class="delete-alert success"><%= success %></div>
+  <% } %>
+
+  <% if (error) { %>
+    <div class="delete-alert danger"><%= error %></div>
+  <% } %>
+
+  <section class="card status-card delete-card">
+    <div class="delete-warning">
+      <div class="delete-icon">⚠️</div>
+      <div>
+        <h3>คำเตือนก่อนลบบัญชี</h3>
+        <p>
+          เมื่อลบบัญชี ระบบจะคืน Scoin คงเหลือเข้าสู่ระบบ และลบข้อมูลที่เกี่ยวข้องกับผู้ใช้งาน
+          การทำรายการนี้ต้องยืนยันด้วย OTP ทางอีเมล
+        </p>
+      </div>
+    </div>
+
+    <div class="delete-grid">
+      <form method="POST" action="/app/delete-account/request-otp" class="delete-box">
+        <div>
+          <h4>1. ขอรหัส OTP</h4>
+          <p>ระบบจะส่ง OTP ไปยังอีเมลบัญชีของคุณ</p>
+        </div>
+
+        <button type="submit" class="delete-premium-btn primary">
+  📩 ส่ง OTP
+</button>
+      </form>
+
+      <form method="POST" action="/app/delete-account/confirm" class="delete-box danger">
+        <div>
+          <h4>2. ยืนยันลบบัญชี</h4>
+          <p>กรอกรหัส OTP 6 หลักที่ได้รับทางอีเมล</p>
+        </div>
+
+        <label class="delete-label">รหัส OTP</label>
+        <input
+          class="delete-otp-input"
+          type="text"
+          name="otp_code"
+          maxlength="6"
+          inputmode="numeric"
+          required
+          placeholder="กรอก OTP 6 หลัก"
+        >
+
+        <button type="submit" class="delete-premium-btn danger">
+  🗑️ ยืนยันลบบัญชี
+</button>
+      </form>
+    </div>
+
+    <div class="delete-actions">
+      <a href="/app/status" class="delete-premium-btn soft">
+  ← กลับไปหน้าสถานะบัญชี
+</a>
+    </div>
+  </section>
+</section>
+
+<%- include('../partials/app-shell-end') %>

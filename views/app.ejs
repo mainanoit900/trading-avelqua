@@ -1,0 +1,57 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+%>
+
+<%- include('partials/head', { pageCss: 'app.css' }) %>
+<%- include('partials/nav') %>
+
+<main class="container section app-page app-theme">
+  <section class="app-hero card">
+    <div>
+      <span class="app-chip"><%= safeT('dashboard.badge', 'USER DASHBOARD') %></span>
+      <h1 class="app-title"><%= safeT('dashboard.title', 'Account overview') %></h1>
+      <p class="muted app-lead"><%= safeT('dashboard.desc', 'Check your package, usage rights, and important account details in one place.') %></p>
+    </div>
+    <div class="hero-orb hero-orb-a"></div>
+    <div class="hero-orb hero-orb-b"></div>
+  </section>
+
+  <section class="grid grid-2 app-stat-grid">
+    <section class="card card-lux">
+      <div class="card-head-simple">
+        <div>
+          <h2><%= safeT('dashboard.profile', 'Profile') %></h2>
+          <p class="muted">ข้อมูลผู้ใช้งานและสถานะแพ็กเกจปัจจุบัน</p>
+        </div>
+      </div>
+      <div class="stack app-profile-list">
+        <div class="metric-item metric-lux"><div class="caption"><%= safeT('common.name','Name') %></div><strong><%= (user && user.name) || '-' %></strong></div>
+        <div class="metric-item metric-lux"><div class="caption"><%= safeT('common.email','Email') %></div><strong><%= (user && user.email) || '-' %></strong></div>
+        <div class="metric-item metric-lux"><div class="caption"><%= safeT('dashboard.package','Current package') %></div><strong><%= (user && user.activePackageName) || safeT('dashboard.no_package','No package yet') %></strong></div>
+        <div class="grid grid-2">
+          <div class="metric-item metric-lux"><div class="caption"><%= safeT('dashboard.start_date','Start date') %></div><strong><%= (user && user.packageStartAt) || '-' %></strong></div>
+          <div class="metric-item metric-lux"><div class="caption"><%= safeT('dashboard.end_date','Expiry date') %></div><strong><%= (user && user.packageEndAt) || '-' %></strong></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="card card-lux">
+      <div class="card-head-simple">
+        <div>
+          <h2><%= safeT('dashboard.bot_rights','Bot usage rights') %></h2>
+          <p class="muted">สิทธิ์การใช้งานที่อ่านง่ายขึ้นในธีมเข้ม</p>
+        </div>
+      </div>
+      <div class="grid grid-2 quick-kpis">
+        <div class="metric-item metric-lux accent-soft"><div class="caption">Lot</div><strong><%= (user && user.lotMin) || 0 %> - <%= (user && user.lotMax) || 0 %></strong></div>
+        <div class="metric-item metric-lux accent-soft"><div class="caption">Port</div><strong><%= (user && user.portMin) || 0 %> - <%= (user && user.portMax) || 0 %></strong></div>
+      </div>
+      <div class="metric-item metric-lux" style="margin-top:14px">
+        <div class="caption"><%= safeT('dashboard.email_status','Email verification') %></div>
+        <strong><%= (user && user.emailVerified) ? safeT('dashboard.verified','Verified') : safeT('dashboard.unverified','Not verified yet') %></strong>
+      </div>
+      <p class="muted" style="margin-top:16px"><%= safeT('dashboard.note', 'When you renew, the remaining days can continue and the higher package rights can be applied.') %></p>
+    </section>
+  </section>
+</main>
+<%- include('partials/footer') %>

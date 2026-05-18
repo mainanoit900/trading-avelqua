@@ -1,0 +1,238 @@
+<%
+const settings = (typeof scoinSettings !== 'undefined' && scoinSettings) ? scoinSettings : {};
+const econ = (typeof economySettings !== 'undefined' && economySettings) ? economySettings : {};
+const safeOrders = Array.isArray(orders) ? orders : [];
+const safeTransactions = Array.isArray(transactions) ? transactions : [];
+const safeWallets = Array.isArray(wallets) ? wallets : [];
+const safePriceHistory = Array.isArray(priceHistory) ? priceHistory : [];
+const safeTreasuryWallets = Array.isArray(treasuryWallets) ? treasuryWallets : [];
+const safeEconomyLogs = Array.isArray(economyLogs) ? economyLogs : [];
+const fundFromLogs = {
+  company_profit_thb: safeEconomyLogs.reduce((sum, l) => sum + Number(l.company_profit_thb || 0), 0),
+  network_bonus_thb: safeEconomyLogs.reduce((sum, l) => sum + Number(l.network_bonus_thb || 0), 0),
+  buyback_reserve_thb: safeEconomyLogs.reduce((sum, l) => sum + Number(l.buyback_reserve_thb || 0), 0),
+  burn_liquidity_thb: safeEconomyLogs.reduce((sum, l) => sum + Number(l.burn_liquidity_thb || 0), 0),
+  promotion_thb: safeEconomyLogs.reduce((sum, l) => sum + Number(l.promotion_thb || 0), 0),
+  system_marketing_thb: safeEconomyLogs.reduce((sum, l) => sum + Number(l.system_marketing_thb || 0), 0),
+  user_receive_scoin: safeEconomyLogs.reduce((sum, l) => sum + Number(l.user_receive_scoin || 0), 0)
+};
+const fund = (typeof fundSummary !== 'undefined' && fundSummary) ? fundSummary : fundFromLogs;
+const statsFromOrders = {
+  pending: safeOrders.filter((o) => String(o.status || '').toLowerCase() === 'pending').length,
+  approved: safeOrders.filter((o) => String(o.status || '').toLowerCase() === 'approved').length,
+  rejected: safeOrders.filter((o) => String(o.status || '').toLowerCase() === 'rejected').length,
+  approved_buy_volume: safeOrders.filter((o) => String(o.order_type || '').toLowerCase() === 'buy' && String(o.status || '').toLowerCase() === 'approved').reduce((sum, o) => sum + Number(o.scoin_amount || 0), 0),
+  approved_sell_volume: safeOrders.filter((o) => String(o.order_type || '').toLowerCase() === 'sell' && String(o.status || '').toLowerCase() === 'approved').reduce((sum, o) => sum + Number(o.scoin_amount || 0), 0)
+};
+const stats = (typeof orderStats !== 'undefined' && orderStats) ? orderStats : statsFromOrders;
+const pg = (typeof pagers !== 'undefined' && pagers) ? pagers : {};
+const currentNowThai = (typeof nowThai !== 'undefined' && nowThai) ? nowThai : new Date().toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false });
+function fmtNum(value, min = 2, max = 4) { return Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: min, maximumFractionDigits: max }); }
+function fmtMoney(value) { return Number(value || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }); }
+function fmtDate(value) { if (!value) return '-'; try { return new Date(value).toLocaleString('th-TH', { timeZone: 'Asia/Bangkok', hour12: false }); } catch (e) { return '-'; } }
+function pagerUrl(key, page) {
+  const qs = new URLSearchParams();
+  qs.set(key, page);
+  return '/admin/scoin-market?' + qs.toString();
+}
+function renderPager(pager, key) {
+  if (!pager || Number(pager.pages || 1) <= 1) return '';
+  const page = Number(pager.page || 1);
+  const pages = Number(pager.pages || 1);
+  const prev = Math.max(1, page - 1);
+  const next = Math.min(pages, page + 1);
+  return `<div class="scoin-pagination"><a class="${page <= 1 ? 'disabled' : ''}" href="${pagerUrl(key, prev)}">ก่อนหน้า</a><span>หน้า ${page} / ${pages}</span><a class="${page >= pages ? 'disabled' : ''}" href="${pagerUrl(key, next)}">ถัดไป</a></div>`;
+}
+%>
+
+<%- include('../partials/admin-shell') %>
+<link rel="stylesheet" href="/public/css/admin-scoin-market.css">
+
+<style>
+.scoin-admin-page{display:grid;gap:22px}.scoin-hero{border-radius:28px;padding:26px;background:radial-gradient(circle at top right,rgba(90,120,255,.18),transparent 30%),linear-gradient(180deg,rgba(7,20,44,.96),rgba(7,18,39,.98));border:1px solid rgba(120,160,255,.16);box-shadow:0 30px 60px rgba(0,0,0,.24)}.scoin-hero-grid{display:grid;grid-template-columns:1.15fr .85fr;gap:18px;align-items:center}.scoin-chip{display:inline-flex;padding:6px 14px;border-radius:999px;background:rgba(96,96,255,.16);border:1px solid rgba(130,130,255,.22);color:#d7dcff;font-size:12px;font-weight:800;letter-spacing:.06em}.scoin-hero h1{margin:12px 0 0;color:#fff;font-size:34px}.scoin-hero p,.scoin-card-sub{color:#93a8d0;line-height:1.75}.scoin-top-summary,.scoin-grid-4{display:grid;grid-template-columns:repeat(4,1fr);gap:12px}.scoin-grid-2{display:grid;grid-template-columns:1fr 1fr;gap:20px}.scoin-grid-3{display:grid;grid-template-columns:repeat(3,1fr);gap:12px}.scoin-kpis-6{display:grid;grid-template-columns:repeat(6,1fr);gap:12px}.scoin-summary-box,.scoin-kpi,.scoin-section-card,.scoin-treasury-card{border:1px solid rgba(130,154,197,.14);background:linear-gradient(180deg,rgba(8,18,36,.94),rgba(9,18,36,.78));border-radius:18px;padding:16px}.scoin-section-card{border-radius:22px;padding:0;overflow:hidden}.scoin-card-head{display:flex;justify-content:space-between;gap:14px;align-items:flex-start;padding:18px 20px 0}.scoin-card-head h3{margin:0;color:#fff;font-size:20px}.scoin-card-body{padding:18px 20px 20px}.scoin-summary-box span,.scoin-kpi span,.scoin-treasury-card span{display:block;color:#8fa5ce;font-size:13px;margin-bottom:8px}.scoin-summary-box strong,.scoin-kpi strong,.scoin-treasury-card strong{display:block;color:#fff;font-size:22px;word-break:break-word}.scoin-form-grid{display:grid;gap:14px}.scoin-form-grid label{display:block;color:#90a7d1;font-size:13px;margin-bottom:7px}.scoin-form-grid input,.scoin-form-grid select{width:100%;min-height:46px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0a1628;color:#fff;padding:0 14px}.scoin-inline-check{display:flex!important;align-items:center;gap:10px;color:#e7efff}.scoin-inline-check input{width:18px;min-height:18px}.scoin-recommend-box,.scoin-economy-model{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:16px}.scoin-recommend-box>div,.scoin-economy-model>div{border:1px solid rgba(130,154,197,.12);border-radius:16px;background:rgba(255,255,255,.03);padding:14px}.scoin-economy-model b{display:block;color:#fff;font-size:22px}.scoin-economy-model span,.scoin-recommend-box span,.scoin-recommend-box small{display:block;color:#8fa5ce}.scoin-chart-panel{height:330px;border:1px solid rgba(130,154,197,.12);border-radius:18px;padding:14px;background:rgba(255,255,255,.02)}.scoin-table-toolbar{display:flex;justify-content:space-between;gap:12px;align-items:center;margin-bottom:12px;flex-wrap:wrap}.scoin-table-search{min-width:280px;min-height:42px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0a1628;color:#fff;padding:0 12px}.scoin-export-links{display:flex;gap:8px;flex-wrap:wrap}.scoin-export-links a,.scoin-pagination a{display:inline-flex;align-items:center;justify-content:center;min-height:34px;padding:6px 12px;border-radius:999px;background:rgba(100,125,255,.16);border:1px solid rgba(120,145,255,.22);color:#dfe8ff;text-decoration:none;font-weight:700;font-size:12px}.scoin-pagination a.disabled{pointer-events:none;opacity:.45}.scoin-pagination{display:flex;gap:10px;align-items:center;justify-content:flex-end;margin-top:12px;color:#8fa5ce}.scoin-table-wrap{overflow:auto;border:1px solid rgba(130,154,197,.12);border-radius:18px}.scoin-table{width:100%;min-width:1100px;border-collapse:collapse}.scoin-table th,.scoin-table td{padding:12px;text-align:left;border-top:1px solid rgba(130,154,197,.10);vertical-align:top}.scoin-table th{background:rgba(255,255,255,.03);color:#8fa5ce;font-size:12px;text-transform:uppercase}.scoin-empty{padding:18px;color:#8fa5ce}.scoin-cell-sub{margin-top:4px;color:#8fa5ce;font-size:12px}.scoin-badge{display:inline-flex;min-height:28px;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:800;border:1px solid transparent}.scoin-badge.buy,.scoin-badge.approved,.scoin-badge.active,.scoin-badge.in{color:#9df2c2;background:rgba(23,201,100,.14);border-color:rgba(23,201,100,.22)}.scoin-badge.sell,.scoin-badge.rejected,.scoin-badge.cancelled,.scoin-badge.out,.scoin-badge.inactive{color:#ffb8c6;background:rgba(255,92,122,.14);border-color:rgba(255,92,122,.22)}.scoin-badge.pending{color:#ffe2a8;background:rgba(255,184,77,.14);border-color:rgba(255,184,77,.22)}.scoin-actions{display:flex;gap:8px;flex-wrap:wrap}.scoin-head-pills{display:flex;gap:8px;flex-wrap:wrap}.scoin-head-pills span{border:1px solid rgba(130,154,197,.14);border-radius:999px;padding:7px 12px;color:#8fa5ce}.scoin-head-pills strong{color:#fff}.scoin-treasury-grid{display:grid;grid-template-columns:repeat(5,1fr);gap:12px}@media(max-width:1280px){.scoin-kpis-6,.scoin-grid-4,.scoin-treasury-grid{grid-template-columns:repeat(3,1fr)}}@media(max-width:980px){.scoin-hero-grid,.scoin-grid-2,.scoin-grid-3,.scoin-kpis-6,.scoin-grid-4,.scoin-treasury-grid,.scoin-recommend-box,.scoin-economy-model{grid-template-columns:1fr}.scoin-hero h1{font-size:28px}}
+</style>
+
+<section class="admin-page-section scoin-admin-page">
+  <section class="scoin-hero">
+    <div class="scoin-hero-grid">
+      <div>
+        <div class="scoin-chip">SCOIN MARKET CONTROL</div>
+        <h1>ศูนย์ควบคุมระบบ Scoin</h1>
+        <p>จัดระเบียบหน้าเดียวครบ: ตั้งค่าตลาด / เศรษฐกิจ / กองทุน / กราฟเรียลไทม์ / รายการซื้อขาย / กระเป๋า / ประวัติ พร้อมวันที่เวลาไทยและ Export Excel</p>
+        <p>อัปเดตล่าสุด: <b><%= currentNowThai %></b></p>
+      </div>
+      <div class="scoin-top-summary">
+        <div class="scoin-summary-box"><span>ราคา 1 Scoin</span><strong>฿<%= fmtNum(settings.current_price_thb || 0.10, 2, 4) %></strong></div>
+        <div class="scoin-summary-box"><span>ค่าธรรมเนียมซื้อ</span><strong><%= fmtNum(settings.buy_fee_percent || settings.transfer_fee_percent || 3, 2, 2) %>%</strong></div>
+        <div class="scoin-summary-box"><span>ค่าธรรมเนียมขาย</span><strong><%= fmtNum(settings.sell_fee_percent || settings.transfer_fee_percent || 3, 2, 2) %>%</strong></div>
+        <div class="scoin-summary-box"><span>ค่าธรรมเนียมโอน</span><strong><%= fmtNum(settings.transfer_fee_percent || 1.2, 2, 2) %>%</strong></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="scoin-kpis-6">
+    <div class="scoin-kpi"><span>คำสั่งรออนุมัติ</span><strong><%= stats.pending || 0 %></strong></div>
+    <div class="scoin-kpi"><span>คำสั่งอนุมัติแล้ว</span><strong><%= stats.approved || 0 %></strong></div>
+    <div class="scoin-kpi"><span>คำสั่งถูกปฏิเสธ</span><strong><%= stats.rejected || 0 %></strong></div>
+    <div class="scoin-kpi"><span>Buy Volume</span><strong><%= fmtNum(stats.approved_buy_volume || 0) %></strong></div>
+    <div class="scoin-kpi"><span>Sell Volume</span><strong><%= fmtNum(stats.approved_sell_volume || 0) %></strong></div>
+    <div class="scoin-kpi"><span>Wallet ทั้งหมด</span><strong><%= (pg.wallets && pg.wallets.total) || safeWallets.length %></strong></div>
+  </section>
+
+  <section class="scoin-section-card">
+    <div class="scoin-card-head">
+      <div><h3>กราฟตลาด Scoin เรียลไทม์ 24 ชั่วโมง</h3><p class="scoin-card-sub">ดึงจากคำสั่งซื้อขายจริงในฐานข้อมูล ราคาเส้นอ้างอิงขยับตามแรงซื้อ/ขาย ไม่แก้ข้อมูลย้อนหลัง</p></div>
+      <div class="scoin-head-pills"><span>Buy <strong id="scoinBuyTotal">0</strong></span><span>Sell <strong id="scoinSellTotal">0</strong></span><span>Orders <strong id="scoinOrderTotal">0</strong></span></div>
+    </div>
+    <div class="scoin-card-body"><div class="scoin-chart-panel"><canvas id="scoinRealtimeChart" height="110"></canvas></div></div>
+  </section>
+
+  <section class="scoin-grid-2">
+    <section class="scoin-section-card">
+      <div class="scoin-card-head"><div><h3>ตั้งค่าตลาด Scoin</h3><p class="scoin-card-sub">ตั้งราคา ค่าธรรมเนียมซื้อ / ขาย / โอน และ Auto Price</p></div></div>
+      <div class="scoin-card-body">
+        <form method="POST" action="/admin/scoin-market/settings" class="scoin-form-grid">
+          <div class="scoin-grid-4">
+            <div><label>ราคา Scoin (THB)</label><input type="number" name="current_price_thb" step="0.0001" value="<%= Number(settings.current_price_thb || 0.10) %>"></div>
+            <div><label>ค่าธรรมเนียมซื้อ %</label><input type="number" name="buy_fee_percent" step="0.01" value="<%= Number(settings.buy_fee_percent || settings.transfer_fee_percent || 3) %>"></div>
+            <div><label>ค่าธรรมเนียมขาย %</label><input type="number" name="sell_fee_percent" step="0.01" value="<%= Number(settings.sell_fee_percent || settings.transfer_fee_percent || 3) %>"></div>
+            <div><label>ค่าธรรมเนียมโอน %</label><input type="number" name="transfer_fee_percent" step="0.01" value="<%= Number(settings.transfer_fee_percent || 1.2) %>"></div>
+            <div><label>จำนวน Scoin ในตลาด</label><input type="number" name="market_supply" step="0.0001" value="<%= Number(settings.market_supply || 0) %>"></div>
+            <div><label class="scoin-inline-check"><input type="checkbox" name="auto_price_enabled" value="1" <%= settings.auto_price_enabled ? 'checked' : '' %>> เปิด Auto Price</label></div>
+          </div>
+          <button type="submit" class="btn btn-primary">บันทึกการตั้งค่าตลาด</button>
+        </form>
+      </div>
+    </section>
+
+    <section class="scoin-section-card">
+      <div class="scoin-card-head"><div><h3>กองทุนกลาง Scoin</h3><p class="scoin-card-sub">แสดงตามข้อมูลที่มีในระบบ</p></div></div>
+      <div class="scoin-card-body">
+        <div class="scoin-grid-3">
+          <div class="scoin-summary-box"><span>Wallet Code</span><strong><%= (hostWallet && hostWallet.wallet_code) || 'HOST-SCOIN-WALLET' %></strong></div>
+          <div class="scoin-summary-box"><span>Scoin รับคืน</span><strong><%= fmtNum((hostWallet && hostWallet.balance) || 0) %></strong></div>
+          <div class="scoin-summary-box"><span>กองทุนกลาง</span><strong>฿<%= fmtMoney((hostWallet && hostWallet.thb_balance) || 0) %></strong></div>
+        </div>
+      </div>
+    </section>
+  </section>
+
+  <section class="scoin-section-card">
+    <div class="scoin-card-head"><div><h3>สรุปยอดกองทุนแบบเรียลไทม์</h3><p class="scoin-card-sub">รวมยอดจากประวัติการกระจายเศรษฐกิจ Scoin ทั้งหมด</p></div></div>
+    <div class="scoin-card-body"><div class="scoin-grid-4">
+      <div class="scoin-summary-box"><span>บริษัท</span><strong>฿<%= fmtMoney(fund.company_profit_thb || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>สายงาน</span><strong>฿<%= fmtMoney(fund.network_bonus_thb || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>Buyback</span><strong>฿<%= fmtMoney(fund.buyback_reserve_thb || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>Burn / Liquidity</span><strong>฿<%= fmtMoney(fund.burn_liquidity_thb || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>Promotion</span><strong>฿<%= fmtMoney(fund.promotion_thb || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>System / Marketing</span><strong>฿<%= fmtMoney(fund.system_marketing_thb || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>ผู้ใช้ได้รับ Scoin</span><strong><%= fmtNum(fund.user_receive_scoin || 0) %></strong></div>
+      <div class="scoin-summary-box"><span>Scoin ในตลาด</span><strong><%= fmtNum(settings.market_supply || 0) %></strong></div>
+    </div></div>
+  </section>
+
+  <section class="scoin-section-card">
+    <div class="scoin-card-head"><div><h3>ตั้งค่าเศรษฐกิจ Scoin</h3><p class="scoin-card-sub">ค่าเริ่มต้นตามโมเดล 35/20/20/10/10/5 และโบนัสสายงาน 8/5/3/2/2</p></div></div>
+    <div class="scoin-card-body">
+      <div class="scoin-economy-model"><div><b>35%</b><span>บริษัท</span></div><div><b>20%</b><span>สายงาน</span></div><div><b>20%</b><span>Buyback</span></div><div><b>10%</b><span>Burn / Liquidity</span></div><div><b>10%</b><span>Promotion</span></div><div><b>5%</b><span>System</span></div></div>
+      <form method="POST" action="/admin/scoin-market/settings" class="scoin-form-grid">
+        <div class="scoin-grid-4">
+          <div><label>1 บาท = กี่ Scoin</label><input type="number" step="0.0001" name="thb_to_scoin_rate" value="<%= Number(econ.thb_to_scoin_rate || 0.8) %>"></div>
+          <div><label>บริษัท %</label><input type="number" step="0.01" name="company_profit_percent" value="<%= Number(econ.company_profit_percent || 35) %>"></div>
+          <div><label>สายงานรวม %</label><input type="number" step="0.01" name="network_bonus_percent" value="<%= Number(econ.network_bonus_percent || 20) %>"></div>
+          <div><label>Buyback Reserve %</label><input type="number" step="0.01" name="buyback_reserve_percent" value="<%= Number(econ.buyback_reserve_percent || 20) %>"></div>
+          <div><label>Burn / Liquidity %</label><input type="number" step="0.01" name="burn_liquidity_percent" value="<%= Number(econ.burn_liquidity_percent || 10) %>"></div>
+          <div><label>Promotion %</label><input type="number" step="0.01" name="promotion_percent" value="<%= Number(econ.promotion_percent || 10) %>"></div>
+          <div><label>System / Marketing %</label><input type="number" step="0.01" name="system_marketing_percent" value="<%= Number(econ.system_marketing_percent || 5) %>"></div>
+          <div><label class="scoin-inline-check"><input type="checkbox" name="economy_enabled" value="1" <%= econ.is_enabled !== false ? 'checked' : '' %>> เปิดระบบเศรษฐกิจ</label></div>
+          <div><label>โบนัสชั้น 1 %</label><input type="number" step="0.01" name="level_1_percent" value="<%= Number(econ.level_1_percent || 8) %>"></div>
+          <div><label>โบนัสชั้น 2 %</label><input type="number" step="0.01" name="level_2_percent" value="<%= Number(econ.level_2_percent || 5) %>"></div>
+          <div><label>โบนัสชั้น 3 %</label><input type="number" step="0.01" name="level_3_percent" value="<%= Number(econ.level_3_percent || 3) %>"></div>
+          <div><label>โบนัสชั้น 4 %</label><input type="number" step="0.01" name="level_4_percent" value="<%= Number(econ.level_4_percent || 2) %>"></div>
+          <div><label>โบนัสชั้น 5 %</label><input type="number" step="0.01" name="level_5_percent" value="<%= Number(econ.level_5_percent || 2) %>"></div>
+          <div><label>จำกัดรับซื้อคืน % / วัน</label><input type="number" step="0.01" name="daily_buyback_limit_percent" value="<%= Number(econ.daily_buyback_limit_percent || 5) %>"></div>
+          <div><label>Burn ตอนใช้จ่าย %</label><input type="number" step="0.01" name="burn_on_spend_percent" value="<%= Number(econ.burn_on_spend_percent || 5) %>"></div>
+        </div>
+        <button type="submit" class="btn btn-primary">บันทึกการตั้งค่าเศรษฐกิจ</button>
+      </form>
+    </div>
+  </section>
+
+  <section class="scoin-section-card">
+    <div class="scoin-card-head"><div><h3>กองทุนกลาง Scoin แยกตามกระเป๋า</h3><p class="scoin-card-sub">ข้อมูลจาก scoin_treasury_wallets</p></div></div>
+    <div class="scoin-card-body"><div class="scoin-treasury-grid">
+      <% if (!safeTreasuryWallets.length) { %><div class="scoin-empty">ยังไม่มีกองทุนกลาง</div><% } %>
+      <% safeTreasuryWallets.forEach(function(row){ %><div class="scoin-treasury-card"><span><%= row.wallet_name || row.wallet_key || '-' %></span><strong>฿<%= fmtMoney(row.balance_thb || 0) %></strong><small><%= row.note || row.wallet_key || '-' %></small></div><% }) %>
+    </div></div>
+  </section>
+
+  <section class="scoin-section-card">
+    <div class="scoin-card-head"><div><h3>คำสั่งซื้อขาย Scoin</h3><p class="scoin-card-sub">แสดงหน้าละ 10 แถว</p></div><div class="scoin-export-links"><a href="/admin/scoin-market/export/orders">Export Excel</a></div></div>
+    <div class="scoin-card-body"><div class="scoin-table-toolbar"><input type="search" class="scoin-table-search" data-scoin-search="ordersTable" placeholder="ค้นหาในหน้านี้"><span>ทั้งหมด <strong><%= (pg.orders && pg.orders.total) || safeOrders.length %></strong> รายการ</span></div><div class="scoin-table-wrap"><table class="scoin-table scoin-smart-table" id="ordersTable"><thead><tr><th>ID</th><th>วันที่ไทย</th><th>ผู้ใช้</th><th>ประเภท</th><th>Wallet</th><th>Scoin</th><th>ราคา</th><th>รวม</th><th>ค่าธรรมเนียม</th><th>สุทธิ</th><th>สถานะ</th><th>จัดการ</th></tr></thead><tbody>
+      <% if (!safeOrders.length) { %><tr><td colspan="12" class="scoin-empty">ยังไม่มีคำสั่งตลาด Scoin</td></tr><% } %>
+      <% safeOrders.forEach(function(order){ %><tr><td>#<%= order.display_id || order.id %></td><td><%= fmtDate(order.created_at) %></td><td><strong><%= order.full_name || '-' %></strong><div class="scoin-cell-sub"><%= order.email || '-' %></div></td><td><span class="scoin-badge <%= String(order.order_type || '').toLowerCase() %>"><%= order.order_type || '-' %></span></td><td><%= order.wallet_code || '-' %></td><td><%= fmtNum(order.scoin_amount || 0) %></td><td>฿<%= fmtNum(order.price_thb || 0) %></td><td>฿<%= fmtMoney(order.gross_amount_thb || 0) %></td><td><%= fmtNum(order.fee_percent || 0,2,2) %>% / ฿<%= fmtMoney(order.fee_amount_thb || 0) %></td><td>฿<%= fmtMoney(order.net_amount_thb || 0) %></td><td><span class="scoin-badge <%= String(order.status || '').toLowerCase() %>"><%= order.status || '-' %></span></td><td><div class="scoin-actions"><% if (String(order.status || '') === 'pending') { %><form method="POST" action="/admin/scoin-market/<%= order.id %>/approve"><button class="btn btn-small btn-success" type="submit">Approve</button></form><form method="POST" action="/admin/scoin-market/<%= order.id %>/reject"><button class="btn btn-small btn-danger" type="submit">Reject</button></form><% } else { %><span class="scoin-cell-sub">ดำเนินการแล้ว</span><% } %></div></td></tr><% }) %>
+    </tbody></table></div></div>
+  </section>
+
+  <section class="scoin-grid-2">
+    <section class="scoin-section-card"><div class="scoin-card-head"><div><h3>รหัสกระเป๋า Scoin</h3><p class="scoin-card-sub">แสดงหน้าละ 10 แถว</p></div><div class="scoin-export-links"><a href="/admin/scoin-market/export/wallets">Export Excel</a></div></div><div class="scoin-card-body"><div class="scoin-table-toolbar"><input type="search" class="scoin-table-search" data-scoin-search="walletsTable" placeholder="ค้นหาในหน้านี้"><span><strong><%= (pg.wallets && pg.wallets.total) || safeWallets.length %></strong> กระเป๋า</span></div><div class="scoin-table-wrap"><table class="scoin-table scoin-smart-table" id="walletsTable"><thead><tr><th>ID</th><th>User</th><th>Wallet Code</th><th>ประเภท</th><th>สถานะ</th><th>สร้างเมื่อ</th></tr></thead><tbody><% if (!safeWallets.length) { %><tr><td colspan="6" class="scoin-empty">ยังไม่มีรหัสกระเป๋า</td></tr><% } %><% safeWallets.forEach(function(wallet){ %><tr><td>#<%= wallet.display_id || wallet.id %></td><td><strong><%= wallet.full_name || '-' %></strong><div class="scoin-cell-sub"><%= wallet.email || '-' %></div></td><td><%= wallet.wallet_code || '-' %></td><td><%= wallet.wallet_type || '-' %></td><td><span class="scoin-badge <%= wallet.is_active ? 'active' : 'inactive' %>"><%= wallet.is_active ? 'active' : 'inactive' %></span></td><td><%= fmtDate(wallet.created_at) %></td></tr><% }) %></tbody></table></div></div></section>
+
+    <section class="scoin-section-card"><div class="scoin-card-head"><div><h3>ประวัติการเคลื่อนไหว Scoin</h3><p class="scoin-card-sub">แสดงหน้าละ 10 แถว</p></div><div class="scoin-export-links"><a href="/admin/scoin-market/export/transactions">Export Excel</a></div></div><div class="scoin-card-body"><div class="scoin-table-toolbar"><input type="search" class="scoin-table-search" data-scoin-search="transactionsTable" placeholder="ค้นหาในหน้านี้"><span><strong><%= (pg.transactions && pg.transactions.total) || safeTransactions.length %></strong> รายการ</span></div><div class="scoin-table-wrap"><table class="scoin-table scoin-smart-table" id="transactionsTable"><thead><tr><th>ID</th><th>วันที่ไทย</th><th>User</th><th>ประเภท</th><th>ทิศทาง</th><th>จำนวน</th><th>ค่าธรรมเนียม</th><th>ก่อน</th><th>หลัง</th></tr></thead><tbody><% if (!safeTransactions.length) { %><tr><td colspan="9" class="scoin-empty">ยังไม่มีประวัติการเคลื่อนไหว</td></tr><% } %><% safeTransactions.forEach(function(tx){ %><tr><td>#<%= tx.display_id || tx.id %></td><td><%= fmtDate(tx.created_at) %></td><td><strong><%= tx.full_name || '-' %></strong><div class="scoin-cell-sub"><%= tx.email || '-' %></div></td><td><%= tx.tx_type || '-' %></td><td><span class="scoin-badge <%= String(tx.direction || '').toLowerCase() %>"><%= tx.direction || '-' %></span></td><td><%= fmtNum(tx.amount || 0) %></td><td><%= fmtNum(tx.fee_amount || 0) %></td><td><%= fmtNum(tx.balance_before || 0) %></td><td><%= fmtNum(tx.balance_after || 0) %></td></tr><% }) %></tbody></table></div></div></section>
+  </section>
+
+  <section class="scoin-section-card"><div class="scoin-card-head"><div><h3>ประวัติการกระจายเศรษฐกิจ Scoin</h3><p class="scoin-card-sub">แสดงหน้าละ 10 แถว</p></div><div class="scoin-export-links"><a href="/admin/scoin-market/export/economy">Export Excel</a></div></div><div class="scoin-card-body"><div class="scoin-table-wrap"><table class="scoin-table scoin-smart-table" id="economyTable"><thead><tr><th>ID</th><th>วันที่ไทย</th><th>User ID</th><th>Payment ID</th><th>Package ID</th><th>ราคาแพ็กเกจ</th><th>Scoin ผู้ใช้</th><th>บริษัท</th><th>สายงาน</th><th>Buyback</th><th>Burn</th><th>Promotion</th><th>System</th></tr></thead><tbody><% if (!safeEconomyLogs.length) { %><tr><td colspan="13" class="scoin-empty">ยังไม่มี economy logs</td></tr><% } %><% safeEconomyLogs.forEach(function(log){ %><tr><td>#<%= log.display_id || log.id %></td><td><%= fmtDate(log.created_at) %></td><td><%= log.user_id || '-' %></td><td><%= log.payment_id || '-' %></td><td><%= log.package_id || '-' %></td><td>฿<%= fmtMoney(log.package_price_thb || 0) %></td><td><%= fmtNum(log.user_receive_scoin || 0) %></td><td>฿<%= fmtMoney(log.company_profit_thb || 0) %></td><td>฿<%= fmtMoney(log.network_bonus_thb || 0) %></td><td>฿<%= fmtMoney(log.buyback_reserve_thb || 0) %></td><td>฿<%= fmtMoney(log.burn_liquidity_thb || 0) %></td><td>฿<%= fmtMoney(log.promotion_thb || 0) %></td><td>฿<%= fmtMoney(log.system_marketing_thb || 0) %></td></tr><% }) %></tbody></table></div></div></section>
+</section>
+
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script>
+const realtimeChart = <%- JSON.stringify(realtimeChart || []) %>;
+const labels = realtimeChart.map(x => x.label);
+const buyData = realtimeChart.map(x => Number(x.buy_scoin || 0));
+const sellData = realtimeChart.map(x => Number(x.sell_scoin || 0));
+const feeData = realtimeChart.map(x => Number(x.fee_thb || 0));
+const priceData = realtimeChart.map(x => Number(x.flow_price_thb || <%= Number(settings.current_price_thb || 0.10) %>));
+const orderData = realtimeChart.map(x => Number(x.order_count || 0));
+const nf = new Intl.NumberFormat('th-TH', { maximumFractionDigits: 4 });
+const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = nf.format(value); };
+setText('scoinBuyTotal', buyData.reduce((s,n)=>s+n,0));
+setText('scoinSellTotal', sellData.reduce((s,n)=>s+n,0));
+setText('scoinOrderTotal', orderData.reduce((s,n)=>s+n,0));
+const ctx = document.getElementById('scoinRealtimeChart');
+if (ctx) {
+  new Chart(ctx, { type: 'line', data: { labels, datasets: [
+    { label: 'ราคาอ้างอิงตามแรงซื้อขาย', data: priceData, yAxisID: 'yPrice', tension: .35, borderWidth: 3, pointRadius: 3 },
+    { label: 'ซื้อ Scoin', data: buyData, yAxisID: 'yVolume', tension: .32, borderWidth: 2, pointRadius: 2 },
+    { label: 'ขาย Scoin', data: sellData, yAxisID: 'yVolume', tension: .32, borderWidth: 2, pointRadius: 2 },
+    { label: 'ค่าธรรมเนียมบาท', data: feeData, yAxisID: 'yFee', tension: .32, borderWidth: 1.5, pointRadius: 0, hidden: true }
+  ]}, options: { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false }, plugins: { legend: { labels: { color: '#c9d8ff', usePointStyle: true } }, tooltip: { callbacks: { label: (c) => c.dataset.yAxisID === 'yPrice' ? c.dataset.label + ': ฿' + nf.format(Number(c.raw || 0)) : c.dataset.label + ': ' + nf.format(Number(c.raw || 0)) } } }, scales: { x: { ticks: { color: '#88a0ca', maxRotation: 0 }, grid: { color: 'rgba(130,154,197,.08)' } }, yPrice: { position: 'left', ticks: { color: '#dbe6ff' }, grid: { color: 'rgba(130,154,197,.10)' } }, yVolume: { position: 'right', ticks: { color: '#88a0ca' }, grid: { drawOnChartArea: false } }, yFee: { display: false, position: 'right' } } } });
+}
+document.querySelectorAll('.scoin-smart-table').forEach((table) => { const headers = Array.from(table.querySelectorAll('thead th')).map(th => th.textContent.trim()); table.querySelectorAll('tbody tr').forEach((row) => { Array.from(row.children).forEach((cell, index) => { if (!cell.getAttribute('data-label')) cell.setAttribute('data-label', headers[index] || ''); }); }); });
+
+function setupScoinClientPager(table) {
+  const rows = Array.from(table.querySelectorAll('tbody tr')).filter(row => !row.querySelector('.scoin-empty'));
+  if (rows.length <= 10) return;
+  let page = 1;
+  const pages = Math.ceil(rows.length / 10);
+  const pager = document.createElement('div');
+  pager.className = 'scoin-pagination';
+  const prev = document.createElement('a'); prev.href = '#'; prev.textContent = 'ก่อนหน้า';
+  const info = document.createElement('span');
+  const next = document.createElement('a'); next.href = '#'; next.textContent = 'ถัดไป';
+  pager.append(prev, info, next);
+  table.closest('.scoin-card-body')?.appendChild(pager);
+  function draw() {
+    rows.forEach((row, idx) => { row.style.display = (idx >= (page - 1) * 10 && idx < page * 10) ? '' : 'none'; });
+    info.textContent = `หน้า ${page} / ${pages}`;
+    prev.classList.toggle('disabled', page <= 1);
+    next.classList.toggle('disabled', page >= pages);
+  }
+  prev.addEventListener('click', (e) => { e.preventDefault(); if (page > 1) { page -= 1; draw(); } });
+  next.addEventListener('click', (e) => { e.preventDefault(); if (page < pages) { page += 1; draw(); } });
+  draw();
+}
+document.querySelectorAll('.scoin-smart-table').forEach(setupScoinClientPager);
+
+document.querySelectorAll('[data-scoin-search]').forEach((input) => { input.addEventListener('input', () => { const table = document.getElementById(input.dataset.scoinSearch); if (!table) return; const keyword = input.value.trim().toLowerCase(); table.querySelectorAll('tbody tr').forEach((row) => { if (row.querySelector('.scoin-empty')) return; row.style.display = row.textContent.toLowerCase().includes(keyword) ? '' : 'none'; }); }); });
+</script>
+
+<%- include('../partials/admin-shell-end') %>

@@ -1,0 +1,447 @@
+<% pageCss = '/css/app-packages.css'; %>
+<%- include('../partials/app-shell') %>
+
+<% if (error || success) { %>
+  <div class="scoin-confirm-modal show" id="packageFlashModal" aria-hidden="false">
+    <div class="scoin-confirm-backdrop" data-flash-close></div>
+
+    <div class="scoin-confirm-card" role="dialog" aria-modal="true">
+      <button type="button" class="scoin-confirm-x" data-flash-close aria-label="ปิด">×</button>
+
+      <div class="scoin-confirm-icon">
+        <% if (error) { %>
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        <% } else { %>
+          <i class="fa-solid fa-circle-check"></i>
+        <% } %>
+      </div>
+
+      <span class="package-chip">
+        <%= error ? 'แจ้งเตือน' : 'สำเร็จ' %>
+      </span>
+
+      <h3>
+        <%= error ? 'ไม่สามารถใช้คูปองได้' : 'ดำเนินการสำเร็จ' %>
+      </h3>
+
+      <p>
+        <%= error || success %>
+      </p>
+
+      <div class="scoin-confirm-actions">
+        <button type="button" class="scoin-modal-confirm" data-flash-close>
+          ตกลง
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const modal = document.getElementById('packageFlashModal');
+      if (!modal) return;
+
+      document.body.classList.add('scoin-modal-open');
+
+      function closeModal() {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('scoin-modal-open');
+      }
+
+      modal.querySelectorAll('[data-flash-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closeModal();
+      });
+    })();
+  </script>
+<% } %>
+
+<section class="package-pay-wrap">
+  <div class="package-pay-card">
+    <div class="package-pay-head">
+      <span class="package-chip">PACKAGE PAYMENT</span>
+      <h2>ชำระเงินแพ็กเกจ</h2>
+      <p>เลือกชำระผ่าน KBank หรือจ่ายด้วย Scoin ได้ทันที หากจ่ายด้วย Scoin ระบบจะเปิดใช้งานแพ็กเกจทันที แต่จะไม่ได้รับ Scoin คืน 30% และไม่แจกโบนัสสายงาน/แนะนำตรง</p>
+    </div>
+
+    <div class="package-pay-summary">
+      <div>
+        <span>เลขรายการ</span>
+        <strong><%= payment.display_id || ('PM' + String(payment.id).padStart(6, '0')) %></strong>
+      </div>
+
+      <div>
+        <span>แพ็กเกจ</span>
+        <strong><%= payment.package_name_snapshot || '-' %></strong>
+      </div>
+
+      <div>
+        <span>ยอดชำระ</span>
+        <strong class="pay-amount">
+          <% const displayFinalAmount = Number(payment.final_amount ?? payment.amount ?? 0); %>
+          <% const displayOriginalAmount = Number(payment.amount || 0); %>
+
+          <% if (Number(payment.discount_amount || 0) > 0) { %>
+            <span style="text-decoration:line-through;opacity:.6;font-size:14px;">
+              ฿<%= displayOriginalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 }) %>
+            </span>
+            <br>
+          <% } %>
+
+          ฿<%= displayFinalAmount.toLocaleString('th-TH', { minimumFractionDigits: 2 }) %>
+        </strong>
+      </div>
+    </div>
+
+    <% if (String(payment.payment_status || '').toLowerCase() === 'paid') { %>
+      <div class="package-scoin-box">
+        <div class="package-scoin-main">
+          <span>สถานะ</span>
+          <strong>ชำระเงินสำเร็จแล้ว</strong>
+        </div>
+        <p>ระบบได้รับยอดชำระแล้ว แพ็กเกจจะถูกเปิดใช้งานตามเงื่อนไข</p>
+      </div>
+    <% } else if (String(payment.payment_status || '').toLowerCase() === 'cancelled') { %>
+      <div class="package-scoin-box">
+        <div class="package-scoin-main">
+          <span>สถานะ</span>
+          <strong>รายการถูกยกเลิก</strong>
+        </div>
+        <p>กรุณากลับไปเลือกซื้อแพ็กเกจใหม่อีกครั้ง</p>
+      </div>
+    <% } else { %>
+
+      <% if (kbankMockMode) { %>
+        <div class="package-scoin-box">
+          <div class="package-scoin-main">
+            <span>Mock Mode</span>
+            <strong>ทดสอบระบบ</strong>
+          </div>
+          <p>ตอนนี้ KBANK_MOCK_MODE=true หากใส่ Key จริงและเปลี่ยนเป็น false ระบบจะยิง API จริง</p>
+        </div>
+      <% } %>
+
+      <% if (kbankPayment && kbankPayment.qr_text) { %>
+        <div class="package-scoin-box">
+          <div class="package-scoin-main">
+            <span>PromptPay QR</span>
+            <strong>พร้อมชำระ</strong>
+          </div>
+          <p style="word-break:break-all;"><%= kbankPayment.qr_text %></p>
+        </div>
+      <% } %>
+
+      <% if (kbankPayment && kbankPayment.payment_url) { %>
+        <a class="pay-kbank-link" href="<%= kbankPayment.payment_url %>">
+          ไปหน้าชำระเงิน KBank
+        </a>
+      <% } %>
+
+      <% if (packageScoinPayment && packageScoinPayment.enabled) { %>
+        <div class="package-scoin-pay-box">
+          <div class="package-scoin-pay-top">
+            <div>
+              <span>จ่ายด้วย Scoin</span>
+              <strong><%= Number(packageScoinPayment.required || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %> Scoin</strong>
+            </div>
+            <div>
+              <span>ราคาตลาด</span>
+              <strong>฿<%= Number(packageScoinPayment.priceThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %> / Scoin</strong>
+            </div>
+            <div>
+              <span>ยอดคงเหลือของคุณ</span>
+              <strong><%= Number(packageScoinPayment.balance || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %> Scoin</strong>
+            </div>
+          </div>
+
+          <form id="packageScoinPayForm" method="POST" action="/app/package-payment/<%= payment.id %>/pay-scoin">
+            <button
+              type="button"
+              id="openScoinPayModal"
+              class="pay-method-btn pay-scoin-btn"
+              <%= packageScoinPayment.enough ? '' : 'disabled' %>
+              data-required="<%= Number(packageScoinPayment.required || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %>"
+              data-price="<%= Number(packageScoinPayment.priceThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %>"
+              data-amount="<%= Number(payment.final_amount ?? payment.amount ?? 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %>"
+              data-package="<%= payment.package_name_snapshot || '-' %>"
+            >
+              <i class="fa-solid fa-coins"></i>
+              <span>จ่ายด้วย Scoin ทันที</span>
+              <small>
+                <% if (packageScoinPayment.enough) { %>
+                  กดเพื่อดูสรุปราคาและยืนยันชำระ
+                <% } else { %>
+                  Scoin ไม่พอ กรุณาซื้อ Scoin เพิ่มก่อน
+                <% } %>
+              </small>
+            </button>
+          </form>
+        </div>
+      <% } %>
+
+      <div class="package-pay-methods">
+        <form method="POST" action="/app/package-payment/<%= payment.id %>/pay">
+          <input type="hidden" name="payment_method" value="promptpay_qr">
+          <button type="submit" class="pay-method-btn">
+            <i class="fa-solid fa-qrcode"></i>
+            <span>PromptPay QR</span>
+            <small>สแกนจ่ายผ่าน KBank</small>
+          </button>
+        </form>
+
+        <form method="POST" action="/app/package-payment/<%= payment.id %>/pay">
+          <input type="hidden" name="payment_method" value="credit_card">
+          <button type="submit" class="pay-method-btn">
+            <i class="fa-solid fa-credit-card"></i>
+            <span>บัตรเครดิต / เดบิต</span>
+            <small>ชำระผ่าน KBank API</small>
+          </button>
+        </form>
+      </div>
+
+      <% if (String(payment.payment_status || '').toLowerCase() === 'pending') { %>
+        <form method="POST" action="/app/package-payment/<%= payment.id %>/apply-coupon" class="package-coupon-box">
+          <label>ใส่โค้ดคูปอง</label>
+          <div class="package-coupon-row">
+            <input
+              type="text"
+              name="coupon_code"
+              placeholder="กรอกโค้ดคูปอง"
+              value="<%= payment.coupon_code_snapshot || '' %>"
+            >
+            <button type="submit">ใช้โค้ด</button>
+          </div>
+
+          <% if (Number(payment.discount_amount || 0) > 0) { %>
+            <p>
+              ส่วนลด:
+              ฿<%= Number(payment.discount_amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %>
+            </p>
+          <% } %>
+        </form>
+
+        <% if (freeCouponPreview && String(payment.payment_status || '').toLowerCase() === 'pending') { %>
+          <button
+            type="button"
+            class="pay-method-btn"
+            id="openFreeCouponModal"
+            style="width:100%;margin-top:14px;"
+          >
+            ใช้งานคูปองฟรี
+          </button>
+          <div class="scoin-confirm-modal" id="freeCouponModal" aria-hidden="true">
+            <div class="scoin-confirm-backdrop" data-free-close></div>
+            <div class="scoin-confirm-card" role="dialog" aria-modal="true">
+              <button
+                type="button"
+                class="scoin-confirm-x"
+                data-free-close
+                aria-label="ปิด"
+              >
+                ×
+              </button>
+              <div class="scoin-confirm-icon">
+                <i class="fa-solid fa-gift"></i>
+              </div>
+              <span class="package-chip">
+                คูปองฟรี
+              </span>
+              <h3>
+                ยืนยันเปิดใช้งานแพ็กเกจ
+              </h3>
+              <p style="margin-bottom:16px;">
+                คุณกำลังใช้คูปองฟรี
+                <strong><%= freeCouponPreview.couponCode || '-' %></strong>
+              </p>
+              <div class="package-summary-box" style="margin-bottom:16px;">
+                <div class="summary-row">
+                  <span>แพ็กเกจ</span>
+                  <strong><%= payment.package_name_snapshot || '-' %></strong>
+                </div>
+                <div class="summary-row">
+                  <span>ราคาปกติ</span>
+                  <strong>
+                    ฿<%= Number(payment.amount || 0).toLocaleString('th-TH', {
+                      minimumFractionDigits: 2
+                    }) %>
+                  </strong>
+                </div>
+                <div class="summary-row">
+                  <span>ส่วนลด</span>
+                  <strong style="color:#22c55e;">
+                    ฟรี 100%
+                  </strong>
+                </div>
+                <div class="summary-row total">
+                  <span>ยอดชำระ</span>
+                  <strong style="color:#22c55e;">
+                    ฿0.00
+                  </strong>
+                </div>
+              </div>
+              <form
+                method="POST"
+                action="/app/package-payment/<%= payment.id %>/confirm-free-coupon"
+              >
+                <input
+                  type="hidden"
+                  name="coupon_code"
+                  value="<%= freeCouponPreview.couponCode || '' %>"
+                >
+                <div class="scoin-confirm-actions">
+                  <button
+                    type="button"
+                    class="scoin-modal-cancel"
+                    data-free-close
+                  >
+                    ยกเลิก
+                  </button>
+                  <button
+                    type="submit"
+                    class="scoin-modal-confirm"
+                  >
+                    ยืนยันใช้งานฟรี
+                  </button>
+                </div>
+              </form>
+            </div>
+          </div>
+          <script>
+            (function () {
+              const openBtn = document.getElementById('openFreeCouponModal');
+              const modal = document.getElementById('freeCouponModal');
+              if (!openBtn || !modal) return;
+              function openModal() {
+                modal.classList.add('show');
+                modal.setAttribute('aria-hidden', 'false');
+                document.body.classList.add('scoin-modal-open');
+              }
+              function closeModal() {
+                modal.classList.remove('show');
+                modal.setAttribute('aria-hidden', 'true');
+                document.body.classList.remove('scoin-modal-open');
+              }
+              openBtn.addEventListener('click', openModal);
+              modal.querySelectorAll('[data-free-close]').forEach(function(el) {
+                el.addEventListener('click', closeModal);
+              });
+              document.addEventListener('keydown', function(event) {
+                if (event.key === 'Escape' && modal.classList.contains('show')) {
+                  closeModal();
+                }
+              });
+            })();
+          </script>
+        <% } %>
+      <% } %>
+
+      <form method="POST" action="/app/package-payment/<%= payment.id %>/cancel" onsubmit="return confirm('ยืนยันยกเลิกรายการนี้?');">
+        <button type="submit" class="pay-cancel-btn">ยกเลิกรายการ</button>
+      </form>
+    <% } %>
+
+    <div style="margin-top:18px;text-align:center;">
+      <a href="/app/packages" style="color:#bfdbfe;text-decoration:none;font-weight:800;">
+        ← กลับไปหน้าแพ็กเกจ
+      </a>
+    </div>
+  </div>
+</section>
+
+<% if (packageScoinPayment && packageScoinPayment.enabled && String(payment.payment_status || '').toLowerCase() === 'pending') { %>
+  <div class="scoin-confirm-modal" id="scoinConfirmModal" aria-hidden="true">
+    <div class="scoin-confirm-backdrop" data-scoin-close></div>
+
+    <div class="scoin-confirm-card" role="dialog" aria-modal="true" aria-labelledby="scoinConfirmTitle">
+      <button type="button" class="scoin-confirm-x" data-scoin-close aria-label="ปิด">×</button>
+
+      <div class="scoin-confirm-icon">
+        <i class="fa-solid fa-coins"></i>
+      </div>
+
+      <span class="package-chip">ยืนยันชำระด้วย Scoin</span>
+
+      <h3 id="scoinConfirmTitle">ซื้อแพ็กเกจด้วย Scoin</h3>
+      <p>เมื่อกดยืนยัน ระบบจะตัด Scoin และเปิดใช้งานแพ็กเกจทันที ไม่ต้องรอแอดมินอนุมัติ การชำระด้วย Scoin จะไม่ได้รับ Scoin คืน 30% และไม่แบ่งโบนัสสายงาน</p>
+
+      <div class="scoin-confirm-lines">
+        <div>
+          <span>แพ็กเกจ</span>
+          <strong id="scoinModalPackage"><%= payment.package_name_snapshot || '-' %></strong>
+        </div>
+
+        <div>
+          <span>ราคาแพ็กเกจ</span>
+          <strong>฿<span id="scoinModalAmount"><%= Number(payment.final_amount ?? payment.amount ?? 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %></span></strong>
+        </div>
+
+        <div>
+          <span>ราคาตลาด Scoin</span>
+          <strong>฿<span id="scoinModalPrice"><%= Number(packageScoinPayment.priceThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %></span> / Scoin</strong>
+        </div>
+
+        <div class="highlight">
+          <span>ต้องจ่ายทั้งหมด</span>
+          <strong><span id="scoinModalRequired"><%= Number(packageScoinPayment.required || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %></span> Scoin</strong>
+        </div>
+      </div>
+
+      <div class="scoin-confirm-actions">
+        <button type="button" class="scoin-modal-cancel" data-scoin-close>ยกเลิก</button>
+        <button type="button" class="scoin-modal-confirm" id="confirmScoinPayBtn">ยืนยันชำระ</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const openBtn = document.getElementById('openScoinPayModal');
+      const modal = document.getElementById('scoinConfirmModal');
+      const form = document.getElementById('packageScoinPayForm');
+      const confirmBtn = document.getElementById('confirmScoinPayBtn');
+
+      if (!openBtn || !modal || !form || !confirmBtn) return;
+
+      function openModal() {
+        document.getElementById('scoinModalPackage').textContent = openBtn.dataset.package || '-';
+        document.getElementById('scoinModalAmount').textContent = openBtn.dataset.amount || '0.00';
+        document.getElementById('scoinModalPrice').textContent = openBtn.dataset.price || '0.0000';
+        document.getElementById('scoinModalRequired').textContent = openBtn.dataset.required || '0.0000';
+
+        modal.classList.add('show');
+        modal.setAttribute('aria-hidden', 'false');
+        document.body.classList.add('scoin-modal-open');
+      }
+
+      function closeModal() {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('scoin-modal-open');
+      }
+
+      openBtn.addEventListener('click', openModal);
+
+      modal.querySelectorAll('[data-scoin-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape' && modal.classList.contains('show')) {
+          closeModal();
+        }
+      });
+
+      confirmBtn.addEventListener('click', function () {
+        confirmBtn.disabled = true;
+        confirmBtn.textContent = 'กำลังชำระ...';
+        form.submit();
+      });
+    })();
+  </script>
+<% } %>
+
+<%- include('../partials/app-shell-end') %>

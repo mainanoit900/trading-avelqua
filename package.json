@@ -1,0 +1,32 @@
+{
+  "name": "trading-avelqua-v3",
+  "version": "3.1.0",
+  "description": "TRADING AVELQUA admin + customer portal with PostgreSQL",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js",
+    "migrate:json": "node scripts/migrate-json-to-postgres.js"
+  },
+  "dependencies": {
+    "axios": "^1.15.1",
+    "bcryptjs": "^3.0.3",
+    "cookie-parser": "^1.4.7",
+    "dotenv": "^16.6.1",
+    "ejs": "^3.1.10",
+    "express": "^4.19.2",
+    "express-rate-limit": "^8.3.2",
+    "express-session": "^1.19.0",
+    "helmet": "^8.1.0",
+    "ioredis": "^5.10.1",
+    "multer": "^2.1.1",
+    "nodemailer": "^8.0.5",
+    "passport": "^0.7.0",
+    "passport-google-oauth20": "^2.0.0",
+    "pg": "^8.20.0",
+    "socket.io": "^4.8.3",
+    "uuid": "^13.0.0",
+    "ws": "^8.20.0",
+    "xlsx": "^0.18.5"
+  }
+}

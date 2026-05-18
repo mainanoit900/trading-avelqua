@@ -1,0 +1,420 @@
+<%- include('partials/head', { title: 'TRADING AVELQUA | Premium', lang: (typeof lang !== 'undefined' ? lang : 'th') }) %>
+<link rel="stylesheet" href="/public/css/home.css">
+<link rel="stylesheet" href="/public/css/public-packages.css">
+
+<%- include('partials/nav', {
+  currentPath: '/',
+  user: (typeof user !== 'undefined' ? user : null),
+  lang: (typeof lang !== 'undefined' ? lang : 'th')
+}) %>
+
+<%
+  const currentLang = (typeof lang !== 'undefined' && lang) ? lang : 'th';
+  const homeViewer = (typeof user !== 'undefined' ? user : null);
+  const homeBuyTarget = homeViewer ? '/app/packages' : ('/register?lang=' + encodeURIComponent(currentLang));
+  const packageList = (typeof packages !== 'undefined' && Array.isArray(packages)) ? packages : [];
+  const newsList = (typeof news !== 'undefined' && Array.isArray(news)) ? news : [];
+
+  function safeText(value, fallback = '') {
+    if (value === null || value === undefined) return fallback;
+    return String(value);
+  }
+
+  const packageBadgePool = currentLang === 'en'
+    ? ['Recommended', 'Hot', 'Popular']
+    : ['แนะนำ', 'ฮิต', 'ยอดนิยม'];
+
+  const featuredPackages = packageList.length
+    ? packageList
+        .filter(pkg => pkg && pkg.enabled !== false)
+        .slice(0, 9)
+        .map((pkg, index) => {
+          const days = Number(pkg.days || 0);
+          const price = Number(pkg.price || 0);
+          const avgPerDay = days > 0 ? Math.round(price / days) : Number(pkg.avgPerDay || 0);
+
+          const localName = currentLang === 'th'
+            ? (pkg.nameTh || pkg.name || 'แพ็กเกจ')
+            : (pkg.nameEn || pkg.name || 'Package');
+
+          const tier = currentLang === 'th'
+            ? (pkg.tierTh || pkg.tier || pkg.group || 'แพ็กเกจพรีเมียม')
+            : (pkg.tierEn || pkg.tier || pkg.group || 'Premium Plan');
+
+          const summary = currentLang === 'th'
+            ? (pkg.summaryTh || pkg.summary || `ใช้งานได้ ${days || '-'} วัน พร้อมระบบอัตโนมัติเต็มรูปแบบ`)
+            : (pkg.summaryEn || pkg.summary || `${days || '-'} day access with full automated trading support`);
+
+          const lotRange = currentLang === 'th'
+            ? (pkg.lotRangeTh || pkg.lotRange || '0.01 - 0.05 lot')
+            : (pkg.lotRangeEn || pkg.lotRange || '0.01 - 0.05 lot');
+
+          const portRange = currentLang === 'th'
+            ? (pkg.portRangeTh || pkg.portRange || '1 - 4 พอร์ต')
+            : (pkg.portRangeEn || pkg.portRange || '1 - 4 ports');
+
+          const profitRange = currentLang === 'th'
+            ? (pkg.profitRangeTh || pkg.profitRange || '1% - 3% โดยประมาณ')
+            : (pkg.profitRangeEn || pkg.profitRange || 'Approx. 1% - 3%');
+
+          return {
+            ...pkg,
+            badge: pkg.badge || packageBadgePool[index % packageBadgePool.length],
+            localName,
+            tier,
+            summary,
+            avgPerDay,
+            lotRange,
+            portRange,
+            profitRange,
+            daysLabel: days > 0
+              ? (currentLang === 'th' ? `${days} วัน` : `${days} days`)
+              : (currentLang === 'th' ? 'ระยะเวลาใช้งาน' : 'Access period')
+          };
+        })
+    : [
+        {
+          tier: currentLang === 'th' ? 'BASIC' : 'BASIC',
+          localName: currentLang === 'th' ? 'BASIC 1 วัน' : 'BASIC 1 Day',
+          price: 99,
+          avgPerDay: 99,
+          lotRange: '0.01 - 0.05 lot',
+          portRange: currentLang === 'th' ? '1 - 4 พอร์ต' : '1 - 4 ports',
+          profitRange: currentLang === 'th' ? '1% - 3% โดยประมาณ' : 'Approx. 1% - 3%',
+          summary: currentLang === 'th' ? 'เริ่มต้นใช้งานง่าย เหมาะกับการทดลองระบบ' : 'Easy starter plan for trying the system',
+          badge: packageBadgePool[0],
+          daysLabel: currentLang === 'th' ? '1 วัน' : '1 day'
+        },
+        {
+          tier: currentLang === 'th' ? 'PRO' : 'PRO',
+          localName: currentLang === 'th' ? 'PRO 7 วัน' : 'PRO 7 Days',
+          price: 699,
+          avgPerDay: 100,
+          lotRange: '0.01 - 0.50 lot',
+          portRange: currentLang === 'th' ? '1 - 6 พอร์ต' : '1 - 6 ports',
+          profitRange: currentLang === 'th' ? '8% - 15% โดยประมาณ' : 'Approx. 8% - 15%',
+          summary: currentLang === 'th' ? 'เหมาะสำหรับผู้ที่ต้องการใช้งานจริงและดูผลลัพธ์ต่อเนื่อง' : 'Built for active users who want consistent real usage',
+          badge: packageBadgePool[2],
+          daysLabel: currentLang === 'th' ? '7 วัน' : '7 days'
+        },
+        {
+          tier: currentLang === 'th' ? 'ADVANCED' : 'ADVANCED',
+          localName: currentLang === 'th' ? 'ADVANCED 30 วัน' : 'ADVANCED 30 Days',
+          price: 2990,
+          avgPerDay: 100,
+          lotRange: currentLang === 'th' ? '0.01 - ไม่จำกัด' : '0.01 - Unlimited',
+          portRange: currentLang === 'th' ? '1 - 10 พอร์ต' : '1 - 10 ports',
+          profitRange: currentLang === 'th' ? '35% - 60% โดยประมาณ' : 'Approx. 35% - 60%',
+          summary: currentLang === 'th' ? 'แพ็กเกจตัวท็อปสำหรับใช้งานต่อเนื่องและขยายพอร์ต' : 'Flagship plan for serious scaling and long-term usage',
+          badge: packageBadgePool[1],
+          daysLabel: currentLang === 'th' ? '30 วัน' : '30 days'
+        }
+      ];
+
+  const latestNews = newsList.length
+    ? newsList.slice(0, 8).map((item) => {
+        const title = currentLang === 'th'
+          ? safeText(item.translatedTitle || item.title, currentLang === 'th' ? 'หัวข้อข่าว' : 'News Title')
+          : safeText(item.title || item.translatedTitle, 'News Title');
+
+        const bodySource = currentLang === 'th'
+          ? safeText(item.translatedBody || item.summary || item.body, '')
+          : safeText(item.body || item.summary || item.translatedBody, '');
+
+        return {
+          ...item,
+          displayTitle: title,
+          displayBody: bodySource,
+          displayCategory: safeText(item.category, currentLang === 'th' ? 'ข่าวเศรษฐกิจ' : 'market news'),
+          image: item.image || item.imageUrl || '/public/images/logo.png'
+        };
+      })
+    : [
+        {
+          displayTitle: currentLang === 'th' ? 'ข่าวทองคำ' : 'Gold Market Update',
+          displayBody: currentLang === 'th' ? 'ติดตามแนวโน้มตลาดทองคำแบบใกล้ชิดและอ่านง่ายมากขึ้น' : 'Follow the latest gold market movement in an easy-to-read format.',
+          displayCategory: currentLang === 'th' ? 'ทองคำ' : 'gold',
+          image: '/public/images/logo.png'
+        },
+        {
+          displayTitle: currentLang === 'th' ? 'ข่าวหุ้น' : 'Stock Market Update',
+          displayBody: currentLang === 'th' ? 'อัปเดตมุมมองตลาดหุ้นในรูปแบบ card พร้อมรูปประกอบ' : 'Stay updated with stock market highlights in premium card format.',
+          displayCategory: currentLang === 'th' ? 'หุ้น' : 'stocks',
+          image: '/public/images/logo.png'
+        },
+        {
+          displayTitle: currentLang === 'th' ? 'ข่าวคริปโต' : 'Crypto Trend',
+          displayBody: currentLang === 'th' ? 'สรุปกระแสคริปโตแบบสั้น กระชับ และดูทันสมัย' : 'A clean and modern summary of crypto momentum.',
+          displayCategory: currentLang === 'th' ? 'คริปโต' : 'crypto',
+          image: '/public/images/logo.png'
+        }
+      ];
+
+  const testimonials = currentLang === 'th'
+    ? [
+        { name: 'คุณต้น - กรุงเทพฯ', text: 'หน้าเว็บใหม่ดูน่าเชื่อถือมากขึ้น ลูกค้าเลือกแพ็กเกจง่ายขึ้นจริง' },
+        { name: 'คุณเมย์ - เชียงใหม่', text: 'ชอบตรงที่ดูข่าวและแพ็กเกจในหน้าเดียว ใช้งานสะดวกกว่าเดิมมาก' },
+        { name: 'คุณแบงค์ - ขอนแก่น', text: 'ดีไซน์ดูแพงขึ้นและมีความเป็นมืออาชีพ เหมาะกับเว็บบอทเทรดมาก' }
+      ]
+    : [
+        { name: 'Ton - Bangkok', text: 'The new website feels more trustworthy and helps customers choose packages faster.' },
+        { name: 'May - Chiang Mai', text: 'I like seeing both news and packages on the same page. It is much easier to use.' },
+        { name: 'Bank - Khon Kaen', text: 'The design feels premium and professional, perfect for a trading bot website.' }
+      ];
+%>
+
+<main class="home-premium">
+  <section class="hero-premium">
+    <div class="container hero-grid">
+      <div class="hero-copy premium-card">
+        <span class="hero-chip"><%= t('home.eyebrow') %></span>
+        <h1><%= t('home.features.title') %></h1>
+        <p class="hero-desc"><%= t('home.features.desc') %></p>
+
+        <div class="hero-actions">
+          <a href="/pricing?lang=<%= currentLang %>" class="btn-primary-premium"><%= t('home.view_pricing') %></a>
+          <a href="/contact?lang=<%= currentLang %>" class="btn-secondary-premium"><%= t('nav.contact') %></a>
+        </div>
+
+        <div class="hero-points">
+          <div class="point-box">
+            <span><%= t('home.f1.title') %></span>
+            <strong><%= t('home.f1.desc') %></strong>
+          </div>
+          <div class="point-box">
+            <span><%= t('home.f2.title') %></span>
+            <strong><%= t('home.f2.desc') %></strong>
+          </div>
+          <div class="point-box">
+            <span><%= t('home.f3.title') %></span>
+            <strong><%= t('home.f3.desc') %></strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="hero-visual premium-card">
+        <div class="hero-logo-wrap animated-hero-wrap">
+          <div class="glow glow-1"></div>
+          <div class="glow glow-2"></div>
+          <img src="/public/images/logo.png" alt="TRADING AVELQUA" class="animated-hero-logo">
+        </div>
+        <p class="hero-side-text"><%= t('footer.tagline') %></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="market-live">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="section-chip"><%= t('home.news_title', 'REAL-TIME MARKET') %></span>
+          <h2><%= t('home.point3') %></h2>
+        </div>
+      </div>
+
+      <div class="premium-card tv-card">
+        <div class="tv-frame">
+          <div id="tradingview_home_widget"></div>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="packages-spotlight public-home-packages">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="section-chip"><%= t('pricing.eyebrow') %></span>
+          <h2><%= t('home.pricing.title') %></h2>
+          <p class="section-desc"><%= t('home.pricing.desc') %></p>
+        </div>
+        <a href="/pricing?lang=<%= currentLang %>" class="section-link"><%= t('home.view_pricing') %></a>
+      </div>
+
+      <div class="package-lux-grid public-home-package-grid" id="packageSlider">
+        <% featuredPackages.forEach(function(pkg, index) { %>
+          <article class="package-lux-card <%= index === 1 ? 'popular' : '' %> <%= index < 3 ? 'is-visible' : '' %>">
+            <div class="package-card-top">
+              <span class="package-id"><%= pkg.badge || t('pricing.popular') %></span>
+              <span class="package-days"><%= pkg.tier || 'PACKAGE' %></span>
+            </div>
+            <h4><%= pkg.daysLabel || pkg.localName || pkg.name || 'Package' %></h4>
+            <p class="package-summary"><%= pkg.summary || '' %></p>
+            <div class="package-price">
+              <strong>฿<%= Number(pkg.price || 0).toLocaleString('th-TH') %></strong>
+              <small><%= currentLang === 'th' ? 'เฉลี่ย' : 'Average' %> ฿<%= Number(pkg.avgPerDay || 0).toLocaleString('th-TH') %> / <%= currentLang === 'th' ? 'วัน' : 'day' %></small>
+            </div>
+            <div class="package-features">
+              <div><span><%= currentLang === 'th' ? 'ชื่อแพ็กเกจ' : 'Package Name' %></span><strong><%= pkg.localName || pkg.name || 'Package' %></strong></div>
+              <div><span><%= t('pricing.lot') %></span><strong><%= pkg.lotRange || '0.01 - 0.05 lot' %></strong></div>
+              <div><span><%= t('pricing.ports') %></span><strong><%= pkg.portRange || '1 - 4 ports' %></strong></div>
+              <div><span><%= t('pricing.avg_profit') %></span><strong><%= pkg.profitRange || '1% - 3%' %></strong></div>
+            </div>
+            <p class="package-note"><%= currentLang === 'th' ? 'สมัครสมาชิกและยืนยันตัวตนก่อน จึงจะซื้อแพ็กเกจได้' : 'Register and verify your identity before purchasing.' %></p>
+            <a href="<%= homeBuyTarget %>" class="package-buy-btn public-package-buy"><span><%= t('pricing.buy_this') %></span></a>
+          </article>
+        <% }) %>
+      </div>
+    </div>
+  </section>
+
+  <section class="news-spotlight">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="section-chip"><%= t('home.news_title') %></span>
+          <h2><%= t('news.title') %></h2>
+          <p class="section-desc"><%= t('home.news_desc') %></p>
+        </div>
+        <a href="/news?lang=<%= currentLang %>" class="section-link"><%= t('home.view_all_news') %></a>
+      </div>
+
+      <div class="news-slider" id="newsSlider">
+        <% if (latestNews.length) { %>
+          <% latestNews.forEach(function(item, index) { %>
+            <article class="news-card premium-card <%= index < 3 ? 'is-visible' : '' %>">
+              <div class="news-image-wrap">
+                <img
+                  src="<%= item.image %>"
+                  alt="<%= item.displayTitle || 'news' %>"
+                  onerror="this.src='/public/images/logo.png'"
+                >
+              </div>
+
+              <div class="news-content">
+                <span class="news-category"><%= item.displayCategory || 'news' %></span>
+                <h3><%= item.displayTitle || (currentLang === 'th' ? 'หัวข้อข่าว' : 'News title') %></h3>
+                <p><%= String(item.displayBody || '').slice(0, 140) %><%= String(item.displayBody || '').length > 140 ? '...' : '' %></p>
+                <a href="/news?lang=<%= currentLang %>" class="news-link"><%= t('news.read_more') %></a>
+              </div>
+            </article>
+          <% }) %>
+        <% } else { %>
+          <div class="premium-card" style="padding:24px;">
+            <h3><%= t('home.no_news') %></h3>
+            <p><%= t('home.no_news_desc') %></p>
+            <a href="/news?lang=<%= currentLang %>" class="news-link"><%= t('home.goto_news') %></a>
+          </div>
+        <% } %>
+      </div>
+    </div>
+  </section>
+
+  <section class="reviews-premium">
+    <div class="container">
+      <div class="section-head">
+        <div>
+          <span class="section-chip"><%= t('home.reviews_badge') %></span>
+          <h2><%= t('home.reviews_title') %></h2>
+          <p class="section-desc"><%= t('home.reviews_desc') %></p>
+        </div>
+      </div>
+
+      <div class="review-grid">
+        <% testimonials.forEach(function(item) { %>
+          <div class="review-card premium-card">
+            <div class="review-stars">★★★★★</div>
+            <p class="review-text">“<%= item.text %>”</p>
+            <div class="review-name"><%= item.name %></div>
+          </div>
+        <% }) %>
+      </div>
+    </div>
+  </section>
+</main>
+
+<script src="https://s3.tradingview.com/tv.js"></script>
+<script>
+  if (typeof TradingView !== 'undefined') {
+    new TradingView.widget({
+      width: "100%",
+      height: 640,
+      symbol: "OANDA:XAUUSD",
+      interval: "15",
+      timezone: "Asia/Bangkok",
+      theme: "dark",
+      style: "1",
+      locale: "<%= currentLang === 'en' ? 'en' : 'th_TH' %>",
+      toolbar_bg: "#0b1424",
+      enable_publishing: false,
+      hide_top_toolbar: false,
+      hide_legend: false,
+      allow_symbol_change: true,
+      save_image: false,
+      container_id: "tradingview_home_widget"
+    });
+  }
+
+  (function() {
+    const packageCards = Array.from(document.querySelectorAll('#packageSlider .package-lux-card'));
+    const newsCards = Array.from(document.querySelectorAll('#newsSlider .news-card'));
+
+    function rotateCards(cards, visibleCount) {
+      if (!cards.length) return;
+      let start = 0;
+
+      function render() {
+        cards.forEach(card => {
+          card.classList.remove('is-visible');
+          card.style.display = 'none';
+        });
+
+        for (let i = 0; i < Math.min(visibleCount, cards.length); i++) {
+          const idx = (start + i) % cards.length;
+          cards[idx].style.display = 'block';
+          cards[idx].classList.add('is-visible');
+        }
+
+        start = (start + visibleCount) % cards.length;
+      }
+
+      render();
+      if (cards.length > visibleCount) {
+        setInterval(render, 5000);
+      }
+    }
+
+    rotateCards(packageCards, 3);
+    rotateCards(newsCards, 3);
+  })();
+
+  (function() {
+    const toggle = document.getElementById('aiChatToggle');
+    const box = document.getElementById('aiChatBox');
+    const closeBtn = document.getElementById('aiChatClose');
+    const form = document.getElementById('aiChatForm');
+    const input = document.getElementById('aiChatInput');
+    const messages = document.getElementById('aiChatMessages');
+
+    if (!toggle || !box || !closeBtn || !form || !input || !messages) return;
+
+    toggle.addEventListener('click', function() {
+      box.classList.toggle('open');
+    });
+
+    closeBtn.addEventListener('click', function() {
+      box.classList.remove('open');
+    });
+
+    form.addEventListener('submit', function(e) {
+      e.preventDefault();
+      const text = input.value.trim();
+      if (!text) return;
+
+      const userMsg = document.createElement('div');
+      userMsg.className = 'ai-msg ai-msg-user';
+      userMsg.textContent = text;
+      messages.appendChild(userMsg);
+
+      const botMsg = document.createElement('div');
+      botMsg.className = 'ai-msg ai-msg-bot';
+      botMsg.textContent = '<%= t('page.default_desc') %>';
+      messages.appendChild(botMsg);
+
+      input.value = '';
+      messages.scrollTop = messages.scrollHeight;
+    });
+  })();
+</script>
+
+<%- include('partials/footer') %>

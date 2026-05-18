@@ -1,0 +1,316 @@
+:root{
+  --bg:#07111f;
+  --bg2:#0a1527;
+  --panel:rgba(10,18,32,.92);
+  --panel-soft:rgba(255,255,255,.03);
+  --text:#eef4ff;
+  --muted:#9fb0d0;
+  --line:rgba(110,158,255,.16);
+  --gold:rgba(214,179,106,.92);
+  --blue:#60a5fa;
+  --blue2:#2563eb;
+  --shadow:0 22px 70px rgba(0,0,0,.42);
+}
+
+*{box-sizing:border-box}
+html,body{margin:0;padding:0}
+body{
+  background:
+    radial-gradient(circle at top left, rgba(37,99,235,.14), transparent 28%),
+    radial-gradient(circle at top right, rgba(214,179,106,.08), transparent 24%),
+    linear-gradient(180deg,var(--bg),var(--bg2) 45%,#07111f 100%);
+  color:var(--text);
+  font-family:Inter,Tahoma,Arial,sans-serif;
+}
+
+a{text-decoration:none;color:inherit}
+img{max-width:100%;display:block}
+.container{width:min(1240px,calc(100% - 32px));margin:auto}
+
+.contact-premium-page{
+  padding:26px 0 60px;
+}
+
+.contact-hero{
+  padding:18px 0 24px;
+}
+
+.contact-hero-card{
+  display:grid;
+  grid-template-columns:1.15fr .85fr;
+  gap:22px;
+  padding:24px;
+  border-radius:26px;
+  border:1px solid var(--line);
+  background:
+    linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015)),
+    linear-gradient(180deg, rgba(10,19,34,.96), rgba(8,14,26,.98));
+  box-shadow:var(--shadow);
+  overflow:hidden;
+  position:relative;
+}
+
+.contact-hero-card::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:linear-gradient(180deg, rgba(255,255,255,.05), transparent 24%);
+  pointer-events:none;
+}
+
+.contact-hero-copy{
+  padding:18px 10px 10px 10px;
+  position:relative;
+  z-index:1;
+}
+
+.contact-chip,
+.section-chip{
+  display:inline-flex;
+  align-items:center;
+  min-height:32px;
+  padding:0 14px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.05em;
+  color:#e7efff;
+  border:1px solid rgba(214,179,106,.22);
+  background:linear-gradient(180deg, rgba(214,179,106,.10), rgba(59,130,246,.08));
+}
+
+.contact-hero-copy h1{
+  margin:18px 0 16px;
+  font-size:clamp(34px,4vw,58px);
+  line-height:1.05;
+  letter-spacing:-.03em;
+}
+
+.contact-subtitle{
+  margin:0;
+  color:var(--muted);
+  font-size:17px;
+  line-height:1.85;
+  max-width:760px;
+}
+
+.contact-mini-stats{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:14px;
+  margin-top:28px;
+}
+
+.mini-stat{
+  padding:18px;
+  border-radius:18px;
+  background:rgba(255,255,255,.025);
+  border:1px solid rgba(255,255,255,.06);
+}
+
+.mini-stat span{
+  display:block;
+  color:#aebce0;
+  font-size:13px;
+  margin-bottom:8px;
+}
+
+.mini-stat strong{
+  display:block;
+  font-size:16px;
+  line-height:1.55;
+}
+
+.contact-hero-side{
+  display:flex;
+  align-items:stretch;
+}
+
+.contact-brand-box{
+  width:100%;
+  min-height:100%;
+  border-radius:22px;
+  border:1px solid rgba(110,158,255,.16);
+  background:
+    radial-gradient(circle at center, rgba(59,130,246,.16), transparent 34%),
+    linear-gradient(180deg, rgba(255,255,255,.03), rgba(255,255,255,.015));
+  padding:24px;
+  display:flex;
+  flex-direction:column;
+  justify-content:center;
+  align-items:center;
+  text-align:center;
+}
+
+.brand-mark{
+  width:140px;
+  height:140px;
+  border-radius:28px;
+  display:grid;
+  place-items:center;
+  background:rgba(255,255,255,.03);
+  border:1px solid rgba(255,255,255,.06);
+  margin-bottom:18px;
+}
+
+.brand-mark img{
+  width:88px;
+  height:88px;
+  object-fit:contain;
+  filter:drop-shadow(0 18px 40px rgba(0,0,0,.45));
+}
+
+.brand-copy h3{
+  margin:0 0 10px;
+  font-size:28px;
+  letter-spacing:-.02em;
+}
+
+.brand-copy p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.85;
+}
+
+.contact-channel-section{
+  padding:10px 0 10px;
+}
+
+.section-head{
+  display:flex;
+  align-items:end;
+  justify-content:space-between;
+  gap:18px;
+  margin-bottom:22px;
+}
+
+.section-head h2{
+  margin:10px 0 8px;
+  font-size:34px;
+  letter-spacing:-.02em;
+}
+
+.section-head p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.85;
+}
+
+.contact-grid{
+  display:grid;
+  grid-template-columns:repeat(3,1fr);
+  gap:18px;
+}
+
+.contact-card{
+  position:relative;
+  display:flex;
+  align-items:flex-start;
+  gap:16px;
+  min-height:190px;
+  padding:24px;
+  border-radius:22px;
+  border:1px solid rgba(110,158,255,.16);
+  background:
+    radial-gradient(circle at top right, rgba(214,179,106,.10), transparent 24%),
+    radial-gradient(circle at bottom left, rgba(96,165,250,.12), transparent 32%),
+    linear-gradient(180deg, rgba(14,24,42,.96), rgba(8,14,26,.98));
+  box-shadow:0 22px 60px rgba(0,0,0,.36);
+  transition:.24s ease;
+  overflow:hidden;
+}
+
+.contact-card:hover{
+  transform:translateY(-4px);
+  border-color:rgba(214,179,106,.26);
+  box-shadow:0 28px 80px rgba(0,0,0,.44);
+}
+
+.contact-icon{
+  width:58px;
+  height:58px;
+  border-radius:18px;
+  display:grid;
+  place-items:center;
+  flex:0 0 58px;
+  font-size:24px;
+  font-weight:800;
+  color:#fff;
+  background:linear-gradient(135deg,var(--blue2),var(--blue));
+  box-shadow:0 14px 30px rgba(37,99,235,.28);
+}
+
+.contact-content{
+  flex:1;
+}
+
+.contact-label{
+  display:inline-block;
+  margin-bottom:10px;
+  font-size:12px;
+  font-weight:800;
+  letter-spacing:.05em;
+  color:#cddcff;
+  text-transform:uppercase;
+}
+
+.contact-content h3{
+  margin:0 0 10px;
+  font-size:24px;
+  line-height:1.35;
+  letter-spacing:-.02em;
+}
+
+.contact-content p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.8;
+}
+
+.contact-arrow{
+  align-self:flex-end;
+  font-size:22px;
+  color:#dce8ff;
+  opacity:.82;
+}
+
+@media (max-width:1180px){
+  .contact-hero-card,
+  .contact-grid,
+  .contact-mini-stats{
+    grid-template-columns:1fr;
+  }
+}
+
+@media (max-width:740px){
+  .contact-hero-copy h1{
+    font-size:30px;
+    line-height:1.14;
+  }
+
+  .contact-subtitle,
+  .section-head p,
+  .brand-copy p,
+  .contact-content p{
+    font-size:15px;
+  }
+
+  .contact-hero-card,
+  .contact-card{
+    padding:18px;
+  }
+
+  .section-head{
+    flex-direction:column;
+    align-items:flex-start;
+  }
+
+  .section-head h2{
+    font-size:26px;
+  }
+
+  .brand-copy h3,
+  .contact-content h3{
+    font-size:22px;
+  }
+}

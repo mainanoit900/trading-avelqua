@@ -1,0 +1,42 @@
+:root{
+  --bg:#07111f;
+  --bg-2:#0b1729;
+  --surface:rgba(12,22,40,.88);
+  --surface-2:rgba(19,31,53,.92);
+  --line:rgba(148,163,184,.16);
+  --text:#e5edf8;
+  --muted:#93a4bd;
+  --primary:#60a5fa;
+  --primary-2:#8b5cf6;
+  --danger:#fb7185;
+  --success:#34d399;
+  --shadow:0 24px 60px rgba(0,0,0,.34);
+}
+body{background:radial-gradient(circle at top left,rgba(96,165,250,.12),transparent 26%),radial-gradient(circle at top right,rgba(139,92,246,.13),transparent 26%),linear-gradient(180deg,var(--bg) 0%,#040b16 100%)!important;color:var(--text)!important}
+.admin-theme{color:var(--text)}
+.admin-page{display:grid;gap:22px}
+.admin-hero,.card-lux,.stat-lux{position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(15,23,42,.94),rgba(7,17,31,.94))!important;border:1px solid var(--line)!important;border-radius:24px;box-shadow:var(--shadow)}
+.admin-hero{padding:32px;min-height:180px;display:flex;align-items:flex-end}
+.admin-title{margin:10px 0 8px;font-size:38px;line-height:1.08;color:#f8fbff}
+.admin-lead{max-width:760px;font-size:15px}
+.admin-chip,.stat-label,.role-pill{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border-radius:999px;font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.admin-chip{background:rgba(96,165,250,.14);color:#bfdbfe;border:1px solid rgba(96,165,250,.24)}
+.admin-hero-glow{position:absolute;right:-80px;top:-80px;width:220px;height:220px;border-radius:50%;background:radial-gradient(circle,rgba(96,165,250,.22),transparent 68%)}
+.admin-stat-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:18px}
+.stat-lux{padding:22px}.stat-lux strong{display:block;margin:14px 0 8px;font-size:30px;color:#f8fbff}.stat-lux.accent{background:linear-gradient(135deg,rgba(31,41,74,.96),rgba(21,46,84,.96))!important}.stat-label{background:rgba(255,255,255,.06);color:#cbd5e1;border:1px solid rgba(255,255,255,.06)}
+.card-head-simple h2{margin:0 0 6px;color:#f8fbff}.card-head-simple p{margin:0}
+.form-lux input,.form-lux select,.form-lux textarea{background:rgba(255,255,255,.04)!important;border:1px solid rgba(148,163,184,.16)!important;color:var(--text)!important;border-radius:14px;padding:12px 14px}
+.form-lux input::placeholder,.form-lux textarea::placeholder{color:#7f92af}
+.table-lux{background:rgba(255,255,255,.03);border:1px solid rgba(148,163,184,.14);border-radius:18px;overflow:hidden}
+.table-lux table{width:100%;border-collapse:collapse}
+.table-lux thead th{background:rgba(255,255,255,.06);color:#dbe7f5}
+.table-lux th,.table-lux td{padding:14px 12px;border-bottom:1px solid rgba(148,163,184,.1);vertical-align:top}
+.table-lux tbody tr:hover{background:rgba(255,255,255,.025)}
+.role-pill.role-admin{background:rgba(96,165,250,.14);color:#bfdbfe}.role-pill.role-user{background:rgba(52,211,153,.12);color:#a7f3d0}
+.inline-actions{display:flex;gap:8px;flex-wrap:wrap}
+.btn{border:0;border-radius:12px;padding:10px 14px;font-weight:800;cursor:pointer;background:linear-gradient(135deg,#2563eb,#4f46e5);color:#fff;box-shadow:0 10px 22px rgba(37,99,235,.18)}
+.btn.primary{background:linear-gradient(135deg,#2563eb,#7c3aed)}
+.btn.danger{background:linear-gradient(135deg,#e11d48,#be123c)}
+.muted{color:var(--muted)!important}
+@media (max-width:1100px){.admin-stat-grid,.admin-grid-two,.admin-grid-three{grid-template-columns:1fr 1fr!important}}
+@media (max-width:740px){.admin-stat-grid,.admin-grid-two,.admin-grid-three,.form-grid.two{grid-template-columns:1fr!important}.admin-title{font-size:30px}.admin-hero{padding:24px}}

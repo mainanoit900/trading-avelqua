@@ -1,0 +1,67 @@
+<%- include('../partials/admin-shell') %>
+<section class="card form-card">
+  <div class="card-head"><div><h3>เพิ่มแพ็กเกจ</h3><p>เรียงแบบแถว เมื่อจะแก้ค่อยกดขยาย</p></div><div class="kpi-row"><span class="kpi-chip">ทั้งหมด <%= counts.total || 0 %></span><span class="kpi-chip">เปิดใช้งาน <%= counts.enabled || 0 %></span></div></div>
+  <form method="POST" action="/admin/packages/create" class="form-grid three">
+    <label>Code<input type="text" name="package_code" /></label>
+    <label>Group<select name="group_name"><option>BASIC</option><option>PRO</option><option>ADVANCED</option></select></label>
+    <label>Sort Order<input type="number" name="sort_order" value="0" /></label>
+    <label>Name TH<input type="text" name="name_th" required /></label>
+    <label>Name EN<input type="text" name="name_en" /></label>
+    <label>Days<input type="number" name="days" min="0" value="0" /></label>
+    <label>Price<input type="number" step="0.01" name="price" value="0" /></label>
+    <label>Lot Min<input type="number" step="0.01" name="lot_min" value="0" /></label>
+    <label>Lot Max<input type="number" step="0.01" name="lot_max" value="0" /></label>
+    <label>Ports Min<input type="number" name="ports_min" value="0" /></label>
+    <label>Ports Max<input type="number" name="ports_max" value="0" /></label>
+    <label>Profit TH<input type="text" name="profit_label_th" /></label>
+    <label>Profit EN<input type="text" name="profit_label_en" /></label>
+    <label>Support TH<input type="text" name="support_th" /></label>
+    <label>Support EN<input type="text" name="support_en" /></label>
+    <label class="full">Summary TH<textarea name="summary_th"></textarea></label>
+    <label class="full">Summary EN<textarea name="summary_en"></textarea></label>
+    <label class="checkbox-row"><input type="checkbox" name="is_enabled" checked /> เปิดใช้งาน</label>
+    <label class="checkbox-row"><input type="checkbox" name="is_popular" /> แนะนำ</label>
+    <div class="form-actions full"><button class="btn primary">เพิ่มแพ็กเกจ</button></div>
+  </form>
+</section>
+<section class="accordion-list">
+  <% if (!(packages || []).length) { %><section class="card"><div class="empty-box">ยังไม่มีแพ็กเกจ</div></section><% } %>
+  <% (packages || []).forEach(function(p){ %>
+    <details class="accordion-item">
+      <summary>
+        <div><div class="cell-title"><%= p.name_th %> <span class="muted">(<%= p.name_en || '-' %>)</span></div><div class="cell-sub">#<%= p.display_id || p.id %> · <%= p.package_code || '-' %></div></div>
+        <div><strong><%= p.group_name %></strong><div class="cell-sub">Group</div></div>
+        <div><strong><%= p.days %> วัน</strong><div class="cell-sub">ระยะเวลา</div></div>
+        <div><strong>฿<%= Number(p.price || 0).toLocaleString('th-TH') %></strong><div class="cell-sub">ราคา</div></div>
+        <div><span class="badge <%= p.is_enabled ? 'green' : 'gray' %>"><%= p.is_enabled ? 'enabled' : 'disabled' %></span></div>
+        <div class="inline-actions"><span class="badge <%= p.is_popular ? 'blue' : 'gray' %>"><%= p.is_popular ? 'popular' : 'standard' %></span></div>
+      </summary>
+      <div class="accordion-body">
+        <form method="POST" action="/admin/packages/<%= p.id %>/update" class="form-grid three">
+          <label>Code<input type="text" name="package_code" value="<%= p.package_code || '' %>" /></label>
+          <label>Group<select name="group_name"><option value="BASIC" <%= p.group_name==='BASIC' ? 'selected' : '' %>>BASIC</option><option value="PRO" <%= p.group_name==='PRO' ? 'selected' : '' %>>PRO</option><option value="ADVANCED" <%= p.group_name==='ADVANCED' ? 'selected' : '' %>>ADVANCED</option></select></label>
+          <label>Sort Order<input type="number" name="sort_order" value="<%= p.sort_order || 0 %>" /></label>
+          <label>Name TH<input type="text" name="name_th" value="<%= p.name_th || '' %>" /></label>
+          <label>Name EN<input type="text" name="name_en" value="<%= p.name_en || '' %>" /></label>
+          <label>Days<input type="number" name="days" value="<%= p.days || 0 %>" /></label>
+          <label>Price<input type="number" step="0.01" name="price" value="<%= p.price || 0 %>" /></label>
+          <label>Lot Min<input type="number" step="0.01" name="lot_min" value="<%= p.lot_min || 0 %>" /></label>
+          <label>Lot Max<input type="number" step="0.01" name="lot_max" value="<%= p.lot_max || 0 %>" /></label>
+          <label>Ports Min<input type="number" name="ports_min" value="<%= p.ports_min || 0 %>" /></label>
+          <label>Ports Max<input type="number" name="ports_max" value="<%= p.ports_max || 0 %>" /></label>
+          <label>Profit TH<input type="text" name="profit_label_th" value="<%= p.profit_label_th || '' %>" /></label>
+          <label>Profit EN<input type="text" name="profit_label_en" value="<%= p.profit_label_en || '' %>" /></label>
+          <label>Support TH<input type="text" name="support_th" value="<%= p.support_th || '' %>" /></label>
+          <label>Support EN<input type="text" name="support_en" value="<%= p.support_en || '' %>" /></label>
+          <label class="full">Summary TH<textarea name="summary_th"><%= p.summary_th || '' %></textarea></label>
+          <label class="full">Summary EN<textarea name="summary_en"><%= p.summary_en || '' %></textarea></label>
+          <label class="checkbox-row"><input type="checkbox" name="is_enabled" <%= p.is_enabled ? 'checked' : '' %> /> เปิดใช้งาน</label>
+          <label class="checkbox-row"><input type="checkbox" name="is_popular" <%= p.is_popular ? 'checked' : '' %> /> แนะนำ</label>
+          <div class="form-actions full"><button class="btn primary">บันทึก</button></div>
+        </form>
+        <form method="POST" action="/admin/packages/<%= p.id %>/delete" onsubmit="return confirm('ยืนยันลบแพ็กเกจ?')"><button class="btn danger">ลบแพ็กเกจ</button></form>
+      </div>
+    </details>
+  <% }) %>
+</section>
+<%- include('../partials/admin-shell-end') %>

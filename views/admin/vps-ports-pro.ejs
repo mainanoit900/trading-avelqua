@@ -1,0 +1,178 @@
+<!doctype html>
+<html lang="th">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title><%= pageTitle || 'VPS Port Dashboard Pro' %></title>
+  <style>
+    :root{--bg:#080b16;--panel:#10172a;--panel2:#0f1b34;--line:#263451;--text:#e8eefc;--muted:#93a4c3;--good:#2ee59d;--bad:#ff6b6b;--warn:#ffd166;--blue:#6ea8fe;--purple:#a78bfa}
+    *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at top left,#172554 0,#080b16 40%,#050711 100%);font-family:system-ui,-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;color:var(--text)}
+    a{color:inherit}.wrap{max-width:1500px;margin:0 auto;padding:24px}.top{display:flex;justify-content:space-between;gap:16px;align-items:flex-start;margin-bottom:18px}.title h1{margin:0;font-size:26px}.title p{margin:6px 0 0;color:var(--muted)}
+    .btn{border:1px solid var(--line);background:#111c33;color:var(--text);padding:10px 14px;border-radius:12px;cursor:pointer;font-weight:700}.btn:hover{border-color:var(--blue);background:#162747}.btn.primary{background:linear-gradient(135deg,#2563eb,#7c3aed);border:0}.btn.danger{background:#3a1720;border-color:#74303d}.btn.good{background:#12372b;border-color:#26785e}.btn.warn{background:#3b3114;border-color:#846b1b}.btn:disabled{opacity:.55;cursor:not-allowed}
+    .grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.card{background:linear-gradient(180deg,rgba(17,27,51,.95),rgba(8,13,27,.95));border:1px solid var(--line);border-radius:18px;padding:16px;box-shadow:0 15px 40px rgba(0,0,0,.25)}
+    .metric{display:flex;justify-content:space-between;gap:10px;align-items:center}.metric b{font-size:24px}.metric span{color:var(--muted);font-size:13px}.toolbar{display:flex;flex-wrap:wrap;gap:10px;margin:16px 0}.search{flex:1;min-width:260px;background:#0b1222;border:1px solid var(--line);border-radius:12px;color:var(--text);padding:11px 13px}
+    .ports{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:14px}.port{position:relative;overflow:hidden}.port:before{content:"";position:absolute;inset:0 0 auto 0;height:4px;background:#334155}.port.running:before{background:var(--good)}.port.stopped:before{background:var(--bad)}.port.busy:before{background:var(--warn)}
+    .port-head{display:flex;justify-content:space-between;gap:10px;align-items:center}.port-no{font-size:22px;font-weight:900}.pill{font-size:12px;border:1px solid var(--line);padding:5px 8px;border-radius:999px;color:var(--muted)}.pill.running{color:#001b12;background:var(--good);border-color:var(--good)}.pill.stopped{color:#2a0000;background:var(--bad);border-color:var(--bad)}.pill.busy{color:#2d2100;background:var(--warn);border-color:var(--warn)}
+    .meta{margin:12px 0;color:var(--muted);font-size:13px;line-height:1.6}.actions{display:grid;grid-template-columns:1fr 1fr;gap:8px}.drop{border:1px dashed #3c4d72;background:#0b1222;border-radius:14px;padding:14px;text-align:center;color:var(--muted);margin:12px 0}.drop.drag{border-color:var(--good);background:#10281f;color:var(--good)}
+    .panel{margin-top:18px}.table-wrap{overflow:auto}.table{width:100%;border-collapse:collapse;font-size:13px}.table th,.table td{border-bottom:1px solid var(--line);padding:10px;text-align:left;white-space:nowrap}.table th{color:var(--muted);font-weight:700}.modal{position:fixed;inset:0;background:rgba(0,0,0,.68);display:none;align-items:center;justify-content:center;padding:18px;z-index:50}.modal.open{display:flex}.modal-box{width:min(1000px,96vw);max-height:88vh;overflow:auto;background:#0b1222;border:1px solid var(--line);border-radius:18px;padding:16px}.modal-head{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}.editor{width:100%;min-height:420px;background:#030711;color:#dce8ff;border:1px solid var(--line);border-radius:12px;padding:12px;font-family:Consolas,monospace;white-space:pre}.toast{position:fixed;right:18px;bottom:18px;background:#10172a;border:1px solid var(--line);border-radius:14px;padding:12px 14px;display:none;z-index:60}.toast.show{display:block}.small{font-size:12px;color:var(--muted)}
+    @media(max-width:1200px){.grid,.ports{grid-template-columns:repeat(2,minmax(0,1fr))}}@media(max-width:700px){.grid,.ports{grid-template-columns:1fr}.top{display:block}.wrap{padding:14px}}
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="top">
+      <div class="title">
+        <h1>📊 VPS Port Dashboard Pro</h1>
+        <p>VPS: <b><%= node.node_name || ('Node #' + node.id) %></b> | IP: <%= node.ip_address || '-' %> | Path: C:\MT5_PORTS\PORT01 - PORT20</p>
+      </div>
+      <div class="toolbar">
+        <a class="btn" href="/admin/vps">← กลับหน้า VPS</a>
+        <button class="btn primary" id="btnRefresh">รีเฟรช Live</button>
+        <button class="btn warn" id="btnWatchdog">Run Watchdog</button>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card metric"><span>PORT ทั้งหมด</span><b id="mTotal">20</b></div>
+      <div class="card metric"><span>Running</span><b id="mRunning">0</b></div>
+      <div class="card metric"><span>Stopped</span><b id="mStopped">0</b></div>
+      <div class="card metric"><span>Busy Queue</span><b id="mBusy">0</b></div>
+    </div>
+
+    <div class="toolbar">
+      <input id="search" class="search" placeholder="ค้นหา PORT / PID / status / path">
+      <button class="btn" id="btnDashboardCmd">สั่ง Agent ส่ง Dashboard</button>
+      <span class="small" id="lastUpdate">ยังไม่โหลดข้อมูล</span>
+    </div>
+
+    <div class="ports" id="portsGrid"></div>
+
+    <div class="card panel">
+      <div class="port-head">
+        <h2 style="margin:0">⚡ Queue คำสั่งล่าสุด</h2>
+        <button class="btn" id="btnQueue">โหลด Queue</button>
+      </div>
+      <div class="table-wrap">
+        <table class="table">
+          <thead><tr><th>ID</th><th>Action</th><th>PORT</th><th>Status</th><th>Lock</th><th>Time</th></tr></thead>
+          <tbody id="queueBody"><tr><td colspan="6">ยังไม่มีข้อมูล</td></tr></tbody>
+        </table>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal" id="modal">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3 id="modalTitle" style="margin:0">รายละเอียด</h3>
+        <button class="btn danger" onclick="closeModal()">ปิด</button>
+      </div>
+      <textarea class="editor" id="modalText"></textarea>
+      <div class="toolbar" id="modalActions"></div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+<script>
+const NODE_ID = <%- JSON.stringify(String(node.id)) %>;
+let allPorts = [];
+
+function toast(msg){ const el=document.getElementById('toast'); el.textContent=msg; el.classList.add('show'); setTimeout(()=>el.classList.remove('show'),3500); }
+function esc(v){ return String(v ?? '').replace(/[&<>"]/g, s => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[s])); }
+function closeModal(){ document.getElementById('modal').classList.remove('open'); }
+function openModal(title, text, actionsHtml=''){ document.getElementById('modalTitle').textContent=title; document.getElementById('modalText').value=text || ''; document.getElementById('modalActions').innerHTML=actionsHtml; document.getElementById('modal').classList.add('open'); }
+
+async function api(path, options={}){
+  const res = await fetch(`/admin/vps/${NODE_ID}/ports/api/${path}`, {
+    headers:{'Content-Type':'application/json','Accept':'application/json'},
+    ...options
+  });
+  const data = await res.json().catch(()=>({ok:false,error:'invalid_json'}));
+  if(!res.ok || data.ok===false) throw new Error(data.message || data.error || 'request_failed');
+  return data;
+}
+
+async function sendAction(payload){
+  const data = await api('action',{method:'POST',body:JSON.stringify(payload)});
+  toast(`ส่งคำสั่งแล้ว: #${data.command?.id || ''}`);
+  await loadQueue();
+  return data;
+}
+
+function statusClass(p){ if(p.busy) return 'busy'; const s=String(p.status||'').toLowerCase(); if(s==='running') return 'running'; if(s==='stopped') return 'stopped'; return ''; }
+function renderPorts(){
+  const q = document.getElementById('search').value.toLowerCase().trim();
+  const grid = document.getElementById('portsGrid');
+  const ports = allPorts.filter(p => !q || JSON.stringify(p).toLowerCase().includes(q));
+  grid.innerHTML = ports.map(p => {
+    const cls = statusClass(p);
+    const status = p.busy ? 'busy' : (p.status || 'unknown');
+    return `<div class="card port ${cls}" data-port="${p.port}">
+      <div class="port-head"><div class="port-no">PORT${p.port}</div><span class="pill ${cls}">${esc(status)}</span></div>
+      <div class="meta">PID: <b>${esc(p.pid || '-')}</b><br>EA .mq5: <b>${esc(p.mq5_count || 0)}</b><br>${esc(p.path || '')}</div>
+      <div class="drop" data-port="${p.port}">ลากไฟล์ .mq5 มาวางที่นี่<br><span class="small">Upload + Compile + Restart</span></div>
+      <div class="actions">
+        <button class="btn good" onclick="sendAction({action:'status',port:'${p.port}'})">Status</button>
+        <button class="btn warn" onclick="sendAction({action:'restart',port:'${p.port}'})">Restart</button>
+        <button class="btn danger" onclick="sendAction({action:'stop',port:'${p.port}'})">Stop</button>
+        <button class="btn" onclick="pickFile('${p.port}')">Upload</button>
+        <button class="btn" onclick="compilePrompt('${p.port}')">Compile</button>
+        <button class="btn" onclick="loadLogs('${p.port}')">Logs</button>
+      </div>
+    </div>`;
+  }).join('') || '<div class="card">ไม่พบ PORT</div>';
+  bindDrops();
+}
+function updateMetrics(){
+  document.getElementById('mTotal').textContent = allPorts.length || 20;
+  document.getElementById('mRunning').textContent = allPorts.filter(p=>String(p.status).toLowerCase()==='running').length;
+  document.getElementById('mStopped').textContent = allPorts.filter(p=>String(p.status).toLowerCase()==='stopped').length;
+  document.getElementById('mBusy').textContent = allPorts.filter(p=>p.busy).length;
+}
+async function loadDashboard(){
+  try{
+    const data = await api('dashboard');
+    allPorts = data.ports || [];
+    updateMetrics(); renderPorts(); renderQueue(data.commands || []);
+    document.getElementById('lastUpdate').textContent = 'อัปเดตล่าสุด: ' + new Date().toLocaleString('th-TH') + (data.dashboard_at ? ' | Agent: '+new Date(data.dashboard_at).toLocaleString('th-TH') : '');
+  }catch(e){ toast('โหลด Dashboard ไม่สำเร็จ: '+e.message); }
+}
+function renderQueue(commands){
+  const body = document.getElementById('queueBody');
+  body.innerHTML = (commands || []).map(c=>{
+    const p = c.payload || {};
+    return `<tr><td>${esc(c.id)}</td><td>${esc(p.action || '-')}</td><td>${esc(p.port || '-')}</td><td>${esc(c.status)}</td><td>${esc(c.lock_key || '-')}</td><td>${esc(c.created_at ? new Date(c.created_at).toLocaleString('th-TH') : '-')}</td></tr>`;
+  }).join('') || '<tr><td colspan="6">ยังไม่มีข้อมูล</td></tr>';
+}
+async function loadQueue(){ try{ const d=await api('commands'); renderQueue(d.commands || []); }catch(e){ toast('โหลด Queue ไม่สำเร็จ: '+e.message); } }
+async function dashboardCmd(){ await sendAction({action:'dashboard'}); }
+async function watchdog(){ await sendAction({action:'watchdog'}); }
+function compilePrompt(port){ const filename=prompt('ชื่อไฟล์ .mq5 เช่น MyBot.mq5'); if(filename) sendAction({action:'compile',port,filename}); }
+async function loadLogs(port){ await sendAction({action:'logs',port}); toast('ส่งคำสั่งอ่าน Logs แล้ว รอ Agent ตอบกลับใน Queue'); }
+function pickFile(port){ const input=document.createElement('input'); input.type='file'; input.accept='.mq5,.mqh,.set,.txt,.ex5'; input.onchange=()=>uploadFile(port,input.files[0]); input.click(); }
+function uploadFile(port,file){
+  if(!file) return;
+  if(!/\.(mq5|mqh|set|txt|ex5)$/i.test(file.name)){ toast('อนุญาตเฉพาะ .mq5 .mqh .set .txt .ex5'); return; }
+  const reader=new FileReader();
+  reader.onload=async()=>{ const base64=String(reader.result).split(',')[1] || ''; await sendAction({action:'upload_compile_restart',port,filename:file.name,base64}); };
+  reader.readAsDataURL(file);
+}
+function bindDrops(){
+  document.querySelectorAll('.drop').forEach(el=>{
+    el.ondragover=e=>{e.preventDefault();el.classList.add('drag')};
+    el.ondragleave=()=>el.classList.remove('drag');
+    el.ondrop=e=>{e.preventDefault();el.classList.remove('drag');uploadFile(el.dataset.port,e.dataTransfer.files[0]);};
+  });
+}
+
+document.getElementById('btnRefresh').onclick=loadDashboard;
+document.getElementById('btnDashboardCmd').onclick=dashboardCmd;
+document.getElementById('btnWatchdog').onclick=watchdog;
+document.getElementById('btnQueue').onclick=loadQueue;
+document.getElementById('search').oninput=renderPorts;
+loadDashboard();
+setInterval(loadDashboard, 5000);
+</script>
+</body>
+</html>

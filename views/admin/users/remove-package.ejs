@@ -1,0 +1,29 @@
+<div class="container" style="max-width:600px;margin:auto;padding:30px;">
+  <h2 style="color:#fff;">📦 ลบแพ็กเกจ</h2>
+
+  <% if (!packages || packages.length === 0) { %>
+    <p style="color:#aaa;">ไม่มีแพ็กเกจ</p>
+  <% } %>
+
+  <% packages.forEach(pkg => { %>
+    <div style="background:#111;border-radius:10px;padding:15px;margin-top:10px;display:flex;justify-content:space-between;align-items:center;">
+      
+      <span style="color:#fff;">
+        <%= pkg.name || ('Package #' + pkg.id) %>
+      </span>
+
+      <form method="POST" action="/admin/users/<%= user.id %>/remove-package/<%= pkg.id %>">
+        <button 
+          style="background:#ff4d4f;border:none;color:#fff;padding:6px 12px;border-radius:6px;cursor:pointer;"
+          onclick="return confirm('ยืนยันลบแพ็กเกจนี้?')">
+          ลบ
+        </button>
+      </form>
+
+    </div>
+  <% }) %>
+
+  <div style="margin-top:20px;">
+    <a href="/admin/users" style="color:#4da6ff;">← กลับ</a>
+  </div>
+</div>

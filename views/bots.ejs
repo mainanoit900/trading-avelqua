@@ -1,0 +1,188 @@
+<%- include('partials/head', { title: 'Bot Details | TRADING AVELQUA', lang: lang }) %>
+<link rel="stylesheet" href="/public/css/bots.css">
+
+<%- include('partials/nav', {
+  currentPath: '/bots',
+  user: (typeof user !== 'undefined' ? user : null),
+  lang: (typeof lang !== 'undefined' ? lang : 'th')
+}) %>
+
+<main class="bots-page">
+  <section class="bots-hero">
+    <div class="container bots-hero-grid">
+      <div class="bots-hero-copy bots-card">
+        <span class="bots-chip"><%= t('bots.hero_badge', 'AI TRADING SYSTEM') %></span>
+
+        <h1><%= t('bots.hero_title', 'ระบบบอทเทรดอัตโนมัติที่ช่วยให้คุณเทรดได้ง่ายขึ้น') %></h1>
+
+        <p class="bots-lead">
+          <%= t('bots.hero_desc', 'TRADING AVELQUA ถูกออกแบบมาเพื่อช่วยให้ทั้งมือใหม่และมืออาชีพสามารถใช้งานบอทเทรดอัตโนมัติได้อย่างมั่นใจ มีระบบช่วยติดตาม บริหารแพ็กเกจ และรองรับการเติบโตของพอร์ตในระยะยาว') %>
+        </p>
+
+        <div class="bots-hero-actions">
+          <a href="/pricing?lang=<%= lang || 'th' %>" class="bots-btn bots-btn-primary">
+            <%= t('bots.cta_pricing', 'ดูแพ็กเกจ') %>
+          </a>
+          <a href="/contact?lang=<%= lang || 'th' %>" class="bots-btn bots-btn-secondary">
+            <%= t('bots.cta_contact', 'ปรึกษาฟรี') %>
+          </a>
+        </div>
+
+        <div class="bots-mini-grid">
+          <div class="bots-mini-box">
+            <span><%= t('bots.mini1_title', 'AI วิเคราะห์ตลาด') %></span>
+            <strong><%= t('bots.mini1_desc', 'ช่วยมองจังหวะเข้าออกได้เร็วขึ้น') %></strong>
+          </div>
+
+          <div class="bots-mini-box">
+            <span><%= t('bots.mini2_title', 'ลดการใช้อารมณ์') %></span>
+            <strong><%= t('bots.mini2_desc', 'เทรดตามแผนอย่างมีวินัย') %></strong>
+          </div>
+
+          <div class="bots-mini-box">
+            <span><%= t('bots.mini3_title', 'ดูแลง่าย') %></span>
+            <strong><%= t('bots.mini3_desc', 'เริ่มต้นใช้งานได้ในไม่กี่ขั้นตอน') %></strong>
+          </div>
+        </div>
+      </div>
+
+      <div class="bots-hero-visual bots-card">
+        <div class="bots-visual-wrap">
+          <div class="bots-glow bots-glow-1"></div>
+          <div class="bots-glow bots-glow-2"></div>
+          <img src="/public/images/logo.png" alt="TRADING AVELQUA">
+        </div>
+        <p class="bots-visual-text">
+          <%= t('bots.visual_desc', 'ระบบที่ถูกออกแบบเพื่อเพิ่มความมั่นใจในการใช้งานจริง ทั้งด้านความสะดวก ความต่อเนื่อง และการติดตามผลได้ชัดเจน') %>
+        </p>
+      </div>
+    </div>
+  </section>
+
+  <section class="bots-section">
+    <div class="container">
+      <div class="bots-section-head">
+        <div>
+          <span class="bots-chip"><%= t('bots.features_badge', 'WHY CHOOSE US') %></span>
+          <h2><%= t('bots.features_title', 'จุดเด่นของระบบ') %></h2>
+          <p class="bots-section-desc">
+            <%= t('bots.features_desc', 'ไม่ใช่แค่บอทเทรดทั่วไป แต่เป็นระบบที่ออกแบบให้พร้อมใช้งานจริง') %>
+          </p>
+        </div>
+      </div>
+
+      <div class="bots-feature-grid">
+        <div class="bots-feature-card bots-card">
+          <div class="bots-feature-icon">⚡</div>
+          <h3><%= t('bots.feature1_title', 'ทำงานอัตโนมัติ') %></h3>
+          <p><%= t('bots.feature1_desc', 'ระบบช่วยให้คุณไม่พลาดจังหวะสำคัญในตลาด และลดภาระการเฝ้าหน้าจอ') %></p>
+        </div>
+
+        <div class="bots-feature-card bots-card">
+          <div class="bots-feature-icon">📊</div>
+          <h3><%= t('bots.feature2_title', 'ติดตามผลได้ง่าย') %></h3>
+          <p><%= t('bots.feature2_desc', 'ดูสถานะการใช้งาน แพ็กเกจ และผลลัพธ์ได้อย่างเป็นระเบียบในระบบเดียว') %></p>
+        </div>
+
+        <div class="bots-feature-card bots-card">
+          <div class="bots-feature-icon">🛡️</div>
+          <h3><%= t('bots.feature3_title', 'ใช้งานอย่างมั่นใจ') %></h3>
+          <p><%= t('bots.feature3_desc', 'ลดความผิดพลาดจากการตัดสินใจด้วยอารมณ์ และช่วยให้เทรดตามแผนมากขึ้น') %></p>
+        </div>
+
+        <div class="bots-feature-card bots-card">
+          <div class="bots-feature-icon">🚀</div>
+          <h3><%= t('bots.feature4_title', 'พร้อมเติบโต') %></h3>
+          <p><%= t('bots.feature4_desc', 'เลือกแพ็กเกจตามระดับการใช้งาน ตั้งแต่เริ่มต้นจนถึงผู้ใช้ระดับสูง') %></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bots-section">
+    <div class="container">
+      <div class="bots-section-head">
+        <div>
+          <span class="bots-chip"><%= t('bots.steps_badge', 'HOW IT WORKS') %></span>
+          <h2><%= t('bots.steps_title', 'เริ่มต้นใช้งานง่ายใน 3 ขั้นตอน') %></h2>
+        </div>
+      </div>
+
+      <div class="bots-step-grid">
+        <div class="bots-step-card bots-card">
+          <div class="bots-step-number">1</div>
+          <h3><%= t('bots.step1_title', 'สมัครสมาชิก') %></h3>
+          <p><%= t('bots.step1_desc', 'สร้างบัญชีผู้ใช้เพื่อเริ่มต้นใช้งานระบบได้อย่างรวดเร็ว') %></p>
+        </div>
+
+        <div class="bots-step-card bots-card">
+          <div class="bots-step-number">2</div>
+          <h3><%= t('bots.step2_title', 'เลือกแพ็กเกจ') %></h3>
+          <p><%= t('bots.step2_desc', 'เลือกแผนที่เหมาะกับรูปแบบการใช้งาน จำนวนพอร์ต และระดับการลงทุน') %></p>
+        </div>
+
+        <div class="bots-step-card bots-card">
+          <div class="bots-step-number">3</div>
+          <h3><%= t('bots.step3_title', 'เริ่มใช้งานบอท') %></h3>
+          <p><%= t('bots.step3_desc', 'ระบบพร้อมช่วยให้คุณติดตามตลาดและใช้งานบอทได้อย่างต่อเนื่อง') %></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bots-section">
+    <div class="container">
+      <div class="bots-section-head">
+        <div>
+          <span class="bots-chip"><%= t('bots.benefits_badge', 'REAL BENEFITS') %></span>
+          <h2><%= t('bots.benefits_title', 'สิ่งที่ลูกค้าจะได้รับ') %></h2>
+        </div>
+      </div>
+
+      <div class="bots-benefit-grid">
+        <div class="bots-benefit-card bots-card">
+          <h3><%= t('bots.benefit1_title', 'ใช้งานง่ายขึ้น') %></h3>
+          <p><%= t('bots.benefit1_desc', 'หน้าเว็บและระบบจัดระเบียบใหม่ ให้ลูกค้าเข้าใจแพ็กเกจและบริการได้ง่าย') %></p>
+        </div>
+
+        <div class="bots-benefit-card bots-card">
+          <h3><%= t('bots.benefit2_title', 'ประหยัดเวลา') %></h3>
+          <p><%= t('bots.benefit2_desc', 'ไม่ต้องคอยติดตามทุกจังหวะด้วยตัวเองตลอดเวลา ระบบช่วยจัดการให้เป็นระบบขึ้น') %></p>
+        </div>
+
+        <div class="bots-benefit-card bots-card">
+          <h3><%= t('bots.benefit3_title', 'ดูน่าเชื่อถือ') %></h3>
+          <p><%= t('bots.benefit3_desc', 'ภาพลักษณ์ของแพลตฟอร์มดีขึ้น ช่วยเพิ่มความมั่นใจให้ผู้สนใจตัดสินใจง่ายขึ้น') %></p>
+        </div>
+
+        <div class="bots-benefit-card bots-card">
+          <h3><%= t('bots.benefit4_title', 'พร้อมขยายต่อยอด') %></h3>
+          <p><%= t('bots.benefit4_desc', 'รองรับการพัฒนาเพิ่มในอนาคต เช่น AI Chat, VPS, Payment และ Dashboard') %></p>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section class="bots-cta">
+    <div class="container">
+      <div class="bots-cta-box bots-card">
+        <span class="bots-chip"><%= t('bots.final_badge', 'START TODAY') %></span>
+        <h2><%= t('bots.final_title', 'พร้อมเริ่มต้นกับระบบบอทเทรดของเราแล้วหรือยัง?') %></h2>
+        <p>
+          <%= t('bots.final_desc', 'เลือกแพ็กเกจที่เหมาะกับคุณ แล้วเริ่มต้นใช้งานระบบที่ออกแบบมาเพื่อเพิ่มความสะดวก ความมั่นใจ และประสบการณ์ใช้งานที่ดีกว่าเดิม') %>
+        </p>
+
+        <div class="bots-hero-actions bots-cta-actions">
+          <a href="/pricing?lang=<%= lang || 'th' %>" class="bots-btn bots-btn-primary">
+            <%= t('bots.final_pricing', 'ไปหน้าแพ็กเกจ') %>
+          </a>
+          <a href="/contact?lang=<%= lang || 'th' %>" class="bots-btn bots-btn-secondary">
+            <%= t('bots.final_contact', 'ติดต่อทีมงาน') %>
+          </a>
+        </div>
+      </div>
+    </div>
+  </section>
+</main>
+
+<%- include('partials/footer') %>

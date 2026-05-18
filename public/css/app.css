@@ -1,0 +1,132 @@
+:root{
+  --bg:#07111f;
+  --bg-2:#0b1729;
+  --surface:rgba(12,22,40,.88);
+  --surface-2:rgba(19,31,53,.92);
+  --line:rgba(148,163,184,.16);
+  --text:#e5edf8;
+  --muted:#93a4bd;
+  --primary:#60a5fa;
+  --primary-2:#8b5cf6;
+  --success:#34d399;
+  --shadow:0 24px 60px rgba(0,0,0,.34);
+}
+body{background:radial-gradient(circle at top left,rgba(96,165,250,.11),transparent 26%),radial-gradient(circle at bottom right,rgba(139,92,246,.12),transparent 26%),linear-gradient(180deg,var(--bg) 0%,#040b16 100%)!important;color:var(--text)!important}
+.app-theme{color:var(--text)}
+.app-page{display:grid;gap:22px}
+.app-hero,.card-lux{position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(15,23,42,.94),rgba(7,17,31,.94))!important;border:1px solid var(--line)!important;border-radius:24px;box-shadow:var(--shadow)}
+.app-hero{padding:32px;min-height:190px;display:flex;align-items:flex-end}
+.app-chip{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border-radius:999px;background:rgba(96,165,250,.14);color:#bfdbfe;border:1px solid rgba(96,165,250,.22);font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.app-title{margin:10px 0 8px;font-size:38px;line-height:1.08;color:#f8fbff}.app-lead{max-width:760px;font-size:15px}
+.hero-orb{position:absolute;border-radius:50%;filter:blur(2px)}
+.hero-orb-a{width:240px;height:240px;right:-70px;top:-70px;background:radial-gradient(circle,rgba(96,165,250,.18),transparent 68%)}
+.hero-orb-b{width:220px;height:220px;right:90px;bottom:-120px;background:radial-gradient(circle,rgba(139,92,246,.16),transparent 68%)}
+.metric-lux{padding:16px 18px;border-radius:18px;background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.12)}
+.metric-lux strong{color:#f8fbff;font-size:18px}.metric-lux .caption{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}.accent-soft{background:linear-gradient(135deg,rgba(30,41,59,.72),rgba(17,24,39,.86))}
+.card-head-simple h2{margin:0 0 6px;color:#f8fbff}.card-head-simple p{margin:0}.muted{color:var(--muted)!important}
+@media (max-width:740px){.app-title{font-size:30px}.app-hero{padding:24px}.app-stat-grid,.grid.grid-2{grid-template-columns:1fr!important}}
+
+:root{
+  --bg:#07111f;
+  --bg-2:#0b1729;
+  --surface:rgba(12,22,40,.88);
+  --surface-2:rgba(19,31,53,.92);
+  --line:rgba(148,163,184,.16);
+  --text:#e5edf8;
+  --muted:#93a4bd;
+  --primary:#60a5fa;
+  --primary-2:#8b5cf6;
+  --success:#34d399;
+  --shadow:0 24px 60px rgba(0,0,0,.34);
+}
+body{background:radial-gradient(circle at top left,rgba(96,165,250,.11),transparent 26%),radial-gradient(circle at bottom right,rgba(139,92,246,.12),transparent 26%),linear-gradient(180deg,var(--bg) 0%,#040b16 100%)!important;color:var(--text)!important}
+.app-theme{color:var(--text)}
+.app-page{display:grid;gap:22px}
+.app-hero,.card-lux{position:relative;overflow:hidden;background:linear-gradient(180deg,rgba(15,23,42,.94),rgba(7,17,31,.94))!important;border:1px solid var(--line)!important;border-radius:24px;box-shadow:var(--shadow)}
+.app-hero{padding:32px;min-height:190px;display:flex;align-items:flex-end}
+.app-chip{display:inline-flex;align-items:center;justify-content:center;padding:8px 12px;border-radius:999px;background:rgba(96,165,250,.14);color:#bfdbfe;border:1px solid rgba(96,165,250,.22);font-size:12px;font-weight:800;letter-spacing:.08em;text-transform:uppercase}
+.app-title{margin:10px 0 8px;font-size:38px;line-height:1.08;color:#f8fbff}.app-lead{max-width:760px;font-size:15px}
+.hero-orb{position:absolute;border-radius:50%;filter:blur(2px)}
+.hero-orb-a{width:240px;height:240px;right:-70px;top:-70px;background:radial-gradient(circle,rgba(96,165,250,.18),transparent 68%)}
+.hero-orb-b{width:220px;height:220px;right:90px;bottom:-120px;background:radial-gradient(circle,rgba(139,92,246,.16),transparent 68%)}
+.metric-lux{padding:16px 18px;border-radius:18px;background:rgba(255,255,255,.035);border:1px solid rgba(148,163,184,.12)}
+.metric-lux strong{color:#f8fbff;font-size:18px}.metric-lux .caption{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.08em;margin-bottom:8px}.accent-soft{background:linear-gradient(135deg,rgba(30,41,59,.72),rgba(17,24,39,.86))}
+.card-head-simple h2{margin:0 0 6px;color:#f8fbff}.card-head-simple p{margin:0}.muted{color:var(--muted)!important}
+@media (max-width:740px){.app-title{font-size:30px}.app-hero{padding:24px}.app-stat-grid,.grid.grid-2{grid-template-columns:1fr!important}}
+
+.modern-btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:48px;
+  padding:0 22px;
+  border:none;
+  border-radius:14px;
+  background:linear-gradient(135deg,#3456ff 0%,#6d3dff 100%);
+  color:#fff !important;
+  font-size:14px;
+  font-weight:800;
+  box-shadow:0 8px 18px rgba(80,100,255,.28);
+  cursor:pointer;
+  transition:all .18s ease;
+  text-decoration:none;
+}
+
+.modern-btn:hover{
+  transform:translateY(-1px) scale(1.02);
+  filter:brightness(1.08);
+  box-shadow:0 10px 22px rgba(80,100,255,.36);
+}
+
+/* Premium Buttons */
+.btn{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  gap:8px;
+  min-height:46px;
+  padding:0 20px;
+  border:none;
+  border-radius:14px;
+  font-size:14px;
+  font-weight:800;
+  cursor:pointer;
+  transition:all .18s ease;
+  text-decoration:none;
+}
+
+.btn:hover{
+  transform:translateY(-1px) scale(1.02);
+  filter:brightness(1.06);
+}
+
+.btn.primary{
+  background:linear-gradient(135deg,#3456ff 0%,#6d3dff 100%);
+  color:#fff !important;
+  box-shadow:0 8px 18px rgba(80,100,255,.28);
+}
+
+.btn.primary:hover{
+  box-shadow:0 10px 22px rgba(80,100,255,.36);
+}
+
+.btn.danger{
+  background:linear-gradient(135deg,#ff4d4d 0%,#b91c1c 100%);
+  color:#fff !important;
+  box-shadow:0 8px 18px rgba(255,77,77,.28);
+}
+
+.btn.danger:hover{
+  box-shadow:0 10px 22px rgba(255,77,77,.36);
+}
+
+.btn.success{
+  background:linear-gradient(135deg,#16a34a 0%,#22c55e 100%);
+  color:#fff !important;
+  box-shadow:0 8px 18px rgba(34,197,94,.28);
+}
+
+.btn.success:hover{
+  box-shadow:0 10px 22px rgba(34,197,94,.36);
+}

@@ -1,0 +1,115 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const safeSite = typeof site !== 'undefined' && site ? site : {};
+const brandName = safeSite.brandName || 'TRADING AVELQUA';
+%>
+
+<link rel="stylesheet" href="/public/css/auth.css">
+
+<div class="auth-page">
+  <div class="auth-card">
+    <div class="auth-logo-wrap">
+      <img src="/public/images/logo.png" alt="<%= brandName %>" class="auth-logo">
+    </div>
+
+    <h1 class="auth-title"><%= safeT('login.title', 'เข้าสู่ระบบ') %></h1>
+    <p class="auth-sub"><%= safeT('login.desc', 'เข้าสู่ระบบเพื่อจัดการพอร์ต ดูแพ็กเกจ และติดตามผลการใช้งานทั้งหมดในระบบเดียว') %></p>
+
+    <% if (typeof error !== 'undefined' && error) { %>
+      <div class="auth-alert auth-alert-danger"><%= error %></div>
+    <% } %>
+
+    <% if (typeof success !== 'undefined' && success) { %>
+      <div class="auth-alert auth-alert-success"><%= success %></div>
+    <% } %>
+
+    <form method="POST" action="/login">
+      <div class="auth-group">
+        <label class="auth-label"><%= safeT('common.email', 'อีเมล') %></label>
+        <input
+          type="email"
+          name="email"
+          class="auth-input"
+          placeholder="<%= safeT('login.email_placeholder', 'กรอกอีเมล') %>"
+          required
+        >
+      </div>
+
+      <div class="auth-group auth-password">
+        <label class="auth-label"><%= safeT('login.password', 'รหัสผ่าน') %></label>
+        <input
+          type="password"
+          id="password"
+          name="password"
+          class="auth-input"
+          placeholder="<%= safeT('login.password_placeholder', 'กรอกรหัสผ่าน') %>"
+          required
+        >
+        <button type="button" class="toggle-pass" onclick="togglePass()" aria-label="<%= safeT('register.toggle_password', 'แสดงหรือซ่อนรหัสผ่าน') %>">
+          👁
+        </button>
+      </div>
+
+      <div class="auth-links">
+        <a href="/forgot-password"><%= safeT('forgot.title', 'ลืมรหัสผ่าน') %></a>
+      </div>
+
+      <button type="submit" class="auth-btn"><%= safeT('nav.login', 'เข้าสู่ระบบ') %></button>
+    </form>
+
+    <div class="auth-divider">
+  <span><%= safeT('login.social', 'หรือเข้าสู่ระบบด้วย') %></span>
+</div>
+
+<div class="auth-social">
+  <a href="/auth/google" class="social-btn social-google">
+    <span class="social-icon-wrap">
+      <img src="/public/images/google.png" alt="Google">
+    </span>
+    <span class="social-text">Google</span>
+  </a>
+
+  <a href="/auth/line" class="social-btn social-line">
+    <span class="social-icon-wrap">
+      <img src="/public/images/line.png" alt="LINE">
+    </span>
+    <span class="social-text">LINE</span>
+  </a>
+</div>
+
+
+
+    <form method="POST" action="/resend-verification" style="margin-top:12px;">
+      <input type="hidden" name="email" value="">
+      <div class="auth-links" style="justify-content:center;">
+        
+      </div>
+    </form>
+
+    <div class="auth-register-text">
+      <span><%= safeT('login.no_account', 'ยังไม่มีบัญชี?') %></span>
+      <a href="/register"><%= safeT('nav.register', 'สมัครใช้งาน') %></a>
+    </div>
+  </div>
+</div>
+
+<script>
+function togglePass() {
+  const input = document.getElementById('password');
+  input.type = input.type === 'password' ? 'text' : 'password';
+}
+
+function resendVerifyFromLogin() {
+  const emailInput = document.querySelector('input[name="email"]');
+  const forms = document.querySelectorAll('form');
+  const resendForm = Array.from(forms).find(f => f.getAttribute('action') === '/resend-verification');
+  if (!emailInput || !resendForm) return;
+  const hiddenEmail = resendForm.querySelector('input[name="email"]');
+  hiddenEmail.value = emailInput.value || '';
+  if (!hiddenEmail.value) {
+    alert('กรุณากรอกอีเมลก่อน');
+    return;
+  }
+  resendForm.submit();
+}
+</script>

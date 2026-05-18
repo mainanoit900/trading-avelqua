@@ -1,0 +1,20 @@
+<%- include('../partials/admin-shell') %>
+<section class="card form-card">
+  <div class="card-head"><div><h3>Edit User</h3><p>แก้ไขทีละคนแบบเต็มฟอร์ม</p></div><a class="ghost-btn" href="/admin/users">กลับไปหน้าผู้ใช้</a></div>
+  <form method="POST" action="/admin/users/<%= editUser.id %>/update" class="form-grid two">
+    <input type="hidden" name="subscription_id" value="<%= subscription ? subscription.id : '' %>" />
+    <label>ชื่อเต็ม<input type="text" name="full_name" value="<%= editUser.full_name || '' %>" /></label>
+    <label>อีเมล<input type="email" name="email" value="<%= editUser.email || '' %>" /></label>
+    <label>ชื่อ<input type="text" name="first_name" value="<%= editUser.first_name || '' %>" /></label>
+    <label>นามสกุล<input type="text" name="last_name" value="<%= editUser.last_name || '' %>" /></label>
+    <label>เบอร์โทร<input type="text" name="phone" value="<%= editUser.phone || '' %>" /></label>
+    <label>Role<select name="role"><option value="user" <%= editUser.role === 'user' ? 'selected' : '' %>>user</option><option value="admin" <%= editUser.role === 'admin' ? 'selected' : '' %>>admin</option></select></label>
+    <label>Provider<select name="provider"><option value="web" <%= editUser.provider === 'web' ? 'selected' : '' %>>web</option><option value="google" <%= editUser.provider === 'google' ? 'selected' : '' %>>google</option><option value="line" <%= editUser.provider === 'line' ? 'selected' : '' %>>line</option><option value="mixed" <%= editUser.provider === 'mixed' ? 'selected' : '' %>>mixed</option></select></label>
+    <label>Status<select name="status"><option value="active" <%= editUser.status === 'active' ? 'selected' : '' %>>active</option><option value="banned" <%= editUser.status === 'banned' ? 'selected' : '' %>>banned</option><option value="disabled" <%= editUser.status === 'disabled' ? 'selected' : '' %>>disabled</option><option value="pending_verification" <%= editUser.status === 'pending_verification' ? 'selected' : '' %>>pending_verification</option></select></label>
+    <label>แพ็กเกจล่าสุด<input type="text" name="package_name_snapshot" value="<%= subscription ? subscription.package_name_snapshot : '' %>" /></label>
+    <label>สมัครผ่าน<select name="source_channel"><option value="web" <%= subscription && subscription.source_channel === 'web' ? 'selected' : '' %>>web</option><option value="google" <%= subscription && subscription.source_channel === 'google' ? 'selected' : '' %>>google</option><option value="line" <%= subscription && subscription.source_channel === 'line' ? 'selected' : '' %>>line</option></select></label>
+    <label>วันหมดอายุ<input type="datetime-local" name="package_end_at" value="<%= subscription && subscription.end_at ? new Date(subscription.end_at).toISOString().slice(0,16) : '' %>" /></label>
+    <div class="form-actions full"><button class="btn primary" type="submit">บันทึก</button><a class="btn secondary" href="/admin/users">กลับ</a></div>
+  </form>
+</section>
+<%- include('../partials/admin-shell-end') %>

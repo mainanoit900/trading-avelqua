@@ -1,0 +1,38 @@
+<%- include('../partials/admin-shell') %>
+<div class="grid-2">
+  <section class="card form-card">
+    <div class="card-head"><div><h3 data-i18n="admin.news.title"><%= t('admin.news.title', 'News Settings') %></h3><p>จัดกลุ่มให้อ่านง่ายขึ้น</p></div></div>
+    <form method="POST" action="/admin/news-settings" class="form-grid two">
+      <label>NEWS_API_KEY<input type="text" name="news_api_key" value="<%= settings.news_api_key || '' %>" /></label>
+      <label>OPENAI_API_KEY<input type="text" name="openai_api_key" value="<%= settings.openai_api_key || '' %>" /></label>
+      <label>OPENAI_MODEL<input type="text" name="openai_model" value="<%= settings.openai_model || 'gpt-5.4-mini' %>" /></label>
+      <label>จำนวนข่าวต่อวัน<input type="number" name="news_per_day" value="<%= settings.news_per_day || 10 %>" /></label>
+      <label>ข่าวต่อหน้า<input type="number" name="news_per_page" value="<%= settings.news_per_page || 12 %>" /></label>
+      <div class="form-actions full"><button class="btn primary" data-i18n="common.save"><%= t('common.save', 'Save') %></button></div>
+    </form>
+<form method="POST" action="/admin/news-sync" style="margin-top:12px;">
+  <button class="btn primary" type="submit">Sync News Now</button>
+</form>
+  </section>
+  <section class="card">
+    <div class="card-head"><div><h3>หมวดและระบบอัตโนมัติ</h3><p>เปิดปิดเป็นกลุ่ม</p></div></div>
+    <form method="POST" action="/admin/news-settings" class="form-grid two">
+      <input type="hidden" name="news_api_key" value="<%= settings.news_api_key || '' %>">
+      <input type="hidden" name="openai_api_key" value="<%= settings.openai_api_key || '' %>">
+      <input type="hidden" name="openai_model" value="<%= settings.openai_model || 'gpt-5.4-mini' %>">
+      <input type="hidden" name="news_per_day" value="<%= settings.news_per_day || 10 %>">
+      <input type="hidden" name="news_per_page" value="<%= settings.news_per_page || 12 %>">
+      <div class="checkbox-grid full">
+        <label class="checkbox-row"><input type="checkbox" name="category_economy" <%= settings.category_economy ? 'checked' : '' %> /> เศรษฐกิจ</label>
+        <label class="checkbox-row"><input type="checkbox" name="category_finance" <%= settings.category_finance ? 'checked' : '' %> /> การเงิน</label>
+        <label class="checkbox-row"><input type="checkbox" name="category_investment" <%= settings.category_investment ? 'checked' : '' %> /> การลงทุน</label>
+        <label class="checkbox-row"><input type="checkbox" name="category_currency" <%= settings.category_currency ? 'checked' : '' %> /> ค่าเงิน</label>
+        <label class="checkbox-row"><input type="checkbox" name="auto_update_enabled" <%= settings.auto_update_enabled ? 'checked' : '' %> /> Auto update</label>
+        <label class="checkbox-row"><input type="checkbox" name="ai_analysis_enabled" <%= settings.ai_analysis_enabled ? 'checked' : '' %> /> AI analysis</label>
+        <label class="checkbox-row"><input type="checkbox" name="auto_translate_enabled" <%= settings.auto_translate_enabled ? 'checked' : '' %> /> Auto translate</label>
+      </div>
+      <div class="form-actions full"><button class="btn primary" data-i18n="common.save"><%= t('common.save', 'Save') %></button></div>
+    </form>
+  </section>
+</div>
+<%- include('../partials/admin-shell-end') %>

@@ -1,0 +1,630 @@
+<%- include('../partials/head', { pageTitle: 'VPS / MT5', pageCss: 'admin-vps-control.css' }) %>
+<%- include('../partials/admin-shell') %>
+
+<%
+const num = (v, d = 2) => Number(v || 0).toLocaleString('th-TH', {
+  minimumFractionDigits: d,
+  maximumFractionDigits: d
+});
+
+const pct = (used, total) => {
+  used = Number(used || 0);
+  total = Number(total || 0);
+  return total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+};
+
+const statusText = s => {
+  const x = String(s || '').toLowerCase();
+  if (x === 'online' || x === 'available') return 'Online';
+  return 'Offline';
+};
+
+const isOnline = s => ['online', 'available'].includes(String(s || '').toLowerCase());
+const fmt = v => v ? new Date(v).toLocaleString('th-TH') : 'ยังไม่เคยเชื่อมต่อ';
+%>
+
+<style>
+  .vps-mini-actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center;margin-top:16px}.vps-mini-actions form{margin:0}.vps-mini-actions .btn{border:0;text-decoration:none;cursor:pointer;white-space:nowrap}.vps-popup-backdrop{position:fixed;inset:0;z-index:99999;display:none;align-items:center;justify-content:center;background:rgba(2,6,23,.68);backdrop-filter:blur(8px)}.vps-popup-backdrop.show{display:flex}.vps-popup{width:min(560px,92vw);border:1px solid rgba(148,163,184,.22);border-radius:26px;background:linear-gradient(145deg,#0f172a,#111827 55%,#020617);box-shadow:0 30px 90px rgba(0,0,0,.55);color:#e5e7eb;overflow:hidden}.vps-popup-head{display:flex;gap:14px;align-items:center;padding:22px 24px;border-bottom:1px solid rgba(148,163,184,.16)}.vps-popup-icon{width:46px;height:46px;border-radius:16px;display:grid;place-items:center;background:rgba(59,130,246,.18);color:#93c5fd;font-size:22px}.vps-popup-title{margin:0;font-size:20px}.vps-popup-sub{margin:4px 0 0;color:#94a3b8;font-size:13px}.vps-popup-body{padding:20px 24px}.vps-popup-message{font-size:15px;line-height:1.7}.vps-popup-result{margin-top:14px;max-height:260px;overflow:auto;border-radius:16px;background:rgba(15,23,42,.75);border:1px solid rgba(148,163,184,.14);padding:14px;white-space:pre-wrap;font-size:13px;color:#cbd5e1}.vps-popup-actions{display:flex;justify-content:flex-end;gap:10px;padding:0 24px 22px}.vps-popup-actions button{border:0;border-radius:14px;padding:10px 16px;cursor:pointer}.vps-popup-ok{background:#2563eb;color:white}.vps-popup-close{background:rgba(148,163,184,.12);color:#e5e7eb}.vps-status-dot{display:inline-flex;align-items:center;gap:7px}.vps-status-dot:before{content:'';width:8px;height:8px;border-radius:999px;background:#ef4444;box-shadow:0 0 12px rgba(239,68,68,.65)}.vps-status-dot.online:before{background:#22c55e;box-shadow:0 0 12px rgba(34,197,94,.75)}.btn.vps-secondary{background:rgba(148,163,184,.14);color:#e5e7eb}.btn.vps-danger{background:rgba(239,68,68,.16);color:#fecaca}.btn.vps-blue{background:linear-gradient(135deg,#2563eb,#7c3aed);color:white}.btn.vps-green{background:linear-gradient(135deg,#16a34a,#22c55e);color:white}.btn.vps-orange{background:rgba(249,115,22,.16);color:#fed7aa}
+</style>
+
+<div class="vps-page">
+
+  <section class="vps-hero premium">
+    <div>
+      <div class="vps-kicker">WINDOWS VPS BOT CONTROL</div>
+      <h1>จัดการ Windows VPS / MT5</h1>
+      <p>กดเชื่อมต่อ/ปิดการเชื่อมต่อ และส่งคำสั่ง Status, Restart, Log ไปที่ agent.ps1 โดยไม่ต้องรีเฟรชทั้งเว็บ</p>
+    </div>
+<div style="
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:12px;
+  width:100%;
+">
+  <form method="POST" action="/admin/vps/deploy-agent-all" style="margin:0;">
+    <button class="btn vps-green" type="submit">
+      🚀 Deploy Agent ทุก VPS
+    </button>
+  </form>
+
+  <a class="btn primary" href="/admin/vps/create">+ เพิ่ม VPS</a>
+</div>
+  </section>
+
+  <section class="vps-summary" id="vpsSummaryBox">
+    <div class="sum-card">
+      <span>VPS ทั้งหมด</span>
+      <strong data-summary="totalNodes"><%= vpsSummary?.totalNodes || 0 %></strong>
+      <small>Online <span data-summary="onlineNodes"><%= vpsSummary?.onlineNodes || 0 %></span> เครื่อง</small>
+    </div>
+
+    <div class="sum-card">
+      <span>Port ใช้งาน</span>
+      <strong data-summary="usedPorts"><%= vpsSummary?.usedPorts || 0 %></strong>
+      <small>จากทั้งหมด <span data-summary="totalPorts"><%= vpsSummary?.totalPorts || 0 %></span> Port</small>
+      <div class="lux-bar"><i data-summary-bar="ports" style="width:<%= pct(vpsSummary?.usedPorts, vpsSummary?.totalPorts) %>%"></i></div>
+    </div>
+
+    <div class="sum-card">
+      <span>Lot ใช้งาน</span>
+      <strong data-summary="usedLot"><%= num(vpsSummary?.usedLot || 0) %></strong>
+      <small>รองรับสูงสุด <span data-summary="totalLot"><%= num(vpsSummary?.totalLot || 0) %></span> Lot</small>
+      <div class="lux-bar"><i data-summary-bar="lot" style="width:<%= pct(vpsSummary?.usedLot, vpsSummary?.totalLot) %>%"></i></div>
+    </div>
+
+    <a class="sum-card danger clickable-card" href="/admin/vps/errors">
+      <span>Error / Alarm</span>
+      <strong data-summary="errorBots"><%= vpsSummary?.errorBots || 0 %></strong>
+      <small>กดเพื่อดูรายการแจ้งเตือน</small>
+    </a>
+  </section>
+
+  <section class="vps-card">
+    <div class="card-head">
+      <div>
+        <h2>รายการ Windows VPS</h2>
+        <p>แสดงสถานะ Online / Offline และค่า CPU, RAM, Net, Ping จาก Agent ล่าสุด</p>
+      </div>
+    </div>
+
+    <div class="vps-compact-grid" id="vpsNodeGrid">
+      <% if (!(nodes || []).length) { %>
+        <div class="empty">ยังไม่มี Windows VPS</div>
+      <% } %>
+
+      <% (nodes || []).forEach(function(node){
+        const portUsed = Number(node.active_ports || 0);
+        const portMax = Number(node.max_ports || 0);
+        const lotUsed = Number(node.active_lot || 0);
+        const lotMax = Number(node.max_lot || 0);
+        const cpu = Number(node.cpu_percent || 0);
+        const ram = Number(node.ram_percent || 0);
+        const portPercent = pct(portUsed, portMax);
+        const lotPercent = pct(lotUsed, lotMax);
+        const agentEnabled = node.agent_enabled !== false;
+        const online = agentEnabled && isOnline(node.status);
+        const isWarn = cpu >= 80 || ram >= 80 || portPercent >= 80 || lotPercent >= 80;
+      %>
+
+      <div class="vps-mini-card <%= isWarn ? 'is-warning' : '' %>" data-vps-card="<%= node.id %>">
+        <div class="vps-mini-top">
+          <div>
+            <h3 data-field="node_name"><%= node.node_name %></h3>
+            <p>IP: <span data-field="ip_address"><%= node.ip_address || '-' %></span></p>
+          </div>
+          <span class="pill <%= online ? 'online' : 'offline' %>" data-field="status"><span class="vps-status-dot <%= online ? 'online' : '' %>"><%= statusText(node.status) %></span></span>
+        </div>
+
+        <div class="vps-last-seen">
+          <span>เชื่อมต่อล่าสุด</span>
+          <b data-field="last_seen_at"><%= fmt(node.last_seen_at || node.updated_at) %></b>
+        </div>
+
+        <div class="vps-chart-grid">
+          <div class="chart-box">
+            <div class="chart-head"><span>CPU</span><b data-field="cpu_percent"><%= cpu %>%</b></div>
+            <div class="lux-bar"><i data-bar="cpu" style="width:<%= cpu %>%"></i></div>
+          </div>
+          <div class="chart-box">
+            <div class="chart-head"><span>RAM</span><b data-field="ram_percent"><%= ram %>%</b></div>
+            <div class="lux-bar"><i data-bar="ram" style="width:<%= ram %>%"></i></div>
+          </div>
+          <div class="chart-box">
+            <div class="chart-head"><span>Port ใช้งาน</span><b data-field="active_ports"><%= portUsed %></b></div>
+            <small>จากทั้งหมด <span data-field="max_ports"><%= portMax %></span> Port</small>
+            <div class="lux-bar"><i data-bar="ports" style="width:<%= portPercent %>%"></i></div>
+          </div>
+          <div class="chart-box">
+            <div class="chart-head"><span>Lot ใช้งาน</span><b data-field="active_lot"><%= num(lotUsed) %></b></div>
+            <small>รองรับสูงสุด <span data-field="max_lot"><%= num(lotMax) %></span> Lot</small>
+            <div class="lux-bar"><i data-bar="lot" style="width:<%= lotPercent %>%"></i></div>
+          </div>
+        </div>
+
+        <div class="vps-mini-net">
+          <span>Download <b data-field="net_down_mbps"><%= num(node.net_down_mbps || 0) %></b> Mbps</span>
+          <span>Upload <b data-field="net_up_mbps"><%= num(node.net_up_mbps || 0) %></b> Mbps</span>
+          <span>Ping <b data-field="ping_ms"><%= num(node.ping_ms || 0, 0) %></b> ms</span>
+        </div>
+
+        <div class="vps-mini-alert" data-field="last_error" style="display:<%= (node.last_error || node.last_error_message) ? 'block' : 'none' %>"><%= node.last_error || node.last_error_message || '' %></div>
+
+        <div class="vps-mini-actions">
+          <button class="btn <%= online ? 'vps-danger' : 'vps-green' %>" type="button" data-vps-command="<%= online ? 'disconnect_agent' : 'connect_agent' %>" data-node-id="<%= node.id %>">
+            <%= online ? 'ปิดการเชื่อมต่อ' : 'เชื่อมต่อ' %>
+          </button>
+
+          <a class="btn primary" href="/admin/vps/<%= node.id %>/ports">Port</a>
+          <a class="btn soft" href="/admin/vps/<%= node.id %>/edit">UpdateVPS</a>
+
+          <button class="btn vps-secondary" type="button" data-vps-command="status" data-node-id="<%= node.id %>">สถานะ</button>
+          <button class="btn vps-orange" type="button" data-vps-command="restart_agent" data-node-id="<%= node.id %>">รีสตาร์ท</button>
+          <button class="btn vps-blue" type="button" data-vps-command="get_log" data-node-id="<%= node.id %>">ดู Log</button>
+
+          <form method="POST" action="/admin/vps/<%= node.id %>/delete" onsubmit="return confirm('ยืนยันลบ VPS นี้?')">
+            <button class="btn danger" type="submit">ลบ VPS</button>
+          </form>
+        </div>
+      </div>
+
+      <% }) %>
+    </div>
+  </section>
+
+</div>
+
+<div class="vps-popup-backdrop" id="vpsPopup">
+  <div class="vps-popup">
+    <div class="vps-popup-head">
+      <div class="vps-popup-icon" id="vpsPopupIcon">⏳</div>
+      <div>
+        <h3 class="vps-popup-title" id="vpsPopupTitle">กำลังส่งคำสั่ง</h3>
+        <p class="vps-popup-sub" id="vpsPopupSub">Windows VPS Agent</p>
+      </div>
+    </div>
+    <div class="vps-popup-body">
+      <div class="vps-popup-message" id="vpsPopupMessage">กำลังดำเนินการ...</div>
+      <pre class="vps-popup-result" id="vpsPopupResult" style="display:none"></pre>
+    </div>
+    <div class="vps-popup-actions">
+      <button class="vps-popup-close" type="button" data-popup-close>ปิด</button>
+      <button class="vps-popup-ok" type="button" data-popup-refresh>รีเฟรชค่า</button>
+    </div>
+  </div>
+</div>
+
+<script>
+(function(){
+  const popup = document.getElementById('vpsPopup');
+  const icon = document.getElementById('vpsPopupIcon');
+  const title = document.getElementById('vpsPopupTitle');
+  const sub = document.getElementById('vpsPopupSub');
+  const msg = document.getElementById('vpsPopupMessage');
+  const resultBox = document.getElementById('vpsPopupResult');
+  const closeBtn = document.querySelector('[data-popup-close]');
+  const actionBtn = document.querySelector('[data-popup-refresh]');
+
+  let popupAction = null;
+  let disconnectTimer = null;
+  let disconnectLock = false;
+
+  const commandNames = {
+    connect_agent: 'เชื่อมต่อ',
+    disconnect_agent: 'ปิดการเชื่อมต่อ',
+    status: 'สถานะ',
+    restart_agent: 'รีสตาร์ท',
+    get_log: 'ดู Log',
+    refresh_metrics: 'รีเฟรชค่า'
+  };
+
+  function n(v, d=2){
+    return Number(v || 0).toLocaleString('th-TH', {
+      minimumFractionDigits:d,
+      maximumFractionDigits:d
+    });
+  }
+
+  function p(used,total){
+    used = Number(used || 0);
+    total = Number(total || 0);
+    return total > 0 ? Math.min(100, Math.round((used / total) * 100)) : 0;
+  }
+
+  function fmt(v){
+    if(!v) return 'ยังไม่เคยเชื่อมต่อ';
+    try { return new Date(v).toLocaleString('th-TH'); } catch(e){ return '-'; }
+  }
+
+  function onlineStatus(s){
+    s = String(s || '').toLowerCase();
+    return s === 'online' || s === 'available';
+  }
+
+  function setPopupButtons(mode, onAction){
+    popupAction = typeof onAction === 'function' ? onAction : null;
+    closeBtn.style.display = 'inline-flex';
+    actionBtn.style.display = 'inline-flex';
+
+    if(mode === 'confirm_disconnect'){
+      closeBtn.textContent = 'ยกเลิก';
+      actionBtn.textContent = 'ปิดทันที';
+      return;
+    }
+
+    if(mode === 'loading'){
+      closeBtn.style.display = 'none';
+      actionBtn.style.display = 'none';
+      return;
+    }
+
+    closeBtn.textContent = 'ปิด';
+    actionBtn.textContent = 'รีเฟรชค่า';
+    popupAction = refreshNodes;
+  }
+
+  function openPopup(state, head, text, result, mode, onAction){
+    icon.textContent = state === 'ok' ? '✅' : state === 'error' ? '⚠️' : state === 'confirm' ? '🛑' : '⏳';
+    title.textContent = head || 'Windows VPS Agent';
+    sub.textContent = 'Windows VPS Agent';
+    msg.textContent = text || '';
+    resultBox.style.display = result ? 'block' : 'none';
+    resultBox.textContent = result || '';
+    setPopupButtons(mode || (state === 'loading' ? 'loading' : 'normal'), onAction);
+    popup.classList.add('show');
+  }
+
+  function closePopup(){
+    if(disconnectTimer){
+      clearInterval(disconnectTimer);
+      disconnectTimer = null;
+    }
+    disconnectLock = false;
+    popup.classList.remove('show');
+  }
+
+  closeBtn.addEventListener('click', closePopup);
+  actionBtn.addEventListener('click', function(){
+    if(popupAction) popupAction();
+  });
+
+  async function sendCommand(nodeId, command){
+    const res = await fetch(`/admin/vps/nodes/${nodeId}/command`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Accept': 'application/json' },
+      body: JSON.stringify({ command })
+    });
+
+    const data = await res.json().catch(() => ({ ok:false, error:'อ่านผลลัพธ์ไม่ได้' }));
+
+    if(!res.ok || !data.ok){
+      throw new Error(data.error || 'ส่งคำสั่งไม่สำเร็จ');
+    }
+
+    return data;
+  }
+
+  async function postCommand(nodeId, command, opts){
+    opts = opts || {};
+    const waitResult = opts.waitResult !== false;
+
+    openPopup('loading', commandNames[command] || 'ส่งคำสั่ง', 'กำลังส่งคำสั่งไปที่ agent.ps1 ใน Windows VPS...', '', 'loading');
+
+    try {
+      const data = await sendCommand(nodeId, command);
+      await refreshNodes();
+
+      const commandId = data.command && data.command.id ? data.command.id : '';
+
+      openPopup(
+        'ok',
+        commandNames[command] || 'ส่งคำสั่ง',
+        data.message || 'ส่งคำสั่งสำเร็จ',
+        commandId ? 'Command ID: ' + commandId : '',
+        'normal'
+      );
+
+      if(waitResult && commandId){
+        openPopup(
+          'loading',
+          commandNames[command] || 'ส่งคำสั่ง',
+          data.message || 'ส่งคำสั่งแล้ว กำลังรอ Agent รับคำสั่ง...',
+          'Command ID: ' + commandId,
+          'loading'
+        );
+        pollCommand(commandId, command);
+      }
+    } catch(err){
+      openPopup('error', commandNames[command] || 'ส่งคำสั่ง', err.message || 'ส่งคำสั่งไม่สำเร็จ', '', 'normal');
+    } finally {
+      disconnectLock = false;
+    }
+  }
+
+  function confirmDisconnect(nodeId){
+    if(disconnectLock) return;
+    disconnectLock = true;
+
+    let sec = 15;
+
+    function draw(){
+      openPopup(
+        'confirm',
+        'ยืนยันปิดการเชื่อมต่อ',
+        `ระบบจะปิดการเชื่อมต่อ Windows VPS ในอีก ${sec} วินาที\nถ้าต้องการยกเลิกให้กด “ยกเลิก”`,
+        'คำสั่งนี้จะส่ง disconnect_agent ไปที่ agent.ps1 หลังนับถอยหลังครบ',
+        'confirm_disconnect',
+        function(){
+          if(disconnectTimer){
+            clearInterval(disconnectTimer);
+            disconnectTimer = null;
+          }
+          postCommand(nodeId, 'disconnect_agent', { waitResult:false });
+        }
+      );
+    }
+
+    draw();
+
+    disconnectTimer = setInterval(function(){
+      sec--;
+
+      if(sec <= 0){
+        clearInterval(disconnectTimer);
+        disconnectTimer = null;
+        postCommand(nodeId, 'disconnect_agent', { waitResult:false });
+        return;
+      }
+
+      draw();
+    }, 1000);
+  }
+
+  async function pollCommand(commandId, command){
+    let count = 0;
+
+    const timer = setInterval(async function(){
+      count++;
+
+      try {
+        const res = await fetch(`/admin/vps/commands/${commandId}`, {
+          headers:{ 'Accept':'application/json' }
+        });
+
+        const data = await res.json();
+        const c = data.command || {};
+
+        const detail = c.result && Object.keys(c.result || {}).length
+          ? JSON.stringify(c.result, null, 2)
+          : (c.error || 'Command ID: ' + commandId + '\nStatus: ' + (c.status || 'pending'));
+
+        resultBox.style.display = 'block';
+        resultBox.textContent = detail;
+
+        if(['done','success','error','failed'].includes(String(c.status || '').toLowerCase())){
+          clearInterval(timer);
+
+          openPopup(
+            String(c.status).toLowerCase() === 'done' || String(c.status).toLowerCase() === 'success' ? 'ok' : 'error',
+            commandNames[command] || 'คำสั่ง',
+            c.error || 'Agent ส่งผลลัพธ์กลับมาแล้ว',
+            detail,
+            'normal'
+          );
+
+          refreshNodes();
+        }
+      } catch(e) {}
+
+      if(count >= 12){
+        clearInterval(timer);
+
+        openPopup(
+          'ok',
+          commandNames[command] || 'คำสั่ง',
+          'ส่งคำสั่งแล้ว ถ้า Agent ทำงานอยู่ ผลลัพธ์จะอัปเดตในระบบอัตโนมัติ',
+          resultBox.textContent || 'Command ID: ' + commandId,
+          'normal'
+        );
+      }
+    }, 2500);
+  }
+
+  function updateCard(node){
+    const card = document.querySelector(`[data-vps-card="${node.id}"]`);
+    if(!card) return;
+
+    const agentEnabled = node.agent_enabled !== false;
+    const online = agentEnabled && onlineStatus(node.status);
+
+    const set = (name, value) => {
+      const el = card.querySelector(`[data-field="${name}"]`);
+      if(el) el.textContent = value;
+    };
+
+    set('node_name', node.node_name || '-');
+    set('ip_address', node.ip_address || '-');
+
+    const statusEl = card.querySelector('[data-field="status"]');
+    if(statusEl){
+      statusEl.className = 'pill ' + (online ? 'online' : 'offline');
+      statusEl.innerHTML = `<span class="vps-status-dot ${online ? 'online' : ''}">${online ? 'Online' : 'Offline'}</span>`;
+    }
+
+    set('last_seen_at', fmt(node.last_seen_at || node.updated_at));
+    set('cpu_percent', Number(node.cpu_percent || 0) + '%');
+    set('ram_percent', Number(node.ram_percent || 0) + '%');
+    set('active_ports', Number(node.active_ports || 0));
+    set('max_ports', Number(node.max_ports || 0));
+    set('active_lot', n(node.active_lot || 0));
+    set('max_lot', n(node.max_lot || 0));
+    set('net_down_mbps', n(node.net_down_mbps || 0));
+    set('net_up_mbps', n(node.net_up_mbps || 0));
+    set('ping_ms', n(node.ping_ms || 0, 0));
+
+    const cpu = Number(node.cpu_percent || 0);
+    const ram = Number(node.ram_percent || 0);
+    const portPercent = p(node.active_ports, node.max_ports);
+    const lotPercent = p(node.active_lot, node.max_lot);
+
+    const bars = { cpu, ram, ports: portPercent, lot: lotPercent };
+
+    Object.keys(bars).forEach(k => {
+      const el = card.querySelector(`[data-bar="${k}"]`);
+      if(el) el.style.width = bars[k] + '%';
+    });
+
+    const err = node.last_error || node.last_error_message || '';
+    const errEl = card.querySelector('[data-field="last_error"]');
+
+    if(errEl){
+      errEl.textContent = err;
+      errEl.style.display = err ? 'block' : 'none';
+    }
+
+    const connectBtn = card.querySelector('[data-vps-command="connect_agent"], [data-vps-command="disconnect_agent"]');
+
+    if(connectBtn){
+      connectBtn.dataset.vpsCommand = online ? 'disconnect_agent' : 'connect_agent';
+      connectBtn.textContent = online ? 'ปิดการเชื่อมต่อ' : 'เชื่อมต่อ';
+      connectBtn.className = 'btn ' + (online ? 'vps-danger' : 'vps-green');
+    }
+  }
+
+  function updateSummary(s){
+    if(!s) return;
+
+    const set = (k,v) => {
+      const el = document.querySelector(`[data-summary="${k}"]`);
+      if(el) el.textContent = v;
+    };
+
+    set('totalNodes', s.totalNodes || 0);
+    set('onlineNodes', s.onlineNodes || 0);
+    set('usedPorts', s.usedPorts || 0);
+    set('totalPorts', s.totalPorts || 0);
+    set('usedLot', n(s.usedLot || 0));
+    set('totalLot', n(s.totalLot || 0));
+    set('errorBots', s.errorBots || 0);
+
+    const pb = document.querySelector('[data-summary-bar="ports"]');
+    if(pb) pb.style.width = p(s.usedPorts, s.totalPorts) + '%';
+
+    const lb = document.querySelector('[data-summary-bar="lot"]');
+    if(lb) lb.style.width = p(s.usedLot, s.totalLot) + '%';
+  }
+
+  async function refreshNodes(){
+    try {
+      const res = await fetch('/admin/vps/api/nodes', {
+        headers:{ 'Accept':'application/json' }
+      });
+
+      const data = await res.json();
+
+      if(!data.ok) return;
+
+      (data.nodes || []).forEach(updateCard);
+      updateSummary(data.vpsSummary);
+    } catch(e) {}
+  }
+
+  async function showNodeStatusDirect(nodeId){
+    openPopup('loading', 'สถานะ VPS', 'กำลังตรวจสอบสถานะ VPS...', '', 'loading');
+
+    const res = await fetch(`/admin/vps/nodes/${nodeId}/status-details`, {
+      headers: { 'Accept': 'application/json' }
+    });
+
+    const data = await res.json().catch(() => ({ ok:false, error:'อ่านข้อมูลไม่ได้' }));
+
+    if(!res.ok || !data.ok){
+      openPopup('error', 'สถานะ VPS', data.error || 'โหลดสถานะไม่สำเร็จ', '', 'normal');
+      return;
+    }
+
+    const x = data.node || {};
+
+    const detail =
+`สถานะ: ${data.state || '-'}
+รายละเอียด: ${data.detail || '-'}
+CPU: ${x.cpu_percent || 0}%
+RAM: ${x.ram_percent || 0}%
+Download: ${x.net_down_mbps || 0} Mbps
+Upload: ${x.net_up_mbps || 0} Mbps
+Ping: ${x.ping_ms || 0} ms
+เชื่อมต่อล่าสุด: ${x.last_seen_at || '-'}
+Error: ${x.last_error || '-'}`;
+
+    openPopup('ok', 'สถานะ VPS', data.state || 'สถานะ', detail, 'normal');
+  }
+
+  async function showNodeLogsDirect(nodeId){
+    openPopup('loading', 'ดู Log VPS', 'กำลังโหลด Log ล่าสุด...', '', 'loading');
+
+    const res = await fetch(`/admin/vps/nodes/${nodeId}/logs`, {
+      headers: { 'Accept': 'application/json' }
+    });
+
+    const data = await res.json().catch(() => ({ ok:false, error:'อ่านข้อมูลไม่ได้' }));
+
+    if(!res.ok || !data.ok){
+      openPopup('error', 'ดู Log VPS', data.error || 'โหลด Log ไม่สำเร็จ', '', 'normal');
+      return;
+    }
+
+    const logs = data.logs || [];
+
+    if(!logs.length){
+      openPopup('error', 'ดู Log VPS', 'ยังไม่มี Log', 'รอ Agent ส่ง heartbeat เข้ามาก่อน', 'normal');
+      return;
+    }
+
+    const lines = logs.slice(0, 50).map((x, i) => {
+      return `${i+1}. ${x.created_at}
+Status: ${x.status || '-'} | CPU: ${x.cpu_percent || 0}% | RAM: ${x.ram_percent || 0}%
+Down: ${x.net_down_mbps || 0} Mbps | Up: ${x.net_up_mbps || 0} Mbps | Ping: ${x.ping_ms || 0} ms
+Error: ${x.last_error || '-'}`;
+    }).join('\n\n');
+
+    openPopup('ok', 'ดู Log VPS', `แสดง ${Math.min(logs.length, 50)} แถวล่าสุด / เก็บย้อนหลัง 10 วัน`, lines, 'normal');
+  }
+
+  document.addEventListener('click', function(e){
+    const btn = e.target.closest('[data-vps-command]');
+    if(!btn) return;
+
+    const nodeId = btn.dataset.nodeId;
+    const command = btn.dataset.vpsCommand;
+
+    if(!nodeId || !command) return;
+
+    if(command === 'status'){
+      showNodeStatusDirect(nodeId);
+      return;
+    }
+
+    if(command === 'get_log'){
+      showNodeLogsDirect(nodeId);
+      return;
+    }
+
+    if(command === 'disconnect_agent'){
+      confirmDisconnect(nodeId);
+      return;
+    }
+
+    if(command === 'connect_agent'){
+      postCommand(nodeId, command, { waitResult:false });
+      return;
+    }
+
+    postCommand(nodeId, command);
+  });
+
+  refreshNodes();
+  setInterval(refreshNodes, 5000);
+})();
+</script>
+
+<%- include('../partials/admin-shell-end') %>

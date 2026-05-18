@@ -1,0 +1,63 @@
+<%- include('../partials/admin-shell') %>
+<div class="stats-grid cols-6">
+  <div class="stat-card"><span data-i18n="admin.dashboard.users"><%= t('admin.dashboard.users', 'Users') %></span><strong><%= summary.users.total || 0 %></strong><div class="muted"><span data-i18n="admin.dashboard.active"><%= t('admin.dashboard.active', 'Active') %></span> <%= summary.users.active || 0 %> · <span data-i18n="admin.dashboard.banned"><%= t('admin.dashboard.banned', 'Banned') %></span> <%= summary.users.banned || 0 %></div></div>
+  <div class="stat-card"><span data-i18n="admin.dashboard.packages"><%= t('admin.dashboard.packages', 'Packages') %></span><strong><%= summary.packages.total || 0 %></strong><div class="muted"><span data-i18n="admin.dashboard.enabled"><%= t('admin.dashboard.enabled', 'Enabled') %></span> <%= summary.packages.enabled || 0 %></div></div>
+  <div class="stat-card"><span data-i18n="admin.dashboard.payments"><%= t('admin.dashboard.payments', 'Payments') %></span><strong><%= summary.payments.total || 0 %></strong><div class="muted"><span data-i18n="admin.dashboard.paid"><%= t('admin.dashboard.paid', 'Paid') %></span> <%= summary.payments.paid || 0 %></div></div>
+  <div class="stat-card"><span data-i18n="admin.dashboard.revenue"><%= t('admin.dashboard.revenue', 'Revenue') %></span><strong>฿<%= Number(summary.payments.revenue || 0).toLocaleString('th-TH') %></strong><div class="muted" data-i18n="admin.dashboard.revenue_note"><%= t('admin.dashboard.revenue_note', 'Total successful payments') %></div></div>
+  <div class="stat-card"><span data-i18n="admin.dashboard.coupons"><%= t('admin.dashboard.coupons', 'Coupons') %></span><strong><%= summary.coupons.total || 0 %></strong><div class="muted"><span data-i18n="admin.dashboard.active"><%= t('admin.dashboard.active', 'Active') %></span> <%= summary.coupons.active || 0 %></div></div>
+  <div class="stat-card"><span data-i18n="admin.dashboard.vps"><%= t('admin.dashboard.vps', 'VPS Nodes') %></span><strong><%= summary.vps.total || 0 %></strong><div class="muted"><span data-i18n="admin.dashboard.free"><%= t('admin.dashboard.free', 'Free') %></span> <%= summary.vps.available || 0 %> · <span data-i18n="admin.dashboard.busy"><%= t('admin.dashboard.busy', 'Busy') %></span> <%= summary.vps.busy || 0 %></div></div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head"><div><h3 data-i18n="admin.dashboard.trend_title"><%= t('admin.dashboard.trend_title', 'Revenue Trend') %></h3><p data-i18n="admin.dashboard.trend_desc"><%= t('admin.dashboard.trend_desc', 'Revenue in the last 14 days') %></p></div></div>
+    <div class="chart-area">
+      <% if (!(revenueDaily || []).length) { %><div class="empty-box" data-i18n="admin.dashboard.no_revenue"><%= t('admin.dashboard.no_revenue', 'No revenue data yet') %></div><% } %>
+      <% (revenueDaily || []).forEach(function(item) { const total = Number(item.total || 0); const max = Math.max(...(revenueDaily || []).map(x => Number(x.total || 0)), 1); const w = Math.max(10, Math.round((total / max) * 100)); %>
+        <div class="chart-row"><label><%= item.label %></label><div class="bar"><span style="width:<%= w %>%"></span></div><strong>฿<%= total.toLocaleString('th-TH') %></strong></div>
+      <% }) %>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h3 data-i18n="admin.dashboard.status_title"><%= t('admin.dashboard.status_title', 'System Status') %></h3><p data-i18n="admin.dashboard.status_desc"><%= t('admin.dashboard.status_desc', 'Overall system status') %></p></div></div>
+    <div class="list-stack">
+      <div class="list-item">News Auto Update: <span class="badge <%= summary.news.auto_update_enabled ? 'green' : 'gray' %>"><%= summary.news.auto_update_enabled ? 'On' : 'Off' %></span></div>
+      <div class="list-item">AI Analysis: <span class="badge <%= summary.news.ai_analysis_enabled ? 'green' : 'gray' %>"><%= summary.news.ai_analysis_enabled ? 'On' : 'Off' %></span></div>
+      <div class="list-item">Auto Translate: <span class="badge <%= summary.news.auto_translate_enabled ? 'green' : 'gray' %>"><%= summary.news.auto_translate_enabled ? 'On' : 'Off' %></span></div>
+      <div class="list-item">AI Chat: <span class="badge <%= summary.ai.is_enabled ? 'green' : 'gray' %>"><%= summary.ai.is_enabled ? 'Enabled' : 'Disabled' %></span></div>
+    </div>
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head"><div><h3 data-i18n="admin.dashboard.recent_payments"><%= t('admin.dashboard.recent_payments', 'Recent Payments') %></h3><p data-i18n="admin.dashboard.recent_payments_desc"><%= t('admin.dashboard.recent_payments_desc', 'Latest items') %></p></div><a class="ghost-btn" href="/admin/payments" data-i18n="admin.dashboard.view_all"><%= t('admin.dashboard.view_all', 'View all') %></a></div>
+    <div class="table-compact">
+      <% if (!(recentPayments || []).length) { %><div class="empty-box" data-i18n="admin.dashboard.no_revenue"><%= t('admin.dashboard.no_revenue', 'No revenue data yet') %></div><% } %>
+      <% (recentPayments || []).forEach(function(item){ %>
+        <div class="row-card">
+          <div><strong><%= item.payer_name || '-' %></strong><div class="muted"><%= item.payer_email || '-' %></div></div>
+          <div><strong>฿<%= Number(item.final_amount || 0).toLocaleString('th-TH') %></strong><div class="muted"><%= item.package_name_snapshot || '-' %></div></div>
+          <div><span class="badge <%= item.payment_status === 'paid' ? 'green' : 'yellow' %>"><%= item.payment_status %></span><div class="muted"><%= item.payment_method || '-' %></div></div>
+          <div><strong><%= item.created_at ? new Date(item.created_at).toLocaleString('th-TH') : '-' %></strong></div>
+        </div>
+      <% }) %>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h3 data-i18n="admin.dashboard.deployments_title"><%= t('admin.dashboard.deployments_title', 'Subscriptions / Deployments') %></h3><p data-i18n="admin.dashboard.deployments_desc"><%= t('admin.dashboard.deployments_desc', 'Items to monitor') %></p></div></div>
+    <div class="detail-stack">
+      <div class="data-panel">
+        <strong>Expiring</strong>
+        <div class="table-compact">
+          <% (expiringSubscriptions || []).forEach(function(item){ %>
+            <div class="list-item"><strong><%= item.full_name || item.email || '-' %></strong><div class="muted"><%= item.package_name_snapshot || '-' %> · <%= item.end_at ? new Date(item.end_at).toLocaleString('th-TH') : '-' %></div></div>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<%- include('../partials/admin-shell-end') %>

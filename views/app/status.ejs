@@ -1,0 +1,120 @@
+<%- include('../partials/app-shell') %>
+<link rel="stylesheet" href="../public/css/app-status.css">
+
+<section class="status-page">
+
+  <div class="status-top-grid">
+    <!-- HERO -->
+    <section class="status-hero card">
+      <div>
+        <span class="status-chip">ACCOUNT STATUS</span>
+        <h3>สถานะบัญชี</h3>
+        <p>ตรวจสอบแพ็กเกจ วันหมดอายุ และความปลอดภัยบัญชีของคุณ</p>
+      </div>
+    </section>
+
+    <!-- QUICK STATUS -->
+    <section class="card status-card">
+      <div class="card-head">
+        <h3>ภาพรวมบัญชี</h3>
+      </div>
+
+      <div class="status-grid">
+        <div class="status-box">
+          <span>สถานะบัญชี</span>
+          <strong>
+            <% if (user && user.identity_verified) { %>
+              ยืนยันแล้ว
+            <% } else { %>
+              รอตรวจสอบ
+            <% } %>
+          </strong>
+        </div>
+
+        <div class="status-box">
+          <span>สถานะแพ็กเกจ</span>
+          <strong><%= subscription ? subscription.status : 'none' %></strong>
+        </div>
+
+        <div class="status-box">
+          <span>Scoin คงเหลือ</span>
+          <strong><%= Number(user?.scoin_balance || 0).toLocaleString('th-TH') %></strong>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <!-- PACKAGE -->
+  <section class="card status-card">
+    <div class="card-head">
+      <h3>ข้อมูลแพ็กเกจ</h3>
+    </div>
+
+    <div class="status-grid">
+      <div class="status-box">
+        <span>สถานะแพ็กเกจ</span>
+        <strong><%= subscription ? subscription.status : 'none' %></strong>
+      </div>
+
+      <div class="status-box">
+        <span>วันหมดอายุ</span>
+        <strong>
+          <%= subscription && subscription.end_at
+            ? new Date(subscription.end_at).toLocaleString('th-TH', {
+                timeZone:'Asia/Bangkok',
+                year:'numeric',
+                month:'2-digit',
+                day:'2-digit',
+                hour:'2-digit',
+                minute:'2-digit',
+                second:'2-digit',
+                hour12:false
+              })
+            : '-' %>
+        </strong>
+      </div>
+
+      <div class="status-box">
+        <span>แจ้งเตือน</span>
+        <strong>
+          <% if (subscription && subscription.end_at && (new Date(subscription.end_at)-new Date()) <= 1000*60*60*24*3) { %>
+            ใกล้หมดอายุ
+          <% } else { %>
+            ปกติ
+          <% } %>
+        </strong>
+      </div>
+    </div>
+  </section>
+
+  <!-- SECURITY -->
+  <section class="card status-card">
+    <div class="card-head">
+      <h3>ความปลอดภัยบัญชี</h3>
+    </div>
+
+    <div class="status-security-box">
+  <div>
+    <h4>เปลี่ยนรหัสผ่านบัญชีของคุณ</h4>
+  </div>
+
+  <a href="/app/security" class="status-btn primary">
+  🔐 เปลี่ยนรหัสผ่าน
+</a>
+</div>
+
+      <div class="status-security-box danger">
+        <div>
+          <div class="status-security-box danger">
+  <div>
+    <h4>ระบบจะส่ง OTP ไปยังอีเมลก่อนยืนยันการลบบัญชี</h4>
+  </div>
+
+  <a href="/app/delete-account" class="status-btn danger">
+  🗑️ ลบบัญชี
+</a>
+</div>
+
+</section>
+
+<%- include('../partials/app-shell-end') %>

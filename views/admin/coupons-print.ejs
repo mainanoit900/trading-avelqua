@@ -1,0 +1,26 @@
+<%- include('../partials/admin-shell') %>
+<section class="card">
+  <div class="print-toolbar no-print">
+    <div>
+      <h3 style="margin:0"><%= t('admin.coupons.print_latest', 'Print latest batch') %></h3>
+      <div class="print-note"><%= printData.title || t('admin.coupons.coupon_set', 'Coupon Set') %> · <%= printData.note || t('admin.coupons.ready_to_use', 'Ready to use immediately') %></div>
+    </div>
+    <div class="form-actions"><button class="btn primary" onclick="window.print()"><%= t('common.print', 'Print') %></button><a class="btn secondary" href="/admin/coupons"><%= t('common.back', 'Back') %></a></div>
+  </div>
+  <div class="coupon-print-grid">
+    <% (printData.codes || []).forEach(function(code){ %>
+      <div class="print-card">
+        <div>
+          <div class="brand-kicker">TRADING AVELQUA</div>
+          <h2 style="margin:8px 0 0"><%= printData.title || t('admin.coupons.promotion_coupon', 'PROMOTION COUPON') %></h2>
+        </div>
+        <div class="coupon-code"><%= code %></div>
+        <div>
+          <div class="print-note"><%= printData.note || t('admin.coupons.single_use_print_note', 'Use once per code') %></div>
+          <div class="print-note"><%= t('admin.coupons.generated_at', 'Generated at') %> <%= new Date(printData.generatedAt).toLocaleString(lang === 'en' ? 'en-GB' : 'th-TH') %></div>
+        </div>
+      </div>
+    <% }) %>
+  </div>
+</section>
+<%- include('../partials/admin-shell-end') %>

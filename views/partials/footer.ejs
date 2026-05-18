@@ -1,0 +1,30 @@
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-shell">
+      <div class="footer-left">
+        <div class="footer-brand">TRADING AVELQUA</div>
+        <p class="footer-text"><%= t('footer.tagline') %></p>
+      </div>
+
+      <div class="footer-right">
+        <a href="/?lang=<%= lang || 'th' %>"><%= t('nav.home') %></a>
+        <a href="/pricing?lang=<%= lang || 'th' %>"><%= t('nav.pricing') %></a>
+        <a href="/news?lang=<%= lang || 'th' %>"><%= t('nav.news') %></a>
+        <a href="/contact?lang=<%= lang || 'th' %>"><%= t('nav.contact') %></a>
+      </div>
+    </div>
+  </div>
+</footer>
+<%- include('./ai-chat-widget') %>
+<script>
+  window.__AVELQUA_I18N__ = {
+    current: <%- JSON.stringify(lang || 'th') %>,
+    labels: <%- JSON.stringify(localeLabels || {}) %>,
+    locales: <%- JSON.stringify(clientLocales || {}) %>,
+    mode: 'reload'
+  };
+</script>
+<script src="/public/js/i18n-live.js"></script>
+
+</body>
+</html>

@@ -1,0 +1,236 @@
+<%- include('../partials/head', { pageTitle: pageTitle || 'ตารางปรับตั้งบอท MT5', pageCss: 'admin-mt5-presets.css' }) %>
+<%- include('../partials/admin-shell') %>
+
+<%
+  rows = rows || [];
+  const show = (v) => (v === null || v === undefined) ? '' : v;
+%>
+
+<div class="mt5-page">
+  <section class="mt5-hero">
+    <div>
+      <div class="mt5-kicker">MT5 BOT SETTING TABLE</div>
+      <h1>ตารางเช็ทบอท MT5</h1>
+      <p>ภาพรวมตารางทุน / LOT / ระดับ T START และ T STOP</p>
+    </div>
+
+    <div class="mt5-hero-actions">
+      <button type="button" class="mt5-btn primary" onclick="openViewModal()">👁 ดูวิว</button>
+      <button type="button" class="mt5-btn success" onclick="openAddModal()">➕ เพิ่มข้อมูล</button>
+      <button type="button" class="mt5-btn warning" onclick="openEditModal()">✏️ แก้ไข</button>
+    </div>
+  </section>
+
+  <section class="mt5-card">
+    <div class="mt5-card-head">
+      <div>
+        <h2>ภาพรวมตารางทุน</h2>
+        <p>จำนวนทั้งหมด <b><%= rows.length %></b> แถว</p>
+      </div>
+    </div>
+
+    <div class="mt5-table-wrap">
+      <table class="mt5-excel-table">
+        <thead>
+          <tr class="group-head">
+            <th rowspan="2">ทุนแนะนำ</th>
+            <th rowspan="2">ทุนเซฟ</th>
+            <th rowspan="2">ทุนเซฟสูงสุด</th>
+            <th rowspan="2">LOT SIZE</th>
+            <th rowspan="2">LOT PLUS</th>
+            <th colspan="2">ระดับต้นสูง</th>
+            <th colspan="2">ระดับกลาง</th>
+            <th colspan="2">ระดับต่ำ</th>
+          </tr>
+          <tr class="sub-head">
+            <th>T START</th>
+            <th>T STOP</th>
+            <th>กลาง T START</th>
+            <th>กลาง T STOP</th>
+            <th>รวบไว T START</th>
+            <th>รวบไว T STOP</th>
+          </tr>
+        </thead>
+
+        <tbody>
+          <% rows.forEach(function(row){ %>
+            <tr>
+              <td><%= show(row.capital_recommend) %></td>
+              <td><%= show(row.capital_safe) %></td>
+              <td><%= show(row.capital_max_safe) %></td>
+              <td><%= show(row.lot_size) %></td>
+              <td><%= show(row.lot_plus) %></td>
+              <td><%= show(row.t_start) %></td>
+              <td><%= show(row.t_stop) %></td>
+              <td><%= show(row.medium_t_start) %></td>
+              <td><%= show(row.medium_t_stop) %></td>
+              <td><%= show(row.fast_t_start) %></td>
+              <td><%= show(row.fast_t_stop) %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </section>
+</div>
+
+<!-- POPUP ดูวิว -->
+<div id="mt5ViewModal" class="mt5-modal">
+  <div class="mt5-modal-panel">
+    <div class="mt5-modal-head">
+      <div>
+        <div class="mt5-kicker">VIEW MODE</div>
+        <h2>ดูวิวตาราง MT5</h2>
+      </div>
+      <button type="button" class="mt5-close-modal" onclick="closeViewModal()">ปิด ✕</button>
+    </div>
+
+    <div class="mt5-table-wrap">
+      <table class="mt5-excel-table">
+        <thead>
+          <tr class="group-head">
+            <th rowspan="2">ทุนแนะนำ</th>
+            <th rowspan="2">ทุนเซฟ</th>
+            <th rowspan="2">ทุนเซฟสูงสุด</th>
+            <th rowspan="2">LOT SIZE</th>
+            <th rowspan="2">LOT PLUS</th>
+            <th colspan="2">ระดับต้นสูง</th>
+            <th colspan="2">ระดับกลาง</th>
+            <th colspan="2">ระดับต่ำ</th>
+          </tr>
+          <tr class="sub-head">
+            <th>T START</th>
+            <th>T STOP</th>
+            <th>กลาง T START</th>
+            <th>กลาง T STOP</th>
+            <th>รวบไว T START</th>
+            <th>รวบไว T STOP</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% rows.forEach(function(row){ %>
+            <tr>
+              <td><%= show(row.capital_recommend) %></td>
+              <td><%= show(row.capital_safe) %></td>
+              <td><%= show(row.capital_max_safe) %></td>
+              <td><%= show(row.lot_size) %></td>
+              <td><%= show(row.lot_plus) %></td>
+              <td><%= show(row.t_start) %></td>
+              <td><%= show(row.t_stop) %></td>
+              <td><%= show(row.medium_t_start) %></td>
+              <td><%= show(row.medium_t_stop) %></td>
+              <td><%= show(row.fast_t_start) %></td>
+              <td><%= show(row.fast_t_stop) %></td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<!-- POPUP เพิ่มข้อมูล -->
+<div id="mt5AddModal" class="mt5-modal">
+  <div class="mt5-modal-panel">
+    <div class="mt5-modal-head">
+      <div>
+        <div class="mt5-kicker">ADD NEW ROW</div>
+        <h2>เพิ่มข้อมูลใหม่</h2>
+      </div>
+      <button type="button" class="mt5-close-modal" onclick="closeAddModal()">ปิด ✕</button>
+    </div>
+
+    <form method="POST" action="/admin/mt5-presets/create" class="mt5-form-grid">
+      <label>ทุนแนะนำ<input required type="number" step="0.01" name="capital_recommend"></label>
+      <label>ทุนเซฟ<input type="number" step="0.01" name="capital_safe"></label>
+      <label>ทุนเซฟสูงสุด<input type="number" step="0.01" name="capital_max_safe"></label>
+      <label>LOT SIZE<input required type="number" step="0.01" name="lot_size"></label>
+      <label>LOT PLUS<input required type="number" step="0.01" name="lot_plus"></label>
+      <label>T START<input type="number" name="t_start"></label>
+      <label>T STOP<input type="number" name="t_stop"></label>
+      <label>กลาง T START<input type="number" name="medium_t_start"></label>
+      <label>กลาง T STOP<input type="number" name="medium_t_stop"></label>
+      <label>รวบไว T START<input type="number" name="fast_t_start"></label>
+      <label>รวบไว T STOP<input type="number" name="fast_t_stop"></label>
+      <label>ลำดับ<input type="number" name="sort_order" value="999"></label>
+
+      <div class="mt5-form-actions">
+        <button type="submit" class="mt5-btn success">➕ เพิ่มข้อมูล</button>
+      </div>
+    </form>
+  </div>
+</div>
+
+<!-- POPUP แก้ไข -->
+<div id="mt5EditModal" class="mt5-modal">
+  <div class="mt5-modal-panel wide">
+    <div class="mt5-modal-head">
+      <div>
+        <div class="mt5-kicker">EDIT MODE</div>
+        <h2>แก้ไขตาราง</h2>
+      </div>
+      <button type="button" class="mt5-close-modal" onclick="closeEditModal()">ปิด ✕</button>
+    </div>
+
+    <div class="mt5-table-wrap">
+      <table class="mt5-edit-table">
+        <thead>
+          <tr>
+            <th>ทุนแนะนำ</th>
+            <th>ทุนเซฟ</th>
+            <th>ทุนเซฟสูงสุด</th>
+            <th>LOT SIZE</th>
+            <th>LOT PLUS</th>
+            <th>T START</th>
+            <th>T STOP</th>
+            <th>กลาง START</th>
+            <th>กลาง STOP</th>
+            <th>รวบไว START</th>
+            <th>รวบไว STOP</th>
+            <th>จัดการ</th>
+          </tr>
+        </thead>
+        <tbody>
+          <% rows.forEach(function(row){ const formId = 'mt5-row-' + row.id; %>
+            <tr>
+              <td>
+                <form id="<%= formId %>" method="POST" action="/admin/mt5-presets/<%= row.id %>/update"></form>
+                <input form="<%= formId %>" type="number" step="0.01" name="capital_recommend" value="<%= show(row.capital_recommend) %>">
+              </td>
+              <td><input form="<%= formId %>" type="number" step="0.01" name="capital_safe" value="<%= show(row.capital_safe) %>"></td>
+              <td><input form="<%= formId %>" type="number" step="0.01" name="capital_max_safe" value="<%= show(row.capital_max_safe) %>"></td>
+              <td><input form="<%= formId %>" type="number" step="0.01" name="lot_size" value="<%= show(row.lot_size) %>"></td>
+              <td><input form="<%= formId %>" type="number" step="0.01" name="lot_plus" value="<%= show(row.lot_plus) %>"></td>
+              <td><input form="<%= formId %>" type="number" name="t_start" value="<%= show(row.t_start) %>"></td>
+              <td><input form="<%= formId %>" type="number" name="t_stop" value="<%= show(row.t_stop) %>"></td>
+              <td><input form="<%= formId %>" type="number" name="medium_t_start" value="<%= show(row.medium_t_start) %>"></td>
+              <td><input form="<%= formId %>" type="number" name="medium_t_stop" value="<%= show(row.medium_t_stop) %>"></td>
+              <td><input form="<%= formId %>" type="number" name="fast_t_start" value="<%= show(row.fast_t_start) %>"></td>
+              <td><input form="<%= formId %>" type="number" name="fast_t_stop" value="<%= show(row.fast_t_stop) %>"></td>
+              <td>
+                <button form="<%= formId %>" type="submit" class="small-save">บันทึก</button>
+                <form method="POST" action="/admin/mt5-presets/<%= row.id %>/delete" onsubmit="return confirm('ยืนยันลบแถวนี้?')">
+                  <button type="submit" class="small-delete">ลบ</button>
+                </form>
+              </td>
+            </tr>
+          <% }) %>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</div>
+
+<script>
+function openViewModal(){document.getElementById('mt5ViewModal').classList.add('show');document.body.style.overflow='hidden';}
+function closeViewModal(){document.getElementById('mt5ViewModal').classList.remove('show');document.body.style.overflow='';}
+function openAddModal(){document.getElementById('mt5AddModal').classList.add('show');document.body.style.overflow='hidden';}
+function closeAddModal(){document.getElementById('mt5AddModal').classList.remove('show');document.body.style.overflow='';}
+function openEditModal(){document.getElementById('mt5EditModal').classList.add('show');document.body.style.overflow='hidden';}
+function closeEditModal(){document.getElementById('mt5EditModal').classList.remove('show');document.body.style.overflow='';}
+document.addEventListener('keydown',function(e){
+  if(e.key==='Escape'){closeViewModal();closeAddModal();closeEditModal();}
+});
+</script>
+
+<%- include('../partials/admin-shell-end') %>

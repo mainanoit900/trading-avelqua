@@ -1,0 +1,75 @@
+<%- include('../partials/admin-shell') %>
+<div class="stats-grid cols-6">
+  <div class="stat-card"><span>Users</span><strong><%= summary.users.total || 0 %></strong><div class="muted">Active <%= summary.users.active || 0 %> · Banned <%= summary.users.banned || 0 %></div></div>
+  <div class="stat-card"><span>Packages</span><strong><%= summary.packages.total || 0 %></strong><div class="muted">Enabled <%= summary.packages.enabled || 0 %></div></div>
+  <div class="stat-card"><span>Payments</span><strong><%= summary.payments.total || 0 %></strong><div class="muted">Paid <%= summary.payments.paid || 0 %></div></div>
+  <div class="stat-card"><span>Revenue</span><strong>฿<%= Number(summary.payments.revenue || 0).toLocaleString('th-TH') %></strong><div class="muted">ยอดรวมที่ชำระสำเร็จ</div></div>
+  <div class="stat-card"><span>Coupons</span><strong><%= summary.coupons.total || 0 %></strong><div class="muted">Active <%= summary.coupons.active || 0 %></div></div>
+  <div class="stat-card"><span>VPS Nodes</span><strong><%= summary.vps.total || 0 %></strong><div class="muted">Free <%= summary.vps.available || 0 %> · Busy <%= summary.vps.busy || 0 %></div></div>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head"><div><h3>Revenue Trend</h3><p>รายได้ 14 วันล่าสุด</p></div></div>
+    <div class="chart-area">
+      <% if (!(revenueDaily || []).length) { %><div class="empty-box">ยังไม่มีข้อมูลรายได้</div><% } %>
+      <% (revenueDaily || []).forEach(function(item) { const total = Number(item.total || 0); const max = Math.max(...(revenueDaily || []).map(x => Number(x.total || 0)), 1); const w = Math.max(10, Math.round((total / max) * 100)); %>
+        <div class="chart-row"><label><%= item.label %></label><div class="bar"><span style="width:<%= w %>%"></span></div><strong>฿<%= total.toLocaleString('th-TH') %></strong></div>
+      <% }) %>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h3>System Status</h3><p>สถานะภาพรวมระบบ</p></div></div>
+    <div class="list-stack">
+      <div class="list-item">News Auto Update: <span class="badge <%= summary.news.auto_update_enabled ? 'green' : 'gray' %>"><%= summary.news.auto_update_enabled ? 'On' : 'Off' %></span></div>
+      <div class="list-item">AI Analysis: <span class="badge <%= summary.news.ai_analysis_enabled ? 'green' : 'gray' %>"><%= summary.news.ai_analysis_enabled ? 'On' : 'Off' %></span></div>
+      <div class="list-item">Auto Translate: <span class="badge <%= summary.news.auto_translate_enabled ? 'green' : 'gray' %>"><%= summary.news.auto_translate_enabled ? 'On' : 'Off' %></span></div>
+      <div class="list-item">AI Chat: <span class="badge <%= summary.ai.is_enabled ? 'green' : 'gray' %>"><%= summary.ai.is_enabled ? 'Enabled' : 'Disabled' %></span></div>
+      <div class="list-item">Chat History: <span class="badge <%= summary.ai.save_chat_history ? 'blue' : 'gray' %>"><%= summary.ai.save_chat_history ? 'Saved' : 'Not saved' %></span></div>
+      <div class="list-item">Hide System Structure: <span class="badge <%= summary.ai.hide_system_structure ? 'green' : 'yellow' %>"><%= summary.ai.hide_system_structure ? 'Protected' : 'Open risk' %></span></div>
+    </div>
+  </section>
+</div>
+
+<div class="grid-2">
+  <section class="card">
+    <div class="card-head"><div><h3>Recent Payments</h3><p>รายการล่าสุด</p></div><a class="ghost-btn" href="/admin/payments">ดูทั้งหมด</a></div>
+    <div class="table-compact">
+      <% if (!(recentPayments || []).length) { %><div class="empty-box">ยังไม่มีข้อมูล</div><% } %>
+      <% (recentPayments || []).forEach(function(item){ %>
+        <div class="row-card">
+          <div><strong><%= item.payer_name || '-' %></strong><div class="muted"><%= item.payer_email || '-' %></div></div>
+          <div><strong>฿<%= Number(item.final_amount || 0).toLocaleString('th-TH') %></strong><div class="muted"><%= item.package_name_snapshot || '-' %></div></div>
+          <div><span class="badge <%= item.payment_status === 'paid' ? 'green' : 'yellow' %>"><%= item.payment_status %></span><div class="muted"><%= item.payment_method || '-' %></div></div>
+          <div><strong><%= item.created_at ? new Date(item.created_at).toLocaleString('th-TH') : '-' %></strong></div>
+        </div>
+      <% }) %>
+    </div>
+  </section>
+
+  <section class="card">
+    <div class="card-head"><div><h3>Subscriptions / Deployments</h3><p>รายการที่ควรติดตาม</p></div></div>
+    <div class="detail-stack">
+      <div class="data-panel">
+        <strong>ใกล้หมดอายุ</strong>
+        <div class="table-compact">
+          <% if (!(expiringSubscriptions || []).length) { %><div class="muted">ยังไม่มีรายการใกล้หมดอายุ</div><% } %>
+          <% (expiringSubscriptions || []).forEach(function(item){ %>
+            <div class="list-item"><strong><%= item.full_name || item.email || '-' %></strong><div class="muted"><%= item.package_name_snapshot || '-' %> · <%= item.end_at ? new Date(item.end_at).toLocaleString('th-TH') : '-' %></div></div>
+          <% }) %>
+        </div>
+      </div>
+      <div class="data-panel">
+        <strong>Bot ล่าสุด</strong>
+        <div class="table-compact">
+          <% if (!(recentDeployments || []).length) { %><div class="muted">ยังไม่มี session ล่าสุด</div><% } %>
+          <% (recentDeployments || []).forEach(function(item){ %>
+            <div class="list-item"><strong><%= item.session_code %></strong><div class="muted"><%= item.full_name || '-' %> · <%= item.symbol || '-' %> · lot <%= item.lot_in_use || 0 %> · ports <%= item.ports_in_use || 0 %> · <%= item.node_name || 'ยังไม่จับ VPS' %></div></div>
+          <% }) %>
+        </div>
+      </div>
+    </div>
+  </section>
+</div>
+<%- include('../partials/admin-shell-end') %>
