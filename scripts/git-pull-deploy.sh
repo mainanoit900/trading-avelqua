@@ -95,6 +95,11 @@ if [ "$RUN_NPM_INSTALL" = "1" ] && [ -f package.json ]; then
   npm install --omit=dev
 fi
 
+if [ -f scripts/migrate-vps-schema-postgres.sh ]; then
+  echo "==> vps_system schema (postgres)"
+  bash scripts/migrate-vps-schema-postgres.sh || echo "WARN: postgres schema migration failed"
+fi
+
 if [ -f scripts/deploy-mt5-live-fix.sh ]; then
   echo "==> verify MT5 patches"
   bash scripts/deploy-mt5-live-fix.sh "$APP_DIR" || true
