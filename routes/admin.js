@@ -2958,8 +2958,11 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
       if (agentState === false && (dbRunning || dbBusy)) {
         reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
       }
-      const inUse = !adminDisabled && (agentRunning || (agentState !== false && (dbRunning || dbBusy)));
-      const mt5Login = live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null;
+      // แสดง "ใช้งาน" เฉพาะเมื่อ Agent ยืนยันว่า terminal64 รันจริง — ไม่พึ่งสถานะ DB ค้าง
+      const inUse = !adminDisabled && agentRunning === true;
+      const mt5Login = agentRunning
+        ? live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null
+        : null;
       return {
         ...p,
         vps_id: p.vps_id || p.node_id || nodeId,
