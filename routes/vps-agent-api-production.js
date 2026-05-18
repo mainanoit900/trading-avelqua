@@ -749,8 +749,7 @@ router.post('/connect-result', async (req, res) => {
         status,
         message: message || (status === 'starting' ? 'กำลังเปิดหน้าจอ MT5...' : 'กำลังตรวจ Login MT5...'),
         windowTitle,
-        previewB64,
-        inProgress: true
+        previewB64
       });
 
       if (portId) {
@@ -804,7 +803,7 @@ router.post('/connect-result', async (req, res) => {
         return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
       }
 
-      if (journalVerdict === 'success' || (windowVerified && loginVerified && journalVerdict !== 'failed')) {
+      if (windowVerified && loginVerified && journalVerdict === 'success') {
         await patchAccountMt5Preview(accountId, {
           message: message || MT5_SUCCESS_MSG,
           windowTitle,
@@ -935,7 +934,20 @@ router.post('/connect-result', async (req, res) => {
             `, [node.id]).catch(() => {});
           }
         }
-        console.warn('[connect-result] pending journal verify', {
+        let failMsg = 'ไม่พบ authorized on MohicansMarkets-Live ใน Journal — กรุณาลองใหม่อีกครั้ง';
+        if (journalVerdict === 'failed') {
+          failMsg = MT5_FAIL_USER_MSG;
+          await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
+            vpsId: node.id,
+            portNo,
+            folderPath
+          }).catch(() => {});
+        } else if (String(message || '').includes('ทันเวลา') || String(message || '').includes('timeout')) {
+          failMsg = 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่';
+        } else if (legacyAgent && upgradeState !== 'ready') {
+          failMsg = messageForUpgradeState(upgradeState);
+        }
+        console.warn('[connect-result] reject connected (journal)', {
           accountId,
           mt5Login: loginForJournal,
           journalVerdict,
@@ -943,31 +955,21 @@ router.post('/connect-result', async (req, res) => {
           agentVersion: req.body.agentVersion || req.body.agent_version || null
         });
 
-        if (journalVerdict === 'failed') {
-          await failAccountFromJournal(accountId, metaPortId || portId, MT5_FAIL_USER_MSG, {
+        if (journalVerdict !== 'failed') {
+          await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
             vpsId: node.id,
             portNo,
             folderPath
           }).catch(() => {});
-          await query(`
-            INSERT INTO vps_system.mt5_login_history
-            (account_id, vps_id, port_id, port_no, mt5_login, status, message)
-            VALUES ($1,$2,$3,$4,$5,'failed',$6)
-          `, [accountId, node.id, portId || null, portNo || null, loginForJournal || mt5Login, MT5_FAIL_USER_MSG]).catch(() => {});
-          return res.json({ ok: true, rejected: true, reason: 'JOURNAL_FAILED', failed: true, message: MT5_FAIL_USER_MSG });
         }
 
-        const waitMsg =
-          legacyAgent && upgradeState !== 'ready'
-            ? messageForUpgradeState(upgradeState)
-            : message || 'กำลังยืนยัน Login จาก MT5 Journal...';
         await query(`
-          UPDATE vps_system.mt5_accounts
-          SET status='checking', last_error=NULL, last_login_message=$2
-          WHERE id=$1
-        `, [accountId, waitMsg]).catch(() => {});
+          INSERT INTO vps_system.mt5_login_history
+          (account_id, vps_id, port_id, port_no, mt5_login, status, message)
+          VALUES ($1,$2,$3,$4,$5,'failed',$6)
+        `, [accountId, node.id, portId || null, portNo || null, loginForJournal || mt5Login, failMsg]).catch(() => {});
 
-        return res.json({ ok: true, pending: true, reason: 'JOURNAL_NOT_VERIFIED', message: waitMsg });
+        return res.json({ ok: true, rejected: true, reason: 'JOURNAL_NOT_VERIFIED', failed: true, message: failMsg });
       }
 
       await patchAccountMt5Preview(accountId, {

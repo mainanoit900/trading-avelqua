@@ -376,8 +376,7 @@ document.addEventListener('DOMContentLoaded', function () {
       document.querySelectorAll('.mt5-alert.success, #mt5SuccessAlert').forEach(el => el.remove());
     }
     const modalId = type === 'success' ? 'mt5SuccessModal' : 'mt5ErrorModal';
-    const existing = document.getElementById(modalId);
-    if (existing) existing.remove();
+    if (document.getElementById(modalId)) return;
     const isSuccess = type === 'success';
     const msg = String(message || '');
     const runBotErr = opts.runBot || /run bot|bot|เลือก bot|lot|ระดับเทรด|port นี้กำลังรัน/i.test(msg);
@@ -625,18 +624,7 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         return;
       }
-      const stWait = String(data.account.status || data.status || '').toLowerCase();
-      if (stWait === 'failed' || data.failed === true) {
-        mt5Checking = false;
-        sessionStorage.setItem('mt5FailedShownId', String(data.account.id) + ':' + String(data.account.updated_at || ''));
-        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-        sessionStorage.removeItem('mt5PollAccountId');
-        const failText = data.message || data.account.last_error || data.account.last_login_message || 'Login หรือ Password ไม่ถูกต้อง';
-        showMt5ConnectModal('error', failText);
-        if (window.mt5Checker) clearInterval(window.mt5Checker);
-        window.mt5Checker = null;
-        return;
-      }
+      const stWait = String(data.account.status || '').toLowerCase();
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
         const btn = document.getElementById('mt5ConnectBtn');
         const sec = data.elapsedSec != null ? data.elapsedSec : '';
@@ -676,7 +664,7 @@ document.addEventListener('DOMContentLoaded', function () {
         sessionStorage.setItem(key, accountId);
         if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
         sessionStorage.removeItem('mt5PollAccountId');
-        showMt5ConnectModal('error', data.message || 'Login หรือ Password ไม่ถูกต้อง');
+        showMt5ConnectModal('error', data.message || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
         if (window.mt5Checker) clearInterval(window.mt5Checker);
         window.mt5Checker = null;
         if (window.history && window.history.replaceState) {

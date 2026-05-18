@@ -65,7 +65,7 @@ JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
-JOURNAL_FAIL_MSG = "Login หรือ Password ไม่ถูกต้อง"
+JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
 AGENT_BUILD_ID = "2026-05-18-mt5-algo-live-v21"
@@ -1673,27 +1673,23 @@ def _journal_outcome_for_login(
         rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorized on\s+{server_esc}(?:\s+through)?\b",
         re.I,
     )
-    ok_prev_rx = re.compile(
-        rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*previous successful authorization",
-        re.I,
-    )
 
-  lines = [ln for ln in text.splitlines() if ln.strip()]
-  for line in reversed(lines):
-    low = line.lower()
-    if login.lower() not in low:
-      continue
-    if server.lower() not in low and not ok_prev_rx.search(line):
-      continue
-    if fail_rx.search(line):
-      return False
-    if any(w in low for w in failed_words):
-      return False
-    if "authorization on" in low and "failed" in low:
-      return False
-    if ok_rx.search(line) or ok_prev_rx.search(line):
-      return True
-  return None
+    lines = text.splitlines()
+    for line in reversed(lines):
+        low = line.lower()
+        if login.lower() not in low:
+            continue
+        if server.lower() not in low:
+            continue
+        if fail_rx.search(line):
+            return False
+        if any(w in low for w in failed_words):
+            return False
+        if "authorization on" in low and "failed" in low:
+            return False
+        if ok_rx.search(line):
+            return True
+    return None
 
 
 def automate_mt5_open_account_wizard(
@@ -1903,7 +1899,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    deadline = time.time() + max(12, min(timeout_sec, 40))
+    deadline = time.time() + max(6, min(timeout_sec, 12))
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
@@ -1937,23 +1933,12 @@ def wait_mt5_login_hybrid(
                 "failed",
                 JOURNAL_FAIL_MSG,
                 port,
-                process_id=proc_pid,
+                process_id=None,
                 journal_evidence=j_chunk,
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
         if j_out is True:
-            titles_ok = " | ".join(mt5_window_titles(port, payload))
-            send_connect_result(
-                payload,
-                "connected",
-                JOURNAL_OK_MSG,
-                port,
-                process_id=proc_pid,
-                journal_evidence=j_chunk,
-                window_title=titles_ok,
-                window_verified=True,
-            )
-            return True, "journal ok", j_chunk
+            return True, "window verified; journal ok", j_chunk
 
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)
@@ -2030,18 +2015,7 @@ def wait_mt5_login_hybrid(
 
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
-    titles_end = " | ".join(mt5_window_titles(port, payload))
     if j_out is True:
-        send_connect_result(
-            payload,
-            "connected",
-            JOURNAL_OK_MSG,
-            port,
-            process_id=proc_pid,
-            journal_evidence=j_chunk,
-            window_title=titles_end,
-            window_verified=True,
-        )
         return True, JOURNAL_OK_MSG, j_chunk
     if j_out is False:
         cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2054,16 +2028,6 @@ def wait_mt5_login_hybrid(
             journal_evidence=j_chunk,
         )
         return False, JOURNAL_FAIL_MSG, j_chunk
-    ok_w_end, _ = mt5_login_verified_by_window(port, payload)
-    if ok_w_end:
-        send_connect_result(
-            payload,
-            "checking",
-            f"เห็นบัญชี {login} บน MT5 แล้ว — กำลังยืนยัน Journal...",
-            port,
-            process_id=proc_pid,
-            window_title=titles_end,
-        )
     return False, JOURNAL_TIMEOUT_MSG, chunk
 
 
@@ -2098,10 +2062,9 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
 
-    login_started_at = time.time()
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
     if ok_fast and mt5_running_for_port_dir(port_dir):
-        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, login_started_at - 3)
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180)
         if j_fast is False:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
@@ -2236,7 +2199,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "28"))
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "10"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
@@ -2256,20 +2219,17 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             log(f"stop_mt5_port_only after failed login: {e}")
         remove_mt5_login_ini(port_dir)
         clear_mt5_login_cache(port_dir)
-        fail_msg = JOURNAL_FAIL_MSG if msg == JOURNAL_FAIL_MSG or "authorization" in (msg or "").lower() else msg
         send_connect_result(
             payload,
             "failed",
-            fail_msg,
+            msg,
             port,
             process_id=None,
             journal_evidence=journal_chunk,
             window_title=titles,
             preview_b64=preview_final,
         )
-        err = RuntimeError(fail_msg)
-        err.journal_evidence = journal_chunk  # type: ignore[attr-defined]
-        raise err
+        raise RuntimeError(msg)
 
     journal_final = journal_chunk or ""
     if "window verified" not in (msg or "").lower():
@@ -3276,8 +3236,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, restart_ea_command(payload))
 
         elif ctype in ("connect_mt5", "login_mt5"):
-            res = start_mt5_bot(payload)
-            command_result(cmd_id, True, res)
+            command_result(cmd_id, True, start_mt5_bot(payload))
 
         elif ctype in ("run_mt5_bot", "run_mt5"):
             command_result(cmd_id, True, run_bot_command(payload))
@@ -3393,9 +3352,6 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             except Exception:
                 pass
             try:
-                j_ev = str(getattr(e, "journal_evidence", "") or "")[:8000]
-                if not j_ev and ("journal" in str(e).lower() or "authorization" in str(e).lower()):
-                    j_ev = str(e)[:8000]
                 command_result(
                     cmd_id,
                     False,
@@ -3404,8 +3360,6 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                         "status": "failed",
                         "login": payload_get(payload, "mt5Login", "login"),
                         "message": str(e)[:500],
-                        "journalEvidence": j_ev,
-                        "journal_evidence": j_ev,
                     },
                     str(e)[:500],
                 )
