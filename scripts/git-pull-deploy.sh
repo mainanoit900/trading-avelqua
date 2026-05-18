@@ -17,6 +17,18 @@ GIT_REMOTE_URL="${GIT_REMOTE_URL:-}"
 GIT_BRANCH="${GIT_BRANCH:-main}"
 PM2_APP_NAME="${PM2_APP_NAME:-trading-avelqua}"
 RUN_NPM_INSTALL="${RUN_NPM_INSTALL:-1}"
+GIT_PUSH_ON_DEPLOY="${GIT_PUSH_ON_DEPLOY:-0}"
+
+git_auth_url() {
+  local base="${GIT_REMOTE_URL:-https://github.com/mainanoit900/trading-avelqua.git}"
+  base="${base#https://}"
+  base="${base#http://}"
+  if [ -n "${GIT_TOKEN:-}" ]; then
+    printf 'https://x-access-token:%s@%s' "$GIT_TOKEN" "$base"
+  else
+    printf 'https://%s' "$base"
+  fi
+}
 
 if ! command -v git >/dev/null 2>&1; then
   echo "ERROR: git not installed. Run: apt install -y git"
@@ -49,7 +61,7 @@ fi
 PREV_HEAD="$(git rev-parse HEAD 2>/dev/null || echo '')"
 
 echo "==> git fetch origin $GIT_BRANCH"
-git fetch origin "$GIT_BRANCH"
+git fetch "$(git_auth_url)" "$GIT_BRANCH"
 
 if ! git rev-parse --verify "origin/$GIT_BRANCH" >/dev/null 2>&1; then
   echo "ERROR: ไม่พบ branch origin/$GIT_BRANCH — ตรวจชื่อ branch ใน deploy.env"
@@ -111,6 +123,14 @@ if command -v pm2 >/dev/null 2>&1; then
   pm2 status | head -15
 else
   echo "pm2 not found — restart node เอง"
+fi
+
+if [ "${GIT_PUSH_ON_DEPLOY:-0}" = "1" ] && [ -n "${GIT_TOKEN:-}" ]; then
+  AHEAD="$(git rev-list --count "origin/$GIT_BRANCH"..HEAD 2>/dev/null || echo 0)"
+  if [ "${AHEAD:-0}" -gt 0 ]; then
+    echo "==> git push origin $GIT_BRANCH ($AHEAD commit(s))"
+    git push "$(git_auth_url)" "HEAD:$GIT_BRANCH"
+  fi
 fi
 
 echo "DONE: $(git log -1 --oneline)"
