@@ -1,6 +1,4 @@
 const { query, getClient } = require('../config/database');
-const { onPackageActivated } = require('../lib/mt5PackagePorts');
-const { applyPaidPackageSubscription } = require('../lib/subscriptionPackage');
 
 function asNumber(value, fallback = 0) {
   const n = Number(value);
@@ -89,38 +87,52 @@ async function activateSubscriptionFromPayment(paymentId) {
       };
     }
 
-    const pkgRes = await client.query(`SELECT * FROM packages WHERE id = $1 LIMIT 1`, [payment.package_id]);
-    const pkgRow = pkgRes.rows[0] || {
-      id: payment.package_id,
-      days: asNumber(payment.days || payment.package_days, 0),
-      name_th: payment.package_name_label || payment.package_name_snapshot || 'Package',
-      group_name: payment.package_group || payment.group_name || ''
-    };
+    const activeRes = await client.query(
+      `SELECT *
+       FROM user_subscriptions
+       WHERE user_id = $1
+         AND status = 'active'
+         AND (end_at IS NULL OR end_at > NOW())
+       ORDER BY COALESCE(end_at, created_at) DESC NULLS LAST, id DESC
+       LIMIT 1
+       FOR UPDATE`,
+      [payment.user_id]
+    );
 
-    const applied = await applyPaidPackageSubscription({
-      client,
-      userId: payment.user_id,
-      packageRow: pkgRow,
-      sourceChannel: `payment:${payment.id}`
-    });
+    const active = activeRes.rows[0] || null;
+    const packageDays = asNumber(payment.days || payment.package_days, 0);
+    const startAt = active && active.end_at ? new Date(active.end_at) : new Date();
+    const endAt = new Date(startAt.getTime() + (packageDays * 24 * 60 * 60 * 1000));
 
-    if (!applied?.subscriptionId) {
-      throw new Error('SUBSCRIPTION_APPLY_FAILED');
-    }
-
-    await client.query(
-      `UPDATE user_subscriptions
-       SET lot_min = $2,
-           lot_max = $3,
-           ports_min = $4,
-           ports_max = $5,
-           profit_min = $6,
-           profit_max = $7,
-           profit_label = $8,
-           updated_at = NOW()
-       WHERE id = $1`,
+    const insertRes = await client.query(
+      `INSERT INTO user_subscriptions (
+         user_id,
+         package_id,
+         package_name_snapshot,
+         source_channel,
+         status,
+         start_at,
+         end_at,
+         lot_min,
+         lot_max,
+         ports_min,
+         ports_max,
+         profit_min,
+         profit_max,
+         profit_label
+       )
+       VALUES (
+         $1, $2, $3, $4, 'active',
+         $5, $6, $7, $8, $9, $10, $11, $12, $13
+       )
+       RETURNING id`,
       [
-        applied.subscriptionId,
+        payment.user_id,
+        payment.package_id,
+        payment.package_name_label || payment.package_name_snapshot || 'Package',
+        `payment:${payment.id}`,
+        startAt,
+        endAt,
         asNumber(payment.lot_min, 0),
         asNumber(payment.lot_max, 0),
         asNumber(payment.ports_min, 0),
@@ -131,10 +143,6 @@ async function activateSubscriptionFromPayment(paymentId) {
       ]
     );
 
-    const startAt = applied.startDate;
-    const endAt = applied.endDate;
-    const insertRes = { rows: [{ id: applied.subscriptionId }] };
-
     if (payment.coupon_id) {
       await client.query(
         `INSERT INTO coupon_usages (coupon_id, user_id, payment_id, note)
@@ -144,8 +152,6 @@ async function activateSubscriptionFromPayment(paymentId) {
     }
 
     await client.query('COMMIT');
-
-    await onPackageActivated(payment.user_id).catch(() => {});
 
     return {
       ok: true,
@@ -162,8 +168,34 @@ async function activateSubscriptionFromPayment(paymentId) {
 }
 
 async function expireSubscriptionsAndStopBots() {
-  const { runPackageExpirySweep } = require('./packageExpiryWorker');
-  return runPackageExpirySweep();
+  await query(
+    `UPDATE user_subscriptions
+     SET status = 'expired',
+         updated_at = NOW()
+     WHERE status = 'active'
+       AND end_at IS NOT NULL
+       AND end_at <= NOW()`
+  );
+
+  const stopped = await query(
+    `UPDATE bot_sessions bs
+     SET status = 'stopped',
+         stopped_at = NOW(),
+         updated_at = NOW()
+     WHERE bs.status = 'running'
+       AND NOT EXISTS (
+         SELECT 1
+         FROM user_subscriptions s
+         WHERE s.user_id = bs.user_id
+           AND s.status = 'active'
+           AND (s.end_at IS NULL OR s.end_at > NOW())
+       )
+     RETURNING id`
+  );
+
+  return {
+    stoppedCount: stopped.rowCount
+  };
 }
 
 module.exports = {

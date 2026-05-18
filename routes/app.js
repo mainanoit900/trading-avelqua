@@ -19,11 +19,6 @@ const {
   approveBuyOrderAndCredit,
   distributeScoinEconomy
 } = require('../services/scoinService');
-const {
-  deactivateTemporaryExtraPorts,
-  onPackageActivated
-} = require('../lib/mt5PackagePorts');
-const { applyPaidPackageSubscription } = require('../lib/subscriptionPackage');
 
 const router = express.Router();
 router.use(requireLogin);
@@ -289,13 +284,27 @@ async function activatePackagePayment(paymentId, webhookPayload = {}) {
       const pkgRes = await client.query(`SELECT * FROM packages WHERE id=$1 LIMIT 1`, [paymentRow.package_id]);
       const pkg = pkgRes.rows[0];
       if (pkg) {
-        await applyPaidPackageSubscription({
-          client,
-          userId: paymentRow.user_id,
-          packageRow: pkg,
-          sourceChannel: `payment:${paymentRow.id}`
-        });
-        await deactivateTemporaryExtraPorts(paymentRow.user_id, client).catch(() => {});
+        const subRes = await client.query(`SELECT * FROM user_subscriptions WHERE user_id=$1 ORDER BY id DESC LIMIT 1`, [paymentRow.user_id]);
+        const oldSub = subRes.rows[0];
+        const now = new Date();
+        let startDate = now;
+        let endDate = new Date();
+        if (oldSub && oldSub.end_at && new Date(oldSub.end_at) > now) {
+          startDate = new Date(oldSub.start_at || now);
+          endDate = new Date(oldSub.end_at);
+        }
+        endDate.setDate(endDate.getDate() + Number(pkg.days || 0));
+        if (oldSub) {
+          await client.query(
+            `UPDATE user_subscriptions SET package_id=$1, package_name_snapshot=$2, start_at=$3, end_at=$4, updated_at=NOW() WHERE id=$5`,
+            [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]
+          );
+        } else {
+          await client.query(
+            `INSERT INTO user_subscriptions (user_id, package_id, package_name_snapshot, start_at, end_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,NOW(),NOW())`,
+            [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]
+          );
+        }
       }
     }
 
@@ -308,7 +317,6 @@ async function activatePackagePayment(paymentId, webhookPayload = {}) {
   }
 
   if (paymentRow && paymentRow.package_id) {
-    await onPackageActivated(paymentRow.user_id).catch(() => {});
     await distributeScoinEconomy({
       userId: paymentRow.user_id,
       paymentId: paymentRow.id,
@@ -325,18 +333,23 @@ async function activatePackageAfterPaid({ client, paymentRow }) {
   const pkg = pkgRes.rows[0];
   if (!pkg) return null;
 
-  const applied = await applyPaidPackageSubscription({
-    client,
-    userId: paymentRow.user_id,
-    packageRow: pkg,
-    sourceChannel: `payment:${paymentRow.id}`
-  });
-  await deactivateTemporaryExtraPorts(paymentRow.user_id, client).catch(() => {});
-  return {
-    package: pkg,
-    startDate: applied?.startDate,
-    endDate: applied?.endDate
-  };
+  const subRes = await client.query(`SELECT * FROM user_subscriptions WHERE user_id=$1 ORDER BY id DESC LIMIT 1`, [paymentRow.user_id]);
+  const oldSub = subRes.rows[0];
+  const now = new Date();
+  let startDate = now;
+  let endDate = new Date();
+  if (oldSub && oldSub.end_at && new Date(oldSub.end_at) > now) {
+    startDate = new Date(oldSub.start_at || now);
+    endDate = new Date(oldSub.end_at);
+  }
+  endDate.setDate(endDate.getDate() + Number(pkg.days || 0));
+
+  if (oldSub) {
+    await client.query(`UPDATE user_subscriptions SET package_id=$1, package_name_snapshot=$2, start_at=$3, end_at=$4, updated_at=NOW() WHERE id=$5`, [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]);
+  } else {
+    await client.query(`INSERT INTO user_subscriptions (user_id, package_id, package_name_snapshot, start_at, end_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,NOW(),NOW())`, [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]);
+  }
+  return { package: pkg, startDate, endDate };
 }
 
 async function payPackageWithScoin({ userId, paymentId }) {
@@ -385,7 +398,6 @@ async function payPackageWithScoin({ userId, paymentId }) {
   }
 
   if (paidPayment) {
-    await onPackageActivated(paidPayment.user_id).catch(() => {});
     await distributeScoinEconomy({ userId: paidPayment.user_id, paymentId: paidPayment.id, packageId: paidPayment.package_id, amountThb: Number(paidPayment.final_amount || paidPayment.amount || 0) });
   }
   return { payment: paidPayment, scoinRequired, scoinPriceThb };
@@ -883,19 +895,33 @@ router.post('/packages/free-coupon/confirm', async (req, res) => {
 
     const paymentId = paymentRes.rows[0].id;
 
-    const appliedFree = await applyPaidPackageSubscription({
-      client,
-      userId: base.user.id,
-      packageRow: { ...pkg, days: freeDays },
-      sourceChannel: `free_coupon:${paymentId}`
-    });
     await client.query(
-      `UPDATE user_subscriptions
-       SET lot_min=$2, lot_max=$3, ports_min=$4, ports_max=$5,
-           profit_min=$6, profit_max=$7, profit_label=$8, updated_at=NOW()
-       WHERE id=$1`,
+      `INSERT INTO user_subscriptions (
+        user_id,
+        package_id,
+        package_name_snapshot,
+        source_channel,
+        status,
+        start_at,
+        end_at,
+        lot_min,
+        lot_max,
+        ports_min,
+        ports_max,
+        profit_min,
+        profit_max,
+        profit_label,
+        created_at,
+        updated_at
+      )
+      VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())`,
       [
-        appliedFree.subscriptionId,
+        base.user.id,
+        pkg.id,
+        packageName,
+        `free_coupon:${paymentId}`,
+        startAt,
+        endAt,
         Number(pkg.lot_min || 0),
         Number(pkg.lot_max || 0),
         Number(pkg.ports_min || 0),
@@ -938,7 +964,6 @@ router.post('/packages/free-coupon/confirm', async (req, res) => {
     );
 
     await client.query('COMMIT');
-    await onPackageActivated(base.user.id).catch(() => {});
 
     delete req.session.packagesFreeCouponPreview;
     delete req.session.freeCouponPreview;
@@ -1575,27 +1600,13 @@ router.post('/package-payment/:id/confirm-free-coupon', async (req, res) => {
       [freePkg.id, packageName, coupon.id, coupon.coupon_code, paymentRef, JSON.stringify({ coupon: { id: coupon.id, code: coupon.coupon_code, type: 'free', free_days: freeDays, free_package_group: freeGroup, override_package: true, original_package_id: payment.package_id, confirmed_at: new Date().toISOString() } }), payment.id]
     );
 
-    const appliedFree = await applyPaidPackageSubscription({
-      client,
-      userId: base.user.id,
-      packageRow: { ...freePkg, days: freeDays },
-      sourceChannel: `free_coupon:${payment.id}`
-    });
     await client.query(
-      `UPDATE user_subscriptions
-       SET lot_min=$2, lot_max=$3, ports_min=$4, ports_max=$5,
-           profit_min=$6, profit_max=$7, profit_label=$8, updated_at=NOW()
-       WHERE id=$1`,
-      [
-        appliedFree.subscriptionId,
-        Number(freePkg.lot_min || 0),
-        Number(freePkg.lot_max || 0),
-        Number(freePkg.ports_min || 0),
-        Number(freePkg.ports_max || 0),
-        freePkg.profit_min === null || freePkg.profit_min === undefined ? null : Number(freePkg.profit_min || 0),
-        freePkg.profit_max === null || freePkg.profit_max === undefined ? null : Number(freePkg.profit_max || 0),
-        freePkg.profit_label_th || freePkg.profit_label_en || ''
-      ]
+      `INSERT INTO user_subscriptions (
+         user_id, package_id, package_name_snapshot, source_channel, status,
+         start_at, end_at, lot_min, lot_max, ports_min, ports_max,
+         profit_min, profit_max, profit_label, created_at, updated_at
+       ) VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())`,
+      [base.user.id, freePkg.id, packageName, `free_coupon:${payment.id}`, startAt, endAt, Number(freePkg.lot_min || 0), Number(freePkg.lot_max || 0), Number(freePkg.ports_min || 0), Number(freePkg.ports_max || 0), freePkg.profit_min === null || freePkg.profit_min === undefined ? null : Number(freePkg.profit_min || 0), freePkg.profit_max === null || freePkg.profit_max === undefined ? null : Number(freePkg.profit_max || 0), freePkg.profit_label_th || freePkg.profit_label_en || '']
     );
 
     await client.query(
@@ -1628,7 +1639,6 @@ router.post('/package-payment/:id/confirm-free-coupon', async (req, res) => {
     );
 
     await client.query('COMMIT');
-    await onPackageActivated(base.user.id).catch(() => {});
     delete req.session.freeCouponPreview;
     req.session.success = `ยืนยันสำเร็จ เปิดใช้งานแพ็กเกจฟรี ${packageName} ${freeDays} วันแล้ว`;
     return res.redirect(`/app/package-payment/${paymentId}`);

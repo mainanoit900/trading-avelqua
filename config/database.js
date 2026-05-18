@@ -34,23 +34,8 @@ pool.on('error', (error) => {
   console.error('[database] Unexpected PostgreSQL pool error:', error);
 });
 
-function sanitizeQueryParams(params) {
-  if (!Array.isArray(params)) return params;
-  try {
-    const { sanitizePgText } = require('../lib/pgSanitize');
-    return params.map((p) => {
-      if (typeof p === 'string') {
-        return p.includes('\u0000') ? sanitizePgText(p) : p;
-      }
-      return p;
-    });
-  } catch (_) {
-    return params;
-  }
-}
-
 async function query(text, params = []) {
-  return pool.query(text, sanitizeQueryParams(params));
+  return pool.query(text, params);
 }
 
 async function getClient() {

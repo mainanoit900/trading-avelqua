@@ -4,7 +4,7 @@ set -euo pipefail
 APP_DIR="${APP_DIR:-/root/trading-avelqua}"
 DB_NAME="${DB_NAME:-trading_avelqua}"
 DB_USER="${DB_USER:-postgres}"
-BACKUP_DIR="$APP_DIR/backups/before-mt5-bot-$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$APP_DIR/backup-before-mt5-bot-$(date +%Y%m%d-%H%M%S)"
 SRC_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "==> Backup current files to $BACKUP_DIR"

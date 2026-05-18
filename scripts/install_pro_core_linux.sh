@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 APP_DIR="${1:-/root/trading-avelqua}"
-BACKUP_DIR="$APP_DIR/backups/pro-mt5-$(date +%Y%m%d-%H%M%S)"
+BACKUP_DIR="$APP_DIR/backup-pro-mt5-$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$BACKUP_DIR"
 cd "$(dirname "$0")/.."
 
