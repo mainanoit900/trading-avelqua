@@ -42,6 +42,7 @@ const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
 const {
   normalizeAgentCommandType,
+  normalizeAgentCommandForPoll,
   normalizeRunBotPayloadAction
 } = require('../lib/mt5CommandNormalize');
 const {
@@ -761,8 +762,12 @@ router.get('/queue', async (req, res) => {
       });
     }
 
-    const normalizedType = normalizeAgentCommandType(row.command_type);
+    const agentVer = String(node.agent_version || '').trim();
+    const normalizedType = normalizeAgentCommandForPoll(row.command_type, agentVer);
     const payload = normalizeRunBotPayloadAction(row.payload || {}, normalizedType);
+    if (normalizedType === 'dashboard' && !(row.payload || {}).equitySnapshot) {
+      payload.equitySnapshot = true;
+    }
     if (normalizedType !== row.command_type) {
       row = { ...row, command_type: normalizedType };
     }

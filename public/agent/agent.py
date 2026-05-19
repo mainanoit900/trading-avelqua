@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-push-v28"
+AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v29"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2941,6 +2941,42 @@ def scan_all_mt5_ports() -> List[Dict[str, Any]]:
 
     return sorted(ports, key=lambda x: int(x.get("portNumber") or 0))
 
+def dashboard_equity_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
+    """ดึง balance/equity PORT เดียวจากโฟลเดอร์จริง (ใช้กับคำสั่ง dashboard + equitySnapshot)"""
+    port = payload_get(payload, "port", "portNumber", "port_no", "portSlot") or "1"
+    port_no = normalize_port(port)
+    port_dir = resolve_mt5_port_dir(port, payload)
+    running = len(mt5_port_processes(port, payload)) > 0
+    snap = account_snapshot(port, payload)
+    bal = snap.get("balance")
+    eq = snap.get("equity")
+    log(f"EQUITY DASHBOARD PORT={port_no} folder={port_dir} BALANCE={bal} EQUITY={eq} running={running}")
+    row = {
+        "port": f"PORT{port_no:02d}",
+        "portNumber": port_no,
+        "path": str(port_dir),
+        "running": running,
+        "busy": running,
+        "status": "full" if running else "free",
+        "pid": [],
+        "lot": 0,
+        "balance": bal,
+        "equity": eq,
+    }
+    return {
+        "action": "dashboard",
+        "equitySnapshot": True,
+        "ports": [row],
+        "balance": bal,
+        "equity": eq,
+        "profit": snap.get("profit"),
+        "currency": snap.get("currency", ""),
+        "used_ports": 1 if running else 0,
+        "used_lot": 0,
+        "at": datetime.now().isoformat(timespec="seconds"),
+    }
+
+
 def mt5_ports_dashboard() -> Dict[str, Any]:
     ports = []
     used_lot = 0.0
@@ -3677,6 +3713,18 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(agent_path)
 
+    for alt in (
+        Path(r"C:\Avelqua-python-agent\agent.py"),
+        Path(r"C:\avelqua-python-agent\agent.py"),
+    ):
+        try:
+            if alt.resolve() != agent_path.resolve():
+                alt.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(agent_path, alt)
+                log(f"AGENT DEPLOY COPY {alt}")
+        except Exception as copy_err:
+            log(f"AGENT DEPLOY COPY SKIP {alt}: {copy_err}")
+
     build_id = AGENT_BUILD_ID
     m = re.search(r'AGENT_BUILD_ID\s*=\s*["\']([^"\']+)["\']', content)
     if m:
@@ -3886,7 +3934,12 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 command_result(cmd_id, True, stop_mt5_port_only(port, payload))
 
         elif ctype in ("dashboard", "watchdog"):
-            command_result(cmd_id, True, mt5_ports_dashboard())
+            purpose = str(payload_get(payload, "purpose") or "")
+            equity_snap = payload_get(payload, "equitySnapshot", "equity_snapshot")
+            if equity_snap in (True, "true", "1", 1) or purpose.startswith("equity"):
+                command_result(cmd_id, True, dashboard_equity_snapshot(payload))
+            else:
+                command_result(cmd_id, True, mt5_ports_dashboard())
 
         elif ctype == "port_open_folder":
             command_result(cmd_id, True, open_mt5_port_folder(payload))
