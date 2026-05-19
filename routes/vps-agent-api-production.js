@@ -761,15 +761,10 @@ router.get('/queue', async (req, res) => {
     }
 
     const normalizedType = normalizeAgentCommandType(row.command_type);
+    const payload = normalizeRunBotPayloadAction(row.payload || {}, normalizedType);
     if (normalizedType !== row.command_type) {
-      await query(
-        `UPDATE vps_system.vps_agent_commands SET command_type=$2, updated_at=NOW() WHERE id=$1`,
-        [row.id, normalizedType]
-      ).catch(() => {});
       row = { ...row, command_type: normalizedType };
     }
-
-    const payload = normalizeRunBotPayloadAction(row.payload || {}, normalizedType);
 
     return res.json({
       ok: true,
