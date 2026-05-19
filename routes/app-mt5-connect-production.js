@@ -813,6 +813,25 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const a = r.rows?.[0];
     if (!a) return res.json({ ok: true, connected: false, status: 'none', message: 'ยังไม่มีรายการเชื่อมต่อ' });
 
+    const statusEarly = String(a.status || '').toLowerCase();
+    if (statusEarly === 'connected') {
+      const previewPathEarly = previewPublicPath(a.id);
+      return res.json({
+        ok: true,
+        account: { ...a, status: 'connected' },
+        connected: true,
+        failed: false,
+        checking: false,
+        pending: false,
+        status: 'connected',
+        loginVerified: true,
+        message: a.last_login_message || MT5_SUCCESS_MSG,
+        windowTitle: windowTitleFromMessage(a.last_login_message),
+        previewUrl: previewPathEarly ? `${previewPathEarly}?t=${Date.now()}` : '',
+        elapsedSec: 0
+      });
+    }
+
     const startedAt = a.connect_started_at
       ? new Date(a.connect_started_at).getTime()
       : a.updated_at

@@ -368,7 +368,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script>
 (function () {
-  let mt5Checking = true;
+  let mt5Checking = false;
   const serverPendingAccountId = '<%= typeof pendingConnectAccountId !== "undefined" && pendingConnectAccountId ? pendingConnectAccountId : "" %>';
   let mt5PollAccountId = sessionStorage.getItem('mt5PollAccountId') || serverPendingAccountId || '';
   const urlParams = new URLSearchParams(window.location.search);
@@ -575,15 +575,46 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   window.refreshMt5PortCards = refreshMt5PortCards;
 
+  function mt5ConnectTargetSlot() {
+    return (
+      sessionStorage.getItem('mt5ConnectTargetSlot') ||
+      (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+      urlParams.get('port_slot') ||
+      ''
+    );
+  }
+
+  function tryFinishFromPortsState(portsData, statusMsg) {
+    if (!portsData || !portsData.ok || !Array.isArray(portsData.ports)) return false;
+    const slot = mt5ConnectTargetSlot();
+    if (!slot) return false;
+    const port = portsData.ports.find(function (p) {
+      return String(p.slot) === String(slot);
+    });
+    if (!port || !(port.canUse || port.cssClass === 'connected')) return false;
+    const acc =
+      (portsData.connectedAccounts || []).find(function (a) {
+        return String(a.port_slot) === String(slot);
+      }) || null;
+    const accountInfo = acc || {
+      id: port.accountId,
+      port_slot: Number(slot) || slot,
+      mt5_login: port.mt5_login
+    };
+    finishMt5ConnectSuccess(statusMsg || 'เชื่อมต่อสำเร็จ', accountInfo);
+    return true;
+  }
+
   async function finishMt5ConnectSuccess(message, accountInfo) {
     if (window.__mt5FinishSuccessRunning) return;
     window.__mt5FinishSuccessRunning = true;
     const base = message || 'เชื่อมต่อสำเร็จ';
     const msg = base + ' — ยังไม่เปิด BOT กรุณาไปขั้นตอน 3) ตั้งค่า BOT แล้วกด ▶ เปิด BOT (ปิด Algo Trading จนกว่าจะเปิด BOT)';
+    const accId = accountInfo && accountInfo.id;
     const outcomeKey = mt5OutcomeStorageKey(
       'ok',
-      accountInfo && accountInfo.id,
-      accountInfo && accountInfo.updated_at
+      accId || 'port',
+      (accountInfo && accountInfo.updated_at) || String(Date.now())
     );
     if (mt5OutcomeWasShown(outcomeKey)) {
       window.__mt5FinishSuccessRunning = false;
@@ -597,32 +628,38 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-    const accId = accountInfo && accountInfo.id;
-    if (accId) {
-      const eq = accountInfo.last_equity != null ? Number(accountInfo.last_equity) : null;
-      const bal = accountInfo.last_balance != null ? Number(accountInfo.last_balance) : null;
-      if (eq > 0) applyEquityUiState(eq, bal > 0 ? bal : null);
-    }
-    await refreshMt5PortCards();
-    showMt5ConnectModal('success', msg, {
-      accountId: accountInfo && accountInfo.id,
-      dedupeKey: outcomeKey
-    });
     const slot =
       (accountInfo && accountInfo.port_slot) ||
-      (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+      mt5ConnectTargetSlot() ||
       '';
     if (slot) {
       try { localStorage.setItem('mt5ActivePortSlot', String(slot)); } catch (_) {}
-      if (window.history && window.history.replaceState) {
-        window.history.replaceState({}, '', '/app/mt5?port_slot=' + encodeURIComponent(slot));
+      const lbl = document.getElementById('mt5LoginPortLabel');
+      if (lbl) lbl.textContent = 'PORT ' + slot + ' — เชื่อมต่อแล้ว';
+    }
+    showMt5ConnectModal('success', msg, {
+      accountId: accId,
+      dedupeKey: outcomeKey
+    });
+    if (accId) {
+      const eq = accountInfo.last_equity != null ? Number(accountInfo.last_equity) : null;
+      const bal = accountInfo.last_balance != null ? Number(accountInfo.last_balance) : null;
+      if (eq > 0 && typeof applyEquityUiState === 'function') {
+        applyEquityUiState(eq, bal > 0 ? bal : null);
       }
-      setTimeout(function () { window.location.reload(); }, 1100);
-    } else if (window.history && window.history.replaceState) {
-      window.history.replaceState({}, '', '/app/mt5');
+    }
+    refreshMt5PortCards().catch(function () {});
+    if (slot && window.history && window.history.replaceState) {
+      window.history.replaceState({}, '', '/app/mt5?port_slot=' + encodeURIComponent(slot));
     }
     window.__mt5FinishSuccessRunning = false;
+    if (slot) {
+      setTimeout(function () {
+        window.location.assign('/app/mt5?port_slot=' + encodeURIComponent(slot));
+      }, 2200);
+    }
   }
 
   async function verifyConnectedFromUrl() {
@@ -665,15 +702,35 @@ document.addEventListener('DOMContentLoaded', function () {
     mt5StatusPollInFlight = true;
     try {
       syncMt5PollAccountId();
+      const inFlight = sessionStorage.getItem('mt5ConnectInFlight') === '1';
       let statusUrl = '/app/mt5/connect-status';
       if (mt5PollAccountId) {
         statusUrl += '?accountId=' + encodeURIComponent(mt5PollAccountId);
       }
-      const res = await fetch(statusUrl, {
-        cache: 'no-store',
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' }
-      });
+      const fetches = [
+        fetch(statusUrl, {
+          cache: 'no-store',
+          credentials: 'same-origin',
+          headers: { Accept: 'application/json' }
+        })
+      ];
+      if (inFlight) {
+        fetches.push(
+          fetch('/app/mt5/ports-state', {
+            cache: 'no-store',
+            credentials: 'same-origin',
+            headers: { Accept: 'application/json' }
+          })
+        );
+      }
+      const results = await Promise.all(fetches);
+      const res = results[0];
+      if (inFlight && results[1] && results[1].ok) {
+        try {
+          const portsData = await results[1].json();
+          if (tryFinishFromPortsState(portsData, 'เชื่อมต่อสำเร็จ')) return;
+        } catch (_) {}
+      }
       const text = await res.text();
       let data;
       try {
@@ -752,14 +809,11 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         return;
       }
-      if (stWait === 'connected' || (data.connected === true && data.status === 'connected')) {
-        const okKey = mt5OutcomeStorageKey('ok', data.account.id, outcomeUpdatedAt);
-        if (mt5OutcomeWasShown(okKey)) {
-          mt5Checking = false;
-          if (window.mt5Checker) clearInterval(window.mt5Checker);
-          window.mt5Checker = null;
-          return;
-        }
+      if (
+        stWait === 'connected' ||
+        data.connected === true ||
+        data.loginVerified === true
+      ) {
         finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account || null);
         return;
       }
@@ -769,6 +823,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   window.finishMt5ConnectSuccess = finishMt5ConnectSuccess;
+  window.checkMt5Connected = checkMt5Connected;
 
   window.startMt5ConnectPolling = function () {
     if (window.mt5Checker) clearInterval(window.mt5Checker);
@@ -778,7 +833,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.__mt5FinishSuccessRunning = false;
     sessionStorage.removeItem('mt5ConnectedShownId');
     sessionStorage.removeItem('mt5OutcomeShown');
-    window.mt5Checker = setInterval(checkMt5Connected, 200);
+    window.mt5Checker = setInterval(checkMt5Connected, 150);
     checkMt5Connected();
   };
 
@@ -1192,6 +1247,11 @@ if (mt5ConnectForm) {
       const uiPortHint = data.port_slot || '';
       delete data.port_slot;
       if (uiPortHint) data.ui_port_hint = uiPortHint;
+      const connectSlot =
+        uiPortHint ||
+        (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+        '';
+      if (connectSlot) sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
 
       const res = await fetch('/app/mt5/connect', {
         method: 'POST',
@@ -1233,6 +1293,7 @@ if (mt5ConnectForm) {
         }
         if (json.portSlot) {
           try { localStorage.setItem('mt5ActivePortSlot', String(json.portSlot)); } catch (_) {}
+          sessionStorage.setItem('mt5ConnectTargetSlot', String(json.portSlot));
           const lbl = document.getElementById('mt5LoginPortLabel');
           if (lbl) lbl.textContent = 'กำลัง Login → PORT ' + json.portSlot;
         }
