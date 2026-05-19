@@ -374,6 +374,19 @@ document.addEventListener('DOMContentLoaded', function () {
   const urlParams = new URLSearchParams(window.location.search);
   let mt5StatusPollInFlight = false;
 
+  function syncMt5PollAccountId() {
+    const fromStore = sessionStorage.getItem('mt5PollAccountId') || '';
+    if (fromStore) mt5PollAccountId = String(fromStore);
+    return mt5PollAccountId;
+  }
+
+  window.setMt5PollAccountId = function (id) {
+    mt5PollAccountId = id != null && id !== '' ? String(id) : '';
+    if (mt5PollAccountId) sessionStorage.setItem('mt5PollAccountId', mt5PollAccountId);
+    else sessionStorage.removeItem('mt5PollAccountId');
+    return mt5PollAccountId;
+  };
+
   function mt5OutcomeStorageKey(kind, accountId, updatedAt) {
     return String(kind || '') + ':' + String(accountId || '') + ':' + String(updatedAt || '');
   }
@@ -583,6 +596,7 @@ document.addEventListener('DOMContentLoaded', function () {
       window.mt5Checker = null;
     }
     sessionStorage.removeItem('mt5PollAccountId');
+    sessionStorage.removeItem('mt5ConnectInFlight');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     const accId = accountInfo && accountInfo.id;
     if (accId) {
@@ -650,6 +664,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!mt5Checking || mt5StatusPollInFlight) return;
     mt5StatusPollInFlight = true;
     try {
+      syncMt5PollAccountId();
       let statusUrl = '/app/mt5/connect-status';
       if (mt5PollAccountId) {
         statusUrl += '?accountId=' + encodeURIComponent(mt5PollAccountId);
@@ -707,6 +722,7 @@ document.addEventListener('DOMContentLoaded', function () {
         mt5Checking = false;
         if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
         sessionStorage.removeItem('mt5PollAccountId');
+        sessionStorage.removeItem('mt5ConnectInFlight');
         const failMsg =
           data.message || data.account.last_error || data.account.last_login_message || 'Login หรือ Password ไม่ถูกต้อง';
         showMt5ConnectModal('error', failMsg, { accountId: data.account.id, dedupeKey: failKey });
@@ -756,6 +772,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   window.startMt5ConnectPolling = function () {
     if (window.mt5Checker) clearInterval(window.mt5Checker);
+    syncMt5PollAccountId();
     mt5Checking = true;
     window.__mt5SuccessShown = false;
     window.__mt5FinishSuccessRunning = false;
@@ -781,6 +798,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   async function mt5BootstrapConnectedState() {
     try {
+      syncMt5PollAccountId();
       const slot = urlParams.get('port_slot') || '';
       let url = '/app/mt5/connect-status';
       if (mt5PollAccountId) url += '?accountId=' + encodeURIComponent(mt5PollAccountId);
@@ -789,6 +807,11 @@ document.addEventListener('DOMContentLoaded', function () {
       if (!data.ok || !data.account) return;
       const st = String(data.account.status || '').toLowerCase();
       if (st === 'connected' || data.connected === true) {
+        const inFlight = sessionStorage.getItem('mt5ConnectInFlight') === '1' || mt5Checking;
+        if (inFlight && typeof finishMt5ConnectSuccess === 'function') {
+          finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account);
+          return;
+        }
         const slotNum = data.account.port_slot || slot;
         if (slotNum) {
           try { localStorage.setItem('mt5ActivePortSlot', String(slotNum)); } catch (_) {}
@@ -799,8 +822,10 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         if (typeof window.refreshMt5PortCards === 'function') await window.refreshMt5PortCards();
       } else if (['connecting', 'starting', 'checking'].includes(st) && !window.mt5Checker) {
-        mt5PollAccountId = String(data.account.id);
-        sessionStorage.setItem('mt5PollAccountId', mt5PollAccountId);
+        if (typeof window.setMt5PollAccountId === 'function') {
+          window.setMt5PollAccountId(data.account.id);
+        }
+        sessionStorage.setItem('mt5ConnectInFlight', '1');
         window.startMt5ConnectPolling();
       }
     } catch (_) {}
@@ -1148,6 +1173,7 @@ if (mt5ConnectForm) {
     sessionStorage.removeItem('mt5FailedShownId');
     sessionStorage.removeItem('mt5OutcomeShown');
     sessionStorage.removeItem('mt5PollAccountId');
+    sessionStorage.setItem('mt5ConnectInFlight', '1');
     window.__mt5LastModalKey = '';
     window.__mt5FinishSuccessRunning = false;
 
@@ -1200,9 +1226,10 @@ if (mt5ConnectForm) {
       }
 
       if (json.ok === true && (json.status === 'queued' || json.status === 'pending' || json.status === 'upgrading' || json.accountId)) {
-        if (json.accountId) {
-          mt5PollAccountId = String(json.accountId);
-          sessionStorage.setItem('mt5PollAccountId', mt5PollAccountId);
+        if (json.accountId && typeof window.setMt5PollAccountId === 'function') {
+          window.setMt5PollAccountId(json.accountId);
+        } else if (json.accountId) {
+          sessionStorage.setItem('mt5PollAccountId', String(json.accountId));
         }
         if (json.portSlot) {
           try { localStorage.setItem('mt5ActivePortSlot', String(json.portSlot)); } catch (_) {}

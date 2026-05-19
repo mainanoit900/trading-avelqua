@@ -784,6 +784,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
     if (accountId) {
       params.push(accountId);
       where += ` AND id=$2`;
+    } else {
+      where += ` AND LOWER(COALESCE(a.status, '')) NOT IN ('deleted', 'expired')`;
     }
 
     const r = await query(`
