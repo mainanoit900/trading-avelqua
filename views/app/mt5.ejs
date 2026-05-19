@@ -231,7 +231,7 @@ document.addEventListener('DOMContentLoaded', function () {
             <label>1) BOT</label>
             <select name="bot_id" id="mt5BotSelect" required<%= botOn ? ' disabled' : '' %>>
               <% bots.forEach(function(b){ %>
-                <option value="<%= b.id %>" data-code="<%= b.bot_code %>"><%= b.display_name || b.bot_name %></option>
+                <option value="<%= b.id %>" data-code="<%= b.bot_code %>"<%= (typeof preferredBotId !== 'undefined' && preferredBotId && Number(preferredBotId) === Number(b.id)) ? ' selected' : '' %>><%= b.display_name || b.bot_name %></option>
               <% }) %>
             </select>
           </div>
@@ -269,10 +269,12 @@ document.addEventListener('DOMContentLoaded', function () {
           </div>
         </div>
         <small class="mt5-hint" id="mt5EaSetHint">หลังเปิด BOT: MT5 ยังเปิดอยู่ — แนบ EA บน XAUUSD → Load preset → เปิด Algo Trading</small>
+        <div class="mt5-license-warn" id="mt5LicenseWarn" hidden></div>
       </form>
         <div class="mt5-bot-command-bar" id="mt5BotCommandBar">
-          <button type="submit" form="mt5RunForm" class="mt5-btn run" id="mt5BtnOpenBot" <%= (packageExpired || botOn) ? 'disabled' : '' %> onclick="return confirm('เปิด BOT บน PORT <%= ac.port_slot %> ใช่ไหม?')">▶ เปิด BOT</button>
-          <button type="button" class="mt5-btn stop" id="mt5BtnStopBot" data-instance-id="<%= stopInstId || '' %>" data-port-slot="<%= ac.port_slot %>" <%= botOn && stopInstId ? '' : 'disabled' %> onclick="return mt5StopBot()">■ หยุด BOT</button>
+          <button type="submit" form="mt5RunForm" class="mt5-btn run" id="mt5BtnOpenBot" <%= (packageExpired || botOn) ? 'disabled' : '' %>>▶ เปิด BOT</button>
+          <button type="button" class="mt5-btn stop" id="mt5BtnStopBot" data-instance-id="<%= stopInstId || '' %>" data-port-slot="<%= ac.port_slot %>" data-account-id="<%= ac.id %>" <%= botOn && stopInstId ? '' : 'disabled' %> onclick="return mt5StopBot()">■ หยุด BOT</button>
+          <button type="button" class="mt5-btn ghost" id="mt5BtnTradingReset" data-port-slot="<%= ac.port_slot %>" data-account-id="<%= ac.id %>">↺ รีเซ็ตตั้งค่า</button>
           <% if (stopInstId) { %>
           <form method="POST" action="/app/mt5/request-restart/<%= stopInstId %>" style="display:inline" onsubmit="return confirm('Restart BOT #<%= stopInstId %> ใช่ไหม?')">
             <button type="submit" class="mt5-btn ghost" id="mt5BtnRestartBot" <%= botOn ? '' : 'disabled' %>>↻ Restart</button>
@@ -895,6 +897,140 @@ window.mt5StopBot = async function (instanceId) {
   return false;
 };
 
+function mt5SetRunFormLocked(locked) {
+  ['mt5BotSelect', 'mt5TradeLevel', 'capital_manual', 'mt5ManualLot'].forEach(function (id) {
+    const el = document.getElementById(id);
+    if (!el) return;
+    if (id === 'capital_manual' || id === 'mt5ManualLot') {
+      el.readOnly = !!locked;
+    } else {
+      el.disabled = !!locked;
+    }
+  });
+}
+
+window.mt5TradingReset = async function () {
+  const btn = document.getElementById('mt5BtnTradingReset');
+  const accountId =
+    (btn && btn.getAttribute('data-account-id')) ||
+    (document.getElementById('mt5AccountId') || {}).value ||
+    '';
+  const portSlot =
+    (btn && btn.getAttribute('data-port-slot')) ||
+    (document.getElementById('mt5RunPortSlot') || {}).value ||
+    '';
+  if (!accountId) {
+    alert('ยังไม่มีบัญชี PORT — Login ก่อน');
+    return false;
+  }
+  if (!confirm('รีเซ็ตการตั้งค่าเทรดบน PORT นี้?\n(หยุด BOT ถ้ากำลังรัน · MT5 ยังเชื่อมต่ออยู่)')) return false;
+  const prev = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'กำลังรีเซ็ต...';
+  }
+  try {
+    const body = new URLSearchParams();
+    body.set('mt5_account_id', accountId);
+    if (portSlot) body.set('port_slot', portSlot);
+    const res = await fetch('/app/mt5/trading-reset', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: body.toString()
+    });
+    const data = await res.json().catch(function () {
+      return { ok: false };
+    });
+    if (!res.ok || data.ok === false) {
+      alert(data.message || 'รีเซ็ตไม่สำเร็จ');
+      return false;
+    }
+    const lotInput = document.getElementById('mt5ManualLot');
+    if (lotInput) lotInput.dataset.userEdited = '0';
+    const capInput = document.getElementById('capital_manual');
+    if (capInput) capInput.dataset.userCapitalEdited = '0';
+    mt5SetRunFormLocked(false);
+    const warn = document.getElementById('mt5LicenseWarn');
+    if (warn) warn.hidden = true;
+    syncMt5BotControlUi();
+    if (typeof refreshPresetCalc === 'function') refreshPresetCalc();
+    if (typeof showMt5Modal === 'function') {
+      showMt5Modal('รีเซ็ตแล้ว', data.message || 'เลือก BOT / ระดับเสี่ยง / ทุน / LOT ใหม่ได้', { success: true });
+    } else {
+      alert(data.message || 'รีเซ็ตแล้ว');
+    }
+  } catch (e) {
+    alert('รีเซ็ตไม่สำเร็จ: ' + (e.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prev || '↺ รีเซ็ตตั้งค่า';
+    }
+  }
+  return false;
+};
+
+async function mt5SubmitRunForm(ev) {
+  if (ev) ev.preventDefault();
+  const form = document.getElementById('mt5RunForm');
+  if (!form) return false;
+  const openBtn = document.getElementById('mt5BtnOpenBot');
+  const portSlot = (document.getElementById('mt5RunPortSlot') || {}).value || '';
+  if (!confirm('เปิด BOT บน PORT ' + (portSlot || '?') + ' ใช่ไหม?')) return false;
+  const prev = openBtn ? openBtn.textContent : '';
+  if (openBtn) {
+    openBtn.disabled = true;
+    openBtn.textContent = 'กำลังส่งคำสั่ง...';
+  }
+  try {
+    const body = new URLSearchParams(new FormData(form));
+    const res = await fetch('/app/mt5/run', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: body.toString()
+    });
+    const data = await res.json().catch(function () {
+      return { ok: false, message: 'ไม่สามารถอ่านผลจากเซิร์ฟเวอร์' };
+    });
+    if (!res.ok || data.ok === false) {
+      if (typeof showMt5Modal === 'function') {
+        showMt5Modal('ไม่สามารถรัน BOT ได้', data.message || 'ลองใหม่', { runBot: true });
+      } else {
+        alert(data.message || 'เปิด BOT ไม่สำเร็จ');
+      }
+      return false;
+    }
+    if (typeof showMt5Modal === 'function') {
+      showMt5Modal('ส่งคำสั่งเปิด BOT แล้ว', data.message || 'รอ Agent 30–60 วินาที', { success: true });
+    }
+    let polls = 0;
+    const pollRun = setInterval(function () {
+      polls += 1;
+      syncMt5BotControlUi();
+      if (polls >= 24) clearInterval(pollRun);
+    }, 500);
+    syncMt5BotControlUi();
+  } catch (e) {
+    alert('เปิด BOT ไม่สำเร็จ: ' + (e.message || e));
+  } finally {
+    if (openBtn) {
+      openBtn.textContent = prev || '▶ เปิด BOT';
+      syncMt5BotControlUi();
+    }
+  }
+  return false;
+}
+
 function syncMt5BotControlUi() {
   const slot =
     (document.getElementById('mt5RunPortSlot') || {}).value ||
@@ -926,6 +1062,7 @@ function syncMt5BotControlUi() {
       }
       if (openBtn) openBtn.disabled = running || packageExpired;
       if (restartBtn) restartBtn.disabled = !running;
+      mt5SetRunFormLocked(running);
       const levelSel = document.getElementById('mt5TradeLevel');
       if (levelSel && data.instance && data.instance.trade_level) {
         const lv = String(data.instance.trade_level).toLowerCase();
@@ -1914,6 +2051,25 @@ function deletePortCountdown(e, form) {
       if (eaHint && data.eaSetFileName) {
         eaHint.textContent = data.eaAttachHint || ('Preset: ' + data.eaSetFileName);
       }
+      const warn = document.getElementById('mt5LicenseWarn');
+      if (warn) {
+        if (data.eaLicenseOk === false && data.eaLicenseMessage) {
+          warn.hidden = false;
+          warn.textContent =
+            data.eaLicenseMessage +
+            (data.suggestedBotLabel ? ' → แนะนำ: ' + data.suggestedBotLabel : '');
+          if (data.suggestedBotId && botSel) {
+            const cur = String(botSel.value || '');
+            if (cur !== String(data.suggestedBotId)) {
+              botSel.value = String(data.suggestedBotId);
+              botSel.dispatchEvent(new Event('change', { bubbles: true }));
+            }
+          }
+        } else {
+          warn.hidden = true;
+          warn.textContent = '';
+        }
+      }
     } catch (_) {}
   }
 
@@ -2018,8 +2174,22 @@ function deletePortCountdown(e, form) {
       }
     }
     refreshPresetCalc();
+    const runForm = document.getElementById('mt5RunForm');
+    if (runForm && runForm.dataset.ajaxBound !== '1') {
+      runForm.dataset.ajaxBound = '1';
+      runForm.addEventListener('submit', mt5SubmitRunForm);
+    }
+    const resetBtn = document.getElementById('mt5BtnTradingReset');
+    if (resetBtn && resetBtn.dataset.bound !== '1') {
+      resetBtn.dataset.bound = '1';
+      resetBtn.addEventListener('click', function (e) {
+        e.preventDefault();
+        mt5TradingReset();
+      });
+    }
   }
   window.mt5BindRunForm = mt5BindRunForm;
+  window.mt5SubmitRunForm = mt5SubmitRunForm;
   mt5BindRunForm();
   if (typeof mt5RestoreTradeLevelSelect === 'function') mt5RestoreTradeLevelSelect();
 
@@ -2180,6 +2350,8 @@ function deletePortCountdown(e, form) {
 
 <style>
 .mt5-hint{display:block;margin-top:6px;color:#94a3b8;font-size:12px;line-height:1.4}
+.mt5-license-warn{display:block;margin-top:8px;padding:10px 12px;border-radius:10px;background:rgba(251,191,36,.12);border:1px solid rgba(251,191,36,.35);color:#fde68a;font-size:13px;line-height:1.45}
+.mt5-license-warn[hidden]{display:none}
 .mt5-analytics-panel{padding:12px 0}
 .mt5-analytics-grid{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
 .mt5-stat{background:rgba(15,23,42,.6);border:1px solid rgba(148,163,184,.15);border-radius:12px;padding:10px}

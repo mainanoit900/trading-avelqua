@@ -51,7 +51,11 @@ const {
 } = require('../lib/mt5BotPresets');
 const { loadAccountPortContext, buildRunMt5BotPayload } = require('../lib/mt5AccountPort');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
-const { validateEaAccountAccess, eaLicenseHintForDiagnostics } = require('../lib/mt5EaLicense');
+const {
+  validateEaAccountAccess,
+  eaLicenseHintForDiagnostics,
+  findLicensedBotForLogin
+} = require('../lib/mt5EaLicense');
 const { isDemoBotCode, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 const { toJsonbParam } = require('../lib/pgSanitize');
 const { ensureBotInstanceRunColumns } = require('../lib/mt5RunBotResult');
@@ -72,7 +76,8 @@ const {
   hasAgentCapableMarker,
   REQUIRED_AGENT_VERSION,
   getAgentUpgradeState,
-  messageForUpgradeState
+  messageForUpgradeState,
+  pruneMetricsCommandBacklog
 } = require('../lib/agentDeploy');
 const { applyMt5LiveStatus, recordEquityLog } = require('../lib/mt5LiveStatus');
 const { generateIntelReport } = require('../services/intelAi');
@@ -1220,7 +1225,10 @@ async function loadProductionBots() {
     `SELECT * FROM vps_system.bot_catalog
      WHERE is_active=TRUE AND is_demo=FALSE
        AND UPPER(bot_code) IN ${PRODUCTION_BOT_CODES_SQL}
-     ORDER BY sort_order ASC, id ASC`,
+     ORDER BY
+       CASE WHEN LOWER(bot_code) LIKE '%demo%' THEN 0 ELSE 1 END,
+       sort_order ASC,
+       id ASC`,
     []
   );
 }
@@ -1852,6 +1860,12 @@ router.get('/mt5', async (req, res) => {
 
   const lotPolicy = packageLotLimits(summary);
 
+  let preferredBotId = null;
+  if (botControl.account?.mt5_login) {
+    const licensed = findLicensedBotForLogin(botControl.account.mt5_login, bots);
+    if (licensed) preferredBotId = Number(licensed.id);
+  }
+
   return res.render('app/mt5', {
     pageTitle: 'เชื่อมต่อ MT5',
     pageCss: 'app-mt5-bot.css',
@@ -1876,6 +1890,7 @@ router.get('/mt5', async (req, res) => {
     pickAccountForPortSlot,
     pendingConnectAccountId: pendingConnectAccount ? pendingConnectAccount.id : null,
     bots,
+    preferredBotId,
     instances,
     packageExpireText: summary.packageExpired ? 'แพ็คเกจหมดอายุ' : fmtDate(summary.pkg.end_at),
     fmtDateView: fmtDate,
@@ -2749,7 +2764,7 @@ router.get('/mt5/preset-calc', requireLogin, async (req, res) => {
     const { lotMin, lotMax, defaultLot, packageGroup } = packageLotLimits(summary);
 
     const accountRes = await safeQuery(
-      `SELECT id, last_balance, last_equity, status FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
+      `SELECT id, mt5_login, last_balance, last_equity, status FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
       [mt5AccountId, userId]
     );
     const account = accountRes[0];
@@ -2796,6 +2811,9 @@ router.get('/mt5/preset-calc', requireLogin, async (req, res) => {
     const licenseCheck = validateEaAccountAccess(bot.bot_code, account.mt5_login, {
       presetSlug: calc.presetSlug
     });
+    const licensedAlt = !licenseCheck.ok
+      ? findLicensedBotForLogin(account.mt5_login, await loadProductionBots())
+      : null;
 
     const eaSetPreview = buildEaSetPayloadFields({
       bot,
@@ -2817,6 +2835,11 @@ router.get('/mt5/preset-calc', requireLogin, async (req, res) => {
       ok: licenseCheck.ok !== false,
       eaLicenseOk: licenseCheck.ok !== false,
       eaLicenseMessage: licenseCheck.ok === false ? licenseCheck.message : null,
+      suggestedBotId: licensedAlt ? Number(licensedAlt.id) : null,
+      suggestedBotCode: licensedAlt ? licensedAlt.bot_code : null,
+      suggestedBotLabel: licensedAlt
+        ? licensedAlt.display_name || licensedAlt.bot_name || licensedAlt.bot_code
+        : null,
       capital: capCheck.capital,
       mt5Balance,
       mt5Equity: mt5Equity != null ? mt5Equity : 0,
@@ -2998,7 +3021,108 @@ router.get('/mt5/bot-analytics/:id', requireLogin, async (req, res) => {
   }
 });
 
+/** รีเซ็ตการตั้งค่าเทรดบน PORT — หยุด BOT (ถ้ารันอยู่) แล้วปลดล็อกฟอร์ม (ไม่ลบ Login MT5) */
+router.post('/mt5/trading-reset', requireLogin, async (req, res) => {
+  const client = await getClient();
+  try {
+    const userId = req.user.id;
+    const mt5AccountId = num(req.body.mt5_account_id || req.body.mt5AccountId);
+    const portSlot = num(req.body.port_slot || req.body.portSlot);
+    if (!mt5AccountId) {
+      return res.status(400).json({ ok: false, message: 'ไม่พบบัญชี PORT' });
+    }
+
+    const accountCtx = await loadAccountPortContext(mt5AccountId, userId, client);
+    if (!accountCtx) {
+      await client.query('ROLLBACK').catch(() => {});
+      return res.status(404).json({ ok: false, message: 'ไม่พบบัญชี MT5' });
+    }
+    if (portSlot > 0 && Number(accountCtx.account.port_slot) !== portSlot) {
+      return res.status(400).json({
+        ok: false,
+        message: `บัญชีไม่ตรง PORT ${portSlot}`
+      });
+    }
+
+    await client.query('BEGIN');
+
+    const active = await client.query(
+      `
+      SELECT id, status, vps_id, assigned_port_no, folder_path, lot_used, mt5_account_id
+      FROM vps_system.bot_instances
+      WHERE user_id=$1
+        AND mt5_account_id=$2
+        AND status IN ('running','pending','starting','restarting')
+      ORDER BY id DESC
+      LIMIT 1
+      FOR UPDATE
+    `,
+      [userId, mt5AccountId]
+    );
+
+    let stoppedId = null;
+    const inst = active.rows?.[0];
+    if (inst) {
+      stoppedId = inst.id;
+      await client.query(
+        `UPDATE vps_system.bot_instances SET status='stopped', ea_status='stopped', stopped_at=NOW(), updated_at=NOW() WHERE id=$1`,
+        [inst.id]
+      );
+      if (inst.vps_id) {
+        await pruneMetricsCommandBacklog(inst.vps_id, { keep: 0 }).catch(() => {});
+        const portNo = Number(inst.assigned_port_no || accountCtx.portNo || 0);
+        const folderPath = folderPathForPortNo(portNo, inst.folder_path || accountCtx.folderPath || '');
+        await cancelStaleRunBotCommands(inst.vps_id, accountCtx.portId, inst.id);
+        await client.query(
+          `
+          INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, command_type, payload, status, created_at)
+          VALUES ($1,$1,'stop_mt5_bot',$2::jsonb,'pending',NOW())
+        `,
+          [
+            inst.vps_id,
+            JSON.stringify({
+              instanceId: inst.id,
+              accountId: inst.mt5_account_id,
+              port: portNo,
+              portNumber: portNo,
+              portSlot: accountCtx.portSlot || portNo,
+              vpsFolderPath: folderPath,
+              folder_path: folderPath,
+              stopTradingOnly: true,
+              keepMt5Open: true,
+              action: 'stop_bot_trading'
+            })
+          ]
+        );
+      }
+    }
+
+    await client.query('COMMIT');
+
+    if (req.session) {
+      delete req.session.mt5LastRunInstanceId;
+      if (portSlot) delete req.session[`mt5TradeLevel_${portSlot}`];
+    }
+
+    return res.json({
+      ok: true,
+      stopped: !!stoppedId,
+      instanceId: stoppedId,
+      portSlot: accountCtx.portSlot,
+      message: stoppedId
+        ? 'รีเซ็ตแล้ว — หยุด BOT แล้ว เลือก BOT / ระดับความเสี่ยง / ทุน / LOT ใหม่ได้'
+        : 'รีเซ็ตแล้ว — เลือก BOT / ระดับความเสี่ยง / ทุน / LOT ใหม่ได้ (MT5 ยังเชื่อมต่ออยู่)'
+    });
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    return res.status(400).json({ ok: false, message: e.message });
+  } finally {
+    client.release();
+  }
+});
+
 router.post('/mt5/run', requireLogin, async (req, res) => {
+  const wantsJson = prefersJsonResponse(req);
   const client = await getClient();
   let lockKey = null;
   try {
@@ -3044,10 +3168,7 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
       throw new Error('ไม่พบ VPS/PORT ของบัญชีนี้ กรุณาเชื่อมต่อ MT5 ใหม่');
     }
 
-    const agentReady = await ensureRunBotAgent(accountCtx.vpsId);
-    if (!agentReady.ok) {
-      req.session.mt5AgentUpgradePending = true;
-    }
+    ensureRunBotAgent(accountCtx.vpsId).catch(() => {});
 
     const dup = await client.query(
       `SELECT id FROM vps_system.bot_instances WHERE mt5_account_id=$1 AND status IN ('running','pending','starting','restarting') LIMIT 1`,
@@ -3062,12 +3183,25 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     const bot = botRows.rows[0];
     if (!bot || !isProductionBot(bot)) throw new Error('ไม่พบ BOT ที่เลือก');
 
+    const licenseCheckEarly = validateEaAccountAccess(bot.bot_code, accountCtx.mt5Login, {
+      presetSlug: presetSlugForBot(bot)
+    });
+    if (!licenseCheckEarly.ok) {
+      const alt = findLicensedBotForLogin(accountCtx.mt5Login, await loadProductionBots());
+      throw new Error(
+        licenseCheckEarly.message +
+          (alt
+            ? ` — แนะนำเลือก "${alt.display_name || alt.bot_name}" แล้วกดรีเซ็ต/เปิด BOT ใหม่`
+            : '')
+      );
+    }
+
     let mt5Balance = positiveMoney(accountCtx.account.last_balance);
     let mt5Equity = positiveMoney(accountCtx.account.last_equity);
 
     if (!capitalManual && mt5Equity == null && mt5Balance == null) {
       await fetchEquityFromVps(accountCtx, mt5AccountId, userId, {
-        waitMs: 4000,
+        waitMs: 1200,
         skipJournal: true
       }).catch(() => {});
       const freshAcc = await query(
@@ -3142,14 +3276,6 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     const presetForEa = calc.preset
       ? { ...calc.preset, lot_plus: calc.lotPlus }
       : { lot_plus: calc.lotPlus };
-    const licenseCheck = validateEaAccountAccess(bot.bot_code, accountCtx.mt5Login, {
-      presetSlug: calc.presetSlug
-    });
-    if (!licenseCheck.ok) {
-      await client.query('ROLLBACK');
-      return res.json({ ok: false, message: licenseCheck.message });
-    }
-
     const eaSet = buildEaSetPayloadFields({
       bot,
       lot,
@@ -3184,6 +3310,7 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     };
 
     await cancelStaleRunBotCommands(accountCtx.vpsId, accountCtx.portId, instanceId);
+    await pruneMetricsCommandBacklog(accountCtx.vpsId, { keep: 0 }).catch(() => {});
 
     const queued = await insertPendingAgentCommand({
       vpsId: accountCtx.vpsId,
@@ -3208,25 +3335,42 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     );
 
     await client.query('COMMIT');
-    req.session.mt5LastRunInstanceId = inst.rows[0].id;
-    const agentHint = !agentReady.ok
-      ? agentReady.deployQueued
-        ? ' (กำลังอัปเดต Agent บน VPS อัตโนมัติ — รอ 2–3 นาที)'
-        : ' (Agent กำลังอัปเดต — ถ้าไม่สำเร็จให้กด Restart อีกครั้ง)'
-      : '';
-    flash(
-      req,
-      'success',
-      `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ที่ PORT ${accountCtx.portSlot} แล้ว${agentHint} — แนบ EA บน XAUUSD แล้ว Load preset ${eaSet.eaSetFileName || ''}`
-    );
+    req.session.mt5LastRunInstanceId = instanceId;
+    if (accountCtx.portSlot) {
+      req.session[`mt5TradeLevel_${accountCtx.portSlot}`] = tradeLevel;
+    }
+    const successMsg =
+      `ส่งคำสั่งเปิด ${bot.display_name || bot.bot_name} ที่ PORT ${accountCtx.portSlot} แล้ว — ` +
+      `รอ Agent ~30–60 วินาที · แนบ EA บน XAUUSD แล้ว Load preset ${eaSet.eaSetFileName || ''}`;
+    if (wantsJson) {
+      return res.json({
+        ok: true,
+        message: successMsg,
+        instanceId,
+        commandId,
+        portSlot: accountCtx.portSlot,
+        botCode: bot.bot_code,
+        lot,
+        tradeLevel,
+        eaSetFileName: eaSet.eaSetFileName || null
+      });
+    }
+    flash(req, 'success', successMsg);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
+    if (wantsJson) {
+      return res.status(400).json({ ok: false, message: e.message });
+    }
     flash(req, 'error', e.message);
   } finally {
     if (lockKey) await redis.del(lockKey).catch(() => {});
     client.release();
   }
-  return res.redirect('/app/mt5?run=' + (req.session.mt5LastRunInstanceId || ''));
+  if (wantsJson) return;
+  const slot = num(req.body.port_slot || req.body.portSlot) || 0;
+  return res.redirect(
+    slot ? `/app/mt5?port_slot=${slot}&run=${req.session.mt5LastRunInstanceId || ''}` : '/app/mt5'
+  );
 });
 
 router.post('/mt5/stop/:id', requireLogin, async (req, res) => {

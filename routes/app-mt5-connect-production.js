@@ -20,14 +20,14 @@ const {
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
-const { expireStuckMaintenanceCommands } = require('../lib/agentDeploy');
+const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
   buildMt5LoginPayload
 } = require('../lib/adminVpsPortPicker');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
-const { buildConnectAdvice } = require('../lib/mt5AiConnectAdvisor');
+const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -634,6 +634,7 @@ async function handleMt5ConnectProduction(req, res) {
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
+    await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
 
     if (reservedPort.admin_node_id && allocPortNo) {
       await setAdminAllocationStatus(
@@ -672,11 +673,22 @@ async function handleMt5ConnectProduction(req, res) {
       ? `${reservedPort.node_name} / ${reservedPort.port_name || 'PORT-' + portLabel}`
       : `PORT ${portLabel}`;
 
-    const connectAdvice = await buildConnectAdvice({
-      reservedPort: { ...reservedPort, port_number: allocPortNo },
-      capital: 0,
-      tradeLevel: 'medium'
-    }).catch(() => null);
+    let connectAdvice = null;
+    if (process.env.MT5_CONNECT_AI === '1') {
+      connectAdvice = await buildConnectAdvice({
+        reservedPort: { ...reservedPort, port_number: allocPortNo },
+        capital: 0,
+        tradeLevel: 'medium'
+      }).catch(() => null);
+    } else {
+      connectAdvice = {
+        portScore: 80,
+        aiAssisted: false,
+        summary: `${pickName} — Login เร็ว (ไม่รอ AI)`,
+        recommendedBot: buildDemoTradingPlan({ capital: 1000, tradeLevel: 'medium' }),
+        testingHint: 'หลัง Login สำเร็จ → เลือก BOT / ระดับเสี่ยง / ทุน / LOT แล้วกดเปิด BOT'
+      };
+    }
 
     return res.json({
       ok: true,
