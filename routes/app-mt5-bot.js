@@ -52,6 +52,7 @@ const {
 const { loadAccountPortContext, buildRunMt5BotPayload } = require('../lib/mt5AccountPort');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
 const { validateEaAccountAccess, eaLicenseHintForDiagnostics } = require('../lib/mt5EaLicense');
+const { isDemoBotCode, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 const { toJsonbParam } = require('../lib/pgSanitize');
 const { ensureBotInstanceRunColumns } = require('../lib/mt5RunBotResult');
 const {
@@ -3740,6 +3741,8 @@ function ema(arr, period=5) {
 }
 
 async function aiTradingBrain(instance) {
+  const botCode = String(instance.bot_code || '').trim();
+  if (!isDemoBotCode(botCode)) return;
 
   const equity = Number(instance.mt5_equity || 0);
   const balance = Number(instance.mt5_balance || 0);
@@ -3839,15 +3842,8 @@ const trend = emaFast - emaSlow;
 
   }
 
-  // ================================
-  // ⚡ 4. VPS PERFORMANCE AUTO MIGRATE
-  // ================================
-  const badVps =
-    Number(instance.ping_ms || 0) > 200 ||
-    Number(instance.cpu_percent || 0) > 85 ||
-    Number(instance.ram_percent || 0) > 85;
-
-  if (badVps) {
+  // ไม่ย้าย VPS อัตโนมัติสำหรับบอททดสอบ (SNIPER-DEMO)
+  if (false) {
     const newVps = await findAvailableVpsPort();
 
     if (

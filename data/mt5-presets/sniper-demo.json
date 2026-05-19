@@ -11,7 +11,9 @@
     "medium_t_start": "",
     "medium_t_stop": "",
     "fast_t_start": "",
-    "fast_t_stop": ""
+    "fast_t_stop": "",
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 2,
@@ -25,7 +27,9 @@
     "medium_t_start": "",
     "medium_t_stop": "",
     "fast_t_start": "",
-    "fast_t_stop": ""
+    "fast_t_stop": "",
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 3,
@@ -39,7 +43,9 @@
     "medium_t_start": 5,
     "medium_t_stop": 3,
     "fast_t_start": 5,
-    "fast_t_stop": 2
+    "fast_t_stop": 2,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 4,
@@ -53,7 +59,9 @@
     "medium_t_start": 7,
     "medium_t_stop": 4,
     "fast_t_start": 6,
-    "fast_t_stop": 3
+    "fast_t_stop": 3,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 5,
@@ -67,7 +75,9 @@
     "medium_t_start": 9,
     "medium_t_stop": 5,
     "fast_t_start": 8,
-    "fast_t_stop": 4
+    "fast_t_stop": 4,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 6,
@@ -81,7 +91,9 @@
     "medium_t_start": 11,
     "medium_t_stop": 5,
     "fast_t_start": 10,
-    "fast_t_stop": 5
+    "fast_t_stop": 5,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 7,
@@ -95,7 +107,9 @@
     "medium_t_start": 13,
     "medium_t_stop": 6,
     "fast_t_start": 11,
-    "fast_t_stop": 6
+    "fast_t_stop": 6,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 8,
@@ -109,7 +123,9 @@
     "medium_t_start": 14,
     "medium_t_stop": 7,
     "fast_t_start": 13,
-    "fast_t_stop": 6
+    "fast_t_stop": 6,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 9,
@@ -123,7 +139,9 @@
     "medium_t_start": 16,
     "medium_t_stop": 8,
     "fast_t_start": 14,
-    "fast_t_stop": 7
+    "fast_t_stop": 7,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 10,
@@ -137,7 +155,9 @@
     "medium_t_start": 18,
     "medium_t_stop": 9,
     "fast_t_start": 16,
-    "fast_t_stop": 8
+    "fast_t_stop": 8,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 11,
@@ -151,7 +171,9 @@
     "medium_t_start": 20,
     "medium_t_stop": 10,
     "fast_t_start": 18,
-    "fast_t_stop": 9
+    "fast_t_stop": 9,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 12,
@@ -165,7 +187,9 @@
     "medium_t_start": 22,
     "medium_t_stop": 11,
     "fast_t_start": 19,
-    "fast_t_stop": 10
+    "fast_t_stop": 10,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 13,
@@ -179,7 +203,9 @@
     "medium_t_start": 23,
     "medium_t_stop": 12,
     "fast_t_start": 21,
-    "fast_t_stop": 10
+    "fast_t_stop": 10,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 14,
@@ -193,7 +219,9 @@
     "medium_t_start": 25,
     "medium_t_stop": 13,
     "fast_t_start": 22,
-    "fast_t_stop": 11
+    "fast_t_stop": 11,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 15,
@@ -207,7 +235,9 @@
     "medium_t_start": 27,
     "medium_t_stop": 14,
     "fast_t_start": 24,
-    "fast_t_stop": 12
+    "fast_t_stop": 12,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 16,
@@ -221,7 +251,9 @@
     "medium_t_start": 29,
     "medium_t_stop": 14,
     "fast_t_start": 26,
-    "fast_t_stop": 13
+    "fast_t_stop": 13,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 17,
@@ -235,7 +267,9 @@
     "medium_t_start": 31,
     "medium_t_stop": 15,
     "fast_t_start": 27,
-    "fast_t_stop": 14
+    "fast_t_stop": 14,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 18,
@@ -249,7 +283,9 @@
     "medium_t_start": 32,
     "medium_t_stop": 16,
     "fast_t_start": 29,
-    "fast_t_stop": 14
+    "fast_t_stop": 14,
+    "pip_step": 345,
+    "take_profit_average": 100
   },
   {
     "id": 19,
@@ -263,6 +299,8 @@
     "medium_t_start": 34,
     "medium_t_stop": 17,
     "fast_t_start": 30,
-    "fast_t_stop": 15
+    "fast_t_stop": 15,
+    "pip_step": 345,
+    "take_profit_average": 100
   }
 ]

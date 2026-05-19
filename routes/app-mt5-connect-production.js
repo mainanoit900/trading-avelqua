@@ -27,6 +27,7 @@ const {
 } = require('../lib/adminVpsPortPicker');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
+const { buildConnectAdvice } = require('../lib/mt5AiConnectAdvisor');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -671,6 +672,12 @@ async function handleMt5ConnectProduction(req, res) {
       ? `${reservedPort.node_name} / ${reservedPort.port_name || 'PORT-' + portLabel}`
       : `PORT ${portLabel}`;
 
+    const connectAdvice = await buildConnectAdvice({
+      reservedPort: { ...reservedPort, port_number: allocPortNo },
+      capital: 0,
+      tradeLevel: 'medium'
+    }).catch(() => null);
+
     return res.json({
       ok: true,
       status: 'queued',
@@ -680,7 +687,8 @@ async function handleMt5ConnectProduction(req, res) {
       portId: reservedPort.port_id,
       portNo: allocPortNo,
       portSlot,
-      message: `กำลังเปิด MT5 — ${pickName} (${serverName})`
+      message: `กำลังเปิด MT5 — ${pickName} (${serverName})`,
+      aiConnect: connectAdvice
     });
   } catch (e) {
     if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
