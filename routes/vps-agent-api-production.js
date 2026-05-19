@@ -55,6 +55,98 @@ const { sanitizePgText, deepSanitizeForPg, toJsonbParam } = require('../lib/pgSa
 
 const router = express.Router();
 
+/** ลดงาน maintenance หนักบน /queue — รันทุก ~30s ต่อ node แทนทุก poll */
+const queueMaintenanceAt = new Map();
+const QUEUE_MAINTENANCE_MS = Number(process.env.VPS_QUEUE_MAINTENANCE_MS || 30000);
+
+function shouldRunQueueMaintenance(nodeId) {
+  const now = Date.now();
+  const last = queueMaintenanceAt.get(nodeId) || 0;
+  if (now - last < QUEUE_MAINTENANCE_MS) return false;
+  queueMaintenanceAt.set(nodeId, now);
+  return true;
+}
+
+function normalizePortHealthRow(p) {
+  const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
+  if (!portNo) return null;
+  const running = !!(p.running ?? p.is_running ?? p.isRunning);
+  const pid = p.process_id ?? p.pid ?? null;
+  const mt5Login = p.mt5_login ?? p.mt5Login ?? null;
+  const folderPath = p.folder_path || p.folderPath || '';
+  return {
+    port_no: portNo,
+    port_number: portNo,
+    folder_path: folderPath,
+    running,
+    is_running: running,
+    process_id: pid,
+    mt5_login: mt5Login,
+    exe_path: p.exe_path || p.exePath || '',
+    status: p.status || (running ? 'running' : 'free')
+  };
+}
+
+async function applyPortHealthBulk(nodeId, ports) {
+  const rows = (Array.isArray(ports) ? ports : [])
+    .map(normalizePortHealthRow)
+    .filter(Boolean);
+  if (!rows.length) return 0;
+
+  const json = JSON.stringify(rows);
+
+  await query(
+    `
+    INSERT INTO vps_system.vps_port_health
+      (node_id, port_number, folder_path, running, process_id, mt5_login, payload, updated_at)
+    SELECT
+      $1,
+      (r->>'port_no')::int,
+      COALESCE(r->>'folder_path', ''),
+      COALESCE((r->>'running')::boolean, false),
+      NULLIF(r->>'process_id', '')::int,
+      NULLIF(r->>'mt5_login', ''),
+      r::jsonb,
+      NOW()
+    FROM jsonb_array_elements($2::jsonb) AS r
+    WHERE COALESCE((r->>'port_no')::int, 0) > 0
+    ON CONFLICT (node_id, port_number)
+    DO UPDATE SET
+      folder_path = EXCLUDED.folder_path,
+      running = EXCLUDED.running,
+      process_id = EXCLUDED.process_id,
+      mt5_login = EXCLUDED.mt5_login,
+      payload = EXCLUDED.payload,
+      updated_at = NOW()
+    `,
+    [nodeId, json]
+  ).catch(() => {});
+
+  await query(
+    `
+    UPDATE vps_system.vps_ports vp
+    SET
+      process_id = NULLIF(d.process_id, '')::int,
+      last_pid = NULLIF(d.process_id, '')::int,
+      current_mt5_login = NULLIF(d.mt5_login, ''),
+      updated_at = NOW()
+    FROM (
+      SELECT
+        (r->>'port_no')::int AS port_no,
+        r->>'process_id' AS process_id,
+        r->>'mt5_login' AS mt5_login
+      FROM jsonb_array_elements($2::jsonb) AS r
+    ) d
+    WHERE vp.vps_id = $1
+      AND vp.port_no = d.port_no
+      AND d.port_no > 0
+    `,
+    [nodeId, json]
+  ).catch(() => {});
+
+  return rows.length;
+}
+
 function sanitizeJournalText(text) {
   return sanitizePgText(text).slice(-8000);
 }
@@ -496,39 +588,9 @@ router.post('/port-health', async (req, res) => {
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
     const ports = Array.isArray(req.body.ports) ? req.body.ports : [];
-    for (const p of ports) {
-      const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
-      if (!portNo) continue;
-      const running = !!(p.running ?? p.is_running ?? p.isRunning);
-      const pid = p.process_id || p.pid || null;
-      const mt5Login = p.mt5_login || p.mt5Login || null;
-      const folderPath = p.folder_path || p.folderPath || '';
+    const count = await applyPortHealthBulk(node.id, ports);
 
-      await query(`
-        INSERT INTO vps_system.vps_port_health
-        (node_id, port_number, folder_path, running, process_id, mt5_login, payload, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,NOW())
-        ON CONFLICT (node_id, port_number)
-        DO UPDATE SET
-          folder_path=EXCLUDED.folder_path,
-          running=EXCLUDED.running,
-          process_id=EXCLUDED.process_id,
-          mt5_login=EXCLUDED.mt5_login,
-          payload=EXCLUDED.payload,
-          updated_at=NOW()
-      `, [node.id, portNo, folderPath, running, pid, mt5Login, JSON.stringify(p)]).catch(() => {});
-
-      await query(`
-        UPDATE vps_system.vps_ports
-        SET process_id=$3,
-            last_pid=$3,
-            current_mt5_login=$4,
-            updated_at=NOW()
-        WHERE vps_id=$1 AND port_no=$2
-      `, [node.id, portNo, pid, mt5Login]).catch(() => {});
-    }
-
-    return res.json({ ok: true, count: ports.length });
+    return res.json({ ok: true, count });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
     return res.status(500).json({ ok: false, message: e.message });
@@ -547,76 +609,75 @@ router.get('/queue', async (req, res) => {
       WHERE id=$1
     `, [node.id]).catch(() => {});
 
-    const { expireStuckMaintenanceCommands, pruneMetricsCommandBacklog } = require('../lib/agentDeploy');
-    await expireStuckMaintenanceCommands(node.id).catch(() => {});
-    await pruneMetricsCommandBacklog(node.id, { keep: 2 }).catch(() => {});
+    if (shouldRunQueueMaintenance(node.id)) {
+      const { pruneMetricsCommandBacklog } = require('../lib/agentDeploy');
+      await expireStuckMaintenanceCommands(node.id).catch(() => {});
+      await pruneMetricsCommandBacklog(node.id, { keep: 2 }).catch(() => {});
 
-    await query(
-      `
-      UPDATE vps_system.vps_agent_commands
-      SET command_type = CASE command_type
-            WHEN 'run_bot' THEN 'run_mt5_bot'
-            WHEN 'restart_ea' THEN 'restart_mt5_bot'
-            ELSE command_type
+      await query(
+        `
+        UPDATE vps_system.vps_agent_commands
+        SET command_type = CASE command_type
+              WHEN 'run_bot' THEN 'run_mt5_bot'
+              WHEN 'restart_ea' THEN 'restart_mt5_bot'
+              ELSE command_type
+            END,
+            updated_at = NOW()
+        WHERE (node_id = $1 OR vps_id = $1)
+          AND status = 'pending'
+          AND command_type IN ('run_bot', 'restart_ea')
+      `,
+        [node.id]
+      ).catch(() => {});
+
+      await query(`
+        WITH stuck AS (
+          SELECT
+            c.id,
+            EXISTS (
+              SELECT 1
+              FROM vps_system.vps_agent_commands p
+              WHERE p.status = 'pending'
+                AND p.port_id = c.port_id
+                AND p.command_type = c.command_type
+                AND p.id <> c.id
+            ) AS other_pending_exists,
+            ROW_NUMBER() OVER (
+              PARTITION BY c.port_id, c.command_type
+              ORDER BY c.id ASC
+            ) AS rn_same_key
+          FROM vps_system.vps_agent_commands c
+          WHERE c.status IN ('processing', 'picked')
+            AND (c.node_id = $1 OR c.vps_id = $1)
+            AND c.port_id IS NOT NULL
+            AND c.finished_at IS NULL
+            AND COALESCE(c.locked_at, c.started_at, c.picked_at, c.updated_at, c.created_at)
+                < NOW() - INTERVAL '5 minutes'
+        )
+        UPDATE vps_system.vps_agent_commands c
+        SET
+          status = CASE
+            WHEN s.other_pending_exists OR s.rn_same_key > 1 THEN 'cancelled'
+            ELSE 'pending'
           END,
+          locked_at = NULL,
+          started_at = NULL,
           updated_at = NOW()
-      WHERE (node_id = $1 OR vps_id = $1)
-        AND status = 'pending'
-        AND command_type IN ('run_bot', 'restart_ea')
-    `,
-      [node.id]
-    ).catch(() => {});
+        FROM stuck s
+        WHERE c.id = s.id
+      `, [node.id]).catch(() => {});
 
-    // Avoid idx_vac_no_dup_pending (unique pending per port_id + command_type):
-    // only one stuck row per key becomes pending; extras or rows when a pending
-    // already exists are cancelled instead of failing the whole UPDATE.
-    await query(`
-      WITH stuck AS (
-        SELECT
-          c.id,
-          EXISTS (
-            SELECT 1
-            FROM vps_system.vps_agent_commands p
-            WHERE p.status = 'pending'
-              AND p.port_id = c.port_id
-              AND p.command_type = c.command_type
-              AND p.id <> c.id
-          ) AS other_pending_exists,
-          ROW_NUMBER() OVER (
-            PARTITION BY c.port_id, c.command_type
-            ORDER BY c.id ASC
-          ) AS rn_same_key
-        FROM vps_system.vps_agent_commands c
-        WHERE c.status IN ('processing', 'picked')
-          AND (c.node_id = $1 OR c.vps_id = $1)
-          AND c.port_id IS NOT NULL
-          AND c.finished_at IS NULL
-          AND COALESCE(c.locked_at, c.started_at, c.picked_at, c.updated_at, c.created_at)
+      await query(`
+        UPDATE vps_system.vps_agent_commands
+        SET status='pending', locked_at=NULL, started_at=NULL, updated_at=NOW()
+        WHERE status IN ('processing', 'picked')
+          AND (node_id=$1 OR vps_id=$1)
+          AND port_id IS NULL
+          AND finished_at IS NULL
+          AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
               < NOW() - INTERVAL '5 minutes'
-      )
-      UPDATE vps_system.vps_agent_commands c
-      SET
-        status = CASE
-          WHEN s.other_pending_exists OR s.rn_same_key > 1 THEN 'cancelled'
-          ELSE 'pending'
-        END,
-        locked_at = NULL,
-        started_at = NULL,
-        updated_at = NOW()
-      FROM stuck s
-      WHERE c.id = s.id
-    `, [node.id]).catch(() => {});
-
-    await query(`
-      UPDATE vps_system.vps_agent_commands
-      SET status='pending', locked_at=NULL, started_at=NULL, updated_at=NOW()
-      WHERE status IN ('processing', 'picked')
-        AND (node_id=$1 OR vps_id=$1)
-        AND port_id IS NULL
-        AND finished_at IS NULL
-        AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
-            < NOW() - INTERVAL '5 minutes'
-    `, [node.id]).catch(() => {});
+      `, [node.id]).catch(() => {});
+    }
 
     const r = await query(`
       WITH next_cmd AS (

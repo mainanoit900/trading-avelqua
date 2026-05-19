@@ -58,8 +58,12 @@ LOG_DIR = AGENT_DIR / "logs"
 LOG_FILE = AGENT_DIR / "agent.log"
 STOP_FLAG = AGENT_DIR / "agent.disabled"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
-LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
-HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
+LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "2"))
+HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "30"))
+PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "30"))
+PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", "120"))
+PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
+PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
 JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
@@ -68,7 +72,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-18-mt5-algo-live-v21"
+AGENT_BUILD_ID = "2026-05-19-agent-perf-v22"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -91,7 +95,14 @@ def has_journal_gate_marker(version_or_build: str) -> bool:
         return False
     if v == AGENT_BUILD_ID:
         return True
-    for marker in ("journal-gate", "equity-live", "algo-live", "run-bot-hot", "metrics-sync"):
+    for marker in (
+        "journal-gate",
+        "equity-live",
+        "algo-live",
+        "run-bot-hot",
+        "metrics-sync",
+        "agent-perf",
+    ):
         if marker in v:
             return True
     return False
@@ -314,57 +325,112 @@ def extract_port_no(path_text):
     return 0
 
 
-def send_port_health():
-    ports = []
+_LAST_PORT_HEALTH = 0.0
+_LAST_PORT_HEALTH_TITLE = 0.0
+_PORT_LOGIN_CACHE: Dict[int, str] = {}
+_PORT_FOLDER_CACHE: List[Tuple[int, Path, str]] = []
+_PORT_FOLDER_CACHE_AT = 0.0
+
+
+def _list_mt5_port_folders(mt5_root: Path) -> List[Tuple[int, Path, str]]:
+    """Cache รายการโฟลเดอร์ port — ลด glob ซ้ำทุกลูป"""
+    global _PORT_FOLDER_CACHE, _PORT_FOLDER_CACHE_AT
+    now = time.time()
+    if _PORT_FOLDER_CACHE and now - _PORT_FOLDER_CACHE_AT < PORT_FOLDER_CACHE_SEC:
+        return _PORT_FOLDER_CACHE
+    folders: List[Tuple[int, Path, str]] = []
+    for folder in sorted(mt5_root.glob("*PORT*")):
+        port_no = extract_port_no(str(folder))
+        if not port_no:
+            continue
+        folder_norm = str(folder).lower().replace("/", "\\")
+        folders.append((port_no, folder, folder_norm))
+    _PORT_FOLDER_CACHE = folders
+    _PORT_FOLDER_CACHE_AT = now
+    return folders
+
+
+def _scan_running_mt5_ports(
+    port_folders: List[Tuple[int, Path, str]],
+) -> Dict[int, Dict[str, Any]]:
+    """จับคู่ terminal64.exe กับ port ครั้งเดียว — O(processes × ports) แต่ไม่ซ้ำ glob"""
+    running_map: Dict[int, Dict[str, Any]] = {}
+    if not port_folders or not psutil:
+        return running_map
+    try:
+        for proc in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name != "terminal64.exe":
+                    continue
+                exe = proc.info.get("exe") or ""
+                if not exe:
+                    continue
+                exe_norm = exe.lower().replace("/", "\\")
+                for port_no, folder, folder_norm in port_folders:
+                    if port_no in running_map:
+                        continue
+                    if folder_norm in exe_norm:
+                        running_map[port_no] = {
+                            "process_id": proc.pid,
+                            "exe_path": exe,
+                            "folder_path": str(folder),
+                        }
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return running_map
+
+
+def _read_mt5_login_from_title(process_id: int) -> str:
+    try:
+        ps = (
+            f"(Get-Process -Id {process_id} -ErrorAction SilentlyContinue)"
+            ".MainWindowTitle"
+        )
+        title = (_run_powershell(ps, timeout=3) or "").strip()
+        m = re.match(r"^(\d{4,})\s*[-–]", title)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
+def send_port_health() -> None:
+    global _LAST_PORT_HEALTH, _LAST_PORT_HEALTH_TITLE, _PORT_LOGIN_CACHE
+
+    now = time.time()
+    if now - _LAST_PORT_HEALTH < PORT_HEALTH_INTERVAL_SEC:
+        return
+    _LAST_PORT_HEALTH = now
 
     try:
         mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
+        port_folders = _list_mt5_port_folders(mt5_root)
+        running_map = _scan_running_mt5_ports(port_folders)
 
-        running_map = {}
+        read_titles = PORT_HEALTH_READ_TITLE and (
+            now - _LAST_PORT_HEALTH_TITLE >= PORT_HEALTH_TITLE_INTERVAL_SEC
+        )
+        if read_titles:
+            _LAST_PORT_HEALTH_TITLE = now
 
-        for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
-            try:
-                name = (p.info.get("name") or "").lower()
-                exe = (p.info.get("exe") or "")
-
-                if name != "terminal64.exe":
-                    continue
-
-                exe_norm = exe.lower().replace("/", "\\")
-
-                for folder in mt5_root.glob("*PORT*"):
-                    folder_norm = str(folder).lower().replace("/", "\\")
-
-                    if folder_norm in exe_norm:
-                        port_no = extract_port_no(str(folder))
-
-                        running_map[port_no] = {
-                            "process_id": p.pid,
-                            "exe_path": exe,
-                            "folder_path": str(folder)
-                        }
-
-            except Exception:
-                pass
-
-        for folder in sorted(mt5_root.glob("*PORT*")):
-            port_no = extract_port_no(str(folder))
-
-            if not port_no:
-                continue
-
+        ports: List[Dict[str, Any]] = []
+        for port_no, folder, _folder_norm in port_folders:
             run = running_map.get(port_no)
-
-            mt5_login = ""
-            if run and run.get("process_id"):
-                try:
-                    ps = f"(Get-Process -Id {run['process_id']} -ErrorAction SilentlyContinue).MainWindowTitle"
-                    title = (_run_powershell(ps, timeout=4) or "").strip()
-                    m = re.match(r"^(\d{4,})\s*[-–]", title)
-                    if m:
-                        mt5_login = m.group(1)
-                except Exception:
-                    pass
+            mt5_login: Optional[str] = None
+            if run:
+                if read_titles and run.get("process_id"):
+                    login = _read_mt5_login_from_title(int(run["process_id"]))
+                    if login:
+                        _PORT_LOGIN_CACHE[port_no] = login
+                        mt5_login = login
+                elif port_no in _PORT_LOGIN_CACHE:
+                    mt5_login = _PORT_LOGIN_CACHE[port_no]
+            else:
+                _PORT_LOGIN_CACHE.pop(port_no, None)
 
             ports.append({
                 "port_no": port_no,
@@ -373,16 +439,13 @@ def send_port_health():
                 "running": bool(run),
                 "is_running": bool(run),
                 "process_id": run.get("process_id") if run else None,
-                "mt5_login": mt5_login or None,
+                "mt5_login": mt5_login,
                 "exe_path": run.get("exe_path") if run else "",
                 "status": "running" if run else "free",
             })
 
-        post_json("/port-health", {
-            "ports": ports
-        })
-
-        log(f"PORT HEALTH SENT count={len(ports)}")
+        post_json("/port-health", {"ports": ports})
+        log(f"PORT HEALTH SENT count={len(ports)} titles={read_titles}")
 
     except Exception as e:
         log(f"PORT HEALTH ERROR {e}")
@@ -2453,6 +2516,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         preview_b64=preview_final,
         window_verified=True,
     )
+    try:
+        _PORT_LOGIN_CACHE[int(port)] = str(login)
+    except Exception:
+        pass
     log(f"LOGIN OK PORT={port} LOGIN={login} (login_only, no auto trade)")
     return {
         "action": "login_mt5",
@@ -3609,11 +3676,11 @@ def main() -> None:
             except Exception as e:
                 log(f"COMMAND POLL ERROR: {e}")
 
-            time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
+            time.sleep(LOOP_SECONDS)
 
         except Exception as e:
             log(f"MAIN LOOP ERROR: {e}")
-            time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
+            time.sleep(LOOP_SECONDS)
 if __name__ == "__main__":
     try:
         main()
