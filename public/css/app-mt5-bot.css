@@ -464,3 +464,169 @@
 @media (max-width: 900px) {
   .mt5-bot-config-row { grid-template-columns: 1fr; }
 }
+
+/* History table — action dropdown (glass luxury) */
+#mt5HistoryTableWrap { overflow: visible; }
+#mt5HistoryTableWrap .mt5-table tbody tr { position: relative; }
+.mt5-row-actions {
+  position: relative;
+  width: 52px;
+  text-align: center;
+  vertical-align: middle;
+  overflow: visible;
+}
+.mt5-action-dd {
+  position: relative;
+  display: inline-flex;
+  justify-content: center;
+}
+.mt5-action-dd-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 36px;
+  height: 36px;
+  padding: 0;
+  margin: 0;
+  border-radius: 12px;
+  cursor: pointer;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: linear-gradient(155deg, rgba(51, 65, 85, 0.72), rgba(15, 23, 42, 0.96));
+  box-shadow:
+    0 2px 10px rgba(0, 0, 0, 0.35),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+  color: #cbd5e1;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+}
+.mt5-action-dd-kebab { fill: currentColor; opacity: 0.92; }
+.mt5-action-dd-btn:hover,
+.mt5-action-dd-btn[aria-expanded="true"] {
+  transform: translateY(-1px);
+  border-color: rgba(56, 189, 248, 0.5);
+  background: linear-gradient(155deg, rgba(37, 99, 235, 0.42), rgba(15, 23, 42, 0.98));
+  box-shadow:
+    0 8px 24px rgba(37, 99, 235, 0.28),
+    inset 0 1px 0 rgba(255, 255, 255, 0.12);
+  color: #f8fafc;
+}
+.mt5-action-dd-btn[aria-expanded="true"] {
+  border-color: rgba(250, 204, 21, 0.4);
+  box-shadow:
+    0 0 0 3px rgba(56, 189, 248, 0.14),
+    0 10px 28px rgba(0, 0, 0, 0.4);
+}
+.mt5-action-dd-menu {
+  position: fixed;
+  z-index: 10050;
+  min-width: 168px;
+  padding: 6px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: linear-gradient(168deg, rgba(30, 41, 59, 0.98) 0%, rgba(15, 23, 42, 0.99) 55%, rgba(2, 6, 23, 0.99) 100%);
+  backdrop-filter: blur(18px);
+  -webkit-backdrop-filter: blur(18px);
+  box-shadow:
+    0 4px 8px rgba(0, 0, 0, 0.15),
+    0 20px 48px rgba(0, 0, 0, 0.5),
+    inset 0 1px 0 rgba(255, 255, 255, 0.1);
+  opacity: 0;
+  visibility: hidden;
+  transform: translateY(-6px) scale(0.97);
+  pointer-events: none;
+  transition: opacity 0.16s ease, transform 0.2s cubic-bezier(0.2, 0.8, 0.2, 1), visibility 0.16s ease;
+}
+.mt5-action-dd-menu[hidden] {
+  display: none !important;
+  opacity: 0;
+  visibility: hidden;
+  pointer-events: none;
+}
+.mt5-action-dd.is-open .mt5-action-dd-menu:not([hidden]) {
+  display: block !important;
+  opacity: 1;
+  visibility: visible;
+  transform: translateY(0) scale(1);
+  pointer-events: auto;
+}
+.mt5-action-dd-menu-head {
+  padding: 7px 11px 9px;
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: #64748b;
+  border-bottom: 1px solid rgba(148, 163, 184, 0.14);
+  margin-bottom: 4px;
+}
+.mt5-action-dd-form { margin: 0; padding: 0; }
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item,
+.mt5-page .mt5-action-dd-menu button.mt5-action-dd-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  min-height: 38px;
+  padding: 9px 11px;
+  margin: 0;
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.25;
+  text-align: left;
+  appearance: none;
+  -webkit-appearance: none;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+  color: #e2e8f0;
+  cursor: pointer;
+  box-shadow: none;
+  transition: background 0.15s ease, color 0.15s ease, transform 0.12s ease;
+}
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item:hover:not(:disabled) {
+  background: linear-gradient(90deg, rgba(56, 189, 248, 0.16), rgba(37, 99, 235, 0.1));
+  color: #f8fafc;
+  transform: translateX(2px);
+}
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item.danger { color: #fecaca; }
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item.danger:hover:not(:disabled) {
+  background: linear-gradient(90deg, rgba(248, 113, 113, 0.2), rgba(239, 68, 68, 0.1));
+  color: #fff;
+}
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item.muted { color: #94a3b8; }
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item.muted:hover:not(:disabled) {
+  color: #e2e8f0;
+  background: rgba(148, 163, 184, 0.12);
+}
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  transform: none;
+}
+.mt5-dd-label { flex: 1; line-height: 1.2; }
+.mt5-dd-ico {
+  flex-shrink: 0;
+  width: 20px;
+  height: 20px;
+  border-radius: 7px;
+  background: rgba(148, 163, 184, 0.12) center / 12px 12px no-repeat;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.07);
+}
+.mt5-dd-ico.analyze {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%237dd3fc'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6m0 0v-6m0 6h12m-6-4V5m0 0l-3 3m3-3l3 3'/%3E%3C/svg%3E");
+}
+.mt5-dd-ico.stop {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23fca5a5'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M21 12a9 9 0 11-18 0 9 9 0 0118 0z'/%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z'/%3E%3C/svg%3E");
+  background-color: rgba(248, 113, 113, 0.14);
+}
+.mt5-dd-ico.remove {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16'/%3E%3C/svg%3E");
+}
+.mt5-action-dd-form + .mt5-action-dd-form { margin-top: 2px; }
+.mt5-action-dd-form:last-child {
+  margin-top: 4px;
+  padding-top: 4px;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
