@@ -69,10 +69,11 @@ JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
+EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-login-fast-v25"
+AGENT_BUILD_ID = "2026-05-19-early-connect-v26"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2253,6 +2254,37 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
     return None, chunk
 
 
+def _early_connect_enabled() -> bool:
+    return os.getenv("AVELQUA_EARLY_CONNECT", "true").lower() not in ("0", "false", "no")
+
+
+def _send_early_connect_if_journal_ok(
+    payload: Dict[str, Any],
+    port: Any,
+    proc_pid: Any,
+    login: str,
+    journal_chunk: str,
+    early_sent: List[bool],
+    window_title: str = "",
+) -> bool:
+    """ยืนยันบนเว็บทันทีเมื่อ journal authorized (ก่อนหน้าต่าง MT5 โหลดเต็ม)"""
+    if early_sent[0] or not _early_connect_enabled() or not journal_chunk:
+        return early_sent[0]
+    early_sent[0] = True
+    send_connect_result(
+        payload,
+        "connected",
+        EARLY_CONNECT_MSG,
+        port,
+        process_id=proc_pid,
+        journal_evidence=journal_chunk,
+        window_title=window_title or "",
+        window_verified=False,
+    )
+    log(f"EARLY CONNECT SENT PORT={port} LOGIN={login}")
+    return True
+
+
 def wait_mt5_login_hybrid(
     port: Any,
     payload: Dict[str, Any],
@@ -2272,6 +2304,7 @@ def wait_mt5_login_hybrid(
     window_ok_streak = 0
     wait_start = time.time()
     preview_b64 = ""
+    early_sent: List[bool] = [False]
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
@@ -2305,7 +2338,10 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
         if j_out is True:
-            return True, "window verified; journal ok", j_chunk
+            _send_early_connect_if_journal_ok(
+                payload, port, proc_pid, login, j_chunk, early_sent, last_title
+            )
+            return True, "journal ok (early web confirm)", j_chunk
 
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)
@@ -2430,7 +2466,10 @@ def wait_mt5_login_hybrid(
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
     if j_out is True:
-        return True, JOURNAL_OK_MSG, j_chunk
+        _send_early_connect_if_journal_ok(
+            payload, port, proc_pid, login, j_chunk, early_sent, last_title
+        )
+        return True, "journal ok (early web confirm)", j_chunk
     if j_out is False:
         cleanup_mt5_after_login_fail(port, payload, port_dir)
         send_connect_result(
@@ -2723,10 +2762,13 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if ok:
         sock_after, sock_detail = mt5_socket_established(port, payload)
-        if not sock_after:
+        early_confirmed = "early" in (msg or "").lower()
+        if not sock_after and not early_confirmed:
             log(f"LOGIN JOURNAL OK BUT NO SOCKET — treat as fail: {sock_detail}")
             ok = False
             msg = "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อ Server — กรุณาลองใหม่"
+        elif not sock_after and early_confirmed:
+            log(f"LOGIN EARLY CONFIRMED — socket pending: {sock_detail}")
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)
 

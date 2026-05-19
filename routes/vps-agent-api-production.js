@@ -13,6 +13,7 @@ const {
   parseMt5JournalOutcome,
   messageIndicatesLoginFailed,
   MT5_SUCCESS_MSG,
+  MT5_EARLY_SUCCESS_MSG,
   MT5_FAIL_USER_MSG
 } = require('../lib/mt5JournalVerify');
 const { normalizeLockedServer } = require('../lib/mt5Server');
@@ -843,6 +844,26 @@ router.post('/connect-result', async (req, res) => {
           reason: 'journal_during_checking'
         }).catch(() => {});
         return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
+      }
+
+      if (
+        journalBlob &&
+        loginHint &&
+        parseJournalRelaxed(journalBlob, loginHint, sinceMs) === 'success'
+      ) {
+        await promoteAccountConnected({
+          accountId,
+          portId,
+          mt5Login: loginHint,
+          message: MT5_EARLY_SUCCESS_MSG
+        });
+        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+        await patchAccountMt5Preview(accountId, {
+          message: MT5_EARLY_SUCCESS_MSG,
+          windowTitle,
+          previewB64
+        });
+        return res.json({ ok: true, connected: true, earlyPath: 'journal_during_starting' });
       }
 
       await patchAccountMt5Preview(accountId, {
