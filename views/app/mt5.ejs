@@ -754,7 +754,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.__mt5FinishSuccessRunning = false;
     sessionStorage.removeItem('mt5ConnectedShownId');
     sessionStorage.removeItem('mt5OutcomeShown');
-    window.mt5Checker = setInterval(checkMt5Connected, 200);
+    window.mt5Checker = setInterval(checkMt5Connected, 2500);
     checkMt5Connected();
   };
 

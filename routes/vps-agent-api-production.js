@@ -695,6 +695,8 @@ router.get('/queue', async (req, res) => {
               'deploy_agent', 'update_agent_script', 'update_python_agent'
             ) THEN 3
             WHEN command_type IN ('dashboard', 'watchdog', 'account_snapshot', 'sync_mt5_account') THEN 4
+            WHEN command_type IN ('read_file', 'port_read_file')
+              AND COALESCE(payload->>'purpose', '') = 'verify_mt5_journal' THEN 6
             ELSE 2
           END,
           id ASC

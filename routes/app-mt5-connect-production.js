@@ -16,8 +16,12 @@ const {
   resolveStuckLoginAccount,
   syncJournalFromLatestCommand,
   failAccountFromJournal,
-  cancelJournalVerifyForAccount
+  cancelJournalVerifyForAccount,
+  cancelJournalVerifyWrongPort
 } = require('../lib/mt5LoginCommandVerify');
+
+const connectStatusSyncAt = new Map();
+const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 5000);
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
@@ -631,6 +635,8 @@ async function handleMt5ConnectProduction(req, res) {
 
     const accountId = acc.rows[0].id;
     await cancelJournalVerifyForAccount(reservedPort.vps_id, accountId).catch(() => {});
+    await cancelJournalVerifyWrongPort(reservedPort.vps_id, accountId, allocPortNo).catch(() => {});
+    connectStatusSyncAt.delete(accountId);
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
@@ -772,14 +778,21 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let statusFinal = status;
     const shouldSyncJournal = ['connecting', 'starting', 'checking'].includes(statusFinal);
 
+    let resolved = { resolved: false };
     if (shouldSyncJournal) {
-      await syncJournalFromLatestCommand(
-        a.id,
-        a.vps_id,
-        a.mt5_login,
-        a.folder_path,
-        a.assigned_port_no
-      ).catch(() => {});
+      const syncNow = Date.now();
+      const lastSync = connectStatusSyncAt.get(a.id) || 0;
+      const doSync = syncNow - lastSync >= CONNECT_STATUS_SYNC_MS;
+      if (doSync) {
+        connectStatusSyncAt.set(a.id, syncNow);
+        await syncJournalFromLatestCommand(
+          a.id,
+          a.vps_id,
+          a.mt5_login,
+          a.folder_path,
+          a.assigned_port_no
+        ).catch(() => {});
+      }
       const freshRow = await query(`
         SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
@@ -794,10 +807,15 @@ async function handleMt5ConnectStatusProduction(req, res) {
         status = String(a.status || '').toLowerCase();
         statusFinal = status;
       }
+      if (
+        doSync &&
+        ['connecting', 'starting', 'checking'].includes(statusFinal)
+      ) {
+        resolved = await resolveStuckLoginAccount(a).catch(() => ({ resolved: false }));
+      }
     }
 
     if (['connecting', 'starting', 'checking'].includes(statusFinal)) {
-      const resolved = await resolveStuckLoginAccount(a).catch(() => ({ resolved: false }));
       if (resolved.resolved) {
         statusFinal = resolved.status || statusFinal;
         if (resolved.message) {
