@@ -38,8 +38,19 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.urlencoded({ extended: true, limit: '6mb' }));
-app.use(express.json({ limit: '6mb' }));
+app.use(express.urlencoded({ extended: true, limit: '8mb' }));
+app.use(express.json({ limit: '8mb' }));
+
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    console.error('PAYLOAD TOO LARGE:', req.method, req.path, err.length || err.message);
+    return res.status(413).json({
+      ok: false,
+      message: 'ข้อมูลจาก VPS ใหญ่เกินไป (ภาพหน้าจอ) — ลองเชื่อมต่อใหม่'
+    });
+  }
+  return next(err);
+});
 app.use(cookieParser());
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/downloads', express.static(path.join(__dirname, 'public/downloads')));

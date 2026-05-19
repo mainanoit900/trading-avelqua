@@ -1032,6 +1032,18 @@ router.post('/connect-result', async (req, res) => {
         return promoteConnectedFromCallback(windowVerified ? 'window_verified' : 'journal_login_verified');
       }
 
+      const msgLowConn = String(message || '').toLowerCase();
+      if (
+        loginVerified &&
+        windowVerified &&
+        journalVerdict !== 'failed' &&
+        (msgLowConn.includes('api verified') ||
+          msgLowConn.includes('ยืนยันบัญชีจาก mt5') ||
+          msgLowConn.includes('socket verified'))
+      ) {
+        return promoteConnectedFromCallback('api_verified');
+      }
+
       if (journalVerdict !== 'success') {
         const cmdVerify = await verifyLoginFromCommand({
           accountId,
