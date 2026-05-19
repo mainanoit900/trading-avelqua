@@ -644,6 +644,15 @@ router.post('/port-health', async (req, res) => {
     const count = await applyPortHealthBulk(node.id, ports);
     const equityUpdated = await applyEquityFromPortHealth(node.id, ports).catch(() => 0);
 
+    const nodeCode = String(node.node_code || '').trim();
+    if (nodeCode) {
+      await query(`
+        UPDATE vps_nodes
+        SET last_seen_at=NOW(), updated_at=NOW(), status='online'
+        WHERE UPPER(TRIM(COALESCE(node_name,''))) = UPPER(TRIM($1))
+      `, [nodeCode]).catch(() => {});
+    }
+
     return res.json({ ok: true, count, equityUpdated });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
