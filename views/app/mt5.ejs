@@ -2256,7 +2256,16 @@ function deletePortCountdown(e, form) {
     mt5EquityVpsBusy = true;
     refreshAccountSnapshot(accId, true)
       .then(function (snap) {
-        if (snap && !snap.syncing) applyEquitySnap(snap);
+        if (snap && snap.hasEquity) applyEquitySnap(snap);
+        else if (snap && !snap.syncing) {
+          const capitalHint = document.getElementById('mt5CapitalHint');
+          const cap = document.getElementById('capital_manual');
+          if (capitalHint) {
+            capitalHint.textContent =
+              'ยังอ่านทุนจาก MT5 ไม่ได้ — ตรวจว่า MT5 เปิดอยู่และ Agent service รันอยู่ หรือใส่ทุนมือ (ขั้นต่ำ $100)';
+          }
+          if (cap && !cap.value) cap.placeholder = 'ใส่ทุนมือ (เช่น 1000)';
+        }
       })
       .finally(function () {
         mt5EquityVpsBusy = false;

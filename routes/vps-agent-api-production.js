@@ -492,6 +492,7 @@ router.post('/heartbeat', async (req, res) => {
     const agentVersion = String(
       agentBuildId || req.body.agent_version || req.body.agentVersion || ''
     ).trim();
+    const versionToStore = agentBuildId || agentVersion || null;
     const status = node.agent_enabled === false ? 'offline' : 'online';
     const level = lastError ? 'error' : (cpu >= 90 || ram >= 90 || ping >= 400 ? 'alarm' : 'normal');
     const deployRequired = !agentVersionOk(req.body);
@@ -518,7 +519,7 @@ router.post('/heartbeat', async (req, res) => {
           last_heartbeat=NOW(),
           updated_at=NOW()
       WHERE id=$1
-    `, [node.id, status, cpu, ram, down, up, ping, agentVersion || null]).catch(async () => {
+    `, [node.id, status, cpu, ram, down, up, ping, versionToStore]).catch(async () => {
       await query(`
         UPDATE vps_system.vps_nodes
         SET status=$2, cpu_percent=$3, ram_percent=$4, last_seen_at=NOW(), updated_at=NOW()
