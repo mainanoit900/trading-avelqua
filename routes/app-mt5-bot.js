@@ -1859,7 +1859,12 @@ router.get('/mt5', async (req, res) => {
     try {
       const ctx = await loadAccountPortContext(Number(acc.id), userId);
       if (!ctx?.vpsId) continue;
-      fetchEquityFromVps(ctx, Number(acc.id), userId, { waitMs: 0, skipJournal: true }).catch(() => {});
+      fetchEquityFromVps(ctx, Number(acc.id), userId, {
+        waitMs: 0,
+        skipJournal: true,
+        light: true,
+        purpose: 'equity_page_load'
+      }).catch(() => {});
     } catch (_) {}
   }
 
