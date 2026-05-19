@@ -178,6 +178,7 @@ async function applyPortHealthBulk(nodeId, ports) {
     if (r.rows?.length) saved += 1;
   }
 
+  const json = JSON.stringify(rows);
   await query(
     `
     UPDATE vps_system.vps_ports vp
@@ -200,7 +201,7 @@ async function applyPortHealthBulk(nodeId, ports) {
     [nodeId, json]
   ).catch(() => {});
 
-  return rows.length;
+  return saved;
 }
 
 function sanitizeJournalText(text) {
