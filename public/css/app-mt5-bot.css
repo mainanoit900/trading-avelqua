@@ -624,6 +624,21 @@
 .mt5-dd-ico.remove {
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%2394a3b8'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16'/%3E%3C/svg%3E");
 }
+.mt5-dd-ico.chart {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23a5b4fc'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M7 12l3-3 3 3 4-4M8 21l4-4 4 4M3 4h18M4 4h16v12a1 1 0 01-1 1H5a1 1 0 01-1-1V4z'/%3E%3C/svg%3E");
+  background-color: rgba(99, 102, 241, 0.14);
+}
+.mt5-dd-ico.restart {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 24 24' stroke='%23fde68a'%3E%3Cpath stroke-linecap='round' stroke-linejoin='round' stroke-width='2' d='M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15'/%3E%3C/svg%3E");
+  background-color: rgba(250, 204, 21, 0.12);
+}
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item.warn { color: #fde68a; }
+.mt5-page .mt5-action-dd-menu .mt5-action-dd-item.warn:hover:not(:disabled) {
+  background: linear-gradient(90deg, rgba(250, 204, 21, 0.18), rgba(245, 158, 11, 0.1));
+  color: #fffbeb;
+}
+#mt5LiveDashboardSection .mt5-table-wrap { overflow: visible; }
+#mt5LiveDashboard .mt5-table tbody tr { position: relative; }
 .mt5-action-dd-form + .mt5-action-dd-form { margin-top: 2px; }
 .mt5-action-dd-form:last-child {
   margin-top: 4px;

@@ -287,6 +287,17 @@ document.addEventListener('DOMContentLoaded', function () {
     </div>
   </section>
 
+  <section class="mt5-card" id="mt5LiveDashboardSection">
+    <div class="mt5-card-head">
+      <h2>📡 Live MT5 Dashboard</h2>
+      <span>WebSocket/Live Refresh</span>
+    </div>
+    <div id="mt5DiagBanner" class="mt5-alert danger" style="display:none;margin-bottom:12px"></div>
+    <div id="mt5LiveDashboard" class="mt5-table-wrap">
+      กำลังโหลดข้อมูล...
+    </div>
+  </section>
+
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
@@ -367,19 +378,6 @@ document.addEventListener('DOMContentLoaded', function () {
     </div>
   </section>
 </div>
-
-
-<section class="mt5-card">
-  <div class="mt5-card-head">
-    <h2>📡 Live MT5 Dashboard</h2>
-    <span>WebSocket/Live Refresh</span>
-  </div>
-
-  <div id="mt5DiagBanner" class="mt5-alert danger" style="display:none;margin-bottom:12px"></div>
-  <div id="mt5LiveDashboard" class="mt5-table-wrap">
-    กำลังโหลดข้อมูล...
-  </div>
-</section>
 
 <script>
 (function () {
@@ -1530,7 +1528,7 @@ window.mt5FocusInstance = function (instId, portSlot) {
   if (instId) url.searchParams.set('run', String(instId));
   const dash = document.getElementById('mt5LiveDashboard');
   if (dash) {
-    const sec = dash.closest('section');
+    const sec = document.getElementById('mt5LiveDashboardSection') || dash.closest('section');
     if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
     if (typeof loadMt5LiveDashboard === 'function') loadMt5LiveDashboard();
     return;
@@ -1611,7 +1609,7 @@ async function loadMt5LiveDashboard() {
             <th>Equity</th>
             <th>Profit</th>
             <th>Lot</th>
-            <th>Restart</th>
+            <th>ครั้ง</th>
             <th>ล่าสุด</th>
             <th></th>
           </tr>
@@ -1641,10 +1639,24 @@ async function loadMt5LiveDashboard() {
           <td>${i.restart_count || 0}</td>
           <td>${i.last_agent_ping ? new Date(i.last_agent_ping).toLocaleString('th-TH') : '-'}</td>
           <td class="mt5-row-actions">
-            <button type="button" class="mt5-btn mini ghost" onclick="loadMt5BotAnalytics(${i.id})">กราฟ</button>
-            <form method="POST" action="/app/mt5/request-restart/${i.id}" onsubmit="return confirm('Restart เฉพาะรายการ ${escAttr(instLabel)} (ID ${i.id}) ใช่ไหม?\\n\\nไม่กระทบแถวอื่นบน PORT เดียวกัน')">
-              <button class="mt5-btn mini" type="submit">Restart</button>
-            </form>
+            <div class="mt5-action-dd">
+              <button type="button" class="mt5-action-dd-btn" aria-label="เมนูจัดการ" aria-haspopup="true" aria-expanded="false" onclick="mt5ToggleActionDd(event, this)">
+                <svg class="mt5-action-dd-kebab" viewBox="0 0 24 24" width="16" height="16" aria-hidden="true"><circle cx="12" cy="5" r="1.75"/><circle cx="12" cy="12" r="1.75"/><circle cx="12" cy="19" r="1.75"/></svg>
+              </button>
+              <div class="mt5-action-dd-menu" hidden>
+                <div class="mt5-action-dd-menu-head">จัดการ</div>
+                <button type="button" class="mt5-action-dd-item" onclick="loadMt5BotAnalytics(${i.id})">
+                  <span class="mt5-dd-ico chart" aria-hidden="true"></span>
+                  <span class="mt5-dd-label">กราฟ</span>
+                </button>
+                <form method="POST" action="/app/mt5/request-restart/${i.id}" class="mt5-action-dd-form" onsubmit="return confirm('Restart เฉพาะรายการ ${escAttr(instLabel)} (ID ${i.id}) ใช่ไหม?\\n\\nไม่กระทบแถวอื่นบน PORT เดียวกัน')">
+                  <button type="submit" class="mt5-action-dd-item warn">
+                    <span class="mt5-dd-ico restart" aria-hidden="true"></span>
+                    <span class="mt5-dd-label">Restart</span>
+                  </button>
+                </form>
+              </div>
+            </div>
           </td>
         </tr>
       `;
