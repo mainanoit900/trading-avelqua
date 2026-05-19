@@ -14,6 +14,7 @@ const { requireLogin } = require('../middleware/requireAuth');
 const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
+  tryFastConnectConfirm,
   syncJournalFromLatestCommand,
   failAccountFromJournal,
   cancelJournalVerifyForAccount,
@@ -21,7 +22,7 @@ const {
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
-const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 5000);
+const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 1500);
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
@@ -780,6 +781,29 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let resolved = { resolved: false };
     if (shouldSyncJournal) {
+      const fast = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
+      if (fast.resolved) {
+        resolved = fast;
+        statusFinal = fast.status || 'connected';
+        const freshFast = await query(
+          `
+          SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+                 a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+                 p.folder_path
+          FROM vps_system.mt5_accounts a
+          LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+          WHERE a.id=$1 AND a.user_id=$2
+          LIMIT 1
+        `,
+          [a.id, userId]
+        ).catch(() => ({ rows: [] }));
+        if (freshFast.rows?.[0]) {
+          Object.assign(a, freshFast.rows[0]);
+          statusFinal = String(a.status || statusFinal).toLowerCase();
+        }
+      }
+    }
+    if (shouldSyncJournal && !resolved.resolved) {
       const syncNow = Date.now();
       const lastSync = connectStatusSyncAt.get(a.id) || 0;
       const doSync = syncNow - lastSync >= CONNECT_STATUS_SYNC_MS;
