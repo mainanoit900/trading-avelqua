@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v33"
+AGENT_BUILD_ID = "2026-05-19-login-verify-v34"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1540,6 +1540,62 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         return {}
 
 
+def mt5_login_verify_api(
+    port_dir: Path,
+    login: str,
+    password: str,
+    server: str = LOCKED_MT5_SERVER,
+) -> Tuple[bool, str]:
+    """ยืนยัน login ผ่าน MetaTrader5 package — ใช้เมื่อหน้าต่าง/socket พร้อมแต่ journal ช้า"""
+    login = str(login).strip()
+    if not login:
+        return False, ""
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
+        return False, "MetaTrader5 package not installed"
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return False, "terminal64.exe not found"
+    try:
+        login_int = int(login)
+    except Exception:
+        return False, "invalid login"
+    srv = str(server or LOCKED_MT5_SERVER).strip()
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            err = mt5.last_error()
+            return False, f"init fail {err}"
+        if password:
+            if not mt5.login(login_int, password=str(password), server=srv):
+                err = mt5.last_error()
+                mt5.shutdown()
+                return False, f"login fail {err}"
+        else:
+            if not mt5.login(login_int):
+                err = mt5.last_error()
+                mt5.shutdown()
+                return False, f"login fail {err}"
+        ai = mt5.account_info()
+        mt5.shutdown()
+        if ai is None:
+            return False, "account_info empty"
+        ai_login = int(getattr(ai, "login", 0) or 0)
+        if ai_login != login_int:
+            return False, f"account mismatch {ai_login}"
+        return True, f"api ok equity={float(getattr(ai, 'equity', 0) or 0):.2f}"
+    except Exception as e:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        return False, str(e)
+
+
 def _snap_positive(snap: Dict[str, Any]) -> bool:
     b = snap.get("balance")
     e = snap.get("equity")
@@ -2357,6 +2413,37 @@ def _send_early_connect_if_journal_ok(
     return True
 
 
+def _connect_on_api_verify(
+    payload: Dict[str, Any],
+    port: Any,
+    port_dir: Path,
+    login: str,
+    proc_pid: Any,
+    joined: str,
+    preview_b64: str = "",
+) -> Tuple[bool, str]:
+    pw = str(payload_get(payload, "mt5Password", "password") or "")
+    srv = resolve_mt5_server(payload)
+    api_ok, api_detail = mt5_login_verify_api(port_dir, login, pw, srv)
+    if not api_ok:
+        return False, api_detail
+    try:
+        enforce_login_no_trading(port_dir, port, payload, login, pw, srv)
+    except Exception:
+        pass
+    send_connect_result(
+        payload,
+        "connected",
+        "เชื่อมต่อสำเร็จ — ยืนยันบัญชีจาก MT5 แล้ว",
+        port,
+        process_id=proc_pid,
+        window_title=joined,
+        preview_b64=preview_b64 or capture_mt5_window_base64(port, payload),
+        window_verified=True,
+    )
+    return True, api_detail
+
+
 def wait_mt5_login_hybrid(
     port: Any,
     payload: Dict[str, Any],
@@ -2366,8 +2453,9 @@ def wait_mt5_login_hybrid(
     proc_pid: Any,
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
-    """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    deadline = time.time() + max(8, min(timeout_sec, 22))
+    """รอ login — Journal + หน้าต่าง MT5 + MT5 API (เมื่อ journal ช้าแต่ terminal login แล้ว)"""
+    timeout_sec = max(15, int(timeout_sec or CONNECT_TIMEOUT_SECONDS))
+    deadline = time.time() + timeout_sec
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
@@ -2484,7 +2572,13 @@ def wait_mt5_login_hybrid(
                 )
                 return True, "socket verified; journal ok", j_rel_chunk or joined
 
-        # สำเร็จเฉพาะเมื่อ Journal ยืนยัน authorized on (ห้ามยอมแค่เห็นเลขบนหน้าต่าง)
+        if sock_ok and ok_w and window_ok_streak >= 2:
+            api_ok, api_detail = _connect_on_api_verify(
+                payload, port, port_dir, login, proc_pid, joined, preview_b64
+            )
+            if api_ok:
+                return True, f"api verified; {api_detail}", api_detail
+
         if window_ok_streak >= 2 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
@@ -2553,6 +2647,40 @@ def wait_mt5_login_hybrid(
             journal_evidence=j_chunk,
         )
         return False, JOURNAL_FAIL_MSG, j_chunk
+
+    ok_w_end, joined_end = mt5_login_verified_by_window(port, payload)
+    sock_end, _ = mt5_socket_established(port, payload)
+    if ok_w_end and sock_end:
+        api_ok, api_detail = _connect_on_api_verify(
+            payload, port, port_dir, login, proc_pid, joined_end
+        )
+        if api_ok:
+            return True, f"api verified (final); {api_detail}", api_detail
+
+    remain = max(5, int(deadline - time.time()))
+    if remain >= 8:
+        log(f"MT5 JOURNAL EXTENDED WAIT login={login} remain_sec={remain}")
+        ok_j, msg_j, chunk_j = check_mt5_journal_login_result(
+            port_dir, login, timeout_sec=remain, since_ts=journal_since
+        )
+        chunk = chunk_j or chunk
+        if ok_j:
+            _send_early_connect_if_journal_ok(
+                payload, port, proc_pid, login, chunk_j, early_sent, joined_end or last_title
+            )
+            return True, "journal ok (extended wait)", chunk_j
+        if not ok_j and msg_j and msg_j != JOURNAL_TIMEOUT_MSG:
+            cleanup_mt5_after_login_fail(port, payload, port_dir)
+            send_connect_result(
+                payload,
+                "failed",
+                msg_j,
+                port,
+                process_id=proc_pid,
+                journal_evidence=chunk_j,
+            )
+            return False, msg_j, chunk_j
+
     return False, JOURNAL_TIMEOUT_MSG, chunk
 
 
@@ -2834,13 +2962,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if ok:
         sock_after, sock_detail = mt5_socket_established(port, payload)
-        early_confirmed = "early" in (msg or "").lower()
-        if not sock_after and not early_confirmed:
+        msg_low = (msg or "").lower()
+        early_confirmed = "early" in msg_low
+        api_confirmed = "api verified" in msg_low
+        if not sock_after and not early_confirmed and not api_confirmed:
             log(f"LOGIN JOURNAL OK BUT NO SOCKET — treat as fail: {sock_detail}")
             ok = False
             msg = "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อ Server — กรุณาลองใหม่"
-        elif not sock_after and early_confirmed:
-            log(f"LOGIN EARLY CONFIRMED — socket pending: {sock_detail}")
+        elif not sock_after and (early_confirmed or api_confirmed):
+            log(f"LOGIN CONFIRMED WITHOUT SOCKET — ok: {sock_detail}")
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)
 
