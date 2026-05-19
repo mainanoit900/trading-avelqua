@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-push-v27"
+AGENT_BUILD_ID = "2026-05-19-equity-push-v28"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3055,7 +3055,13 @@ def port_list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _optional_port_read_purpose(payload: Dict[str, Any]) -> bool:
     purpose = str(payload_get(payload, "purpose") or "").lower()
-    return purpose in ("equity_sync", "equity_sync_journal", "journal_probe")
+    return purpose in (
+        "equity_sync",
+        "equity_sync_journal",
+        "equity_poller",
+        "equity_connect",
+        "journal_probe",
+    )
 
 
 def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -3543,17 +3549,35 @@ def poll_running_mt5_list() -> None:
         log(f"RUNNING SYNC ERROR: {e}")
 
 
+def _windows_service_running(service_name: str) -> bool:
+    if os.name != "nt":
+        return False
+    try:
+        ps = (
+            f"$s = Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue; "
+            f"if ($s -and $s.Status -eq 'Running') {{ '1' }} else {{ '0' }}"
+        )
+        out = (_run_powershell(ps, timeout=8) or "").strip()
+        return out == "1"
+    except Exception:
+        return False
+
+
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
     """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
     if os.name != "nt":
         log("SERVICE RESTART SKIPPED: not Windows")
         return
+    service_running = _windows_service_running(service_name)
+    if not service_running:
+        log(
+            f"SERVICE RESTART SKIPPED: {service_name} is not running "
+            f"(start service manually or run: net start {service_name})"
+        )
+        return
     ps = (
         f"Start-Sleep -Seconds 2; "
-        f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue; "
-        f"if (-not (Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue | "
-        f"Where-Object {{ $_.Status -eq 'Running' }}) ) {{ "
-        f"net stop {service_name}; net start {service_name} }}"
+        f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue"
     )
     subprocess.Popen(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
@@ -3561,7 +3585,7 @@ def restart_service_later(service_name: str, exit_process: bool = True) -> None:
     )
     log(f"SERVICE RESTART SCHEDULED name={service_name} exit_process={exit_process}")
 
-    if exit_process:
+    if exit_process and service_running:
         def _exit_after_delay() -> None:
             time.sleep(4)
             log("AGENT EXIT after deploy/restart — loading new agent.py on service start")

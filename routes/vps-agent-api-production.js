@@ -494,22 +494,8 @@ router.post('/heartbeat', async (req, res) => {
 
     if (deployRequired && node.agent_enabled !== false) {
       try {
-        const {
-          getAgentUpgradeState,
-          queueAgentDeploy,
-          queueAgentRestart,
-          expireStuckMaintenanceCommands,
-          pruneMetricsCommandBacklog
-        } = require('../lib/agentDeploy');
-        await expireStuckMaintenanceCommands(node.id);
-        await pruneMetricsCommandBacklog(node.id, { keep: 1 }).catch(() => {});
-        const upState = await getAgentUpgradeState(node.id).catch(() => 'legacy');
-        if (upState === 'stuck' || upState === 'needs_restart') {
-          await queueAgentDeploy(node.id, { force: true }).catch(() => ({}));
-          await queueAgentRestart(node.id, { force: true }).catch(() => ({}));
-        } else {
-          await queueAgentDeploy(node.id);
-        }
+        const { maybeQueueDeployFromHeartbeat } = require('../lib/agentDeploy');
+        await maybeQueueDeployFromHeartbeat(node.id, req.body).catch(() => ({}));
       } catch (deployErr) {
         console.error('[heartbeat deploy]', deployErr.message || deployErr);
       }
