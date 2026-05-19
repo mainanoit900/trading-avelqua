@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v29"
+AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v30"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3600,31 +3600,31 @@ def _windows_service_running(service_name: str) -> bool:
 
 
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
-    """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
+    """รีสตาร์ท Windows Service (ถ้ามี) แล้วออกจาก process ให้โหลด agent.py ใหม่จากดิสก์"""
     if os.name != "nt":
         log("SERVICE RESTART SKIPPED: not Windows")
         return
     service_running = _windows_service_running(service_name)
-    if not service_running:
-        log(
-            f"SERVICE RESTART SKIPPED: {service_name} is not running "
-            f"(start service manually or run: net start {service_name})"
+    if service_running:
+        ps = (
+            f"Start-Sleep -Seconds 2; "
+            f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue"
         )
-        return
-    ps = (
-        f"Start-Sleep -Seconds 2; "
-        f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue"
-    )
-    subprocess.Popen(
-        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-    )
-    log(f"SERVICE RESTART SCHEDULED name={service_name} exit_process={exit_process}")
+        subprocess.Popen(
+            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+        )
+        log(f"SERVICE RESTART SCHEDULED name={service_name}")
+    else:
+        log(
+            f"SERVICE NOT RUNNING name={service_name} — will exit process to reload agent.py "
+            f"(or run: net start {service_name})"
+        )
 
-    if exit_process and service_running:
+    if exit_process:
         def _exit_after_delay() -> None:
-            time.sleep(4)
-            log("AGENT EXIT after deploy/restart — loading new agent.py on service start")
+            time.sleep(4 if service_running else 2)
+            log("AGENT EXIT after deploy/restart — loading new agent.py")
             os._exit(0)
 
         import threading

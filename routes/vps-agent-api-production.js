@@ -133,34 +133,50 @@ async function applyPortHealthBulk(nodeId, ports) {
     .filter(Boolean);
   if (!rows.length) return 0;
 
-  const json = JSON.stringify(rows);
-
-  await query(
-    `
-    INSERT INTO vps_system.vps_port_health
-      (node_id, port_number, folder_path, running, process_id, mt5_login, payload, updated_at)
-    SELECT
-      $1,
-      (r->>'port_no')::int,
-      COALESCE(r->>'folder_path', ''),
-      COALESCE((r->>'running')::boolean, false),
-      NULLIF(r->>'process_id', '')::int,
-      NULLIF(r->>'mt5_login', ''),
-      r::jsonb,
-      NOW()
-    FROM jsonb_array_elements($2::jsonb) AS r
-    WHERE COALESCE((r->>'port_no')::int, 0) > 0
-    ON CONFLICT (node_id, port_number)
-    DO UPDATE SET
-      folder_path = EXCLUDED.folder_path,
-      running = EXCLUDED.running,
-      process_id = EXCLUDED.process_id,
-      mt5_login = EXCLUDED.mt5_login,
-      payload = EXCLUDED.payload,
-      updated_at = NOW()
+  let saved = 0;
+  for (const p of rows) {
+    const portNo = Number(p.port_no || p.port_number || 0);
+    if (!portNo) continue;
+    const folder = String(p.folder_path || '').trim();
+    const running = !!(p.running ?? p.is_running);
+    const pid = p.process_id != null && p.process_id !== '' ? Number(p.process_id) : null;
+    const login = String(p.mt5_login || '').trim() || null;
+    const bal = positiveMoney(p.balance);
+    const eq = positiveMoney(p.equity);
+    const r = await query(
+      `
+      INSERT INTO vps_system.vps_port_health
+        (node_id, port_number, folder_path, terminal_exists, running, pid, process_id, mt5_login,
+         balance, equity, updated_at)
+      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, NOW())
+      ON CONFLICT (node_id, port_number)
+      DO UPDATE SET
+        folder_path = COALESCE(NULLIF(EXCLUDED.folder_path, ''), vps_system.vps_port_health.folder_path),
+        terminal_exists = EXCLUDED.terminal_exists,
+        running = EXCLUDED.running,
+        pid = EXCLUDED.pid,
+        process_id = COALESCE(EXCLUDED.process_id, vps_system.vps_port_health.process_id),
+        mt5_login = COALESCE(EXCLUDED.mt5_login, vps_system.vps_port_health.mt5_login),
+        balance = COALESCE(EXCLUDED.balance, vps_system.vps_port_health.balance),
+        equity = COALESCE(EXCLUDED.equity, vps_system.vps_port_health.equity),
+        updated_at = NOW()
+      RETURNING id
     `,
-    [nodeId, json]
-  ).catch(() => {});
+      [
+        nodeId,
+        portNo,
+        folder,
+        !!folder || running,
+        running,
+        JSON.stringify(pid ? [pid] : []),
+        pid,
+        login,
+        bal,
+        eq
+      ]
+    ).catch(() => ({ rows: [] }));
+    if (r.rows?.length) saved += 1;
+  }
 
   await query(
     `
@@ -434,6 +450,8 @@ async function ensureAgentTables() {
 
   await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS mt5_login TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS process_id BIGINT`).catch(() => {});
+  await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS balance NUMERIC`).catch(() => {});
+  await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS equity NUMERIC`).catch(() => {});
 
   await query(`
     CREATE TABLE IF NOT EXISTS vps_system.mt5_login_history (
