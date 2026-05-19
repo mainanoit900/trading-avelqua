@@ -332,15 +332,20 @@ document.addEventListener('DOMContentLoaded', function () {
               <td><%= typeof tradeLevelLabel === 'function' ? tradeLevelLabel(i.trade_level) : (i.trade_level || '-') %></td>
               <td><span class="status <%= i.status %>"><%= i.status %></span></td>
               <td class="mt5-row-actions">
-                <button type="button" class="mt5-btn mini ghost" onclick="mt5FocusInstance(<%= i.id %>, <%= Number(i.assigned_port_no) || 0 %>)">วิเคราะห์</button>
-                <% if (histActive) { %>
-                  <form method="POST" action="/app/mt5/stop/<%= i.id %>" style="display:inline" onsubmit="return confirm('หยุดการเทรด BOT ใช่ไหม? (MT5 ยังเปิดอยู่)')">
-                    <button class="mt5-btn mini" type="submit">หยุด</button>
-                  </form>
-                <% } %>
-                <form method="POST" action="/app/mt5/instance/<%= i.id %>/remove<%= i.assigned_port_no ? '?port_slot=' + i.assigned_port_no : '' %>" style="display:inline" onsubmit="return confirm('เอารายการนี้ออกจากประวัติใช่ไหม?')">
-                  <button class="mt5-btn mini ghost" type="submit" <%= histActive ? 'disabled title="หยุด BOT ก่อน"' : '' %>>เอาออก</button>
-                </form>
+                <div class="mt5-action-dd">
+                  <button type="button" class="mt5-action-dd-btn" aria-label="เมนูจัดการ" aria-haspopup="true" aria-expanded="false" onclick="mt5ToggleActionDd(event, this)">▾</button>
+                  <div class="mt5-action-dd-menu" hidden>
+                    <button type="button" class="mt5-action-dd-item" onclick="mt5FocusInstance(<%= i.id %>, <%= Number(i.assigned_port_no) || 0 %>)">วิเคราะห์</button>
+                    <% if (histActive) { %>
+                      <form method="POST" action="/app/mt5/stop/<%= i.id %>" class="mt5-action-dd-form" onsubmit="return confirm('หยุดการเทรด BOT ใช่ไหม? (MT5 ยังเปิดอยู่)')">
+                        <button type="submit" class="mt5-action-dd-item danger">หยุด</button>
+                      </form>
+                    <% } %>
+                    <form method="POST" action="/app/mt5/instance/<%= i.id %>/remove<%= i.assigned_port_no ? '?port_slot=' + i.assigned_port_no : '' %>" class="mt5-action-dd-form" onsubmit="return confirm('เอารายการนี้ออกจากประวัติใช่ไหม?')">
+                      <button type="submit" class="mt5-action-dd-item" <%= histActive ? 'disabled title="หยุด BOT ก่อน"' : '' %>>เอาออก</button>
+                    </form>
+                  </div>
+                </div>
               </td>
             </tr>
           <% }) %>
@@ -1446,7 +1451,34 @@ window.mt5HistoryGo = function (p) {
   initMt5HistoryPager();
 };
 
+window.mt5CloseAllActionDd = function () {
+  document.querySelectorAll('.mt5-action-dd-menu').forEach(function (m) {
+    m.hidden = true;
+  });
+  document.querySelectorAll('.mt5-action-dd-btn').forEach(function (b) {
+    b.setAttribute('aria-expanded', 'false');
+  });
+};
+
+window.mt5ToggleActionDd = function (ev, btn) {
+  if (ev) ev.stopPropagation();
+  const wrap = btn && btn.closest ? btn.closest('.mt5-action-dd') : null;
+  if (!wrap) return;
+  const menu = wrap.querySelector('.mt5-action-dd-menu');
+  const wasOpen = menu && !menu.hidden;
+  mt5CloseAllActionDd();
+  if (menu && !wasOpen) {
+    menu.hidden = false;
+    btn.setAttribute('aria-expanded', 'true');
+  }
+};
+
+document.addEventListener('click', function () {
+  mt5CloseAllActionDd();
+});
+
 window.mt5FocusInstance = function (instId, portSlot) {
+  mt5CloseAllActionDd();
   const url = new URL(window.location.href);
   if (portSlot) url.searchParams.set('port_slot', String(portSlot));
   if (instId) url.searchParams.set('run', String(instId));
@@ -1476,6 +1508,7 @@ function initMt5HistoryPager() {
     r.style.display = show ? '' : 'none';
   });
   pager.innerHTML = mt5PagerHtml(pg.page, pg.pages, pg.total, 'mt5HistoryGo');
+  if (typeof mt5CloseAllActionDd === 'function') mt5CloseAllActionDd();
 }
 
 document.addEventListener('DOMContentLoaded', function () {
@@ -2486,7 +2519,18 @@ function deletePortCountdown(e, form) {
 .mt5-alert-item{padding:10px 12px;border-radius:10px;margin-top:8px;font-size:13px}
 .mt5-alert-item.warning{background:rgba(250,204,21,.12);color:#fde68a}
 .mt5-alert-item.danger{background:rgba(248,113,113,.15);color:#fecaca}
-.mt5-row-actions{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.mt5-row-actions{position:relative;width:52px;text-align:right;vertical-align:middle}
+.mt5-action-dd{position:relative;display:inline-block}
+.mt5-action-dd-btn{min-width:32px;height:28px;padding:0 8px;font-size:12px;line-height:1;border-radius:8px;border:1px solid rgba(148,163,184,.35);background:rgba(30,41,59,.9);color:#e2e8f0;cursor:pointer}
+.mt5-action-dd-btn:hover,.mt5-action-dd-btn[aria-expanded="true"]{border-color:rgba(59,130,246,.55);background:rgba(37,99,235,.25)}
+.mt5-action-dd-menu{position:absolute;right:0;top:calc(100% + 4px);z-index:40;min-width:108px;padding:4px;border-radius:10px;border:1px solid rgba(148,163,184,.28);background:#0f172a;box-shadow:0 8px 24px rgba(0,0,0,.45)}
+.mt5-action-dd-menu[hidden]{display:none!important}
+.mt5-action-dd-form{margin:0;padding:0}
+.mt5-action-dd-item{display:block;width:100%;padding:7px 10px;font-size:12px;text-align:left;border:none;border-radius:6px;background:transparent;color:#e2e8f0;cursor:pointer}
+.mt5-action-dd-item:hover:not(:disabled){background:rgba(59,130,246,.18)}
+.mt5-action-dd-item.danger{color:#fca5a5}
+.mt5-action-dd-item.danger:hover:not(:disabled){background:rgba(248,113,113,.15)}
+.mt5-action-dd-item:disabled{opacity:.45;cursor:not-allowed}
 .mt5-live-chart-wrap{padding:12px 0 4px;border-top:1px solid rgba(148,163,184,.15);margin-top:12px}
 .profit-pos{color:#4ade80;font-weight:700}
 .profit-neg{color:#f87171;font-weight:700}
