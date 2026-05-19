@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v31"
+AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v32"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1489,7 +1489,8 @@ def ensure_equity_pulse_indicator(port_dir: Path) -> None:
         log(f"DEPLOY AvelquaEquityPulse ERROR: {e}")
 
 
-def account_snapshot_mt5_api(port_dir: Path) -> Dict[str, Any]:
+def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """ดึง Balance/Equity ผ่าน MetaTrader5 package (เชื่อม terminal ที่รันอยู่ได้)"""
     try:
         import MetaTrader5 as mt5  # type: ignore
     except Exception:
@@ -1497,18 +1498,39 @@ def account_snapshot_mt5_api(port_dir: Path) -> Dict[str, Any]:
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {}
+    login_hint = 0
     try:
-        if not mt5.initialize(path=str(terminal)):
+        login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
+    except Exception:
+        login_hint = 0
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        ok = mt5.initialize(path=str(terminal))
+        if not ok:
+            log(f"MT5 API INIT FAIL path={terminal} err={mt5.last_error()}")
             return {}
         ai = mt5.account_info()
+        if ai is None and login_hint:
+            try:
+                mt5.login(login_hint)
+                ai = mt5.account_info()
+            except Exception:
+                ai = None
         mt5.shutdown()
         if ai is None:
             return {}
-        return {
+        if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
+            return {}
+        out = {
             "balance": float(ai.balance),
             "equity": float(ai.equity),
             "currency": str(ai.currency or ""),
         }
+        log(f"MT5 API SNAPSHOT path={port_dir.name} BALANCE={out['balance']} EQUITY={out['equity']}")
+        return out
     except Exception as e:
         log(f"MT5 API SNAPSHOT ERROR: {e}")
         try:
@@ -1551,16 +1573,20 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             return _snap_merge_profit(snap)
 
         if mt5_open:
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
+            if _snap_positive(api_snap):
+                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                return _snap_merge_profit(snap)
+
             uia_snap = account_snapshot_uia(port, payload)
             if _snap_positive(uia_snap):
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
                 return _snap_merge_profit(snap)
 
         if not mt5_open:
-            api_snap = account_snapshot_mt5_api(port_dir)
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
             if _snap_positive(api_snap):
                 snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
-                log(f"MT5 SNAPSHOT API PORT={port} BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}")
                 return _snap_merge_profit(snap)
 
         if not mt5_open:

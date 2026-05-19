@@ -260,7 +260,8 @@ document.addEventListener('DOMContentLoaded', function () {
   value="<% const _capEq = ac.last_equity != null && Number(ac.last_equity) > 0 ? Number(ac.last_equity) : (ac.last_balance != null && Number(ac.last_balance) >= 100 ? Number(ac.last_balance) : ''); %><%= _capEq && _capEq >= 100 ? _capEq : '' %>"
   <%= botOn ? 'readonly' : '' %>
 >
-            <small class="mt5-hint" id="mt5CapitalHint">ทุนจริงจาก MT5 บน PORT นี้</small>
+            <small class="mt5-hint" id="mt5CapitalHint">ทุนจริงจาก MT5 บน PORT นี้ — ถ้า Equity ไม่ขึ้นอัตโนมัติ ให้กรอกตามที่เห็นบน MT5 แล้วกดปุ่มด้านล่าง</small>
+            <button type="button" class="mt5-btn ghost" id="mt5BtnSaveCapitalFromMt5" style="margin-top:8px;width:100%;max-width:320px">💾 บันทึกทุนที่เห็นบน MT5 → แสดงบนเว็บ</button>
           </div>
           <div>
             <label>4) LOT</label>
@@ -1876,8 +1877,13 @@ function deletePortCountdown(e, form) {
     const bal = balance != null && Number(balance) > 0 ? Number(balance) : null;
     const v = eq != null ? eq : bal;
     if (v == null) {
-      el.textContent = '';
-      el.className = 'mt5-port-lock-equity';
+      el.textContent = ' · กรอกทุนด้านล่าง';
+      el.className = 'mt5-port-lock-equity syncing';
+      const hint = document.getElementById('mt5CapitalHint');
+      if (hint && hint.textContent.indexOf('บันทึกทุน') < 0) {
+        hint.textContent =
+          'ดึงอัตโนมัติไม่ได้ — ดู Equity บน MT5 แล้วกรอกในช่องเงินทุน กด「บันทึกทุนที่เห็นบน MT5」';
+      }
       return;
     }
     let txt = ' · Equity $' + fmtMt5Money(v);
@@ -2127,6 +2133,47 @@ function deletePortCountdown(e, form) {
         refreshPresetCalc();
       });
     });
+    const btnSaveCap = document.getElementById('mt5BtnSaveCapitalFromMt5');
+    if (btnSaveCap && btnSaveCap.dataset.bound !== '1') {
+      btnSaveCap.dataset.bound = '1';
+      btnSaveCap.addEventListener('click', function () {
+        const accId = getMt5AccountId();
+        const capInput = document.getElementById('capital_manual');
+        const v = Number(capInput && capInput.value ? capInput.value : 0);
+        if (!accId) {
+          alert('ยังไม่ได้เลือกบัญชี MT5');
+          return;
+        }
+        if (!Number.isFinite(v) || v < 100) {
+          alert('กรอกจำนวนเงินทุนตามที่เห็นบน MT5 (ขั้นต่ำ $100)');
+          if (capInput) capInput.focus();
+          return;
+        }
+        btnSaveCap.disabled = true;
+        fetch('/app/mt5/save-equity', {
+          method: 'POST',
+          credentials: 'same-origin',
+          headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ mt5_account_id: accId, equity: v, balance: v })
+        })
+          .then(function (r) { return r.json(); })
+          .then(function (data) {
+            if (!data.ok) throw new Error(data.message || 'บันทึกไม่สำเร็จ');
+            applyEquityUiState(v, v);
+            const sel = document.getElementById('mt5AccountSelect');
+            if (sel) updateAccountSelectEquityLabel(sel, { hasEquity: true, equity: v, hasBalance: true, balance: v });
+            const hint = document.getElementById('mt5CapitalHint');
+            if (hint) hint.textContent = 'บันทึกทุน $' + v.toLocaleString() + ' แล้ว — แสดงบนเว็บและใช้เปิด BOT ได้';
+            refreshPresetCalc();
+          })
+          .catch(function (err) {
+            alert(err.message || 'บันทึกไม่สำเร็จ');
+          })
+          .finally(function () {
+            btnSaveCap.disabled = false;
+          });
+      });
+    }
     if (capitalInput && capitalInput.dataset.presetInputBound !== '1') {
       capitalInput.dataset.presetInputBound = '1';
       capitalInput.addEventListener('input', function () {
