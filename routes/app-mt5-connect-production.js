@@ -36,7 +36,7 @@ const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 const { positiveMoney, ensureEquityOnConnect } = require('../lib/mt5EquitySync');
 const { loadAccountPortContext } = require('../lib/mt5AccountPort');
-const { checkVpsAgentLiveness } = require('../lib/vpsAgentLiveness');
+const { checkVpsAgentLiveness, assertVpsAgentOnline } = require('../lib/vpsAgentLiveness');
 const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
 const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 
@@ -220,6 +220,11 @@ const { findMt5LoginInUse, mt5LoginInUseMessage } = require('../lib/mt5LoginDupl
 async function reserveBestPort(userId) {
   await clearExpiredLocks();
 
+  const agentGate = await assertVpsAgentOnline();
+  if (!agentGate.ok) {
+    return { ok: false, message: agentGate.message, code: 'AGENT_OFFLINE' };
+  }
+
   const adminReserve = await reserveAdminPortForLogin(userId);
   if (adminReserve.ok) return adminReserve;
 
@@ -268,12 +273,12 @@ async function reserveBestPort(userId) {
     const port = r.rows?.[0];
     if (!port) {
       await client.query('ROLLBACK');
-      return {
-        ok: false,
-        message:
-          adminReserve.message ||
-          'ไม่มี VPS/PORT ว่าง — ตรวจสอบ /admin/vps/ports (ข้าม PORT ใช้งาน/ปิด) และ /admin/vps/edit (CPU/RAM/PING)'
-      };
+      const preferMsg =
+        adminReserve.code === 'AGENT_OFFLINE'
+          ? adminReserve.message
+          : adminReserve.message ||
+            'ไม่มี VPS/PORT ว่าง — ตรวจสอบ /admin/vps/ports (ข้าม PORT ใช้งาน/ปิด) และ /admin/vps/edit (CPU/RAM/PING)';
+      return { ok: false, message: preferMsg, code: adminReserve.code };
     }
 
     await client.query(`
@@ -475,6 +480,11 @@ async function handleMt5ConnectProduction(req, res) {
     if (!mt5Login) throw new Error('กรุณากรอก Login MT5');
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
+    const agentGateEarly = await assertVpsAgentOnline();
+    if (!agentGateEarly.ok) {
+      throw new Error(agentGateEarly.message);
+    }
+
     lockKey = userLockKey(userId);
     const locked = await redis.set(lockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
     if (!locked) throw new Error('ระบบกำลังเชื่อมต่อบัญชีนี้อยู่ กรุณารอสักครู่');
@@ -673,11 +683,6 @@ async function handleMt5ConnectProduction(req, res) {
     await cancelJournalVerifyWrongPort(reservedPort.vps_id, accountId, allocPortNo).catch(() => {});
     connectStatusSyncAt.delete(accountId);
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
-
-    const agentLive = await checkVpsAgentLiveness(reservedPort.vps_id);
-    if (!agentLive.ok) {
-      throw new Error(agentLive.message);
-    }
 
     await expireStalePendingAgentCommands(reservedPort.vps_id, 120).catch(() => ({}));
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
