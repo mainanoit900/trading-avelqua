@@ -22,7 +22,7 @@ const {
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
-const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 1500);
+const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 800);
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');

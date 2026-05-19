@@ -29,7 +29,10 @@ const {
   queueJournalReadVerify,
   queueStopMt5ForAccount,
   failAccountFromJournal,
-  accountConnectSinceMs
+  accountConnectSinceMs,
+  tryFastConnectConfirm,
+  parseJournalRelaxed,
+  finishPendingLoginCommands
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -886,7 +889,7 @@ router.post('/connect-result', async (req, res) => {
       );
       const sinceMsConn = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
       let journalVerdict = journalEvidence && loginForJournal
-        ? parseMt5JournalOutcome(journalEvidence, loginForJournal, undefined, sinceMsConn)
+        ? parseJournalRelaxed(journalEvidence, loginForJournal, sinceMsConn)
         : null;
 
       if (
@@ -901,7 +904,7 @@ router.post('/connect-result', async (req, res) => {
         return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
       }
 
-      if (windowVerified && loginVerified && journalVerdict === 'success') {
+      const promoteConnectedFromCallback = async (fastPath) => {
         await patchAccountMt5Preview(accountId, {
           message: message || MT5_SUCCESS_MSG,
           windowTitle,
@@ -913,6 +916,7 @@ router.post('/connect-result', async (req, res) => {
           mt5Login: loginForJournal || mt5Login,
           message: message || MT5_SUCCESS_MSG
         });
+        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
         await query(`
           UPDATE vps_system.mt5_accounts
           SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity)
@@ -924,14 +928,18 @@ router.post('/connect-result', async (req, res) => {
             SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
                 locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
             WHERE id=$1
-          `, [portId, pid, mt5Login]).catch(() => {});
+          `, [portId, pid, mt5Login || loginForJournal]).catch(() => {});
         }
         await query(`
           INSERT INTO vps_system.mt5_login_history
           (account_id, vps_id, port_id, port_no, mt5_login, status, message)
           VALUES ($1,$2,$3,$4,$5,'connected',$6)
-        `, [accountId, node.id, portId || null, portNo || null, mt5Login, message || MT5_SUCCESS_MSG]).catch(() => {});
-        return res.json({ ok: true, connected: true, fastPath: 'window_verified' });
+        `, [accountId, node.id, portId || null, portNo || null, mt5Login || loginForJournal, message || MT5_SUCCESS_MSG]).catch(() => {});
+        return res.json({ ok: true, connected: true, fastPath });
+      };
+
+      if (loginVerified && journalVerdict === 'success') {
+        return promoteConnectedFromCallback(windowVerified ? 'window_verified' : 'journal_login_verified');
       }
 
       if (journalVerdict !== 'success') {
@@ -982,6 +990,22 @@ router.post('/connect-result', async (req, res) => {
         const pendingJournal = await tryApplyPendingJournalRead(accountId, node.id).catch(() => false);
         if (pendingJournal) {
           return res.json({ ok: true, connected: true, status: 'connected' });
+        }
+
+        const accFast = await query(
+          `
+          SELECT id, status, vps_id, port_id, assigned_port_no, port_slot, mt5_login
+          FROM vps_system.mt5_accounts
+          WHERE id=$1
+          LIMIT 1
+        `,
+          [accountId]
+        ).catch(() => ({ rows: [] }));
+        if (accFast.rows?.[0]) {
+          const fast = await tryFastConnectConfirm(accFast.rows[0]).catch(() => ({ resolved: false }));
+          if (fast.resolved) {
+            return res.json({ ok: true, connected: true, fastPath: fast.source || 'poll_fast' });
+          }
         }
 
         if (folderPath) {
