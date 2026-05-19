@@ -507,6 +507,28 @@ async function handleMt5ConnectProduction(req, res) {
     let portSlot;
 
     if (requestedSlot > 0) {
+      const alreadyOnSlot = await query(
+        `
+        SELECT id, status, mt5_login
+        FROM vps_system.mt5_accounts
+        WHERE user_id=$1
+          AND port_slot=$2
+          AND mt5_login=$3
+          AND COALESCE(server_name, mt5_server, '')=$4
+          AND LOWER(COALESCE(status, '')) = 'connected'
+        LIMIT 1
+      `,
+        [userId, requestedSlot, mt5Login, serverName]
+      ).catch(() => ({ rows: [] }));
+      if (alreadyOnSlot.rows?.[0]) {
+        return res.json({
+          ok: true,
+          status: 'connected',
+          accountId: alreadyOnSlot.rows[0].id,
+          portSlot: requestedSlot,
+          message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้'
+        });
+      }
       if (!(await isUserPortSlotAvailable(userId, requestedSlot, totalPorts))) {
         throw new Error(`PORT ${requestedSlot} ไม่ว่าง กรุณาเลือก PORT ที่ยังไม่ใช้งาน`);
       }

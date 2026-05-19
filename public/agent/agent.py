@@ -72,7 +72,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-mt5-server-lock-v24"
+AGENT_BUILD_ID = "2026-05-19-login-fast-v25"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2263,7 +2263,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    deadline = time.time() + max(6, min(timeout_sec, 12))
+    deadline = time.time() + max(8, min(timeout_sec, 22))
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
@@ -2329,6 +2329,52 @@ def wait_mt5_login_hybrid(
             window_ok_streak += 1
         else:
             window_ok_streak = 0
+
+        sock_ok, _sock_info = mt5_socket_established(port, payload)
+        if sock_ok and ok_w and j_out is True:
+            try:
+                enforce_login_no_trading(
+                    port_dir, port, payload, login,
+                    str(payload_get(payload, "mt5Password", "password") or ""),
+                    LOCKED_MT5_SERVER,
+                )
+            except Exception:
+                pass
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อสำเร็จ — ยังไม่เปิด BOT กรุณาตั้งค่าขั้นตอน 3) แล้วกด ▶ เปิด BOT",
+                port,
+                process_id=proc_pid,
+                journal_evidence=j_chunk or joined,
+                window_title=joined,
+                preview_b64=preview_b64 if preview_b64 else capture_mt5_window_base64(port, payload),
+                window_verified=True,
+            )
+            return True, "socket+journal ok", j_chunk or joined
+
+        if sock_ok and ok_w and j_out is not False and window_ok_streak >= 1:
+            j_relaxed, j_rel_chunk = _quick_journal_probe(port_dir, login, journal_since - 900)
+            if j_relaxed is True:
+                try:
+                    enforce_login_no_trading(
+                        port_dir, port, payload, login,
+                        str(payload_get(payload, "mt5Password", "password") or ""),
+                        LOCKED_MT5_SERVER,
+                    )
+                except Exception:
+                    pass
+                send_connect_result(
+                    payload,
+                    "connected",
+                    "เชื่อมต่อสำเร็จ — MT5 login (socket verified)",
+                    port,
+                    process_id=proc_pid,
+                    journal_evidence=j_rel_chunk or joined,
+                    window_title=joined,
+                    window_verified=True,
+                )
+                return True, "socket verified; journal ok", j_rel_chunk or joined
 
         # สำเร็จเฉพาะเมื่อ Journal ยืนยัน authorized on (ห้ามยอมแค่เห็นเลขบนหน้าต่าง)
         if window_ok_streak >= 2 and j_out is True:
@@ -2652,7 +2698,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
-            time.sleep(3)
+            time.sleep(1.5)
             automate_mt5_login_server_form(login, password, server)
         return proc
 
