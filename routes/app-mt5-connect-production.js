@@ -15,17 +15,24 @@ const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
   tryFastConnectConfirm,
+  tryFastJournalFail,
   expireStuckLoginCommands,
   syncJournalFromLatestCommand,
   failAccountFromJournal,
   cancelJournalVerifyForAccount,
-  cancelJournalVerifyWrongPort
+  cancelJournalVerifyWrongPort,
+  queueJournalReadVerify
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
-const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 800);
+const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 250);
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
-const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
+const {
+  normalizeLockedServer,
+  MT5_LOCKED_SERVER,
+  MT5_SUCCESS_MSG,
+  MT5_FAIL_USER_MSG
+} = require('../lib/mt5Server');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
@@ -107,6 +114,7 @@ async function ensureRuntimeColumns() {
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS account_name TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_error TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_login_message TEXT`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_journal_evidence TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_balance NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_equity NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
@@ -840,7 +848,17 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let resolved = { resolved: false };
     if (shouldSyncJournal) {
-      const fast = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
+      const failFast = await tryFastJournalFail(a).catch(() => ({ resolved: false }));
+      if (failFast.resolved) {
+        resolved = failFast;
+        statusFinal = 'failed';
+        a.status = 'failed';
+        a.last_error = failFast.message || MT5_FAIL_USER_MSG;
+        a.last_login_message = a.last_error;
+      }
+      const fast = !failFast.resolved
+        ? await tryFastConnectConfirm(a).catch(() => ({ resolved: false }))
+        : { resolved: false };
       if (fast.resolved) {
         resolved = fast;
         statusFinal = fast.status || 'connected';
@@ -862,6 +880,16 @@ async function handleMt5ConnectStatusProduction(req, res) {
           statusFinal = String(a.status || statusFinal).toLowerCase();
         }
       }
+    }
+    if (shouldSyncJournal && !resolved.resolved && elapsedSec >= 3 && a.folder_path && a.vps_id && a.mt5_login) {
+      await queueJournalReadVerify({
+        accountId: a.id,
+        vpsId: a.vps_id,
+        folderPath: a.folder_path,
+        mt5Login: a.mt5_login,
+        portNo: a.assigned_port_no || a.port_slot,
+        allowDuringLogin: true
+      }).catch(() => {});
     }
     if (shouldSyncJournal && !resolved.resolved) {
       const syncNow = Date.now();

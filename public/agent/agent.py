@@ -75,7 +75,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-connect-fix-v36"
+AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v33"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2027,7 +2027,7 @@ def send_connect_result(
             "portSlot": port_slot,
             "portNumber": port,
             "mt5Login": payload_get(payload, "mt5Login", "login"),
-            "serverName": payload_get(payload, "serverName", default=LOCKED_MT5_SERVER),
+            "serverName": payload_get(payload, "serverName", default="MohicansMarkets-Live"),
             "status": status,
             "message": message,
             "process_id": process_id,
@@ -2460,12 +2460,14 @@ def _connect_on_api_verify(
         enforce_login_no_trading(port_dir, port, payload, login, pw, srv)
     except Exception:
         pass
+    j_out, j_chunk = _quick_journal_probe(port_dir, login, time.time() - 120)
     send_connect_result(
         payload,
         "connected",
         "เชื่อมต่อสำเร็จ — ยืนยันบัญชีจาก MT5 แล้ว",
         port,
         process_id=proc_pid,
+        journal_evidence=j_chunk or joined,
         window_title=joined,
         preview_b64=preview_b64,
         window_verified=True,
@@ -2639,19 +2641,33 @@ def wait_mt5_login_hybrid(
             preview_b64 = capture_mt5_window_base64(port, payload)
             last_preview_at = now
 
-        if ok_w and now - last_progress_at >= 0.8:
+        if ok_w and now - last_progress_at >= 0.45:
+            j_chk, j_chk_chunk = _quick_journal_probe(port_dir, login, journal_since)
+            if j_chk is False:
+                cleanup_mt5_after_login_fail(port, payload, port_dir)
+                send_connect_result(
+                    payload,
+                    "failed",
+                    JOURNAL_FAIL_MSG,
+                    port,
+                    process_id=None,
+                    journal_evidence=j_chk_chunk or j_chunk,
+                    window_title=joined,
+                )
+                return False, JOURNAL_FAIL_MSG, j_chk_chunk or j_chunk
             send_connect_result(
                 payload,
                 "checking",
                 f"เห็นบัญชี {login} บนหน้าต่าง MT5 แล้ว — กำลังยืนยัน...",
                 port,
                 process_id=proc_pid,
-                journal_evidence=j_chunk or "",
+                journal_evidence=j_chk_chunk or j_chunk or "",
                 window_title=joined,
                 preview_b64=preview_b64,
             )
             last_progress_at = now
-        elif now - last_progress_at >= 1.5:
+        elif now - last_progress_at >= 0.9:
+            j_hint, j_hint_chunk = _quick_journal_probe(port_dir, login, journal_since - 120)
             hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
             send_connect_result(
                 payload,
@@ -2659,6 +2675,7 @@ def wait_mt5_login_hybrid(
                 hint,
                 port,
                 process_id=proc_pid,
+                journal_evidence=j_hint_chunk or "",
                 window_title=joined,
                 preview_b64=preview_b64,
             )
