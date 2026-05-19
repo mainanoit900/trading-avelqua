@@ -17,6 +17,7 @@ const {
   MT5_FAIL_USER_MSG
 } = require('../lib/mt5JournalVerify');
 const { normalizeLockedServer } = require('../lib/mt5Server');
+const { positiveMoney } = require('../lib/mt5EquitySync');
 const {
   verifyLoginFromCommand,
   applyLoginMt5FromCommandResult,
@@ -855,7 +856,9 @@ router.post('/connect-result', async (req, res) => {
           accountId,
           portId,
           mt5Login: loginHint,
-          message: MT5_EARLY_SUCCESS_MSG
+          message: MT5_EARLY_SUCCESS_MSG,
+          balance: positiveMoney(req.body.balance),
+          equity: positiveMoney(req.body.equity)
         });
         await finishPendingLoginCommands(accountId, node.id).catch(() => {});
         await patchAccountMt5Preview(accountId, {
@@ -938,14 +941,11 @@ router.post('/connect-result', async (req, res) => {
           accountId,
           portId,
           mt5Login: loginForJournal || mt5Login,
-          message: message || MT5_SUCCESS_MSG
+          message: message || MT5_SUCCESS_MSG,
+          balance: positiveMoney(req.body.balance),
+          equity: positiveMoney(req.body.equity)
         });
         await finishPendingLoginCommands(accountId, node.id).catch(() => {});
-        await query(`
-          UPDATE vps_system.mt5_accounts
-          SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity)
-          WHERE id=$1
-        `, [accountId, req.body.balance || null, req.body.equity || null]).catch(() => {});
         if (portId) {
           await query(`
             UPDATE vps_system.vps_ports

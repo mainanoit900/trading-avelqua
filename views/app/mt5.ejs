@@ -584,6 +584,22 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     sessionStorage.removeItem('mt5PollAccountId');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+    const accId = accountInfo && accountInfo.id;
+    if (accId) {
+      const eq = accountInfo.last_equity != null ? Number(accountInfo.last_equity) : null;
+      const bal = accountInfo.last_balance != null ? Number(accountInfo.last_balance) : null;
+      if (eq > 0) {
+        applyEquityUiState(eq, bal > 0 ? bal : null);
+      } else {
+        window.__mt5EquityWaitOnce = true;
+        const snap = await refreshAccountSnapshot(accId, true);
+        if (snap && snap.hasEquity) applyEquitySnap(snap);
+        else {
+          const fast = await refreshAccountEquityFast(accId);
+          if (fast) applyEquitySnap(fast);
+        }
+      }
+    }
     await refreshMt5PortCards();
     showMt5ConnectModal('success', msg, {
       accountId: accountInfo && accountInfo.id,
@@ -598,10 +614,11 @@ document.addEventListener('DOMContentLoaded', function () {
       if (window.history && window.history.replaceState) {
         window.history.replaceState({}, '', '/app/mt5?port_slot=' + encodeURIComponent(slot));
       }
-      setTimeout(function () { window.location.reload(); }, 700);
+      setTimeout(function () { window.location.reload(); }, 1100);
     } else if (window.history && window.history.replaceState) {
       window.history.replaceState({}, '', '/app/mt5');
     }
+    window.__mt5FinishSuccessRunning = false;
   }
 
   async function verifyConnectedFromUrl() {

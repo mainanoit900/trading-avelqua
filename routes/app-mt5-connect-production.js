@@ -34,6 +34,8 @@ const {
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
+const { positiveMoney, ensureEquityOnConnect } = require('../lib/mt5EquitySync');
+const { loadAccountPortContext } = require('../lib/mt5AccountPort');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -764,7 +766,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const r = await query(`
       SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
              a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
-             a.connect_started_at,
+             a.connect_started_at, a.last_balance, a.last_equity,
              p.folder_path
       FROM vps_system.mt5_accounts a
       LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -824,7 +826,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
           `
           SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                  a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
-                 a.connect_started_at,
+                 a.connect_started_at, a.last_balance, a.last_equity,
                  p.folder_path
           FROM vps_system.mt5_accounts a
           LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -856,7 +858,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const freshRow = await query(`
         SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
-               a.connect_started_at,
+               a.connect_started_at, a.last_balance, a.last_equity,
                p.folder_path
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -913,6 +915,28 @@ async function handleMt5ConnectStatusProduction(req, res) {
         : (a.last_login_message || `กำลังเปิด MT5 และตรวจสอบ Login (${elapsedSec} วินาที)...`);
     }
     const loginVerified = statusFinal === 'connected';
+    if (loginVerified && !positiveMoney(a.last_equity)) {
+      const eqRes = await ensureEquityOnConnect(
+        a.id,
+        userId,
+        () => loadAccountPortContext(a.id, userId),
+        { waitMs: 5000, skipJournal: true }
+      ).catch(() => null);
+      if (eqRes?.ok) {
+        if (eqRes.balance) a.last_balance = eqRes.balance;
+        if (eqRes.equity) a.last_equity = eqRes.equity;
+      } else {
+        const freshEq = await query(
+          `SELECT last_balance, last_equity FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+          [a.id]
+        ).catch(() => ({ rows: [] }));
+        const fr = freshEq.rows?.[0];
+        if (fr) {
+          if (positiveMoney(fr.last_balance)) a.last_balance = fr.last_balance;
+          if (positiveMoney(fr.last_equity)) a.last_equity = fr.last_equity;
+        }
+      }
+    }
     const previewPath = previewPublicPath(a.id);
     const previewUrl = previewPath ? `${previewPath}?t=${Date.now()}` : '';
     return res.json({
