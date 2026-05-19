@@ -15,6 +15,7 @@ const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
   tryFastConnectConfirm,
+  expireStuckLoginCommands,
   syncJournalFromLatestCommand,
   failAccountFromJournal,
   cancelJournalVerifyForAccount,
@@ -300,7 +301,13 @@ async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) 
       result_message = 'ยกเลิกเพราะมีคำสั่ง login ใหม่ (รหัสผ่านล่าสุด)',
       updated_at = NOW(),
       finished_at = COALESCE(finished_at, NOW())
-    WHERE command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
+    WHERE (
+        command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
+        OR (
+          command_type IN ('read_file', 'port_read_file')
+          AND COALESCE(payload->>'purpose', '') = 'verify_mt5_journal'
+        )
+      )
       AND status IN ('pending', 'processing', 'picked')
       AND (
         ($1::bigint IS NOT NULL AND port_id = $1)
@@ -641,6 +648,7 @@ async function handleMt5ConnectProduction(req, res) {
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
+    await expireStuckLoginCommands(reservedPort.vps_id, 1).catch(() => ({ expired: 0 }));
     await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
 
     if (reservedPort.admin_node_id && allocPortNo) {
@@ -734,6 +742,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const r = await query(`
       SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
              a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+             a.connect_started_at,
              p.folder_path
       FROM vps_system.mt5_accounts a
       LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -755,8 +764,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const a = r.rows?.[0];
     if (!a) return res.json({ ok: true, connected: false, status: 'none', message: 'ยังไม่มีรายการเชื่อมต่อ' });
 
-    const updatedAt = a.updated_at ? new Date(a.updated_at).getTime() : 0;
-    const staleMs = Date.now() - updatedAt;
+    const startedAt = a.connect_started_at
+      ? new Date(a.connect_started_at).getTime()
+      : a.updated_at
+        ? new Date(a.updated_at).getTime()
+        : 0;
+    const staleMs = Date.now() - startedAt;
     let status = String(a.status || '').toLowerCase();
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
@@ -789,6 +802,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
           `
           SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                  a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+                 a.connect_started_at,
                  p.folder_path
           FROM vps_system.mt5_accounts a
           LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -820,6 +834,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const freshRow = await query(`
         SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+               a.connect_started_at,
                p.folder_path
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id

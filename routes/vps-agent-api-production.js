@@ -32,7 +32,9 @@ const {
   accountConnectSinceMs,
   tryFastConnectConfirm,
   parseJournalRelaxed,
-  finishPendingLoginCommands
+  finishPendingLoginCommands,
+  expireStuckLoginCommands,
+  cancelJournalVerifyForVps
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -615,6 +617,7 @@ router.get('/queue', async (req, res) => {
     if (shouldRunQueueMaintenance(node.id)) {
       const { pruneMetricsCommandBacklog } = require('../lib/agentDeploy');
       await expireStuckMaintenanceCommands(node.id).catch(() => {});
+      await expireStuckLoginCommands(node.id, 90).catch(() => ({ expired: 0 }));
       await pruneMetricsCommandBacklog(node.id, { keep: 2 }).catch(() => {});
 
       await query(
@@ -1086,14 +1089,13 @@ router.post('/connect-result', async (req, res) => {
             killMt5: true
           }).catch(() => {});
         } else {
-          await query(
-            `
-            UPDATE vps_system.mt5_accounts
-            SET status='checking', last_error=$2, last_login_message=$2, updated_at=NOW()
-            WHERE id=$1
-          `,
-            [accountId, failMsg]
-          ).catch(() => {});
+          await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
+            vpsId: node.id,
+            portNo,
+            folderPath,
+            reason: journalVerdict === 'failed' ? 'journal_rejected_connected' : 'journal_not_verified',
+            killMt5: journalVerdict === 'failed'
+          }).catch(() => {});
         }
 
         await query(`
