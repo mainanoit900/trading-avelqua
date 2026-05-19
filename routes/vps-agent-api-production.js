@@ -9,15 +9,8 @@ const express = require('express');
 const fs = require('fs');
 const path = require('path');
 const { query } = require('../config/database');
-const {
-  parseMt5JournalOutcome,
-  messageIndicatesLoginFailed,
-  MT5_SUCCESS_MSG,
-  MT5_EARLY_SUCCESS_MSG,
-  MT5_FAIL_USER_MSG
-} = require('../lib/mt5JournalVerify');
+const { parseMt5JournalOutcome, MT5_SUCCESS_MSG, MT5_FAIL_USER_MSG } = require('../lib/mt5JournalVerify');
 const { normalizeLockedServer } = require('../lib/mt5Server');
-const { positiveMoney } = require('../lib/mt5EquitySync');
 const {
   verifyLoginFromCommand,
   applyLoginMt5FromCommandResult,
@@ -30,21 +23,9 @@ const {
   tryApplyPendingJournalRead,
   queueJournalReadVerify,
   queueStopMt5ForAccount,
-  failAccountFromJournal,
-  accountConnectSinceMs,
-  tryFastConnectConfirm,
-  parseJournalRelaxed,
-  finishPendingLoginCommands,
-  expireStuckLoginCommands,
-  cancelJournalVerifyForVps
+  failAccountFromJournal
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
-const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
-const {
-  normalizeAgentCommandType,
-  normalizeAgentCommandForPoll,
-  normalizeRunBotPayloadAction
-} = require('../lib/mt5CommandNormalize');
 const {
   REQUIRED_AGENT_VERSION,
   AGENT_SCRIPT_PATH,
@@ -52,217 +33,41 @@ const {
   queueAgentDeploy,
   getAgentUpgradeState,
   messageForUpgradeState,
-  hasJournalGateMarker,
-  hasRunBotMarker,
-  expireStuckMaintenanceCommands
+  hasJournalGateMarker
 } = require('../lib/agentDeploy');
 const { patchAccountMt5Preview } = require('../lib/mt5Preview');
 const { applyEquityFromCommandResult } = require('../lib/mt5EquitySync');
-const { applyRunBotCommandResult } = require('../lib/mt5RunBotResult');
-const { sanitizePgText, deepSanitizeForPg, toJsonbParam } = require('../lib/pgSanitize');
 
 const router = express.Router();
 
-/** ลดงาน maintenance หนักบน /queue — รันทุก ~30s ต่อ node แทนทุก poll */
-const queueMaintenanceAt = new Map();
-const QUEUE_MAINTENANCE_MS = Number(process.env.VPS_QUEUE_MAINTENANCE_MS || 30000);
-
-function shouldRunQueueMaintenance(nodeId) {
-  const now = Date.now();
-  const last = queueMaintenanceAt.get(nodeId) || 0;
-  if (now - last < QUEUE_MAINTENANCE_MS) return false;
-  queueMaintenanceAt.set(nodeId, now);
-  return true;
-}
-
-function normalizePortHealthRow(p) {
-  const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
-  if (!portNo) return null;
-  const running = !!(p.running ?? p.is_running ?? p.isRunning);
-  const pid = p.process_id ?? p.pid ?? null;
-  const mt5Login = p.mt5_login ?? p.mt5Login ?? null;
-  const folderPath = p.folder_path || p.folderPath || '';
-  const balance = positiveMoney(p.balance);
-  const equity = positiveMoney(p.equity);
-  return {
-    port_no: portNo,
-    port_number: portNo,
-    folder_path: folderPath,
-    running,
-    is_running: running,
-    process_id: pid,
-    mt5_login: mt5Login,
-    exe_path: p.exe_path || p.exePath || '',
-    status: p.status || (running ? 'running' : 'free'),
-    balance: balance || null,
-    equity: equity || null
-  };
-}
-
-async function applyEquityFromPortHealth(nodeId, ports) {
-  let updated = 0;
-  for (const p of Array.isArray(ports) ? ports : []) {
-    const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
-    const login = String(p.mt5_login || p.mt5Login || '').trim();
-    const bal = positiveMoney(p.balance);
-    const eq = positiveMoney(p.equity);
-    if (!portNo || (!bal && !eq)) continue;
-    const r = await query(
-      `
-      UPDATE vps_system.mt5_accounts
-      SET last_balance = COALESCE($4::numeric, last_balance),
-          last_equity = COALESCE($5::numeric, last_equity),
-          last_seen_at = NOW(),
-          updated_at = NOW()
-      WHERE vps_id = $1
-        AND (assigned_port_no = $2 OR port_slot = $2)
-        AND LOWER(COALESCE(status, '')) = 'connected'
-        AND ($3 = '' OR mt5_login::text = $3)
-      RETURNING id
-    `,
-      [nodeId, portNo, login, bal, eq]
-    ).catch(() => ({ rows: [] }));
-    if (r.rows?.length) updated += r.rows.length;
-  }
-  return updated;
-}
-
-async function applyPortHealthBulk(nodeId, ports) {
-  const rows = (Array.isArray(ports) ? ports : [])
-    .map(normalizePortHealthRow)
-    .filter(Boolean);
-  if (!rows.length) return 0;
-
-  let saved = 0;
-  for (const p of rows) {
-    const portNo = Number(p.port_no || p.port_number || 0);
-    if (!portNo) continue;
-    const folder = String(p.folder_path || '').trim();
-    const running = !!(p.running ?? p.is_running);
-    const pid = p.process_id != null && p.process_id !== '' ? Number(p.process_id) : null;
-    const login = String(p.mt5_login || '').trim() || null;
-    const bal = positiveMoney(p.balance);
-    const eq = positiveMoney(p.equity);
-    const r = await query(
-      `
-      INSERT INTO vps_system.vps_port_health
-        (node_id, port_number, folder_path, terminal_exists, running, pid, process_id, mt5_login,
-         balance, equity, updated_at)
-      VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, $8, $9, $10, NOW())
-      ON CONFLICT (node_id, port_number)
-      DO UPDATE SET
-        folder_path = COALESCE(NULLIF(EXCLUDED.folder_path, ''), vps_system.vps_port_health.folder_path),
-        terminal_exists = EXCLUDED.terminal_exists,
-        running = EXCLUDED.running,
-        pid = EXCLUDED.pid,
-        process_id = COALESCE(EXCLUDED.process_id, vps_system.vps_port_health.process_id),
-        mt5_login = COALESCE(EXCLUDED.mt5_login, vps_system.vps_port_health.mt5_login),
-        balance = COALESCE(EXCLUDED.balance, vps_system.vps_port_health.balance),
-        equity = COALESCE(EXCLUDED.equity, vps_system.vps_port_health.equity),
-        updated_at = NOW()
-      RETURNING id
-    `,
-      [
-        nodeId,
-        portNo,
-        folder,
-        !!folder || running,
-        running,
-        JSON.stringify(pid ? [pid] : []),
-        pid,
-        login,
-        bal,
-        eq
-      ]
-    ).catch(() => ({ rows: [] }));
-    if (r.rows?.length) saved += 1;
-  }
-
-  const json = JSON.stringify(rows);
-  await query(
-    `
-    UPDATE vps_system.vps_ports vp
-    SET
-      process_id = NULLIF(d.process_id, '')::int,
-      last_pid = NULLIF(d.process_id, '')::int,
-      current_mt5_login = NULLIF(d.mt5_login, ''),
-      updated_at = NOW()
-    FROM (
-      SELECT
-        (r->>'port_no')::int AS port_no,
-        r->>'process_id' AS process_id,
-        r->>'mt5_login' AS mt5_login
-      FROM jsonb_array_elements($2::jsonb) AS r
-    ) d
-    WHERE vp.vps_id = $1
-      AND vp.port_no = d.port_no
-      AND d.port_no > 0
-    `,
-    [nodeId, json]
-  ).catch(() => {});
-
-  return saved;
-}
-
 function sanitizeJournalText(text) {
-  return sanitizePgText(text).slice(-8000);
+  return String(text || '')
+    .replace(/\u0000/g, '')
+    .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F]/g, ' ')
+    .slice(-8000);
 }
 
 /** เก็บ result ลง jsonb โดยไม่ใส่ content ยาว (กัน PG error จาก null bytes / escape) */
 function prepareCommandResultForDb(result) {
   if (!result || typeof result !== 'object') return {};
-  const out = deepSanitizeForPg({ ...result });
+  const out = { ...result };
   if (typeof out.content === 'string') {
-    const j = sanitizeJournalText(out.content);
-    if (j && /authorized on|authorization on/i.test(j)) {
-      out.journalEvidence = j;
-    }
+    out.journalEvidence = sanitizeJournalText(out.content);
     delete out.content;
   }
   if (typeof out.journalEvidence === 'string') {
     out.journalEvidence = sanitizeJournalText(out.journalEvidence);
   }
-  for (const k of Object.keys(out)) {
-    if (typeof out[k] === 'string' && out[k].length > 16000) {
-      out[k] = sanitizePgText(out[k]).slice(-8000);
-    }
-  }
   return out;
 }
 
-async function processCommandResultSideEffects(node, commandId, ctype, pl, result, opts = {}) {
-  const ok = opts.ok !== false;
-  const message = String(opts.message || '');
-
-  const t = String(ctype || '').toLowerCase();
-  const isRunBotCmd =
-    t === 'run_bot' ||
-    t === 'restart_ea' ||
-    (pl?.instanceId != null &&
-      ['run_mt5_bot', 'run_mt5', 'restart_mt5_bot', 'restart_mt5'].includes(t));
-
-  if (isRunBotCmd) {
-    await applyRunBotCommandResult({ pl, result, ok, message }).catch((e) => {
-      console.error('[run_bot result]', e.message || e);
-    });
-    return;
-  }
-
+async function processCommandResultSideEffects(node, commandId, ctype, pl, result) {
   const accountId = pl.accountId ?? pl.account_id;
   const purpose = String(pl.purpose || '');
 
-  if (ctype === 'login_mt5' || ctype === 'connect_mt5') {
-    if (!ok) {
-      await applyLoginMt5CommandFailed(node, pl, { message, result }).catch((e) => {
-        console.error('[login_mt5 failed]', e.message || e);
-      });
-      return;
-    }
+  if (ctype === 'login_mt5') {
     await applyLoginMt5FromCommandResult(node, pl, result).catch(() => {});
-    return;
   }
-
-  if (!ok) return;
   if (
     (ctype === 'read_file' || ctype === 'port_read_file')
     && purpose === 'verify_mt5_journal'
@@ -277,51 +82,11 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
   let equityApplied = false;
   if (
     (ctype === 'read_file' || ctype === 'port_read_file')
-    && (purpose === 'equity_sync' ||
-      purpose === 'equity_sync_journal' ||
-      purpose === 'equity_poller' ||
-      purpose === 'equity_connect')
+    && (purpose === 'equity_sync' || purpose === 'equity_sync_journal')
   ) {
     const aid = Number(pl.accountId ?? pl.account_id ?? 0);
     if (aid > 0) {
       equityApplied = await applyEquityFromCommandResult(aid, result).catch(() => false);
-    }
-  }
-
-  if (
-    ok &&
-    ['sync_mt5_account', 'account_snapshot', 'read_account_metrics', 'dashboard', 'watchdog'].includes(
-      t
-    )
-  ) {
-    const aid = Number(pl.accountId ?? pl.account_id ?? 0);
-    const instanceId = Number(pl.instanceId ?? pl.instance_id ?? 0);
-    const portNo = Number(pl.portNumber ?? pl.port ?? pl.port_no ?? pl.portSlot ?? 0);
-    const { metricsFromSnapshotResult, metricsFromCommandResult, applyEquityToAccount } = require('../lib/mt5EquitySync');
-    let metrics = metricsFromSnapshotResult(result);
-    if (!metrics || (!metrics.balance && !metrics.equity)) {
-      metrics = metricsFromCommandResult(
-        result,
-        portNo,
-        pl.vpsFolderPath || pl.folder_path || pl.folderPath
-      );
-    }
-    if (metrics && (metrics.balance || metrics.equity)) {
-      if (aid > 0) {
-        await applyEquityToAccount(aid, metrics.balance, metrics.equity).catch(() => {});
-      }
-      if (instanceId > 0) {
-        await applyMt5LiveStatus({
-          instanceId,
-          accountId: aid || undefined,
-          port: pl.portNumber ?? pl.port ?? pl.port_no,
-          balance: metrics.balance,
-          equity: metrics.equity,
-          profit: metrics.profit,
-          status: 'running'
-        }).catch(() => {});
-      }
-      equityApplied = true;
     }
   }
 
@@ -451,8 +216,6 @@ async function ensureAgentTables() {
 
   await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS mt5_login TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS process_id BIGINT`).catch(() => {});
-  await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS balance NUMERIC`).catch(() => {});
-  await query(`ALTER TABLE vps_system.vps_port_health ADD COLUMN IF NOT EXISTS equity NUMERIC`).catch(() => {});
 
   await query(`
     CREATE TABLE IF NOT EXISTS vps_system.mt5_login_history (
@@ -484,18 +247,6 @@ async function findNode(req) {
   return r.rows?.[0] || null;
 }
 
-router.post('/mt5/live-status', async (req, res) => {
-  try {
-    const node = await findNode(req);
-    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
-    const out = await applyMt5LiveStatus(req.body || {});
-    return res.json(out);
-  } catch (e) {
-    console.error('[mt5/live-status]', e.message || e);
-    return res.status(500).json({ ok: false, message: e.message });
-  }
-});
-
 router.post('/heartbeat', async (req, res) => {
   try {
     await ensureAgentTables();
@@ -512,19 +263,9 @@ router.post('/heartbeat', async (req, res) => {
     const agentVersion = String(
       agentBuildId || req.body.agent_version || req.body.agentVersion || ''
     ).trim();
-    const versionToStore = agentBuildId || agentVersion || null;
     const status = node.agent_enabled === false ? 'offline' : 'online';
     const level = lastError ? 'error' : (cpu >= 90 || ram >= 90 || ping >= 400 ? 'alarm' : 'normal');
     const deployRequired = !agentVersionOk(req.body);
-
-    if (deployRequired && node.agent_enabled !== false) {
-      try {
-        const { maybeQueueDeployFromHeartbeat } = require('../lib/agentDeploy');
-        await maybeQueueDeployFromHeartbeat(node.id, req.body).catch(() => ({}));
-      } catch (deployErr) {
-        console.error('[heartbeat deploy]', deployErr.message || deployErr);
-      }
-    }
 
     await query(`
       UPDATE vps_system.vps_nodes
@@ -539,7 +280,7 @@ router.post('/heartbeat', async (req, res) => {
           last_heartbeat=NOW(),
           updated_at=NOW()
       WHERE id=$1
-    `, [node.id, status, cpu, ram, down, up, ping, versionToStore]).catch(async () => {
+    `, [node.id, status, cpu, ram, down, up, ping, agentVersion || null]).catch(async () => {
       await query(`
         UPDATE vps_system.vps_nodes
         SET status=$2, cpu_percent=$3, ram_percent=$4, last_seen_at=NOW(), updated_at=NOW()
@@ -586,54 +327,6 @@ router.post('/heartbeat', async (req, res) => {
   }
 });
 
-function mt5FolderForPort(portNo) {
-  const n = Number(portNo) || 1;
-  return `C:\\MT5_PORTS\\VPS-WIN-01-PORT-${String(n).padStart(2, '0')}`;
-}
-
-router.get('/running-sync', async (req, res) => {
-  try {
-    await ensureAgentTables();
-    const node = await findNode(req);
-    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
-
-    const rows = await query(
-      `
-      SELECT bi.id AS "instanceId",
-             bi.assigned_port_no AS port,
-             bi.mt5_account_id AS "accountId",
-             bi.user_id AS "userId"
-      FROM vps_system.bot_instances bi
-      WHERE bi.vps_id = $1
-        AND bi.status IN ('running', 'pending', 'restarting', 'starting')
-        AND bi.assigned_port_no IS NOT NULL
-      ORDER BY bi.id DESC
-      LIMIT 50
-    `,
-      [node.id]
-    );
-
-    const items = (rows.rows || []).map((r) => {
-      const port = Number(r.port || 0);
-      const folder = mt5FolderForPort(port);
-      return {
-        instanceId: r.instanceId,
-        port,
-        portNumber: port,
-        portSlot: port,
-        accountId: r.accountId,
-        userId: r.userId,
-        vpsFolderPath: folder,
-        folder_path: folder
-      };
-    });
-
-    return res.json({ ok: true, items });
-  } catch (e) {
-    return res.status(500).json({ ok: false, items: [], message: e.message });
-  }
-});
-
 router.post('/port-health', async (req, res) => {
   try {
     await ensureAgentTables();
@@ -641,19 +334,39 @@ router.post('/port-health', async (req, res) => {
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
     const ports = Array.isArray(req.body.ports) ? req.body.ports : [];
-    const count = await applyPortHealthBulk(node.id, ports);
-    const equityUpdated = await applyEquityFromPortHealth(node.id, ports).catch(() => 0);
+    for (const p of ports) {
+      const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
+      if (!portNo) continue;
+      const running = !!(p.running ?? p.is_running ?? p.isRunning);
+      const pid = p.process_id || p.pid || null;
+      const mt5Login = p.mt5_login || p.mt5Login || null;
+      const folderPath = p.folder_path || p.folderPath || '';
 
-    const nodeCode = String(node.node_code || '').trim();
-    if (nodeCode) {
       await query(`
-        UPDATE vps_nodes
-        SET last_seen_at=NOW(), updated_at=NOW(), status='online'
-        WHERE UPPER(TRIM(COALESCE(node_name,''))) = UPPER(TRIM($1))
-      `, [nodeCode]).catch(() => {});
+        INSERT INTO vps_system.vps_port_health
+        (node_id, port_number, folder_path, running, process_id, mt5_login, payload, updated_at)
+        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,NOW())
+        ON CONFLICT (node_id, port_number)
+        DO UPDATE SET
+          folder_path=EXCLUDED.folder_path,
+          running=EXCLUDED.running,
+          process_id=EXCLUDED.process_id,
+          mt5_login=EXCLUDED.mt5_login,
+          payload=EXCLUDED.payload,
+          updated_at=NOW()
+      `, [node.id, portNo, folderPath, running, pid, mt5Login, JSON.stringify(p)]).catch(() => {});
+
+      await query(`
+        UPDATE vps_system.vps_ports
+        SET process_id=$3,
+            last_pid=$3,
+            current_mt5_login=$4,
+            updated_at=NOW()
+        WHERE vps_id=$1 AND port_no=$2
+      `, [node.id, portNo, pid, mt5Login]).catch(() => {});
     }
 
-    return res.json({ ok: true, count, equityUpdated });
+    return res.json({ ok: true, count: ports.length });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
     return res.status(500).json({ ok: false, message: e.message });
@@ -672,78 +385,59 @@ router.get('/queue', async (req, res) => {
       WHERE id=$1
     `, [node.id]).catch(() => {});
 
-    if (shouldRunQueueMaintenance(node.id)) {
-      const { pruneMetricsCommandBacklog } = require('../lib/agentDeploy');
-      await expireStuckMaintenanceCommands(node.id).catch(() => {});
-      await expireStuckLoginCommands(node.id, 90).catch(() => ({ expired: 0 }));
-      const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
-      await expireStalePendingAgentCommands(node.id, 900).catch(() => ({}));
-      await pruneMetricsCommandBacklog(node.id, { keep: 2 }).catch(() => {});
+    const { expireStuckMaintenanceCommands } = require('../lib/agentDeploy');
+    await expireStuckMaintenanceCommands(node.id).catch(() => {});
 
-      await query(
-        `
-        UPDATE vps_system.vps_agent_commands
-        SET command_type = CASE command_type
-              WHEN 'run_bot' THEN 'run_mt5_bot'
-              WHEN 'restart_ea' THEN 'restart_mt5_bot'
-              ELSE command_type
-            END,
-            updated_at = NOW()
-        WHERE (node_id = $1 OR vps_id = $1)
-          AND status = 'pending'
-          AND command_type IN ('run_bot', 'restart_ea')
-      `,
-        [node.id]
-      ).catch(() => {});
-
-      await query(`
-        WITH stuck AS (
-          SELECT
-            c.id,
-            EXISTS (
-              SELECT 1
-              FROM vps_system.vps_agent_commands p
-              WHERE p.status = 'pending'
-                AND p.port_id = c.port_id
-                AND p.command_type = c.command_type
-                AND p.id <> c.id
-            ) AS other_pending_exists,
-            ROW_NUMBER() OVER (
-              PARTITION BY c.port_id, c.command_type
-              ORDER BY c.id ASC
-            ) AS rn_same_key
-          FROM vps_system.vps_agent_commands c
-          WHERE c.status IN ('processing', 'picked')
-            AND (c.node_id = $1 OR c.vps_id = $1)
-            AND c.port_id IS NOT NULL
-            AND c.finished_at IS NULL
-            AND COALESCE(c.locked_at, c.started_at, c.picked_at, c.updated_at, c.created_at)
-                < NOW() - INTERVAL '5 minutes'
-        )
-        UPDATE vps_system.vps_agent_commands c
-        SET
-          status = CASE
-            WHEN s.other_pending_exists OR s.rn_same_key > 1 THEN 'cancelled'
-            ELSE 'pending'
-          END,
-          locked_at = NULL,
-          started_at = NULL,
-          updated_at = NOW()
-        FROM stuck s
-        WHERE c.id = s.id
-      `, [node.id]).catch(() => {});
-
-      await query(`
-        UPDATE vps_system.vps_agent_commands
-        SET status='pending', locked_at=NULL, started_at=NULL, updated_at=NOW()
-        WHERE status IN ('processing', 'picked')
-          AND (node_id=$1 OR vps_id=$1)
-          AND port_id IS NULL
-          AND finished_at IS NULL
-          AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
+    // Avoid idx_vac_no_dup_pending (unique pending per port_id + command_type):
+    // only one stuck row per key becomes pending; extras or rows when a pending
+    // already exists are cancelled instead of failing the whole UPDATE.
+    await query(`
+      WITH stuck AS (
+        SELECT
+          c.id,
+          EXISTS (
+            SELECT 1
+            FROM vps_system.vps_agent_commands p
+            WHERE p.status = 'pending'
+              AND p.port_id = c.port_id
+              AND p.command_type = c.command_type
+              AND p.id <> c.id
+          ) AS other_pending_exists,
+          ROW_NUMBER() OVER (
+            PARTITION BY c.port_id, c.command_type
+            ORDER BY c.id ASC
+          ) AS rn_same_key
+        FROM vps_system.vps_agent_commands c
+        WHERE c.status IN ('processing', 'picked')
+          AND (c.node_id = $1 OR c.vps_id = $1)
+          AND c.port_id IS NOT NULL
+          AND c.finished_at IS NULL
+          AND COALESCE(c.locked_at, c.started_at, c.picked_at, c.updated_at, c.created_at)
               < NOW() - INTERVAL '5 minutes'
-      `, [node.id]).catch(() => {});
-    }
+      )
+      UPDATE vps_system.vps_agent_commands c
+      SET
+        status = CASE
+          WHEN s.other_pending_exists OR s.rn_same_key > 1 THEN 'cancelled'
+          ELSE 'pending'
+        END,
+        locked_at = NULL,
+        started_at = NULL,
+        updated_at = NOW()
+      FROM stuck s
+      WHERE c.id = s.id
+    `, [node.id]).catch(() => {});
+
+    await query(`
+      UPDATE vps_system.vps_agent_commands
+      SET status='pending', locked_at=NULL, started_at=NULL, updated_at=NOW()
+      WHERE status IN ('processing', 'picked')
+        AND (node_id=$1 OR vps_id=$1)
+        AND port_id IS NULL
+        AND finished_at IS NULL
+        AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
+            < NOW() - INTERVAL '5 minutes'
+    `, [node.id]).catch(() => {});
 
     const r = await query(`
       WITH next_cmd AS (
@@ -754,16 +448,9 @@ router.get('/queue', async (req, res) => {
           AND COALESCE(status, '') NOT IN ('success', 'failed', 'cancelled', 'expired')
         ORDER BY
           CASE
-            WHEN command_type IN ('login_mt5', 'connect_mt5') THEN 0
-            WHEN command_type IN ('run_mt5_bot', 'run_mt5', 'run_bot', 'restart_mt5_bot', 'restart_ea') THEN 1
-            WHEN command_type IN ('restart_agent') THEN 2
-            WHEN command_type IN (
-              'deploy_agent', 'update_agent_script', 'update_python_agent'
-            ) THEN 3
-            WHEN command_type IN ('dashboard', 'watchdog', 'account_snapshot', 'sync_mt5_account') THEN 4
-            WHEN command_type IN ('read_file', 'port_read_file')
-              AND COALESCE(payload->>'purpose', '') = 'verify_mt5_journal' THEN 6
-            ELSE 2
+            WHEN command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5') THEN 0
+            WHEN command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN 2
+            ELSE 1
           END,
           id ASC
         FOR UPDATE SKIP LOCKED
@@ -783,7 +470,7 @@ router.get('/queue', async (req, res) => {
       RETURNING c.*
     `, [node.id]);
 
-    let row = r.rows?.[0] || null;
+    const row = r.rows?.[0] || null;
 
     if (!row) {
       return res.json({
@@ -792,23 +479,13 @@ router.get('/queue', async (req, res) => {
       });
     }
 
-    const agentVer = String(node.agent_version || '').trim();
-    const normalizedType = normalizeAgentCommandForPoll(row.command_type, agentVer);
-    const payload = normalizeRunBotPayloadAction(row.payload || {}, normalizedType);
-    if (normalizedType === 'dashboard' && !(row.payload || {}).equitySnapshot) {
-      payload.equitySnapshot = true;
-    }
-    if (normalizedType !== row.command_type) {
-      row = { ...row, command_type: normalizedType };
-    }
-
     return res.json({
       ok: true,
       command: {
         id: row.id,
-        commandType: normalizedType,
-        command_type: normalizedType,
-        payload
+        commandType: row.command_type,
+        command_type: row.command_type,
+        payload: row.payload || {}
       }
     });
   } catch (e) {
@@ -834,11 +511,13 @@ router.post('/command-result', async (req, res) => {
     ).catch(() => ({ rows: [] }));
     const pl = plRow.rows?.[0]?.payload || {};
     const ctype = String(plRow.rows?.[0]?.command_type || '').toLowerCase();
+    const failMsg = String(req.body.error || req.body.message || 'failed').slice(0, 2000);
 
-    await processCommandResultSideEffects(node, commandId, ctype, pl, result, {
-      ok,
-      message: req.body.message || ''
-    });
+    if (ok) {
+      await processCommandResultSideEffects(node, commandId, ctype, pl, result);
+    } else if (ctype === 'login_mt5') {
+      await applyLoginMt5CommandFailed(node, pl, { message: failMsg, result }).catch(() => {});
+    }
 
     await query(`
       UPDATE vps_system.vps_agent_commands
@@ -846,9 +525,9 @@ router.post('/command-result', async (req, res) => {
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
     `, [
       ok ? 'success' : 'failed',
-      sanitizePgText(req.body.message || ''),
-      toJsonbParam(prepareCommandResultForDb(result)),
-      ok ? null : sanitizePgText(req.body.message || 'failed'),
+      req.body.message || '',
+      prepareCommandResultForDb(result),
+      ok ? null : (req.body.message || 'failed'),
       commandId,
       node.id
     ]);
@@ -866,8 +545,7 @@ router.post('/connect-result', async (req, res) => {
     const node = await findNode(req);
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
-    const body = req.body && typeof req.body === 'object' ? req.body : {};
-    const accountId = Number(body.accountId || body.account_id || 0);
+    const accountId = Number(req.body.accountId || req.body.account_id || 0);
     const portId = Number(req.body.portId || req.body.port_id || 0);
     const status = String(req.body.status || '').toLowerCase();
     const message = req.body.message || '';
@@ -880,53 +558,6 @@ router.post('/connect-result', async (req, res) => {
     if (!accountId) return res.status(400).json({ ok: false, message: 'NO_ACCOUNT_ID' });
 
     if (status === 'starting' || status === 'checking') {
-      const loginHint = String(mt5Login || '').trim();
-      const sinceMs = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
-      const journalBlob = sanitizeJournalText(
-        extractJournalEvidence(
-          req.body.journalEvidence,
-          req.body.journal_evidence,
-          req.body.journal,
-          message
-        ) || ''
-      );
-      const titleBlob = `${windowTitle} ${message} ${journalBlob}`;
-      if (
-        (journalBlob &&
-          loginHint &&
-          parseMt5JournalOutcome(journalBlob, loginHint, undefined, sinceMs) === 'failed') ||
-        messageIndicatesLoginFailed(titleBlob, loginHint, sinceMs)
-      ) {
-        await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
-          vpsId: node.id,
-          portNo,
-          reason: 'journal_during_checking'
-        }).catch(() => {});
-        return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
-      }
-
-      if (
-        journalBlob &&
-        loginHint &&
-        parseJournalRelaxed(journalBlob, loginHint, sinceMs) === 'success'
-      ) {
-        await promoteAccountConnected({
-          accountId,
-          portId,
-          mt5Login: loginHint,
-          message: MT5_EARLY_SUCCESS_MSG,
-          balance: positiveMoney(req.body.balance),
-          equity: positiveMoney(req.body.equity)
-        });
-        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
-        await patchAccountMt5Preview(accountId, {
-          message: MT5_EARLY_SUCCESS_MSG,
-          windowTitle,
-          previewB64
-        });
-        return res.json({ ok: true, connected: true, earlyPath: 'journal_during_starting' });
-      }
-
       await patchAccountMt5Preview(accountId, {
         status,
         message: message || (status === 'starting' ? 'กำลังเปิดหน้าจอ MT5...' : 'กำลังตรวจ Login MT5...'),
@@ -947,7 +578,6 @@ router.post('/connect-result', async (req, res) => {
 
     if (status === 'connected') {
       const loginVerified = req.body.loginVerified === true || req.body.login_verified === true;
-      const windowVerified = req.body.windowVerified === true || req.body.window_verified === true;
       if (!loginVerified) {
         console.warn('[connect-result] ignore connected without loginVerified', { accountId, mt5Login });
         return res.json({ ok: true, ignored: true, reason: 'LOGIN_NOT_VERIFIED' });
@@ -962,87 +592,17 @@ router.post('/connect-result', async (req, res) => {
         loginForJournal = String(accRow.rows?.[0]?.mt5_login || '').trim();
       }
 
-      let journalEvidence = sanitizeJournalText(
-        extractJournalEvidence(
-          req.body.journalEvidence,
-          req.body.journal_evidence,
-          req.body.journal,
-          req.body.latestLog,
-          req.body.logText,
-          message
-        ) || ''
+      let journalEvidence = extractJournalEvidence(
+        req.body.journalEvidence,
+        req.body.journal_evidence,
+        req.body.journal,
+        req.body.latestLog,
+        req.body.logText,
+        message
       );
-      const sinceMsConn = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
       let journalVerdict = journalEvidence && loginForJournal
-        ? parseJournalRelaxed(journalEvidence, loginForJournal, sinceMsConn)
+        ? parseMt5JournalOutcome(journalEvidence, loginForJournal)
         : null;
-
-      if (
-        journalVerdict === 'failed' ||
-        messageIndicatesLoginFailed(journalEvidence || message, loginForJournal, sinceMsConn)
-      ) {
-        await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
-          vpsId: node.id,
-          portNo,
-          reason: 'journal_rejected_connected'
-        }).catch(() => {});
-        return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
-      }
-
-      const promoteConnectedFromCallback = async (fastPath) => {
-        let connBal = positiveMoney(req.body.balance);
-        let connEq = positiveMoney(req.body.equity);
-        if (!connBal && !connEq && windowTitle) {
-          const { parseMetricsFromLogText } = require('../lib/mt5EquitySync');
-          const fromTitle = parseMetricsFromLogText(windowTitle);
-          connBal = connBal || positiveMoney(fromTitle.balance);
-          connEq = connEq || positiveMoney(fromTitle.equity);
-        }
-        await patchAccountMt5Preview(accountId, {
-          message: message || MT5_SUCCESS_MSG,
-          windowTitle,
-          previewB64
-        });
-        await promoteAccountConnected({
-          accountId,
-          portId,
-          mt5Login: loginForJournal || mt5Login,
-          message: message || MT5_SUCCESS_MSG,
-          balance: connBal,
-          equity: connEq
-        });
-        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
-        if (portId) {
-          await query(`
-            UPDATE vps_system.vps_ports
-            SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
-                locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
-            WHERE id=$1
-          `, [portId, pid, mt5Login || loginForJournal]).catch(() => {});
-        }
-        await query(`
-          INSERT INTO vps_system.mt5_login_history
-          (account_id, vps_id, port_id, port_no, mt5_login, status, message)
-          VALUES ($1,$2,$3,$4,$5,'connected',$6)
-        `, [accountId, node.id, portId || null, portNo || null, mt5Login || loginForJournal, message || MT5_SUCCESS_MSG]).catch(() => {});
-        return res.json({ ok: true, connected: true, fastPath });
-      };
-
-      if (loginVerified && journalVerdict === 'success') {
-        return promoteConnectedFromCallback(windowVerified ? 'window_verified' : 'journal_login_verified');
-      }
-
-      const msgLowConn = String(message || '').toLowerCase();
-      if (
-        loginVerified &&
-        windowVerified &&
-        journalVerdict !== 'failed' &&
-        (msgLowConn.includes('api verified') ||
-          msgLowConn.includes('ยืนยันบัญชีจาก mt5') ||
-          msgLowConn.includes('socket verified'))
-      ) {
-        return promoteConnectedFromCallback('api_verified');
-      }
 
       if (journalVerdict !== 'success') {
         const cmdVerify = await verifyLoginFromCommand({
@@ -1094,22 +654,6 @@ router.post('/connect-result', async (req, res) => {
           return res.json({ ok: true, connected: true, status: 'connected' });
         }
 
-        const accFast = await query(
-          `
-          SELECT id, status, vps_id, port_id, assigned_port_no, port_slot, mt5_login
-          FROM vps_system.mt5_accounts
-          WHERE id=$1
-          LIMIT 1
-        `,
-          [accountId]
-        ).catch(() => ({ rows: [] }));
-        if (accFast.rows?.[0]) {
-          const fast = await tryFastConnectConfirm(accFast.rows[0]).catch(() => ({ resolved: false }));
-          if (fast.resolved) {
-            return res.json({ ok: true, connected: true, fastPath: fast.source || 'poll_fast' });
-          }
-        }
-
         if (folderPath) {
           await queueJournalReadVerify({
             accountId,
@@ -1132,11 +676,8 @@ router.post('/connect-result', async (req, res) => {
 
         const reportedVer = req.body.agentBuildId || req.body.agent_build_id
           || req.body.agentVersion || req.body.agent_version || null;
-        const legacyAgent =
-          !journalEvidence &&
-          !String(reportedVer || '').includes('journal-gate') &&
-          !String(reportedVer || '').includes('equity-live') &&
-          !String(reportedVer || '').includes('algo-live');
+        const legacyAgent = !journalEvidence
+          && !String(reportedVer || '').includes('journal-gate');
         let upgradeState = 'ready';
         if (legacyAgent) {
           upgradeState = await getAgentUpgradeState(node.id);
@@ -1179,37 +720,21 @@ router.post('/connect-result', async (req, res) => {
           agentVersion: req.body.agentVersion || req.body.agent_version || null
         });
 
-        if (journalVerdict === 'failed') {
+        if (journalVerdict !== 'failed') {
           await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
             vpsId: node.id,
             portNo,
-            folderPath,
-            journalVerdict: 'failed',
-            killMt5: true
-          }).catch(() => {});
-        } else {
-          await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
-            vpsId: node.id,
-            portNo,
-            folderPath,
-            reason: journalVerdict === 'failed' ? 'journal_rejected_connected' : 'journal_not_verified',
-            killMt5: journalVerdict === 'failed'
+            folderPath
           }).catch(() => {});
         }
 
         await query(`
           INSERT INTO vps_system.mt5_login_history
           (account_id, vps_id, port_id, port_no, mt5_login, status, message)
-          VALUES ($1,$2,$3,$4,$5,'checking',$6)
+          VALUES ($1,$2,$3,$4,$5,'failed',$6)
         `, [accountId, node.id, portId || null, portNo || null, loginForJournal || mt5Login, failMsg]).catch(() => {});
 
-        return res.json({
-          ok: true,
-          rejected: true,
-          reason: 'JOURNAL_NOT_VERIFIED',
-          pending: journalVerdict !== 'failed',
-          message: failMsg
-        });
+        return res.json({ ok: true, rejected: true, reason: 'JOURNAL_NOT_VERIFIED', failed: true, message: failMsg });
       }
 
       await patchAccountMt5Preview(accountId, {
@@ -1251,37 +776,17 @@ router.post('/connect-result', async (req, res) => {
 
     if (status === 'failed') {
       let failMsg = message || MT5_FAIL_USER_MSG;
-      const evidence = sanitizeJournalText(
-        req.body.journalEvidence || req.body.journal_evidence || ''
-      ).trim();
-      const loginForFail = String(mt5Login || '').trim();
-      const sinceMsFail = accountId ? await accountConnectSinceMs(accountId).catch(() => 0) : 0;
-      let journalVerdictFail = null;
-      if (evidence && loginForFail) {
-        journalVerdictFail = parseMt5JournalOutcome(evidence, loginForFail, undefined, sinceMsFail);
-      }
       if (/ทันเวลา|timeout/i.test(String(failMsg))) {
         failMsg = 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่';
-      } else if (journalVerdictFail === 'failed') {
+      } else if (String(failMsg).includes('ผู้ใช้งานผิด')) {
         failMsg = MT5_FAIL_USER_MSG;
+      } else {
+        const evidence = String(req.body.journalEvidence || req.body.journal_evidence || '').trim();
+        const loginForFail = String(mt5Login || '').trim();
+        if (evidence && loginForFail && parseMt5JournalOutcome(evidence, loginForFail) === 'failed') {
+          failMsg = MT5_FAIL_USER_MSG;
+        }
       }
-
-      const accSnap = await query(
-        `
-        SELECT status, last_equity, last_balance
-        FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1
-      `,
-        [accountId]
-      ).catch(() => ({ rows: [] }));
-      const accSt = String(accSnap.rows?.[0]?.status || '').toLowerCase();
-      const eq = Number(accSnap.rows?.[0]?.last_equity || 0);
-      const wasConnected = accSt === 'connected' && eq > 50;
-
-      if (wasConnected && journalVerdictFail !== 'failed') {
-        console.warn('[connect-result] ignore stale failed — account connected', accountId);
-        return res.json({ ok: true, ignored: true, reason: 'STALE_FAILED_WHILE_CONNECTED' });
-      }
-
       const failMeta = await query(
         `
         SELECT a.port_id, p.folder_path
@@ -1294,51 +799,20 @@ router.post('/connect-result', async (req, res) => {
       ).catch(() => ({ rows: [] }));
       const failFolder = failMeta.rows?.[0]?.folder_path || '';
       const failPortId = Number(failMeta.rows?.[0]?.port_id || portId || 0);
-      const killMt5 = journalVerdictFail === 'failed';
-
-      if (killMt5) {
-        await failAccountFromJournal(accountId, failPortId, failMsg, {
-          vpsId: node.id,
-          portNo,
-          folderPath: failFolder,
-          reason: 'agent_reported_failed',
-          journalVerdict: 'failed',
-          killMt5: true
-        }).catch(() => {});
-      } else {
-        await query(
-          `
-          UPDATE vps_system.mt5_accounts
-          SET status='checking', last_error=$2, last_login_message=$2, updated_at=NOW()
-          WHERE id=$1
-        `,
-          [accountId, failMsg]
-        ).catch(() => {});
-        if (failFolder) {
-          await queueJournalReadVerify({
-            accountId,
-            vpsId: node.id,
-            folderPath: failFolder,
-            mt5Login: loginForFail
-          }).catch(() => {});
-        }
-      }
+      await failAccountFromJournal(accountId, failPortId, failMsg, {
+        vpsId: node.id,
+        portNo,
+        folderPath: failFolder,
+        reason: 'agent_reported_failed'
+      }).catch(() => {});
 
       await query(`
         INSERT INTO vps_system.mt5_login_history
         (account_id, vps_id, port_id, port_no, mt5_login, status, message)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
-      `, [
-        accountId,
-        node.id,
-        portId || null,
-        portNo || null,
-        mt5Login,
-        killMt5 ? 'failed' : 'checking',
-        failMsg
-      ]).catch(() => {});
+        VALUES ($1,$2,$3,$4,$5,'failed',$6)
+      `, [accountId, node.id, portId || null, portNo || null, mt5Login, failMsg]).catch(() => {});
 
-      return res.json({ ok: true, failed: killMt5, pending: !killMt5, message: failMsg });
+      return res.json({ ok: true, failed: true, message: failMsg });
     }
 
     if (status === 'stopped') {
@@ -1403,10 +877,11 @@ router.post('/commands/:id/result', async (req, res) => {
     const pl = pay.rows?.[0]?.payload || {};
     const ctype = String(pay.rows?.[0]?.command_type || '').toLowerCase();
 
-    await processCommandResultSideEffects(node, commandId, ctype, pl, result, {
-      ok,
-      message: msg
-    });
+    if (ok) {
+      await processCommandResultSideEffects(node, commandId, ctype, pl, result);
+    } else if (ctype === 'login_mt5') {
+      await applyLoginMt5CommandFailed(node, pl, { message: msg, result }).catch(() => {});
+    }
 
     await query(`
       UPDATE vps_system.vps_agent_commands
@@ -1417,14 +892,7 @@ router.post('/commands/:id/result', async (req, res) => {
           finished_at=NOW(),
           updated_at=NOW()
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
-    `, [
-      ok ? 'success' : 'failed',
-      sanitizePgText(msg),
-      toJsonbParam(prepareCommandResultForDb(result)),
-      ok ? null : sanitizePgText(msg),
-      commandId,
-      node.id
-    ]);
+    `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId, node.id]);
 
     return res.json({ ok: true });
   } catch (e) {
