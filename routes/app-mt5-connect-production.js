@@ -36,6 +36,9 @@ const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 const { positiveMoney, ensureEquityOnConnect } = require('../lib/mt5EquitySync');
 const { loadAccountPortContext } = require('../lib/mt5AccountPort');
+const { checkVpsAgentLiveness } = require('../lib/vpsAgentLiveness');
+const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
+const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -671,6 +674,12 @@ async function handleMt5ConnectProduction(req, res) {
     connectStatusSyncAt.delete(accountId);
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
+    const agentLive = await checkVpsAgentLiveness(reservedPort.vps_id);
+    if (!agentLive.ok) {
+      throw new Error(agentLive.message);
+    }
+
+    await expireStalePendingAgentCommands(reservedPort.vps_id, 120).catch(() => ({}));
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
     await expireStuckLoginCommands(reservedPort.vps_id, 1).catch(() => ({ expired: 0 }));
     await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
@@ -694,12 +703,13 @@ async function handleMt5ConnectProduction(req, res) {
       serverName
     });
 
-    const cmd = await query(`
-      INSERT INTO vps_system.vps_agent_commands
-      (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
-      VALUES ($1,$1,$2,'login_mt5',$3::jsonb,'pending',NOW(),NOW())
-      RETURNING id
-    `, [reservedPort.vps_id, reservedPort.port_id, JSON.stringify(payload)]);
+    const cmdIns = await insertPendingAgentCommand({
+      vpsId: reservedPort.vps_id,
+      portId: reservedPort.port_id,
+      commandType: 'login_mt5',
+      payload
+    });
+    const cmd = { rows: [{ id: cmdIns.id }] };
 
     await query(`
       INSERT INTO vps_system.mt5_login_history
@@ -801,12 +811,19 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const staleLimitMs = 120 * 1000;
 
     if (['connecting', 'starting', 'checking'].includes(status) && staleMs > staleLimitMs) {
-      const staleMsg = 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่';
+      const agentLive = a.vps_id
+        ? await checkVpsAgentLiveness(a.vps_id).catch(() => ({ ok: false }))
+        : { ok: false };
+      const staleMsg = agentLive.ok
+        ? 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่'
+        : (agentLive.message ||
+            'VPS Agent ไม่ตอบสนอง — คำสั่ง login ไม่ถูกดำเนินการ กรุณารอแล้วลองใหม่');
       await failAccountFromJournal(a.id, a.port_id, staleMsg, {
         vpsId: a.vps_id,
         portNo: a.assigned_port_no,
         folderPath: a.folder_path,
-        reason: 'connect_poll_timeout'
+        reason: 'connect_poll_timeout',
+        agentOffline: !agentLive.ok
       }).catch(() => {});
       status = 'failed';
       a.last_error = staleMsg;
