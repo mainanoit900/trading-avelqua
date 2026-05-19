@@ -60,7 +60,7 @@ STOP_FLAG = AGENT_DIR / "agent.disabled"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "2"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "30"))
-PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "30"))
+PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "20"))
 PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", "120"))
 PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
 PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-early-connect-v26"
+AGENT_BUILD_ID = "2026-05-19-equity-push-v27"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -434,6 +434,16 @@ def send_port_health() -> None:
             else:
                 _PORT_LOGIN_CACHE.pop(port_no, None)
 
+            balance = None
+            equity = None
+            if run:
+                try:
+                    file_snap = account_snapshot_equity_file(folder, max_age_sec=120)
+                    balance = file_snap.get("balance")
+                    equity = file_snap.get("equity")
+                except Exception:
+                    pass
+
             ports.append({
                 "port_no": port_no,
                 "port_number": port_no,
@@ -444,6 +454,8 @@ def send_port_health() -> None:
                 "mt5_login": mt5_login,
                 "exe_path": run.get("exe_path") if run else "",
                 "status": "running" if run else "free",
+                "balance": balance,
+                "equity": equity,
             })
 
         post_json("/port-health", {"ports": ports})
@@ -1510,16 +1522,16 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
         ensure_equity_pulse_indicator(port_dir)
         mt5_open = mt5_running_for_port_dir(port_dir)
 
+        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=120 if mt5_open else 0)
+        if _snap_positive(file_snap):
+            snap.update({k: v for k, v in file_snap.items() if v is not None and v != ""})
+            return _snap_merge_profit(snap)
+
         if mt5_open:
             uia_snap = account_snapshot_uia(port, payload)
             if _snap_positive(uia_snap):
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
                 return _snap_merge_profit(snap)
-
-        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=25 if mt5_open else 0)
-        if _snap_positive(file_snap):
-            snap.update({k: v for k, v in file_snap.items() if v is not None and v != ""})
-            return _snap_merge_profit(snap)
 
         if not mt5_open:
             api_snap = account_snapshot_mt5_api(port_dir)

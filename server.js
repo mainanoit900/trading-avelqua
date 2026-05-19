@@ -618,6 +618,12 @@ ensureOptionalTables()
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
       startPackageExpiryWorker();
+      try {
+        const { startMt5EquityPoller } = require('./lib/mt5EquityPoller');
+        startMt5EquityPoller();
+      } catch (pollerErr) {
+        console.error('mt5 equity poller start error:', pollerErr.message);
+      }
     });
   })
   .catch((error) => {

@@ -81,6 +81,8 @@ function normalizePortHealthRow(p) {
   const pid = p.process_id ?? p.pid ?? null;
   const mt5Login = p.mt5_login ?? p.mt5Login ?? null;
   const folderPath = p.folder_path || p.folderPath || '';
+  const balance = positiveMoney(p.balance);
+  const equity = positiveMoney(p.equity);
   return {
     port_no: portNo,
     port_number: portNo,
@@ -90,8 +92,38 @@ function normalizePortHealthRow(p) {
     process_id: pid,
     mt5_login: mt5Login,
     exe_path: p.exe_path || p.exePath || '',
-    status: p.status || (running ? 'running' : 'free')
+    status: p.status || (running ? 'running' : 'free'),
+    balance: balance || null,
+    equity: equity || null
   };
+}
+
+async function applyEquityFromPortHealth(nodeId, ports) {
+  let updated = 0;
+  for (const p of Array.isArray(ports) ? ports : []) {
+    const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
+    const login = String(p.mt5_login || p.mt5Login || '').trim();
+    const bal = positiveMoney(p.balance);
+    const eq = positiveMoney(p.equity);
+    if (!portNo || (!bal && !eq)) continue;
+    const r = await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET last_balance = COALESCE($4::numeric, last_balance),
+          last_equity = COALESCE($5::numeric, last_equity),
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE vps_id = $1
+        AND (assigned_port_no = $2 OR port_slot = $2)
+        AND LOWER(COALESCE(status, '')) = 'connected'
+        AND ($3 = '' OR mt5_login::text = $3)
+      RETURNING id
+    `,
+      [nodeId, portNo, login, bal, eq]
+    ).catch(() => ({ rows: [] }));
+    if (r.rows?.length) updated += r.rows.length;
+  }
+  return updated;
 }
 
 async function applyPortHealthBulk(nodeId, ports) {
@@ -227,7 +259,10 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
   let equityApplied = false;
   if (
     (ctype === 'read_file' || ctype === 'port_read_file')
-    && (purpose === 'equity_sync' || purpose === 'equity_sync_journal')
+    && (purpose === 'equity_sync' ||
+      purpose === 'equity_sync_journal' ||
+      purpose === 'equity_poller' ||
+      purpose === 'equity_connect')
   ) {
     const aid = Number(pl.accountId ?? pl.account_id ?? 0);
     if (aid > 0) {
@@ -596,8 +631,9 @@ router.post('/port-health', async (req, res) => {
 
     const ports = Array.isArray(req.body.ports) ? req.body.ports : [];
     const count = await applyPortHealthBulk(node.id, ports);
+    const equityUpdated = await applyEquityFromPortHealth(node.id, ports).catch(() => 0);
 
-    return res.json({ ok: true, count });
+    return res.json({ ok: true, count, equityUpdated });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
     return res.status(500).json({ ok: false, message: e.message });

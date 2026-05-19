@@ -486,7 +486,12 @@ const {
   buildMt5LoginPayload,
   formatPickMessage: formatAdminPickMessage
 } = require('../lib/adminVpsPortPicker');
-const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
+const {
+  setAdminAllocationStatus,
+  parsePortNumber,
+  releaseUserPortCompletely,
+  resolveSystemVpsId
+} = require('../lib/adminVpsBridge');
 
 async function reserveMt5Port(userId) {
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -2365,21 +2370,32 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       }
     }
 
-    // STEP 3: ค่อยล้างค่าใน DB
+    // STEP 3: ค่อยล้างค่าใน DB (ปล่อย port_slot ให้ว่างบนแพ็กเกจ)
     await query(`
       UPDATE vps_system.mt5_accounts
       SET status='deleted',
+          port_slot=NULL,
           assigned_port_no=NULL,
           windows_port_no=NULL,
           vps_id=NULL,
           port_id=NULL,
+          last_login_message='ว่าง',
           updated_at=NOW()
       WHERE id=$1
         AND user_id=$2
         AND LOWER(TRIM(COALESCE(status,'ready'))) <> 'deleted'
     `, [id, userId]);
 
-    flash(req, 'success', 'ลบ PORT ' + (oldPort.port_slot || '') + ' แล้ว');
+    const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({ adminNodeId: 0 }));
+    await releaseUserPortCompletely({
+      systemVpsId: stopNodeId,
+      adminNodeId: adminNodeId || stopNodeId,
+      portNo: stopPortNo,
+      folderPath,
+      portId: oldPort.port_id || null
+    }).catch(() => {});
+
+    flash(req, 'success', 'ลบ PORT ' + (oldPort.port_slot || '') + ' แล้ว — ช่องว่างพร้อมใช้ใหม่');
   } catch (e) {
     flash(req, 'error', e.message);
   }
@@ -2713,8 +2729,9 @@ router.get('/mt5/account-snapshot', requireLogin, async (req, res) => {
     }
     if (shouldVpsSync) {
       fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
-        waitMs: needsSync ? (waitSync ? 14000 : 8000) : 4500,
-        skipJournal: !needsSync
+        waitMs: waitSync ? 3500 : 0,
+        skipJournal: true,
+        light: true
       });
       ctx = await loadAccountPortContext(accountId, userId);
       balanceNum = positiveMoney(ctx?.account?.last_balance);

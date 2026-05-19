@@ -916,26 +916,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
     const loginVerified = statusFinal === 'connected';
     if (loginVerified && !positiveMoney(a.last_equity)) {
-      const eqRes = await ensureEquityOnConnect(
-        a.id,
-        userId,
-        () => loadAccountPortContext(a.id, userId),
-        { waitMs: 5000, skipJournal: true }
-      ).catch(() => null);
-      if (eqRes?.ok) {
-        if (eqRes.balance) a.last_balance = eqRes.balance;
-        if (eqRes.equity) a.last_equity = eqRes.equity;
-      } else {
-        const freshEq = await query(
-          `SELECT last_balance, last_equity FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
-          [a.id]
-        ).catch(() => ({ rows: [] }));
-        const fr = freshEq.rows?.[0];
-        if (fr) {
-          if (positiveMoney(fr.last_balance)) a.last_balance = fr.last_balance;
-          if (positiveMoney(fr.last_equity)) a.last_equity = fr.last_equity;
-        }
-      }
+      ensureEquityOnConnect(a.id, userId, () => loadAccountPortContext(a.id, userId)).catch(() => {});
     }
     const previewPath = previewPublicPath(a.id);
     const previewUrl = previewPath ? `${previewPath}?t=${Date.now()}` : '';

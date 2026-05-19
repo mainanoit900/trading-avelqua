@@ -588,17 +588,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (accId) {
       const eq = accountInfo.last_equity != null ? Number(accountInfo.last_equity) : null;
       const bal = accountInfo.last_balance != null ? Number(accountInfo.last_balance) : null;
-      if (eq > 0) {
-        applyEquityUiState(eq, bal > 0 ? bal : null);
-      } else {
-        window.__mt5EquityWaitOnce = true;
-        const snap = await refreshAccountSnapshot(accId, true);
-        if (snap && snap.hasEquity) applyEquitySnap(snap);
-        else {
-          const fast = await refreshAccountEquityFast(accId);
-          if (fast) applyEquitySnap(fast);
-        }
-      }
+      if (eq > 0) applyEquityUiState(eq, bal > 0 ? bal : null);
     }
     await refreshMt5PortCards();
     showMt5ConnectModal('success', msg, {
@@ -1878,7 +1868,7 @@ function deletePortCountdown(e, form) {
     const el = document.getElementById('mt5PortLockEquity');
     if (!el) return;
     if (syncing) {
-      el.textContent = ' · กำลังดึง Equity...';
+      el.textContent = ' · รอข้อมูลทุน (~20 วิ)...';
       el.className = 'mt5-port-lock-equity syncing';
       return;
     }
@@ -1952,8 +1942,8 @@ function deletePortCountdown(e, form) {
     updateMt5Stats(bal, eq, profitVal);
     if (capitalHint) {
       capitalHint.textContent = eq
-        ? ('ทุนจาก MT5: ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · ขั้นต่ำ $100')
-        : 'เลือก PORT แล้วระบบดึงทุนจริงจาก MT5 (ขั้นต่ำ $100)';
+        ? ('ทุนจาก MT5: ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก ~20 วิ')
+        : 'เลือก PORT — ระบบอัปเดตทุนจาก MT5 ทุก ~20 วิ (ขั้นต่ำ $100)';
     }
     if (eq && capitalInput && (!capitalInput.dataset.userCapitalEdited || capitalInput.dataset.userCapitalEdited !== '1')) {
       capitalInput.value = eq >= 100 ? eq : 100;
@@ -2226,8 +2216,17 @@ function deletePortCountdown(e, form) {
     opt.textContent = 'PORT ' + portSlot + ' / Login ' + login + suffix;
   }
 
+  const MT5_EQUITY_POLL_MS = 20000;
   let mt5EquityVpsTick = 0;
   let mt5EquityVpsBusy = false;
+
+  (function applyInitialPortLockEquity() {
+    const el = document.getElementById('mt5PortLockEquity');
+    if (!el) return;
+    const eq = Number(el.getAttribute('data-initial-equity') || 0);
+    const bal = Number(el.getAttribute('data-initial-balance') || 0);
+    if (eq > 0 || bal > 0) applyEquityUiState(eq > 0 ? eq : null, bal > 0 ? bal : null);
+  })();
 
   function applyEquitySnap(snap) {
     if (!snap) return;
@@ -2253,8 +2252,7 @@ function deletePortCountdown(e, form) {
     refreshAccountEquityFast(accId).then(applyEquitySnap);
 
     mt5EquityVpsTick += 1;
-    if (mt5EquityVpsTick % 4 !== 0 || mt5EquityVpsBusy) return;
-
+    if (mt5EquityVpsBusy) return;
     mt5EquityVpsBusy = true;
     refreshAccountSnapshot(accId, true)
       .then(function (snap) {
@@ -2265,17 +2263,8 @@ function deletePortCountdown(e, form) {
       });
   }
 
-  window.__mt5EquityWaitOnce = true;
   pollAccountEquity();
-  setInterval(pollAccountEquity, 2000);
-  setTimeout(function () {
-    const accId = getMt5AccountId();
-    if (!accId || mt5EquityVpsBusy) return;
-    mt5EquityVpsBusy = true;
-    refreshAccountSnapshot(accId, true)
-      .then(applyEquitySnap)
-      .finally(function () { mt5EquityVpsBusy = false; });
-  }, 400);
+  setInterval(pollAccountEquity, MT5_EQUITY_POLL_MS);
 
   function drawEquityChart(canvas, series) {
     if (!canvas || !series || !series.length) return;
