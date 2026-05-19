@@ -2636,13 +2636,19 @@ router.get('/mt5/account-equity', requireLogin, async (req, res) => {
       `
       SELECT
         ma.id,
+        ma.vps_id,
+        ma.assigned_port_no,
+        ma.port_slot,
+        ma.mt5_login,
         ma.last_balance,
         ma.last_equity,
         ma.status,
-        GREATEST(ma.updated_at, bi.updated_at) AS updated_at,
+        GREATEST(ma.updated_at, bi.updated_at, ph.updated_at) AS updated_at,
         bi.mt5_balance AS bi_balance,
         bi.mt5_equity AS bi_equity,
-        bi.profit AS bi_profit
+        bi.profit AS bi_profit,
+        ph.balance AS ph_balance,
+        ph.equity AS ph_equity
       FROM vps_system.mt5_accounts ma
       LEFT JOIN LATERAL (
         SELECT mt5_balance, mt5_equity, profit, updated_at, last_agent_ping
@@ -2653,6 +2659,10 @@ router.get('/mt5/account-equity', requireLogin, async (req, res) => {
         ORDER BY last_agent_ping DESC NULLS LAST, id DESC
         LIMIT 1
       ) bi ON TRUE
+      LEFT JOIN vps_system.vps_port_health ph
+        ON ph.node_id = ma.vps_id
+        AND ph.port_number = COALESCE(ma.assigned_port_no, ma.port_slot)
+        AND ph.updated_at > NOW() - INTERVAL '3 minutes'
       WHERE ma.id = $1
         AND ma.user_id = $2
         AND LOWER(TRIM(COALESCE(ma.status, ''))) NOT IN ('deleted', 'expired')
@@ -2663,9 +2673,27 @@ router.get('/mt5/account-equity', requireLogin, async (req, res) => {
     const acc = row.rows?.[0];
     if (!acc) return res.json({ ok: false, message: 'ไม่พบบัญชี' });
 
-    const balanceNum =
-      positiveMoney(acc.bi_balance) ?? positiveMoney(acc.last_balance);
-    const equityNum = positiveMoney(acc.bi_equity) ?? positiveMoney(acc.last_equity);
+    let balanceNum =
+      positiveMoney(acc.bi_balance) ??
+      positiveMoney(acc.last_balance) ??
+      positiveMoney(acc.ph_balance);
+    let equityNum =
+      positiveMoney(acc.bi_equity) ??
+      positiveMoney(acc.last_equity) ??
+      positiveMoney(acc.ph_equity);
+
+    if ((!equityNum || !balanceNum) && acc.vps_id && (acc.ph_equity || acc.ph_balance)) {
+      await query(
+        `
+        UPDATE vps_system.mt5_accounts
+        SET last_balance = COALESCE($3::numeric, last_balance),
+            last_equity = COALESCE($4::numeric, last_equity),
+            updated_at = NOW()
+        WHERE id = $1 AND user_id = $2
+      `,
+        [accountId, userId, positiveMoney(acc.ph_balance), positiveMoney(acc.ph_equity)]
+      ).catch(() => {});
+    }
     let profitNum =
       acc.bi_profit != null && Number.isFinite(Number(acc.bi_profit))
         ? Number(acc.bi_profit)
@@ -2683,7 +2711,12 @@ router.get('/mt5/account-equity', requireLogin, async (req, res) => {
       hasBalance: balanceNum != null,
       capital: equityNum || balanceNum || 0,
       updatedAt: acc.updated_at || new Date().toISOString(),
-      source: acc.bi_equity != null || acc.bi_balance != null ? 'bot_live' : 'db'
+      source:
+        acc.bi_equity != null || acc.bi_balance != null
+          ? 'bot_live'
+          : acc.ph_equity != null || acc.ph_balance != null
+            ? 'port_health'
+            : 'db'
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });

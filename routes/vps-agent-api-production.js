@@ -978,6 +978,14 @@ router.post('/connect-result', async (req, res) => {
       }
 
       const promoteConnectedFromCallback = async (fastPath) => {
+        let connBal = positiveMoney(req.body.balance);
+        let connEq = positiveMoney(req.body.equity);
+        if (!connBal && !connEq && windowTitle) {
+          const { parseMetricsFromLogText } = require('../lib/mt5EquitySync');
+          const fromTitle = parseMetricsFromLogText(windowTitle);
+          connBal = connBal || positiveMoney(fromTitle.balance);
+          connEq = connEq || positiveMoney(fromTitle.equity);
+        }
         await patchAccountMt5Preview(accountId, {
           message: message || MT5_SUCCESS_MSG,
           windowTitle,
@@ -988,8 +996,8 @@ router.post('/connect-result', async (req, res) => {
           portId,
           mt5Login: loginForJournal || mt5Login,
           message: message || MT5_SUCCESS_MSG,
-          balance: positiveMoney(req.body.balance),
-          equity: positiveMoney(req.body.equity)
+          balance: connBal,
+          equity: connEq
         });
         await finishPendingLoginCommands(accountId, node.id).catch(() => {});
         if (portId) {

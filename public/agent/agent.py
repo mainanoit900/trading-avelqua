@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v30"
+AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v31"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -438,9 +438,20 @@ def send_port_health() -> None:
             equity = None
             if run:
                 try:
+                    pl = {
+                        "vpsFolderPath": str(folder),
+                        "folder_path": str(folder),
+                        "mt5Login": mt5_login or _PORT_LOGIN_CACHE.get(port_no),
+                    }
                     file_snap = account_snapshot_equity_file(folder, max_age_sec=120)
                     balance = file_snap.get("balance")
                     equity = file_snap.get("equity")
+                    if not _snap_positive(file_snap):
+                        snap = account_snapshot(port_no, pl)
+                        balance = snap.get("balance")
+                        equity = snap.get("equity")
+                        if balance or equity:
+                            send_account_metrics(pl, balance, equity, snap.get("currency", ""))
                 except Exception:
                     pass
 
@@ -1404,6 +1415,14 @@ def account_snapshot_uia(port: Any, payload: Optional[Dict[str, Any]] = None) ->
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqWin {{
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}}
+"@
 $root = '{root}'
 $login = '{login}'
 $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
@@ -1414,6 +1433,10 @@ $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
   return $false
 }} | Select-Object -First 1
 if (-not $proc) {{ Write-Output '{{}}'; exit 0 }}
+if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {{
+  [void][AvqWin]::ShowWindow($proc.MainWindowHandle, 9)
+  Start-Sleep -Milliseconds 400
+}}
 $ae = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
 if (-not $ae) {{ Write-Output '{{}}'; exit 0 }}
 $names = New-Object System.Collections.Generic.List[string]
