@@ -46,10 +46,12 @@ const {
   validateRunCapital,
   normalizeTradeLevel,
   tradeLevelLabel,
+  presetSlugForBot,
   packageLotLimits: resolvePackageLotLimits
 } = require('../lib/mt5BotPresets');
 const { loadAccountPortContext, buildRunMt5BotPayload } = require('../lib/mt5AccountPort');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
+const { validateEaAccountAccess, eaLicenseHintForDiagnostics } = require('../lib/mt5EaLicense');
 const { toJsonbParam } = require('../lib/pgSanitize');
 const { ensureBotInstanceRunColumns } = require('../lib/mt5RunBotResult');
 const {
@@ -1610,6 +1612,14 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
         'แนบ EA บนกราฟ XAUUSD + เปิด Algo Trading (สีเขียว) ใน MT5 — ถ้า Algo แดง BOT จะไม่เทรด'
       );
     }
+    const licenseHint = eaLicenseHintForDiagnostics(
+      ctx.instance?.bot_code,
+      ctx.account?.mt5_login,
+      presetSlugForBot({ bot_code: ctx.instance?.bot_code }) || 'ak-sniper'
+    );
+    if (licenseHint) {
+      blockers.push(licenseHint);
+    }
 
     return res.json({
       ok: true,
@@ -2785,12 +2795,17 @@ router.get('/mt5/preset-calc', requireLogin, async (req, res) => {
       defaultLot
     );
 
+    const licenseCheck = validateEaAccountAccess(bot.bot_code, account.mt5_login, {
+      presetSlug: calc.presetSlug
+    });
+
     const eaSetPreview = buildEaSetPayloadFields({
       bot,
       lot: calc.lot,
       capital: capCheck.capital,
       trade: calc.trade,
-      preset: { ...calc.preset, lot_plus: calc.lotPlus }
+      preset: { ...calc.preset, lot_plus: calc.lotPlus },
+      presetSlug: calc.presetSlug
     });
 
     const riskLabel =
@@ -2801,7 +2816,9 @@ router.get('/mt5/preset-calc', requireLogin, async (req, res) => {
           : '🟢 เสี่ยงต่ำ';
 
     return res.json({
-      ok: true,
+      ok: licenseCheck.ok !== false,
+      eaLicenseOk: licenseCheck.ok !== false,
+      eaLicenseMessage: licenseCheck.ok === false ? licenseCheck.message : null,
       capital: capCheck.capital,
       mt5Balance,
       mt5Equity: mt5Equity != null ? mt5Equity : 0,
@@ -3127,12 +3144,21 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     const presetForEa = calc.preset
       ? { ...calc.preset, lot_plus: calc.lotPlus }
       : { lot_plus: calc.lotPlus };
+    const licenseCheck = validateEaAccountAccess(bot.bot_code, accountCtx.mt5Login, {
+      presetSlug: calc.presetSlug
+    });
+    if (!licenseCheck.ok) {
+      await client.query('ROLLBACK');
+      return res.json({ ok: false, message: licenseCheck.message });
+    }
+
     const eaSet = buildEaSetPayloadFields({
       bot,
       lot,
       capital: capCheck.capital,
       trade,
-      preset: presetForEa
+      preset: presetForEa,
+      presetSlug: calc.presetSlug
     });
     const payload = buildRunMt5BotPayload({
       accountCtx,
@@ -3364,7 +3390,8 @@ router.post('/mt5/request-restart/:id', requireLogin, async (req, res) => {
       lot: lotVal,
       capital: capVal,
       trade,
-      preset: rp.presetRow || null
+      preset: rp.presetRow || null,
+      presetSlug: presetSlugForBot(bot) || 'ak-sniper'
     });
     const payload = {
       ...rp,

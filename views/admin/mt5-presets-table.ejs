@@ -11,7 +11,12 @@
     <div>
       <div class="mt5-kicker">MT5 BOT SETTING TABLE</div>
       <h1>📊 <%= preset.name %></h1>
-      <p>ภาพรวมตารางทุน / LOT / ระดับความเสี่ยง</p>
+      <p>ภาพรวมตารางทุน / LOT / ระดับความเสี่ยง · ค่า <b>Pip Step</b> / <b>TP Average</b> ส่งไปไฟล์ .set ของ EA (ไม่แก้ .mq5)</p>
+      <% if (slug === 'ak-sniper') { %>
+      <p class="mt5-hint" style="margin-top:8px;font-size:13px;color:#94a3b8">
+        เลขบัญชีที่ EA อนุญาตฝังใน .ex5 — ดูรายการใน <code>data/mt5-presets/ak-sniper-ea-meta.json</code>
+      </p>
+      <% } %>
     </div>
 
     <div class="mt5-hero-actions">
@@ -47,6 +52,8 @@
             <th colspan="2">🔴 เสี่ยงสูง</th>
             <th colspan="2">🟡 เสี่ยงกลาง</th>
             <th colspan="2">🟢 เสี่ยงต่ำ</th>
+            <th rowspan="2">Pip Step</th>
+            <th rowspan="2">TP Avg</th>
           </tr>
           <tr class="sub-head">
             <th>T START</th>
@@ -71,6 +78,8 @@
               <td><%= show(row.medium_t_stop) %></td>
               <td><%= show(row.fast_t_start) %></td>
               <td><%= show(row.fast_t_stop) %></td>
+              <td><%= show(row.pip_step) %></td>
+              <td><%= show(row.take_profit_average) %></td>
             </tr>
           <% }) %>
         </tbody>
@@ -132,6 +141,8 @@
       <label>กลาง T STOP<input type="number" step="0.01" name="medium_t_stop"></label>
       <label>รวบไว T START<input type="number" step="0.01" name="fast_t_start"></label>
       <label>รวบไว T STOP<input type="number" step="0.01" name="fast_t_stop"></label>
+      <label>Pip Step<input type="number" step="1" name="pip_step" placeholder="345"></label>
+      <label>TP Average<input type="number" step="1" name="take_profit_average" placeholder="100"></label>
 
       <div class="mt5-form-actions">
         <button type="submit" class="mt5-btn success">บันทึกเพิ่มข้อมูล</button>
@@ -152,7 +163,7 @@
         <thead>
           <tr>
             <th>ทุนแนะนำ</th><th>ทุนเซฟ</th><th>ทุนเซฟสูงสุด</th><th>LOT SIZE</th><th>LOT PLUS</th>
-            <th>T START</th><th>T STOP</th><th>กลาง START</th><th>กลาง STOP</th><th>รวบไว START</th><th>รวบไว STOP</th><th>จัดการ</th>
+            <th>T START</th><th>T STOP</th><th>กลาง START</th><th>กลาง STOP</th><th>รวบไว START</th><th>รวบไว STOP</th><th>Pip</th><th>TP</th><th>จัดการ</th>
           </tr>
         </thead>
         <tbody>
@@ -172,6 +183,8 @@
               <td><input form="<%= fid %>" type="number" step="0.01" name="medium_t_stop" value="<%= show(row.medium_t_stop) %>"></td>
               <td><input form="<%= fid %>" type="number" step="0.01" name="fast_t_start" value="<%= show(row.fast_t_start) %>"></td>
               <td><input form="<%= fid %>" type="number" step="0.01" name="fast_t_stop" value="<%= show(row.fast_t_stop) %>"></td>
+              <td><input form="<%= fid %>" type="number" step="1" name="pip_step" value="<%= show(row.pip_step) %>"></td>
+              <td><input form="<%= fid %>" type="number" step="1" name="take_profit_average" value="<%= show(row.take_profit_average) %>"></td>
               <td class="action-cell">
                 <button form="<%= fid %>" type="submit" class="small-save">บันทึก</button>
                 <form method="POST" action="/admin/mt5-presets/<%= slug %>/<%= row.id %>/delete" onsubmit="return confirm('ยืนยันลบแถวนี้?')">

@@ -58,6 +58,8 @@ const defaultRows = [
   medium_t_stop: r[8],
   fast_t_start: r[9],
   fast_t_stop: r[10],
+  pip_step: 345,
+  take_profit_average: 100
 }));
 
 function getViewBase(req, res) {
@@ -117,6 +119,8 @@ function buildRow(body, id) {
     medium_t_stop: num(body.medium_t_stop),
     fast_t_start: num(body.fast_t_start),
     fast_t_stop: num(body.fast_t_stop),
+    pip_step: num(body.pip_step),
+    take_profit_average: num(body.take_profit_average)
   };
 }
 
