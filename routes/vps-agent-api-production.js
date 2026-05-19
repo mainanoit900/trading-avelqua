@@ -904,4 +904,222 @@ router.post('/commands/:id/result', async (req, res) => {
   }
 });
 
+function positiveMoney(v) {
+  const n = Number(v);
+  if (!Number.isFinite(n) || n < 0) return null;
+  return Math.round(n * 100) / 100;
+}
+
+/** Agent poll — รายการ BOT/บัญชีที่รันอยู่บน VPS นี้ (ซิงค์ balance/equity) */
+async function handleRunningSync(req, res) {
+  try {
+    await ensureAgentTables();
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+
+    const vpsId = Number(node.id);
+    const items = [];
+    const seenPorts = new Set();
+
+    const bots = await query(
+      `
+      SELECT
+        bi.id AS instance_id,
+        bi.assigned_port_no,
+        bi.port_used,
+        bi.mt5_account_id,
+        bi.status,
+        bi.run_payload,
+        a.mt5_login,
+        a.user_id,
+        p.id AS port_id,
+        p.folder_path,
+        b.bot_code,
+        b.bot_name
+      FROM vps_system.bot_instances bi
+      LEFT JOIN vps_system.mt5_accounts a ON a.id = bi.mt5_account_id
+      LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+      LEFT JOIN vps_system.bots b ON b.id = bi.bot_id
+      WHERE bi.vps_id = $1
+        AND LOWER(COALESCE(bi.status, '')) IN ('running', 'pending', 'restarting')
+        AND bi.assigned_port_no IS NOT NULL
+      ORDER BY bi.id DESC
+      LIMIT 80
+    `,
+      [vpsId]
+    ).catch(() => ({ rows: [] }));
+
+    for (const row of bots.rows || []) {
+      const portNo = Number(row.assigned_port_no || 0);
+      if (!portNo) continue;
+      const pl = row.run_payload && typeof row.run_payload === 'object' ? row.run_payload : {};
+      const folderPath = String(pl.folderPath || pl.folder_path || row.folder_path || '').trim();
+      items.push({
+        ...pl,
+        instanceId: pl.instanceId || row.instance_id,
+        accountId: pl.accountId || row.mt5_account_id,
+        userId: pl.userId || row.user_id,
+        port: pl.port || portNo,
+        portNumber: pl.portNumber || portNo,
+        portSlot: pl.portSlot || row.port_used || portNo,
+        portId: pl.portId || row.port_id,
+        mt5Login: pl.mt5Login || row.mt5_login,
+        folderPath,
+        folder_path: folderPath,
+        vpsFolderPath: pl.vpsFolderPath || folderPath,
+        botCode: pl.botCode || pl.eaName || row.bot_code,
+        eaName: pl.eaName || row.bot_name || row.bot_code,
+        vpsId,
+        nodeId: vpsId
+      });
+      seenPorts.add(portNo);
+    }
+
+    const accounts = await query(
+      `
+      SELECT
+        a.id AS account_id,
+        a.user_id,
+        a.mt5_login,
+        a.assigned_port_no,
+        a.port_slot,
+        p.id AS port_id,
+        p.folder_path
+      FROM vps_system.mt5_accounts a
+      LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+      WHERE a.vps_id = $1
+        AND LOWER(COALESCE(a.status, '')) = 'connected'
+        AND a.assigned_port_no IS NOT NULL
+      ORDER BY a.updated_at DESC
+      LIMIT 40
+    `,
+      [vpsId]
+    ).catch(() => ({ rows: [] }));
+
+    for (const row of accounts.rows || []) {
+      const portNo = Number(row.assigned_port_no || row.port_slot || 0);
+      if (!portNo || seenPorts.has(portNo)) continue;
+      const folderPath = String(row.folder_path || '').trim();
+      items.push({
+        accountId: row.account_id,
+        userId: row.user_id,
+        port: portNo,
+        portNumber: portNo,
+        portSlot: row.port_slot || portNo,
+        portId: row.port_id,
+        mt5Login: row.mt5_login,
+        folderPath,
+        folder_path: folderPath,
+        vpsFolderPath: folderPath,
+        vpsId,
+        nodeId: vpsId
+      });
+      seenPorts.add(portNo);
+    }
+
+    return res.json({ ok: true, items });
+  } catch (e) {
+    console.error('[RUNNING SYNC ERROR]', e);
+    return res.status(500).json({ ok: false, message: e.message, items: [] });
+  }
+}
+
+router.get('/running-sync', handleRunningSync);
+router.get('/running_sync', handleRunningSync);
+
+/** Agent รายงานสถานะ BOT ราย PORT (balance/equity) */
+router.post('/mt5/live-status', async (req, res) => {
+  try {
+    await ensureAgentTables();
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+
+    const {
+      instanceId,
+      accountId,
+      port,
+      status,
+      eaStatus,
+      balance,
+      equity,
+      error: errorText
+    } = req.body || {};
+
+    if (!instanceId && !port && !accountId) {
+      return res.json({ ok: false, message: 'instanceId, port or accountId required' });
+    }
+
+    const balVal = positiveMoney(balance);
+    const eqVal = positiveMoney(equity);
+
+    await query(
+      `
+      UPDATE vps_system.bot_instances
+      SET status = COALESCE($2, status),
+          ea_status = COALESCE($3, ea_status),
+          mt5_balance = COALESCE($4::numeric, mt5_balance),
+          mt5_equity = COALESCE($5::numeric, mt5_equity),
+          last_error = COALESCE($6, last_error),
+          last_agent_ping = NOW(),
+          last_heartbeat = NOW(),
+          updated_at = NOW()
+      WHERE vps_id = $7
+        AND (
+          ($1::bigint IS NOT NULL AND id = $1)
+          OR ($8::int IS NOT NULL AND assigned_port_no = $8)
+        )
+    `,
+      [
+        instanceId || null,
+        status || null,
+        eaStatus || null,
+        balVal,
+        eqVal,
+        errorText || null,
+        node.id,
+        port || null
+      ]
+    ).catch(() => {});
+
+    if (accountId) {
+      await query(
+        `
+        UPDATE vps_system.mt5_accounts
+        SET last_balance = COALESCE($2::numeric, last_balance),
+            last_equity = COALESCE($3::numeric, last_equity),
+            last_seen_at = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+      `,
+        [Number(accountId), balVal, eqVal]
+      ).catch(() => {});
+    }
+
+    if (port || instanceId) {
+      await query(
+        `
+        UPDATE vps_system.mt5_accounts a
+        SET last_balance = COALESCE($2::numeric, a.last_balance),
+            last_equity = COALESCE($3::numeric, a.last_equity),
+            last_seen_at = NOW(),
+            updated_at = NOW()
+        FROM vps_system.bot_instances bi
+        WHERE bi.mt5_account_id = a.id
+          AND bi.vps_id = $4
+          AND (
+            ($1::bigint IS NOT NULL AND bi.id = $1)
+            OR ($5::int IS NOT NULL AND (a.assigned_port_no = $5 OR a.port_slot = $5))
+          )
+      `,
+        [instanceId || null, balVal, eqVal, node.id, port || null]
+      ).catch(() => {});
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    console.error('[MT5 LIVE STATUS ERROR]', e);
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
 module.exports = router;
