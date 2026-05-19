@@ -72,7 +72,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-agent-perf-v22"
+AGENT_BUILD_ID = "2026-05-19-mt5-connect-v23"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -102,6 +102,7 @@ def has_journal_gate_marker(version_or_build: str) -> bool:
         "run-bot-hot",
         "metrics-sync",
         "agent-perf",
+        "mt5-connect",
     ):
         if marker in v:
             return True
@@ -724,13 +725,10 @@ def clear_mt5_logs(port_dir: Path) -> None:
 
 
 def clear_mt5_login_cache(port_dir: Path) -> None:
-    """ลบ cache บัญชีที่ MT5 จำไว้ — บังคับใช้ Login/Password จาก INI ล่าสุดเท่านั้น"""
+    """ลบ cache บัญชีที่ MT5 จำไว้ — เก็บ servers.dat (รายการ server/IP) ไว้ให้เชื่อมต่อได้"""
     for rel in (
         "config/accounts.dat",
-        "config/servers.dat",
         "config/account.ini",
-        "config/common.ini",
-        "config/settings.ini",
     ):
         p = port_dir / rel
         if p.is_file():
@@ -759,18 +757,26 @@ def write_mt5_login_ini(
             except Exception:
                 pass
     trade_flag = "true" if allow_expert_trading else "false"
+    safe_password = password.replace("\r", "").replace("\n", "")
+    if any(c in safe_password for c in ('=', ';', '#', '"')):
+        safe_password = safe_password.replace('"', "'")
+        pw_line = f'Password="{safe_password}"'
+    else:
+        pw_line = f"Password={safe_password}"
     ini = f"""[Common]
 Login={login}
-Password={password}
+{pw_line}
 Server={server}
-AutoConfiguration=false
+AutoConfiguration=true
+ProxyEnable=false
+CertInstall=0
 
 [Experts]
 AllowLiveTrading={trade_flag}
 AllowDllImport=true
 Enabled={trade_flag}
 """
-    config_file.write_text(ini, encoding="ascii", errors="ignore")
+    config_file.write_text(ini, encoding="utf-8", errors="replace")
     for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
         if alias.resolve() != config_file.resolve():
             try:
@@ -2265,6 +2271,50 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     mt5_already_open = bool(procs_existing) or mt5_running_for_port_dir(port_dir)
 
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
+    sock_ok = False
+    sock_info = ""
+    if mt5_already_open:
+        sock_ok, sock_info = mt5_socket_established(port, payload)
+        journal_since_open = time.time() - 600
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, journal_since_open)
+        if not sock_ok and j_fast is not True:
+            log(
+                f"MT5 OPEN BUT OFFLINE PORT={port} login={login} "
+                f"socket={sock_info} — kill and relaunch with fresh INI"
+            )
+            try:
+                kill_mt5_by_folder(port_dir)
+                time.sleep(2)
+            except Exception as e:
+                log(f"OFFLINE RELAUNCH kill error: {e}")
+            mt5_already_open = False
+            procs_existing = []
+        elif sock_ok and j_fast is True:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            proc_pid = procs_existing[0].pid if procs_existing else None
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่ ยังไม่เปิด BOT กรุณากด Run BOT ในขั้นตอน 3)",
+                port,
+                process_id=proc_pid,
+                journal_evidence=j_chunk_fast,
+                window_title=title_fast,
+            )
+            log(f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} journal=ok socket=ok")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "keepMt5Open": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
     if mt5_already_open:
         journal_since_open = time.time() - 600
         j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, journal_since_open)
@@ -2278,7 +2328,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 journal_evidence=j_chunk_fast,
             )
             raise RuntimeError(JOURNAL_FAIL_MSG)
-        if j_fast is True or ok_fast:
+        if j_fast is True or (ok_fast and sock_ok):
             enforce_login_no_trading(port_dir, port, payload, login, password, server)
             proc_pid = procs_existing[0].pid if procs_existing else None
             send_connect_result(
@@ -2291,7 +2341,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 window_verified=ok_fast,
                 journal_evidence=j_chunk_fast,
             )
-            log(f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} journal={j_fast} window={ok_fast}")
+            log(
+                f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} "
+                f"journal={j_fast} window={ok_fast} socket={sock_ok}"
+            )
             return {
                 "action": "login_mt5",
                 "status": "connected",
@@ -2446,12 +2499,20 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "10"))
+    journal_timeout = int(
+        os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", str(CONNECT_TIMEOUT_SECONDS))
+    )
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
         port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
     )
+    if ok:
+        sock_after, sock_detail = mt5_socket_established(port, payload)
+        if not sock_after:
+            log(f"LOGIN JOURNAL OK BUT NO SOCKET — treat as fail: {sock_detail}")
+            ok = False
+            msg = "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อ Server — กรุณาลองใหม่"
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)
 
