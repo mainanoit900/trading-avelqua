@@ -65,7 +65,9 @@ PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", 
 PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
 PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
-JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
+JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.25"))
+MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.45"))
+JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "10"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
@@ -73,7 +75,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-login-verify-v34"
+AGENT_BUILD_ID = "2026-05-19-login-fast-v35"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1570,17 +1572,18 @@ def mt5_login_verify_api(
         if not mt5.initialize(path=str(terminal)):
             err = mt5.last_error()
             return False, f"init fail {err}"
-        if password:
-            if not mt5.login(login_int, password=str(password), server=srv):
-                err = mt5.last_error()
-                mt5.shutdown()
-                return False, f"login fail {err}"
-        else:
-            if not mt5.login(login_int):
-                err = mt5.last_error()
-                mt5.shutdown()
-                return False, f"login fail {err}"
         ai = mt5.account_info()
+        ai_login = int(getattr(ai, "login", 0) or 0) if ai is not None else 0
+        if ai_login != login_int:
+            if password:
+                logged = bool(mt5.login(login_int, password=str(password), server=srv))
+            else:
+                logged = bool(mt5.login(login_int))
+            if not logged:
+                err = mt5.last_error()
+                mt5.shutdown()
+                return False, f"login fail {err}"
+            ai = mt5.account_info()
         mt5.shutdown()
         if ai is None:
             return False, "account_info empty"
@@ -1769,6 +1772,17 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Pope
     )
 
 
+_MT5_TITLE_CACHE: Dict[str, Tuple[float, List[str]]] = {}
+_MT5_SOCK_CACHE: Dict[str, Tuple[float, bool, str]] = {}
+
+
+def _mt5_port_cache_key(port: Any, payload: Optional[Dict[str, Any]] = None) -> str:
+    try:
+        return str(resolve_mt5_port_dir(port, payload)).lower()
+    except Exception:
+        return str(port or "")
+
+
 def _run_powershell(command: str, timeout: int = 8) -> str:
     try:
         return subprocess.check_output(
@@ -1782,6 +1796,12 @@ def _run_powershell(command: str, timeout: int = 8) -> str:
 
 def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[str]:
     """Return MainWindowTitle values for terminal64.exe matched to this PORT folder."""
+    cache_key = _mt5_port_cache_key(port, payload)
+    now = time.time()
+    hit = _MT5_TITLE_CACHE.get(cache_key)
+    if hit and (now - hit[0]) < MT5_PROBE_CACHE_SEC:
+        return list(hit[1])
+
     titles: List[str] = []
     port_dir = resolve_mt5_port_dir(port, payload)
     root = str(port_dir).rstrip("\\/").lower()
@@ -1827,6 +1847,7 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
                     titles.append(line.strip())
         except Exception:
             pass
+    _MT5_TITLE_CACHE[cache_key] = (now, titles)
     return titles
 
 
@@ -1867,6 +1888,12 @@ def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bo
 
 def mt5_socket_established(port: Any, payload: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     """Detect whether the terminal matched to this PORT has an established broker socket."""
+    cache_key = _mt5_port_cache_key(port, payload)
+    now = time.time()
+    hit = _MT5_SOCK_CACHE.get(cache_key)
+    if hit and (now - hit[0]) < MT5_PROBE_CACHE_SEC:
+        return hit[1], hit[2]
+
     if psutil is None:
         return False, "psutil not installed"
     pids = set()
@@ -1889,7 +1916,10 @@ def mt5_socket_established(port: Any, payload: Optional[Dict[str, Any]] = None) 
                 pass
     except Exception as e:
         return False, str(e)
-    return len(hits) > 0, ", ".join(hits[:5])
+    ok = len(hits) > 0
+    detail = ", ".join(hits[:5])
+    _MT5_SOCK_CACHE[cache_key] = (now, ok, detail)
+    return ok, detail
 
 
 def mt5_has_login_failure_text(text: str) -> bool:
@@ -2438,7 +2468,7 @@ def _connect_on_api_verify(
         port,
         process_id=proc_pid,
         window_title=joined,
-        preview_b64=preview_b64 or capture_mt5_window_base64(port, payload),
+        preview_b64=preview_b64,
         window_verified=True,
     )
     return True, api_detail
@@ -2460,17 +2490,22 @@ def wait_mt5_login_hybrid(
     last_progress_at = 0.0
     last_wizard_at = 0.0
     last_gate_at = 0.0
+    last_api_at = 0.0
+    last_probe_at = 0.0
     last_title = ""
     window_ok_streak = 0
     wait_start = time.time()
     preview_b64 = ""
     early_sent: List[bool] = [False]
+    joined = ""
+    ok_w = False
+    sock_ok = False
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
         now = time.time()
 
-        if now - last_gate_at >= 1.5:
+        if now - last_gate_at >= 3.0:
             try:
                 write_avelqua_trading_gate(port_dir, False, payload)
                 patch_mt5_experts_config(port_dir, False)
@@ -2478,7 +2513,7 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if now - last_wizard_at >= 4.0:
+        if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
             srv = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
             automate_mt5_open_account_wizard(server=srv)
@@ -2503,10 +2538,14 @@ def wait_mt5_login_hybrid(
             )
             return True, "journal ok (early web confirm)", j_chunk
 
-        titles = mt5_window_titles(port, payload)
-        joined = " | ".join(titles)
-        if joined and joined != last_title:
-            last_title = joined
+        if now - last_probe_at >= MT5_PROBE_CACHE_SEC:
+            titles = mt5_window_titles(port, payload)
+            joined = " | ".join(titles)
+            ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
+            sock_ok, _sock_info = mt5_socket_established(port, payload)
+            last_probe_at = now
+            if joined and joined != last_title:
+                last_title = joined
 
         if mt5_title_suggests_auth_failure(joined):
             cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2520,13 +2559,19 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, joined
 
-        ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
         if ok_w:
             window_ok_streak += 1
         else:
             window_ok_streak = 0
 
-        sock_ok, _sock_info = mt5_socket_established(port, payload)
+        if ok_w and window_ok_streak >= 1 and now - last_api_at >= 1.0:
+            last_api_at = now
+            api_ok, api_detail = _connect_on_api_verify(
+                payload, port, port_dir, login, proc_pid, joined, preview_b64
+            )
+            if api_ok:
+                return True, f"api verified; {api_detail}", api_detail
+
         if sock_ok and ok_w and j_out is True:
             try:
                 enforce_login_no_trading(
@@ -2572,13 +2617,6 @@ def wait_mt5_login_hybrid(
                 )
                 return True, "socket verified; journal ok", j_rel_chunk or joined
 
-        if sock_ok and ok_w and window_ok_streak >= 2:
-            api_ok, api_detail = _connect_on_api_verify(
-                payload, port, port_dir, login, proc_pid, joined, preview_b64
-            )
-            if api_ok:
-                return True, f"api verified; {api_detail}", api_detail
-
         if window_ok_streak >= 2 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
@@ -2598,11 +2636,11 @@ def wait_mt5_login_hybrid(
             return True, "window verified; login success", j_chunk or joined
 
         preview_b64 = ""
-        if now - last_preview_at >= 10.0 and window_ok_streak < 1:
+        if now - last_preview_at >= 18.0 and window_ok_streak < 1:
             preview_b64 = capture_mt5_window_base64(port, payload)
             last_preview_at = now
 
-        if ok_w and now - last_progress_at >= 1.2:
+        if ok_w and now - last_progress_at >= 0.8:
             send_connect_result(
                 payload,
                 "checking",
@@ -2614,7 +2652,7 @@ def wait_mt5_login_hybrid(
                 preview_b64=preview_b64,
             )
             last_progress_at = now
-        elif now - last_progress_at >= 2.0:
+        elif now - last_progress_at >= 1.5:
             hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
             send_connect_result(
                 payload,
@@ -2627,7 +2665,7 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
 
-        time.sleep(0.14)
+        time.sleep(0.08 if ok_w else 0.18)
 
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
@@ -2649,16 +2687,15 @@ def wait_mt5_login_hybrid(
         return False, JOURNAL_FAIL_MSG, j_chunk
 
     ok_w_end, joined_end = mt5_login_verified_by_window(port, payload)
-    sock_end, _ = mt5_socket_established(port, payload)
-    if ok_w_end and sock_end:
-        api_ok, api_detail = _connect_on_api_verify(
-            payload, port, port_dir, login, proc_pid, joined_end
-        )
-        if api_ok:
-            return True, f"api verified (final); {api_detail}", api_detail
+    api_ok, api_detail = _connect_on_api_verify(
+        payload, port, port_dir, login, proc_pid, joined_end or last_title
+    )
+    if api_ok:
+        return True, f"api verified (final); {api_detail}", api_detail
 
     remain = max(5, int(deadline - time.time()))
-    if remain >= 8:
+    remain = min(remain, JOURNAL_EXTENDED_CAP_SEC if ok_w_end else max(JOURNAL_EXTENDED_CAP_SEC, 15))
+    if remain >= 5:
         log(f"MT5 JOURNAL EXTENDED WAIT login={login} remain_sec={remain}")
         ok_j, msg_j, chunk_j = check_mt5_journal_login_result(
             port_dir, login, timeout_sec=remain, since_ts=journal_since
@@ -2937,7 +2974,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
-            time.sleep(1.5)
+            time.sleep(0.9)
             automate_mt5_login_server_form(login, password, server)
         return proc
 
