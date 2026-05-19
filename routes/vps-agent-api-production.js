@@ -360,11 +360,20 @@ router.post('/heartbeat', async (req, res) => {
 
     if (deployRequired && node.agent_enabled !== false) {
       try {
-        const { getAgentUpgradeState, queueAgentDeploy, expireStuckMaintenanceCommands } =
-          require('../lib/agentDeploy');
+        const {
+          getAgentUpgradeState,
+          queueAgentDeploy,
+          queueAgentRestart,
+          expireStuckMaintenanceCommands,
+          pruneMetricsCommandBacklog
+        } = require('../lib/agentDeploy');
         await expireStuckMaintenanceCommands(node.id);
+        await pruneMetricsCommandBacklog(node.id, { keep: 1 }).catch(() => {});
         const upState = await getAgentUpgradeState(node.id).catch(() => 'legacy');
-        if (upState !== 'stuck') {
+        if (upState === 'stuck' || upState === 'needs_restart') {
+          await queueAgentDeploy(node.id, { force: true }).catch(() => ({}));
+          await queueAgentRestart(node.id, { force: true }).catch(() => ({}));
+        } else {
           await queueAgentDeploy(node.id);
         }
       } catch (deployErr) {
@@ -620,8 +629,9 @@ router.get('/queue', async (req, res) => {
           CASE
             WHEN command_type IN ('login_mt5', 'connect_mt5') THEN 0
             WHEN command_type IN ('run_mt5_bot', 'run_mt5', 'run_bot', 'restart_mt5_bot', 'restart_ea') THEN 1
+            WHEN command_type IN ('restart_agent') THEN 2
             WHEN command_type IN (
-              'deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent'
+              'deploy_agent', 'update_agent_script', 'update_python_agent'
             ) THEN 3
             WHEN command_type IN ('dashboard', 'watchdog', 'account_snapshot', 'sync_mt5_account') THEN 4
             ELSE 2

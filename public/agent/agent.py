@@ -270,16 +270,17 @@ def _maybe_self_deploy_agent(heartbeat_res: Dict[str, Any]) -> None:
     """ดาวน์โหลด agent.py ล่าสุดเมื่อเซิร์ฟเวอร์บอกว่าเวอร์ชันเก่า (กัน deploy ค้างแต่ service ไม่รีสตาร์ท)"""
     global _LAST_SELF_DEPLOY_AT
     now = time.time()
-    if now - _LAST_SELF_DEPLOY_AT < float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "3600")):
-        return
-    _LAST_SELF_DEPLOY_AT = now
     required = str(
         heartbeat_res.get("required_agent_version")
         or heartbeat_res.get("requiredAgentVersion")
         or AGENT_BUILD_ID
     ).strip()
-    if has_journal_gate_marker(AGENT_BUILD_ID) and has_journal_gate_marker(required):
+    if AGENT_BUILD_ID == required:
         return
+    cooldown = float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "180"))
+    if now - _LAST_SELF_DEPLOY_AT < cooldown:
+        return
+    _LAST_SELF_DEPLOY_AT = now
     script_url = str(heartbeat_res.get("agent_script_url") or heartbeat_res.get("scriptUrl") or "").strip()
     if not script_url:
         script_url = f"{SERVER_URL}/agent-script"

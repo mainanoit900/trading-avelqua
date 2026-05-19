@@ -1538,11 +1538,11 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
         }));
         upgradeState = maint.state || (await getAgentUpgradeState(accCtx.vpsId).catch(() => 'unknown'));
         upgradeMessage = maint.notice || messageForUpgradeState(upgradeState);
-        if (maint.state === 'stuck') {
-          upgradeState = 'stuck';
-        } else if (maint.maintenancePending && upgradeState !== 'ready') {
-          upgradeState = 'deploying';
-          upgradeMessage = '';
+        if (maint.maintenancePending || maint.state === 'stuck' || maint.recovering) {
+          if (upgradeState !== 'ready') {
+            upgradeState = 'deploying';
+            upgradeMessage = '';
+          }
         }
 
         const pend = await query(
@@ -1596,11 +1596,8 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
     if (ctx.account && String(ctx.account.status).toLowerCase() !== 'connected') {
       blockers.push('PORT ยังไม่ connected — ต้อง Login MT5 ขั้นตอน 2 ก่อน');
     }
-    if (upgradeState === 'stuck' && ctx.botRunning) {
-      blockers.push(
-        upgradeMessage ||
-          'อัปเดต Agent อัตโนมัติไม่สำเร็จ — บน VPS รัน Restart-Service AvelquaPythonAgent -Force'
-      );
+    if ((upgradeState === 'stuck' || upgradeState === 'needs_restart') && ctx.botRunning) {
+      blockers.push('ระบบกำลังอัปเดต Agent บน VPS อัตโนมัติ — รอประมาณ 1–3 นาที');
     } else if (maintPending && ctx.botRunning) {
       blockers.push('ระบบกำลังอัปเดต Agent บน VPS อัตโนมัติ — รอประมาณ 1–2 นาที');
     } else if (vpsAgent && !vpsAgent.runBotReady && ctx.botRunning && upgradeState === 'legacy') {
