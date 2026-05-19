@@ -296,10 +296,11 @@ document.addEventListener('DOMContentLoaded', function () {
       <table class="mt5-table" id="mt5HistoryTable">
         <thead>
           <tr>
+            <th>Date</th>
             <th>BOT</th>
-            <th>MT5</th>
             <th>VPS</th>
             <th>PORT</th>
+            <th>Fund</th>
             <th>Lot</th>
             <th>Level</th>
             <th>Status</th>
@@ -308,24 +309,38 @@ document.addEventListener('DOMContentLoaded', function () {
         </thead>
         <tbody>
           <% if (!instances || instances.length === 0) { %>
-            <tr><td colspan="8" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
+            <tr><td colspan="9" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
           <% } %>
-          <% (instances || []).forEach(function(i){ %>
+          <% (instances || []).forEach(function(i){
+            const histDate = i.started_at || i.created_at;
+            const histDateStr = histDate && typeof fmtDateView === 'function'
+              ? fmtDateView(histDate)
+              : (histDate ? String(histDate).slice(0, 16).replace('T', ' ') : '-');
+            const fundVal = Number(i.capital_used || i.mt5_equity || i.account_equity || i.mt5_balance || i.account_balance || 0);
+            const fundStr = fundVal > 0
+              ? fundVal.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+              : '-';
+            const histActive = ['running','pending','starting','restarting'].includes(String(i.status||'').toLowerCase());
+          %>
             <tr data-mt5-history-row="1">
+              <td><%= histDateStr %></td>
               <td><%= i.display_name || i.bot_name || i.bot_code %></td>
-              <td>#<%= i.mt5_account_id %></td>
               <td><%= i.node_name || i.node_code || '-' %></td>
               <td><%= i.assigned_port_no || '-' %></td>
-              <td><%= i.lot_used || '-' %></td>
+              <td><%= fundStr %></td>
+              <td><%= i.lot_used || i.lot || '-' %></td>
               <td><%= typeof tradeLevelLabel === 'function' ? tradeLevelLabel(i.trade_level) : (i.trade_level || '-') %></td>
               <td><span class="status <%= i.status %>"><%= i.status %></span></td>
               <td class="mt5-row-actions">
-                <button type="button" class="mt5-btn mini" onclick="loadMt5BotAnalytics(<%= i.id %>)">วิเคราะห์</button>
-                <% if (['running','pending','starting','restarting'].includes(String(i.status||'').toLowerCase())) { %>
-                  <form method="POST" action="/app/mt5/stop/<%= i.id %>" onsubmit="return confirm('หยุดการเทรด BOT ใช่ไหม? (MT5 ยังเปิดอยู่)')">
+                <button type="button" class="mt5-btn mini ghost" onclick="mt5FocusInstance(<%= i.id %>, <%= Number(i.assigned_port_no) || 0 %>)">วิเคราะห์</button>
+                <% if (histActive) { %>
+                  <form method="POST" action="/app/mt5/stop/<%= i.id %>" style="display:inline" onsubmit="return confirm('หยุดการเทรด BOT ใช่ไหม? (MT5 ยังเปิดอยู่)')">
                     <button class="mt5-btn mini" type="submit">หยุด</button>
                   </form>
                 <% } %>
+                <form method="POST" action="/app/mt5/instance/<%= i.id %>/remove<%= i.assigned_port_no ? '?port_slot=' + i.assigned_port_no : '' %>" style="display:inline" onsubmit="return confirm('เอารายการนี้ออกจากประวัติใช่ไหม?')">
+                  <button class="mt5-btn mini ghost" type="submit" <%= histActive ? 'disabled title="หยุด BOT ก่อน"' : '' %>>เอาออก</button>
+                </form>
               </td>
             </tr>
           <% }) %>
@@ -336,15 +351,6 @@ document.addEventListener('DOMContentLoaded', function () {
   </section>
 </div>
 
-<section class="mt5-card" id="mt5BotAnalyticsCard">
-  <div class="mt5-card-head">
-    <h2>📊 กราฟ &amp; วิเคราะห์ BOT (AI)</h2>
-    <span>หลังกด Run BOT — XAUUSD</span>
-  </div>
-  <div id="mt5BotAnalyticsPanel" class="mt5-analytics-panel">
-    <div class="mt5-empty">กด Run BOT เพื่อดูกราฟ Equity, กำไร/ขาดทุน และวิเคราะห์ตลาด (AI)</div>
-  </div>
-</section>
 
 <section class="mt5-card">
   <div class="mt5-card-head">
@@ -355,14 +361,6 @@ document.addEventListener('DOMContentLoaded', function () {
   <div id="mt5DiagBanner" class="mt5-alert danger" style="display:none;margin-bottom:12px"></div>
   <div id="mt5LiveDashboard" class="mt5-table-wrap">
     กำลังโหลดข้อมูล...
-  </div>
-  <div id="mt5LiveChartWrap" class="mt5-live-chart-wrap" style="display:none;margin-top:16px">
-    <div class="mt5-card-head" style="margin-bottom:8px">
-      <h3 style="margin:0;font-size:16px">📈 กราฟ Equity (Live)</h3>
-      <span id="mt5LiveChartLabel" class="muted" style="font-size:12px"></span>
-    </div>
-    <canvas id="mt5LiveEquityCanvas" class="mt5-equity-canvas" height="200"></canvas>
-    <p class="muted" style="font-size:12px;margin:8px 0 0">อัปเดตทุก 2 วินาทีเมื่อมี BOT รันอยู่ — ใน MT5 เปิดปุ่ม Algo Trading (สีเขียว) และแนบ EA บนกราฟ XAUUSD</p>
   </div>
 </section>
 
@@ -1446,6 +1444,20 @@ window.mt5LiveDashGo = function (p) {
 window.mt5HistoryGo = function (p) {
   mt5HistoryPage = p;
   initMt5HistoryPager();
+};
+
+window.mt5FocusInstance = function (instId, portSlot) {
+  const url = new URL(window.location.href);
+  if (portSlot) url.searchParams.set('port_slot', String(portSlot));
+  if (instId) url.searchParams.set('run', String(instId));
+  const dash = document.getElementById('mt5LiveDashboard');
+  if (dash) {
+    const sec = dash.closest('section');
+    if (sec) sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (typeof loadMt5LiveDashboard === 'function') loadMt5LiveDashboard();
+    return;
+  }
+  window.location.href = url.pathname + '?' + url.searchParams.toString();
 };
 
 function initMt5HistoryPager() {

@@ -1778,13 +1778,16 @@ router.get('/mt5', async (req, res) => {
   const vpsProbe = await findAvailableVpsPort();
 
   const instances = await safeQuery(`
-    SELECT bi.*, bc.display_name, bc.bot_name, bc.bot_code, n.node_name, n.node_code
+    SELECT bi.*, bc.display_name, bc.bot_name, bc.bot_code, n.node_name, n.node_code,
+           a.last_equity AS account_equity, a.last_balance AS account_balance
     FROM vps_system.bot_instances bi
     LEFT JOIN vps_system.bot_catalog bc ON bc.id=bi.bot_id
     LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
+    LEFT JOIN vps_system.mt5_accounts a ON a.id = bi.mt5_account_id
     WHERE bi.user_id=$1
-    ORDER BY bi.id DESC
-    LIMIT 20
+      AND LOWER(COALESCE(bi.status, '')) NOT IN ('removed', 'deleted')
+    ORDER BY COALESCE(bi.started_at, bi.created_at) DESC NULLS LAST, bi.id DESC
+    LIMIT 50
   `, [userId]);
 
   const flashData = pullFlash(req);
@@ -3435,6 +3438,32 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
   return res.redirect(
     slot ? `/app/mt5?port_slot=${slot}&run=${req.session.mt5LastRunInstanceId || ''}` : '/app/mt5'
   );
+});
+
+router.post('/mt5/instance/:id/remove', requireLogin, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const id = num(req.params.id);
+    const rows = await query(
+      `SELECT id, status, assigned_port_no FROM vps_system.bot_instances WHERE id=$1 AND user_id=$2 LIMIT 1`,
+      [id, userId]
+    );
+    const inst = rows.rows?.[0];
+    if (!inst) throw new Error('ไม่พบรายการ BOT');
+    const st = String(inst.status || '').toLowerCase();
+    if (BOT_ACTIVE_STATUSES.includes(st)) {
+      throw new Error('หยุด BOT ก่อน จึงจะเอาออกจากรายการได้');
+    }
+    await query(
+      `UPDATE vps_system.bot_instances SET status='removed', ea_status='removed', updated_at=NOW() WHERE id=$1`,
+      [id]
+    );
+    flash(req, 'success', 'เอารายการออกจากประวัติแล้ว');
+  } catch (e) {
+    flash(req, 'error', e.message || 'เอาออกไม่สำเร็จ');
+  }
+  const slot = num(req.query.port_slot || req.body?.port_slot || 0);
+  return res.redirect(slot ? `/app/mt5?port_slot=${slot}` : '/app/mt5');
 });
 
 router.post('/mt5/stop/:id', requireLogin, async (req, res) => {
