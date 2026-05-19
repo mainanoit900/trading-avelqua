@@ -73,7 +73,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v32"
+AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v33"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1899,10 +1899,21 @@ $bmp.Save($ms, $enc, $ep)
 """
         out = _run_powershell(ps, timeout=12).strip()
         if out and len(out) > 200 and not out.lower().startswith("exit"):
-            return out[:2_400_000]
+            return out[:400_000]
     except Exception as e:
         log(f"MT5 SCREENSHOT ERROR: {e}")
     return ""
+
+
+def _connect_preview_payload(status: str, preview_b64: str) -> str:
+    """ส่งภาพหน้าจอเฉพาะตอน connected — ลด PayloadTooLarge ตอน checking/starting"""
+    raw = str(preview_b64 or "").strip()
+    if not raw:
+        return ""
+    st = str(status or "").lower()
+    if st != "connected":
+        return ""
+    return raw[:400_000]
 
 
 def send_connect_result(
@@ -1942,8 +1953,8 @@ def send_connect_result(
             "journalEvidence": (journal_evidence or "")[:8000],
             "windowTitle": (window_title or "")[:500],
             "mt5WindowTitle": (window_title or "")[:500],
-            "previewImage": (preview_b64 or "")[:2_400_000],
-            "mt5PreviewImage": (preview_b64 or "")[:2_400_000],
+            "previewImage": _connect_preview_payload(status, preview_b64),
+            "mt5PreviewImage": _connect_preview_payload(status, preview_b64),
             "windowVerified": bool(window_verified),
             "agentVersion": AGENT_BUILD_ID,
             "agentBuildId": AGENT_BUILD_ID,

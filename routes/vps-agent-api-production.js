@@ -855,7 +855,8 @@ router.post('/connect-result', async (req, res) => {
     const node = await findNode(req);
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
-    const accountId = Number(req.body.accountId || req.body.account_id || 0);
+    const body = req.body && typeof req.body === 'object' ? req.body : {};
+    const accountId = Number(body.accountId || body.account_id || 0);
     const portId = Number(req.body.portId || req.body.port_id || 0);
     const status = String(req.body.status || '').toLowerCase();
     const message = req.body.message || '';
