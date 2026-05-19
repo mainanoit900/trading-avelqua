@@ -2734,10 +2734,19 @@ router.get('/mt5/account-snapshot', requireLogin, async (req, res) => {
     }
     if (shouldVpsSync) {
       fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
-        waitMs: waitSync ? 3500 : 0,
-        skipJournal: true,
-        light: true
+        waitMs: needsSync ? (waitSync ? 12000 : 0) : 0,
+        skipJournal: false,
+        light: true,
+        purpose: forceRefresh ? 'equity_refresh' : 'equity_sync'
       });
+      if (needsSync && !fetchMeta?.ok && waitSync) {
+        fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
+          waitMs: 8000,
+          skipJournal: false,
+          light: true,
+          purpose: 'equity_journal_retry'
+        });
+      }
       ctx = await loadAccountPortContext(accountId, userId);
       balanceNum = positiveMoney(ctx?.account?.last_balance);
       equityNum = positiveMoney(ctx?.account?.last_equity);

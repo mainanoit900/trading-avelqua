@@ -282,7 +282,11 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
     const { metricsFromSnapshotResult, metricsFromCommandResult, applyEquityToAccount } = require('../lib/mt5EquitySync');
     let metrics = metricsFromSnapshotResult(result);
     if (!metrics || (!metrics.balance && !metrics.equity)) {
-      metrics = metricsFromCommandResult(result, portNo);
+      metrics = metricsFromCommandResult(
+        result,
+        portNo,
+        pl.vpsFolderPath || pl.folder_path || pl.folderPath
+      );
     }
     if (metrics && (metrics.balance || metrics.equity)) {
       if (aid > 0) {
