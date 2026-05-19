@@ -1473,7 +1473,8 @@ window.mt5ToggleActionDd = function (ev, btn) {
   }
 };
 
-document.addEventListener('click', function () {
+document.addEventListener('click', function (ev) {
+  if (ev.target && ev.target.closest && ev.target.closest('.mt5-action-dd')) return;
   mt5CloseAllActionDd();
 });
 
