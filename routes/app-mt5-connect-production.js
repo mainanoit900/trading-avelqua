@@ -616,6 +616,31 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(mt5LoginInUseMessage(duplicate));
     }
 
+    // ถ้าบัญชีนี้ connected อยู่แล้ว (ผู้ใช้กดเชื่อมต่อซ้ำ) ให้ตอบสำเร็จทันที
+    const alreadyConnected = await query(
+      `
+      SELECT id, port_slot
+      FROM vps_system.mt5_accounts
+      WHERE user_id=$1
+        AND mt5_login=$2
+        AND COALESCE(server_name, mt5_server, '')=$3
+        AND LOWER(COALESCE(status, ''))='connected'
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `,
+      [userId, mt5Login, serverName]
+    ).catch(() => ({ rows: [] }));
+    if (alreadyConnected.rows?.[0]) {
+      const connectedRow = alreadyConnected.rows[0];
+      return res.json({
+        ok: true,
+        status: 'connected',
+        accountId: connectedRow.id,
+        portSlot: Number(connectedRow.port_slot || 0) || null,
+        message: 'บัญชีนี้เชื่อมต่ออยู่แล้ว'
+      });
+    }
+
     await cancelPendingLoginCommands({ mt5Login });
 
     const requestedSlot = num(req.body.port_slot || req.body.portSlot);
