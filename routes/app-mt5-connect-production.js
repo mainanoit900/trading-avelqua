@@ -46,6 +46,11 @@ const {
 } = require('../lib/adminVpsPortPicker');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
+const {
+  USER_PORT_SLOT_BUSY_STATUSES,
+  isUserPortSlotFreeForLogin,
+  findFolderPortUsedByOtherUser
+} = require('../lib/mt5PortSlotGuard');
 const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 const { positiveMoney, ensureEquityOnConnect } = require('../lib/mt5EquitySync');
 const { loadAccountPortContext } = require('../lib/mt5AccountPort');
@@ -555,30 +560,9 @@ async function releasePort(portId, message = '') {
   `, [portId, message || null]).catch(() => {});
 }
 
-const USER_PORT_SLOT_BUSY_STATUSES = [
-  'connecting',
-  'checking',
-  'connected',
-  'ready',
-  'starting'
-];
-
-async function isUserPortSlotAvailable(userId, slot, totalPorts) {
-  const s = num(slot);
-  const max = num(totalPorts);
-  if (s < 1 || s > max) return false;
-  const r = await query(
-    `
-    SELECT 1
-    FROM vps_system.mt5_accounts
-    WHERE user_id=$1
-      AND port_slot=$2
-      AND LOWER(COALESCE(status, '')) = ANY($3::text[])
-    LIMIT 1
-  `,
-    [userId, s, USER_PORT_SLOT_BUSY_STATUSES]
-  ).catch(() => ({ rows: [] }));
-  return !(r.rows || []).length;
+async function isUserPortSlotAvailable(userId, slot, totalPorts, mt5Login = '') {
+  const gate = await isUserPortSlotFreeForLogin(userId, slot, totalPorts, mt5Login);
+  return gate.ok && !gate.alreadyConnected && !gate.inProgress;
 }
 
 async function getNextUserSlot(userId, totalPorts) {
@@ -760,33 +744,42 @@ async function handleMt5ConnectProduction(req, res) {
     let portSlot;
 
     if (requestedSlot > 0) {
-      const alreadyOnSlot = await query(
-        `
-        SELECT id, status, mt5_login
-        FROM vps_system.mt5_accounts
-        WHERE user_id=$1
-          AND port_slot=$2
-          AND mt5_login=$3
-          AND COALESCE(server_name, mt5_server, '')=$4
-          AND LOWER(COALESCE(status, '')) = 'connected'
-        LIMIT 1
-      `,
-        [userId, requestedSlot, mt5Login, serverName]
-      ).catch(() => ({ rows: [] }));
-      if (alreadyOnSlot.rows?.[0]) {
+      const slotGate = await isUserPortSlotFreeForLogin(
+        userId,
+        requestedSlot,
+        totalPorts,
+        mt5Login
+      );
+      if (!slotGate.ok) {
+        throw new Error(slotGate.message);
+      }
+      if (slotGate.alreadyConnected && slotGate.accountId) {
         return respondConnect(req, res, {
           ok: true,
           status: 'connected',
-          accountId: alreadyOnSlot.rows[0].id,
+          accountId: slotGate.accountId,
           portSlot: requestedSlot,
           message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้'
         });
       }
-      if (!(await isUserPortSlotAvailable(userId, requestedSlot, totalPorts))) {
-        throw new Error(`PORT ${requestedSlot} ไม่ว่าง กรุณาเลือก PORT ที่ยังไม่ใช้งาน`);
+      if (slotGate.inProgress && slotGate.accountId) {
+        return respondConnect(req, res, {
+          ok: true,
+          status: 'queued',
+          accountId: slotGate.accountId,
+          portSlot: requestedSlot,
+          message: 'กำลังเชื่อมต่อบน PORT นี้อยู่แล้ว กรุณารอสักครู่'
+        });
       }
       portSlot = requestedSlot;
       const reserve = await reserveBestPort(userId, requestedSlot);
+      if (!reserve.ok) throw new Error(reserve.message);
+      reservedPort = reserve.port;
+    } else if (totalPorts === 1) {
+      const slotGate = await isUserPortSlotFreeForLogin(userId, 1, totalPorts, mt5Login);
+      if (!slotGate.ok) throw new Error(slotGate.message);
+      portSlot = 1;
+      const reserve = await reserveBestPort(userId, 1);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (retryPort) {
@@ -808,13 +801,20 @@ async function handleMt5ConnectProduction(req, res) {
         mt5Login
       });
     } else {
-      portSlot = await getNextUserSlot(userId, totalPorts);
-      if (!portSlot) {
-        throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
-      }
-      const reserve = await reserveBestPort(userId, portSlot);
-      if (!reserve.ok) throw new Error(reserve.message);
-      reservedPort = reserve.port;
+      throw new Error(
+        `กรุณาเลือก PORT 1–${totalPorts} ก่อนกดเชื่อมต่อ (แต่ละ PORT ใช้ Login คนละบัญชี ไม่ซ้ำกัน)`
+      );
+    }
+
+    const otherOnFolder = await findFolderPortUsedByOtherUser(
+      reservedPort.vps_id,
+      num(reservedPort.port_number || parsePortNumber(reservedPort) || portSlot),
+      userId
+    );
+    if (otherOnFolder) {
+      throw new Error(
+        `Folder PORT นี้มีผู้ใช้อื่น (Login ${otherOnFolder.mt5_login}) อยู่แล้ว — เลือก PORT อื่น`
+      );
     }
 
     const allocPortNo = num(

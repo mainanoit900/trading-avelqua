@@ -115,7 +115,7 @@ document.addEventListener('DOMContentLoaded', function () {
     <div class="mt5-card">
       <div class="mt5-card-head">
         <h2>1) เลือก PORT ตามแพ็กเกจ</h2>
-        <span>แพ็กเกจให้ <%= includedPorts || 1 %> PORT (สูงสุด <%= packagePortRange || ('1 - ' + packageMaxPorts) %>) · ใช้ได้ <%= totalPorts %> PORT / Lot <%= packageLotMin %>-<%= packageLotMax %></span>
+        <span>แพ็กเกจ <%= totalPorts %> PORT · แต่ละ PORT = Login คนละบัญชี · ไม่ซ้ำข้าม PORT</span>
       </div>
       <div class="port-list" id="mt5PortList">
         <% if (totalPorts <= 0) { %>
@@ -182,7 +182,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       <div class="mt5-login-port-pill" id="mt5LoginPortPill">
         ดู/จัดการ: <b id="mt5LoginPortLabel">คลิก PORT ด้านบน</b>
-        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">เลือก PORT ว่างด้านบน หรือระบบจะเลือก PORT ว่างให้อัตโนมัติ · โฟลเดอร์ VPS ตามเลข PORT</small>
+        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">คลิก <b>PORT ว่าง</b> แล้วกรอก Login — แต่ละ PORT ใช้บัญชี MT5 คนละเลข (Login เดิมใช้ได้แค่ PORT เดิม)</small>
       </div>
 
       <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="return window.mt5PrepareConnectSubmit(event)">
@@ -439,7 +439,16 @@ document.addEventListener('DOMContentLoaded', function () {
       );
       return false;
     }
-    const connectSlot = mt5EnsureEmptyPortSelected({});
+    let connectSlot = String((document.getElementById('mt5SelectedPortSlot') || {}).value || '').trim();
+    if (!connectSlot) connectSlot = mt5FirstEmptyPortSlotFromDom();
+    const portPickErr = mt5ValidatePortForConnect(connectSlot);
+    if (portPickErr) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        portPickErr
+      );
+      return false;
+    }
     if (!connectSlot) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
@@ -852,6 +861,23 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     if (!pw || pw.length < 4) {
       return 'กรุณากรอกรหัสผ่าน MT5';
+    }
+    return '';
+  }
+
+  function mt5ValidatePortForConnect(slot) {
+    if (!slot) {
+      return 'กรุณาคลิกเลือก PORT ว่าง (ขั้นตอน 1) ก่อนกดเชื่อมต่อ';
+    }
+    const card = document.querySelector('.port-item[data-port-slot="' + slot + '"]');
+    if (!card) return 'ไม่พบ PORT ' + slot;
+    if (card.classList.contains('connected')) {
+      return (
+        'PORT ' + slot + ' มีบัญชีเชื่อมต่อแล้ว — คลิก PORT ว่างเพื่อ Login บัญชีใหม่ หรือคลิก PORT นี้ไปขั้นตอน 3'
+      );
+    }
+    if (card.classList.contains('checking')) {
+      return 'PORT ' + slot + ' กำลังเชื่อมต่ออยู่ — รอให้เสร็จหรือเลือก PORT ว่างอื่น';
     }
     return '';
   }
@@ -1419,6 +1445,11 @@ function mt5ScrollToBotSection() {
   if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
+function mt5ScrollToLoginSection() {
+  const el = document.getElementById('mt5LoginPortPill') || document.getElementById('mt5ConnectForm');
+  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
 function mt5SelectPortSlot(slot, opts) {
   const o = opts || {};
   const n = Number(slot || 0);
@@ -1435,14 +1466,18 @@ function mt5SelectPortSlot(slot, opts) {
   document.querySelectorAll('.port-item[data-port-slot]').forEach(function (el) {
     el.classList.toggle('selected', Number(el.getAttribute('data-port-slot')) === n);
   });
+  const card = document.querySelector('.port-item[data-port-slot="' + n + '"]');
+  const isConnected = card && card.classList.contains('connected');
+  const isChecking = card && card.classList.contains('checking');
   if (o.navigate === true) {
-    const urlSlot = new URLSearchParams(window.location.search).get('port_slot');
-    if (String(urlSlot || '') !== String(n)) {
-      window.location.href = '/app/mt5?port_slot=' + encodeURIComponent(n);
-      return;
-    }
+    window.location.href = '/app/mt5?port_slot=' + encodeURIComponent(n);
+    return;
   }
-  mt5ScrollToBotSection();
+  if (isConnected || isChecking) {
+    mt5ScrollToBotSection();
+  } else {
+    mt5ScrollToLoginSection();
+  }
 }
 window.mt5SelectPortSlot = mt5SelectPortSlot;
 
@@ -1713,13 +1748,20 @@ function mt5BindPortSlotPicks() {
     if (e.target.closest('.port-actions')) return;
     const card = e.target.closest('.port-item[data-port-slot]');
     if (!card) return;
-    mt5SelectPortSlot(card.getAttribute('data-port-slot'), { navigate: true });
+    const slot = card.getAttribute('data-port-slot');
+    const goNav =
+      card.classList.contains('connected') || card.classList.contains('checking');
+    mt5SelectPortSlot(slot, { navigate: goNav });
   });
   list.addEventListener('keydown', function (e) {
     const hit = e.target.closest('.port-slot-pick-hit[data-port-slot]');
     if (!hit || (e.key !== 'Enter' && e.key !== ' ')) return;
     e.preventDefault();
-    mt5SelectPortSlot(hit.getAttribute('data-port-slot'), { navigate: true });
+    const card = hit.closest('.port-item[data-port-slot]');
+    const goNav =
+      card &&
+      (card.classList.contains('connected') || card.classList.contains('checking'));
+    mt5SelectPortSlot(hit.getAttribute('data-port-slot'), { navigate: !!goNav });
   });
 }
 window.mt5BindPortSlotPicks = mt5BindPortSlotPicks;
@@ -1728,15 +1770,10 @@ try {
   const urlSlot = new URLSearchParams(window.location.search).get('port_slot');
   const savedSlot = urlSlot || localStorage.getItem('mt5ActivePortSlot');
   if (savedSlot) {
-    const card = document.querySelector('.port-item[data-port-slot="' + savedSlot + '"]');
-    if (card && !card.classList.contains('connected') && !card.classList.contains('checking')) {
-      mt5SelectPortSlot(savedSlot, { navigate: false });
-    } else {
-      mt5EnsureEmptyPortSelected({});
-    }
-    setTimeout(mt5ScrollToBotSection, 400);
+    mt5SelectPortSlot(savedSlot, { navigate: false });
   } else {
-    mt5EnsureEmptyPortSelected({});
+    const empty = mt5FirstEmptyPortSlotFromDom();
+    if (empty) mt5SelectPortSlot(empty, { navigate: false });
   }
 } catch (_) {}
 
