@@ -10,7 +10,7 @@
 
 const express = require('express');
 const Redis = require('ioredis');
-const { requireLogin } = require('../middleware/requireAuth');
+const { requireLogin, prefersJsonResponse } = require('../middleware/requireAuth');
 const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
@@ -600,6 +600,29 @@ async function getNextUserSlot(userId, totalPorts) {
   return 0;
 }
 
+function respondConnect(req, res, body, statusCode = 200) {
+  const useJson =
+    prefersJsonResponse(req) ||
+    String(req.headers['content-type'] || '').includes('json');
+  if (useJson) {
+    return res.status(statusCode).json(body);
+  }
+  if (
+    body.ok &&
+    body.accountId &&
+    (body.status === 'queued' || body.status === 'connected' || body.status === 'pending')
+  ) {
+    const q = new URLSearchParams();
+    const ps = body.portSlot || req.body?.port_slot || req.body?.portSlot || '';
+    if (ps) q.set('port_slot', String(ps));
+    q.set('connect_account', String(body.accountId));
+    q.set('connect_queued', '1');
+    return res.redirect(302, '/app/mt5?' + q.toString());
+  }
+  const errMsg = encodeURIComponent(String(body.message || 'เชื่อมต่อไม่สำเร็จ').slice(0, 800));
+  return res.redirect(302, '/app/mt5?connect_error=' + errMsg);
+}
+
 async function handleMt5ConnectProduction(req, res) {
   let lockKey = null;
   let loginLockKey = null;
@@ -670,7 +693,7 @@ async function handleMt5ConnectProduction(req, res) {
     ).catch(() => ({ rows: [] }));
     if (alreadyConnected.rows?.[0]) {
       const connectedRow = alreadyConnected.rows[0];
-      return res.json({
+      return respondConnect(req, res, {
         ok: true,
         status: 'connected',
         accountId: connectedRow.id,
@@ -719,7 +742,7 @@ async function handleMt5ConnectProduction(req, res) {
       ).catch(() => ({ rows: [] }));
 
       if (activeCmd.rows?.[0]) {
-        return res.json({
+        return respondConnect(req, res, {
           ok: true,
           status: 'queued',
           accountId: pendingAcc.id,
@@ -751,7 +774,7 @@ async function handleMt5ConnectProduction(req, res) {
         [userId, requestedSlot, mt5Login, serverName]
       ).catch(() => ({ rows: [] }));
       if (alreadyOnSlot.rows?.[0]) {
-        return res.json({
+        return respondConnect(req, res, {
           ok: true,
           status: 'connected',
           accountId: alreadyOnSlot.rows[0].id,
@@ -969,7 +992,7 @@ async function handleMt5ConnectProduction(req, res) {
       portSlot
     });
 
-    return res.json({
+    return respondConnect(req, res, {
       ok: true,
       status: 'queued',
       accountId,
@@ -985,7 +1008,7 @@ async function handleMt5ConnectProduction(req, res) {
   } catch (e) {
     console.warn('[mt5-connect] failed', { userId: req.user?.id, message: e.message });
     if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
-    return res.json({ ok: false, status: 'failed', message: e.message });
+    return respondConnect(req, res, { ok: false, status: 'failed', message: e.message }, 400);
   } finally {
     if (loginLockKey) await redis.del(loginLockKey).catch(() => {});
     if (lockKey) await redis.del(lockKey).catch(() => {});

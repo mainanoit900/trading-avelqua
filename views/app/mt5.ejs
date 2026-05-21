@@ -182,7 +182,7 @@ document.addEventListener('DOMContentLoaded', function () {
         <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">เลือก PORT ว่างด้านบน หรือระบบจะเลือก PORT ว่างให้อัตโนมัติ · โฟลเดอร์ VPS ตามเลข PORT</small>
       </div>
 
-      <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm">
+      <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="return window.mt5PrepareConnectSubmit(event)">
         <input type="hidden" name="port_slot" id="mt5SelectedPortSlot" value="">
 
   <div id="mt5LoginPreview" class="mt5-login-preview" style="display:none;margin:12px 0;padding:12px;background:#0b1220;border:1px solid #1e3a5f;border-radius:12px">
@@ -417,7 +417,95 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (_) {}
   }
   const urlParams = new URLSearchParams(window.location.search);
+  const packageExpired = <%= packageExpired ? 'true' : 'false' %>;
   let mt5StatusPollInFlight = false;
+
+  window.mt5PrepareConnectSubmit = function () {
+    if (packageExpired) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'แพ็คเกจหมดอายุ กรุณาต่ออายุแพ็กเกจก่อนเชื่อมต่อ MT5'
+      );
+      return false;
+    }
+    const formErr = mt5ValidateLoginForm();
+    if (formErr) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        formErr
+      );
+      return false;
+    }
+    const connectSlot = mt5EnsureEmptyPortSelected({});
+    if (!connectSlot) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'ไม่มี PORT ว่างในแพ็กเกจ — ลบพอร์ตที่ไม่ใช้หรือเพิ่มพอร์ตก่อน'
+      );
+      return false;
+    }
+    const slotInput = document.getElementById('mt5SelectedPortSlot');
+    if (slotInput) slotInput.value = String(connectSlot);
+    mt5SaveLoginIfRemembered();
+    sessionStorage.setItem('mt5ConnectInFlight', '1');
+    sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
+    const btn = document.getElementById('mt5ConnectBtn');
+    if (btn) {
+      btn.disabled = true;
+      btn.innerHTML = 'กำลังส่งคำสั่งไปเซิร์ฟเวอร์...';
+    }
+    return true;
+  };
+
+  (function mt5HandleConnectRedirect() {
+    const err = urlParams.get('connect_error');
+    if (err) {
+      try {
+        if (typeof window.showMt5ConnectModal === 'function') {
+          window.showMt5ConnectModal('error', decodeURIComponent(err.replace(/\+/g, ' ')));
+        } else {
+          alert(decodeURIComponent(err.replace(/\+/g, ' ')));
+        }
+      } catch (_) {}
+      if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+      if (window.history && window.history.replaceState) {
+        window.history.replaceState({}, '', '/app/mt5');
+      }
+      return;
+    }
+    const accId = urlParams.get('connect_account');
+    if (accId && urlParams.get('connect_queued') === '1') {
+      if (typeof window.setMt5PollAccountId === 'function') window.setMt5PollAccountId(accId);
+      else {
+        mt5PollAccountId = String(accId);
+        sessionStorage.setItem('mt5PollAccountId', mt5PollAccountId);
+      }
+      sessionStorage.setItem('mt5ConnectInFlight', '1');
+      const btn = document.getElementById('mt5ConnectBtn');
+      if (btn) {
+        btn.disabled = true;
+        btn.dataset.originalText = btn.dataset.originalText || 'เชื่อมต่อ';
+        btn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
+      }
+      const previewBox = document.getElementById('mt5LoginPreview');
+      if (previewBox) previewBox.style.display = 'block';
+      if (typeof window.mt5UpdateConnectProgress === 'function') {
+        window.mt5UpdateConnectProgress({
+          connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+          commandStatus: 'pending',
+          elapsedSec: 0
+        });
+      }
+      if (typeof window.startMt5ConnectPolling === 'function') {
+        window.startMt5ConnectPolling();
+      }
+      if (window.history && window.history.replaceState) {
+        const ps = urlParams.get('port_slot') || '';
+        const q = ps ? '?port_slot=' + encodeURIComponent(ps) : '';
+        window.history.replaceState({}, '', '/app/mt5' + q);
+      }
+    }
+  })();
 
   function syncMt5PollAccountId() {
     const fromStore = sessionStorage.getItem('mt5PollAccountId') || '';
@@ -1544,7 +1632,8 @@ try {
   }
 } catch (_) {}
 
-if (mt5ConnectForm) {
+/* fetch submit ถูกปิด — ใช้ form POST + redirect (window.mt5PrepareConnectSubmit) */
+if (false && mt5ConnectForm) {
   mt5ConnectForm.addEventListener('submit', async function(e){
     e.preventDefault();
 
