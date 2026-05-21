@@ -1452,7 +1452,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let userMessage = statusFinal === 'connected'
       ? MT5_SUCCESS_MSG
       : statusFinal === 'failed'
-        ? (failedMsg || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด')
+        ? (failedMsg || 'User หรือ รหัส ไม่ถูกต้อง')
         : (a.last_login_message || a.last_error || statusFinal);
     if (inProgress) {
       const upgradeHint = /อัปเดต Agent|รอ 2.?3 นาที|Restart-Service/i.test(

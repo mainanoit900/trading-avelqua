@@ -952,6 +952,28 @@ router.post('/connect-result', async (req, res) => {
       if (journalBlob) {
         await processInboundConnectJournal(accountId, node.id, journalBlob).catch(() => {});
       }
+
+      if (
+        journalBlob &&
+        loginHint &&
+        parseJournalRelaxed(journalBlob, loginHint, sinceMs) === 'failed'
+      ) {
+        await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
+          vpsId: node.id,
+          portNo,
+          reason: 'journal_fail_during_checking',
+          killMt5: true,
+          clearPackagePort: true
+        }).catch(() => {});
+        return res.json({
+          ok: true,
+          failed: true,
+          status: 'failed',
+          message: MT5_FAIL_USER_MSG,
+          earlyPath: 'journal_fail_fast'
+        });
+      }
+
       if (
         journalBlob &&
         loginHint &&
@@ -972,39 +994,6 @@ router.post('/connect-result', async (req, res) => {
           previewB64
         });
         return res.json({ ok: true, connected: true, earlyPath: 'journal_during_starting' });
-      }
-
-      const connBal = positiveMoney(req.body.balance);
-      const connEq = positiveMoney(req.body.equity);
-      if (loginHint && (connBal > 0 || connEq > 0)) {
-        await promoteAccountConnected({
-          accountId,
-          portId,
-          mt5Login: loginHint,
-          message: MT5_EARLY_SUCCESS_MSG,
-          balance: connBal,
-          equity: connEq
-        });
-        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
-        return res.json({ ok: true, connected: true, earlyPath: 'metrics_during_checking' });
-      }
-
-      if (loginHint && windowTitle && windowTitle.includes(loginHint)) {
-        await promoteAccountConnected({
-          accountId,
-          portId,
-          mt5Login: loginHint,
-          message: MT5_EARLY_SUCCESS_MSG,
-          balance: connBal,
-          equity: connEq
-        });
-        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
-        await patchAccountMt5Preview(accountId, {
-          message: MT5_EARLY_SUCCESS_MSG,
-          windowTitle,
-          previewB64
-        });
-        return res.json({ ok: true, connected: true, earlyPath: 'window_title_during_checking' });
       }
 
       await patchAccountMt5Preview(accountId, {
@@ -1069,7 +1058,9 @@ router.post('/connect-result', async (req, res) => {
         await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
           vpsId: node.id,
           portNo,
-          reason: 'journal_rejected_connected'
+          reason: 'journal_rejected_connected',
+          killMt5: true,
+          clearPackagePort: true
         }).catch(() => {});
         return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
       }
@@ -1121,7 +1112,7 @@ router.post('/connect-result', async (req, res) => {
       if (
         loginVerified &&
         windowVerified &&
-        journalVerdict !== 'failed' &&
+        journalVerdict === 'success' &&
         (msgLowConn.includes('api verified') ||
           msgLowConn.includes('ยืนยันบัญชีจาก mt5') ||
           msgLowConn.includes('socket verified'))
@@ -1167,31 +1158,19 @@ router.post('/connect-result', async (req, res) => {
           message,
           folderPath
         }).catch(() => false);
-        if (legacyHandled === true) {
-          return res.json({ ok: true, connected: true, status: 'connected' });
-        }
         if (legacyHandled === 'pending') {
           return res.json({ ok: true, pending: true, reason: 'JOURNAL_VERIFY' });
         }
 
         const pendingJournal = await tryApplyPendingJournalRead(accountId, node.id).catch(() => false);
         if (pendingJournal) {
-          return res.json({ ok: true, connected: true, status: 'connected' });
-        }
-
-        const accFast = await query(
-          `
-          SELECT id, status, vps_id, port_id, assigned_port_no, port_slot, mt5_login
-          FROM vps_system.mt5_accounts
-          WHERE id=$1
-          LIMIT 1
-        `,
-          [accountId]
-        ).catch(() => ({ rows: [] }));
-        if (accFast.rows?.[0]) {
-          const fast = await tryFastConnectConfirm(accFast.rows[0]).catch(() => ({ resolved: false }));
-          if (fast.resolved) {
-            return res.json({ ok: true, connected: true, fastPath: fast.source || 'poll_fast' });
+          const accAfterJournal = await query(
+            `SELECT status FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+            [accountId]
+          ).catch(() => ({ rows: [] }));
+          const stJ = String(accAfterJournal.rows?.[0]?.status || '').toLowerCase();
+          if (stJ === 'connected') {
+            return res.json({ ok: true, connected: true, status: 'connected' });
           }
         }
 
@@ -1246,25 +1225,26 @@ router.post('/connect-result', async (req, res) => {
         let failMsg = 'ไม่พบ authorized on MohicansMarkets-Live ใน Journal — กรุณาลองใหม่อีกครั้ง';
         if (journalVerdict === 'failed') {
           failMsg = MT5_FAIL_USER_MSG;
-          await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
+          await failAccountFromJournal(accountId, metaPortId || portId, MT5_FAIL_USER_MSG, {
             vpsId: node.id,
             portNo,
             folderPath,
             journalVerdict: 'failed',
-            killMt5: true
+            killMt5: true,
+            clearPackagePort: true
           }).catch(() => {});
-          return res.json({ ok: true, failed: true, message: failMsg });
+          return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
         }
         if (String(message || '').includes('ทันเวลา') || String(message || '').includes('timeout')) {
-          failMsg = 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่';
-          await failAccountFromJournal(accountId, metaPortId || portId, failMsg, {
+          await failAccountFromJournal(accountId, metaPortId || portId, MT5_FAIL_USER_MSG, {
             vpsId: node.id,
             portNo,
             folderPath,
-            reason: 'connect_timeout',
-            killMt5: true
+            reason: 'login_cmd_journal_failed',
+            killMt5: true,
+            clearPackagePort: true
           }).catch(() => {});
-          return res.json({ ok: true, failed: true, message: failMsg });
+          return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
         }
         if (legacyAgent && upgradeState !== 'ready') {
           failMsg = messageForUpgradeState(upgradeState);
@@ -1286,19 +1266,6 @@ router.post('/connect-result', async (req, res) => {
             allowDuringLogin: true
           }).catch(() => {});
         }
-        const fastPending = await tryFastConnectConfirm({
-          id: accountId,
-          vps_id: node.id,
-          port_id: metaPortId || portId,
-          assigned_port_no: portNo,
-          port_slot: portNo,
-          mt5_login: loginForJournal,
-          status: 'checking'
-        }).catch(() => ({ resolved: false }));
-        if (fastPending.resolved && fastPending.status === 'connected') {
-          return res.json({ ok: true, connected: true, fastPath: fastPending.source || 'pending_fast' });
-        }
-
         await query(
           `
           UPDATE vps_system.mt5_accounts
@@ -1355,7 +1322,6 @@ router.post('/connect-result', async (req, res) => {
     }
 
     if (status === 'failed') {
-      let failMsg = message || MT5_FAIL_USER_MSG;
       const evidence = sanitizeJournalText(
         req.body.journalEvidence || req.body.journal_evidence || ''
       ).trim();
@@ -1364,11 +1330,6 @@ router.post('/connect-result', async (req, res) => {
       let journalVerdictFail = null;
       if (evidence && loginForFail) {
         journalVerdictFail = parseMt5JournalOutcome(evidence, loginForFail, undefined, sinceMsFail);
-      }
-      if (/ทันเวลา|timeout/i.test(String(failMsg))) {
-        failMsg = 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่';
-      } else if (journalVerdictFail === 'failed') {
-        failMsg = MT5_FAIL_USER_MSG;
       }
 
       const accSnap = await query(
@@ -1389,7 +1350,7 @@ router.post('/connect-result', async (req, res) => {
 
       const failMeta = await query(
         `
-        SELECT a.port_id, p.folder_path
+        SELECT a.port_id, a.port_slot, p.folder_path
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
         WHERE a.id=$1
@@ -1399,51 +1360,33 @@ router.post('/connect-result', async (req, res) => {
       ).catch(() => ({ rows: [] }));
       const failFolder = failMeta.rows?.[0]?.folder_path || '';
       const failPortId = Number(failMeta.rows?.[0]?.port_id || portId || 0);
-      const killMt5 = journalVerdictFail === 'failed';
+      const failSlot = Number(failMeta.rows?.[0]?.port_slot || portNo || 0);
+      const failMsg = MT5_FAIL_USER_MSG;
 
-      if (killMt5) {
-        await failAccountFromJournal(accountId, failPortId, failMsg, {
-          vpsId: node.id,
-          portNo,
-          folderPath: failFolder,
-          reason: 'agent_reported_failed',
-          journalVerdict: 'failed',
-          killMt5: true
-        }).catch(() => {});
-      } else {
-        await query(
-          `
-          UPDATE vps_system.mt5_accounts
-          SET status='checking', last_error=$2, last_login_message=$2, updated_at=NOW()
-          WHERE id=$1
-        `,
-          [accountId, failMsg]
-        ).catch(() => {});
-        if (failFolder) {
-          await queueJournalReadVerify({
-            accountId,
-            vpsId: node.id,
-            folderPath: failFolder,
-            mt5Login: loginForFail
-          }).catch(() => {});
-        }
-      }
+      await failAccountFromJournal(accountId, failPortId, failMsg, {
+        vpsId: node.id,
+        portNo: failSlot || portNo,
+        folderPath: failFolder,
+        reason: 'agent_reported_failed',
+        journalVerdict: journalVerdictFail || 'failed',
+        killMt5: true,
+        clearPackagePort: true
+      }).catch(() => {});
 
       await query(`
         INSERT INTO vps_system.mt5_login_history
         (account_id, vps_id, port_id, port_no, mt5_login, status, message)
-        VALUES ($1,$2,$3,$4,$5,$6,$7)
+        VALUES ($1,$2,$3,$4,$5,'failed',$6)
       `, [
         accountId,
         node.id,
         portId || null,
         portNo || null,
         mt5Login,
-        killMt5 ? 'failed' : 'checking',
         failMsg
       ]).catch(() => {});
 
-      return res.json({ ok: true, failed: killMt5, pending: !killMt5, message: failMsg });
+      return res.json({ ok: true, failed: true, pending: false, message: failMsg });
     }
 
     if (status === 'stopped') {
