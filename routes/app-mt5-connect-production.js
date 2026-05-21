@@ -613,6 +613,8 @@ async function handleMt5ConnectProduction(req, res) {
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
     const serverName = normalizeLockedServer(clean(req.body.server_name || req.body.serverName));
 
+    console.log('[mt5-connect] start', { userId, mt5Login, port_slot: req.body.port_slot || req.body.portSlot });
+
     if (!mt5Login) throw new Error('กรุณากรอก Login MT5');
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
@@ -958,11 +960,19 @@ async function handleMt5ConnectProduction(req, res) {
       };
     }
 
+    console.log('[mt5-connect] queued', {
+      userId,
+      accountId,
+      commandId: cmd.rows?.[0]?.id || cmdIns?.id,
+      vpsId: reservedPort.vps_id,
+      portSlot
+    });
+
     return res.json({
       ok: true,
       status: 'queued',
       accountId,
-      commandId: cmd.rows?.[0]?.id || null,
+      commandId: cmd.rows?.[0]?.id || cmdIns?.id || null,
       vpsId: reservedPort.vps_id,
       portId: reservedPort.port_id,
       portNo: allocPortNo,
@@ -972,6 +982,7 @@ async function handleMt5ConnectProduction(req, res) {
       aiConnect: connectAdvice
     });
   } catch (e) {
+    console.warn('[mt5-connect] failed', { userId: req.user?.id, message: e.message });
     if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
     return res.json({ ok: false, status: 'failed', message: e.message });
   } finally {

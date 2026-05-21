@@ -1028,6 +1028,14 @@ document.addEventListener('DOMContentLoaded', function () {
         const btn = document.getElementById('mt5ConnectBtn');
         const sec = data.elapsedSec != null ? Number(data.elapsedSec) : 0;
         const cmdSt = String(data.commandStatus || '').toLowerCase();
+        if (sec >= 8 && !cmdSt && !data.account?.id) {
+          if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+          showMt5ConnectModal(
+            'error',
+            'ยังไม่ได้ส่งคำสั่ง Login — กรุณากดปุ่มเชื่อมต่ออีกครั้ง (Ctrl+F5 ก่อน)'
+          );
+          return;
+        }
         if (
           sec >= 45 &&
           cmdSt === 'pending' &&
@@ -1539,15 +1547,6 @@ if (mt5ConnectForm) {
       mt5ConnectBtn.style.opacity = '0.6';
       mt5ConnectBtn.style.pointerEvents = 'none';
     }
-    if (typeof window.mt5UpdateConnectProgress === 'function') {
-      window.mt5UpdateConnectProgress({
-        message: 'ส่งคำสั่ง Login ไป VPS...',
-        connectStep: 'ส่งคำสั่งไป VPS',
-        commandStatus: '',
-        elapsedSec: 0
-      });
-    }
-
     const formErr = mt5ValidateLoginForm();
     if (formErr) {
       sessionStorage.removeItem('mt5ConnectInFlight');
@@ -1560,6 +1559,14 @@ if (mt5ConnectForm) {
     }
 
     mt5SaveLoginIfRemembered();
+
+    const diagElPre = document.getElementById('mt5ConnectDiag');
+    const previewBox = document.getElementById('mt5LoginPreview');
+    if (previewBox) previewBox.style.display = 'block';
+    if (diagElPre) {
+      diagElPre.innerHTML =
+        '<b>ขั้นตอน:</b> กำลังส่งคำสั่งไปเซิร์ฟเวอร์... (ยังไม่ถึง VPS)';
+    }
 
     try {
       const formData = new FormData(mt5ConnectForm);
@@ -1639,7 +1646,11 @@ if (mt5ConnectForm) {
       }
 
       sessionStorage.removeItem('mt5ConnectInFlight');
-      pop('error', json.message || 'Login ไม่สำเร็จ');
+      const errMsg = json.message || 'Login ไม่สำเร็จ — กรุณากดเชื่อมต่ออีกครั้ง';
+      if (diagElPre) {
+        diagElPre.innerHTML = '<span class="err"><b>ไม่สำเร็จ:</b> ' + mt5Esc(errMsg) + '</span>';
+      }
+      pop('error', errMsg);
       if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     } catch (err) {
       sessionStorage.removeItem('mt5ConnectInFlight');
@@ -1647,6 +1658,9 @@ if (mt5ConnectForm) {
         err && err.name === 'AbortError'
           ? 'ส่งคำสั่งช้าเกินไป — กรุณากดเชื่อมต่ออีกครั้ง'
           : err.message || 'Login ไม่สำเร็จ';
+      if (diagElPre) {
+        diagElPre.innerHTML = '<span class="err"><b>ไม่สำเร็จ:</b> ' + mt5Esc(msg) + '</span>';
+      }
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
         msg
