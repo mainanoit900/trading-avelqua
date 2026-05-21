@@ -1318,7 +1318,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         a.last_login_message = a.last_error;
       }
       const portRecover =
-        elapsedSec >= 5 && !failFast.resolved
+        elapsedSec >= 2 && !failFast.resolved
           ? await tryRecoverLoginFromPortHealth(a).catch(() => ({ resolved: false }))
           : { resolved: false };
       if (portRecover.resolved) {

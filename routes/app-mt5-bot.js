@@ -1722,7 +1722,10 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
 router.get('/mt5/ports-state', requireLogin, async (req, res) => {
   try {
     const userId = req.user.id;
-    const { reconcileConnectedAccountLive } = require('../lib/mt5LoginCommandVerify');
+    const {
+      reconcileConnectedAccountLive,
+      tryRecoverReadyAccount
+    } = require('../lib/mt5LoginCommandVerify');
     const summary = await getPortSummaryReadOnly(userId);
     let accounts = await safeQuery(
       `
@@ -1742,12 +1745,23 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     );
 
     for (const acc of accounts || []) {
-      if (String(acc?.status || '').toLowerCase() !== 'connected') continue;
-      const row = await reconcileConnectedAccountLive(acc).catch(() => null);
-      if (row?.changed && row.account) {
-        acc.status = row.account.status;
-        acc.last_error = row.account.last_error;
-        acc.last_login_message = row.account.last_login_message;
+      const stAcc = String(acc?.status || '').toLowerCase();
+      if (stAcc === 'connected') {
+        const row = await reconcileConnectedAccountLive(acc, { allowDemote: false }).catch(() => null);
+        if (row?.changed && row.account) {
+          acc.status = row.account.status;
+          acc.last_error = row.account.last_error;
+          acc.last_login_message = row.account.last_login_message;
+        }
+        continue;
+      }
+      if (['ready', 'failed'].includes(stAcc)) {
+        const rec = await tryRecoverReadyAccount(acc).catch(() => null);
+        if (rec?.recovered && rec.account) {
+          acc.status = rec.account.status;
+          acc.last_error = rec.account.last_error;
+          acc.last_login_message = rec.account.last_login_message;
+        }
       }
     }
 
@@ -1839,14 +1853,28 @@ router.get('/mt5', async (req, res) => {
     ORDER BY a.port_slot ASC, a.id ASC
   `, [userId]);
 
-  const { reconcileConnectedAccountLive } = require('../lib/mt5LoginCommandVerify');
+  const {
+    reconcileConnectedAccountLive,
+    tryRecoverReadyAccount
+  } = require('../lib/mt5LoginCommandVerify');
   for (const acc of accounts || []) {
-    if (String(acc?.status || '').toLowerCase() !== 'connected') continue;
-    const row = await reconcileConnectedAccountLive(acc).catch(() => null);
-    if (row?.changed && row.account) {
-      acc.status = row.account.status;
-      acc.last_error = row.account.last_error;
-      acc.last_login_message = row.account.last_login_message;
+    const stAcc = String(acc?.status || '').toLowerCase();
+    if (stAcc === 'connected') {
+      const row = await reconcileConnectedAccountLive(acc, { allowDemote: false }).catch(() => null);
+      if (row?.changed && row.account) {
+        acc.status = row.account.status;
+        acc.last_error = row.account.last_error;
+        acc.last_login_message = row.account.last_login_message;
+      }
+      continue;
+    }
+    if (['ready', 'failed'].includes(stAcc)) {
+      const rec = await tryRecoverReadyAccount(acc).catch(() => null);
+      if (rec?.recovered && rec.account) {
+        acc.status = rec.account.status;
+        acc.last_error = rec.account.last_error;
+        acc.last_login_message = rec.account.last_login_message;
+      }
     }
   }
 
@@ -1863,12 +1891,23 @@ router.get('/mt5', async (req, res) => {
   `, [userId]);
 
   for (const acc of portSlotAccounts || []) {
-    if (String(acc?.status || '').toLowerCase() !== 'connected') continue;
-    const row = await reconcileConnectedAccountLive(acc).catch(() => null);
-    if (row?.changed && row.account) {
-      acc.status = row.account.status;
-      acc.last_error = row.account.last_error;
-      acc.last_login_message = row.account.last_login_message;
+    const stAcc = String(acc?.status || '').toLowerCase();
+    if (stAcc === 'connected') {
+      const row = await reconcileConnectedAccountLive(acc, { allowDemote: false }).catch(() => null);
+      if (row?.changed && row.account) {
+        acc.status = row.account.status;
+        acc.last_error = row.account.last_error;
+        acc.last_login_message = row.account.last_login_message;
+      }
+      continue;
+    }
+    if (['ready', 'failed'].includes(stAcc)) {
+      const rec = await tryRecoverReadyAccount(acc).catch(() => null);
+      if (rec?.recovered && rec.account) {
+        acc.status = rec.account.status;
+        acc.last_error = rec.account.last_error;
+        acc.last_login_message = rec.account.last_login_message;
+      }
     }
   }
 

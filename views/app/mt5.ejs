@@ -675,16 +675,19 @@ document.addEventListener('DOMContentLoaded', function () {
         applyEquityUiState(eq, bal > 0 ? bal : null);
       }
     }
-    refreshMt5PortCards().catch(function () {});
+    refreshMt5PortCards()
+      .then(function () {
+        if (slot && typeof window.refreshMt5BotPanel === 'function') {
+          setTimeout(function () {
+            window.refreshMt5BotPanel(slot);
+          }, 600);
+        }
+      })
+      .catch(function () {});
     if (slot && window.history && window.history.replaceState) {
       window.history.replaceState({}, '', '/app/mt5?port_slot=' + encodeURIComponent(slot));
     }
     window.__mt5FinishSuccessRunning = false;
-    if (slot) {
-      setTimeout(function () {
-        window.location.assign('/app/mt5?port_slot=' + encodeURIComponent(slot));
-      }, 2200);
-    }
   }
 
   async function verifyConnectedFromUrl() {
