@@ -2637,7 +2637,7 @@ def wait_mt5_login_hybrid(
             return True, "window verified; login success", j_chunk or joined
 
         preview_b64 = ""
-        if now - last_preview_at >= 18.0 and window_ok_streak < 1:
+        if now - last_preview_at >= 8.0 and window_ok_streak < 1:
             preview_b64 = capture_mt5_window_base64(port, payload)
             last_preview_at = now
 

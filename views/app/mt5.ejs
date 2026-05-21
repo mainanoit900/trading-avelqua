@@ -37,6 +37,13 @@ document.addEventListener('DOMContentLoaded', function () {
 .mt5-port-lock-equity-ts{display:block;margin-top:4px;font-size:11px;color:#64748b;font-weight:600}
 @keyframes mt5EqPulse{50%{opacity:.5}}
 @keyframes mt5EqFlash{0%{color:#fef08a}100%{color:#86efac}}
+.mt5-connect-steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
+.mt5-connect-step{font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px;border:1px solid #334155;color:#64748b;background:#0f172a}
+.mt5-connect-step.active{border-color:#38bdf8;color:#e0f2fe;background:rgba(56,189,248,.12)}
+.mt5-connect-step.done{border-color:#22c55e;color:#bbf7d0;background:rgba(34,197,94,.1)}
+.mt5-connect-diag b{color:#e2e8f0}
+.mt5-connect-diag .warn{color:#fbbf24}
+.mt5-connect-diag .err{color:#f87171}
 </style>
 
 
@@ -180,7 +187,12 @@ document.addEventListener('DOMContentLoaded', function () {
 
   <div id="mt5LoginPreview" class="mt5-login-preview" style="display:none;margin:12px 0;padding:12px;background:#0b1220;border:1px solid #1e3a5f;border-radius:12px">
     <div style="font-size:13px;color:#93c5fd;margin-bottom:8px">
-      <b>หน้าจอ MT5 บน VPS</b> — ตรวจสอบเลขบัญชีบน title bar ว่าตรงกับที่กรอก
+      <b>สถานะ Login MT5</b> — ดูว่าติดขั้นตอนไหน (ภาพจาก VPS อัปเดตทุก ~8 วินาที)
+    </div>
+    <div id="mt5ConnectSteps" class="mt5-connect-steps"></div>
+    <div id="mt5ConnectDiag" class="mt5-connect-diag" style="font-size:12px;color:#94a3b8;margin:8px 0;line-height:1.5"></div>
+    <div id="mt5PreviewPlaceholder" class="mt5-preview-placeholder" style="display:none;padding:20px;text-align:center;color:#64748b;font-size:13px;border:1px dashed #334155;border-radius:8px">
+      รอภาพหน้าจอ MT5 จาก VPS Agent...
     </div>
     <img id="mt5PreviewImg" alt="MT5 Preview" style="max-width:100%;border-radius:8px;border:1px solid #334155;display:none">
     <div id="mt5PreviewTitle" style="font-size:12px;color:#cbd5e1;margin-top:8px;word-break:break-all"></div>
@@ -701,6 +713,84 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  window.mt5UpdateConnectProgress = function (data) {
+    const box = document.getElementById('mt5LoginPreview');
+    const stepsEl = document.getElementById('mt5ConnectSteps');
+    const diagEl = document.getElementById('mt5ConnectDiag');
+    const ph = document.getElementById('mt5PreviewPlaceholder');
+    const img = document.getElementById('mt5PreviewImg');
+    const titleEl = document.getElementById('mt5PreviewTitle');
+    if (!box) return;
+    box.style.display = 'block';
+    const d = data || {};
+    const sec = d.elapsedSec != null ? d.elapsedSec : '';
+    const st = String((d.account && d.account.status) || d.status || '').toLowerCase();
+    const cmd = String(d.commandStatus || '').toLowerCase();
+    const agentOk = d.agentOnline === true;
+    const agentBad = d.agentOnline === false;
+    const stepLabels = [
+      { key: 'queue', label: 'ส่งคำสั่ง', on: true },
+      { key: 'agent', label: 'Agent รับงาน', on: cmd && cmd !== 'pending' },
+      { key: 'mt5', label: 'เปิด MT5', on: st === 'starting' || st === 'checking' || st === 'connected' || !!d.previewUrl },
+      { key: 'verify', label: 'ตรวจ Login', on: st === 'checking' || st === 'connected' }
+    ];
+    let activeIdx = 0;
+    if (agentBad && cmd === 'pending') activeIdx = 1;
+    else if (cmd === 'pending') activeIdx = 1;
+    else if (['processing', 'picked', 'running'].includes(cmd)) activeIdx = 2;
+    else if (st === 'starting') activeIdx = 2;
+    else if (st === 'checking') activeIdx = 3;
+    if (stepsEl) {
+      stepsEl.innerHTML = stepLabels
+        .map(function (s, i) {
+          const cls =
+            i < activeIdx ? 'done' : i === activeIdx ? 'active' : '';
+          return '<span class="mt5-connect-step ' + cls + '">' + s.label + '</span>';
+        })
+        .join('');
+    }
+    if (diagEl) {
+      const lines = [];
+      if (d.connectStep) lines.push('<b>ขั้นตอน:</b> ' + mt5Esc(d.connectStep));
+      if (d.agentMessage) {
+        lines.push(
+          '<b>Agent:</b> <span class="' +
+            (agentBad ? 'err' : agentOk ? '' : 'warn') +
+            '">' +
+            mt5Esc(d.agentMessage) +
+            '</span>'
+        );
+      }
+      if (cmd) {
+        let cmdLine = '<b>คำสั่ง login:</b> ' + mt5Esc(cmd);
+        if (d.commandAgeSec != null) cmdLine += ' (' + d.commandAgeSec + ' วินาที)';
+        if (d.commandMessage) cmdLine += ' — ' + mt5Esc(d.commandMessage);
+        lines.push(cmdLine);
+      }
+      if (sec !== '') lines.push('<b>รอมาแล้ว:</b> ' + sec + ' วินาที');
+      diagEl.innerHTML = lines.join('<br>') || 'กำลังเชื่อมต่อ...';
+    }
+    if (d.previewUrl && img) {
+      img.src = d.previewUrl;
+      img.style.display = 'block';
+      if (ph) ph.style.display = 'none';
+    } else if (ph && (!img || img.style.display === 'none')) {
+      ph.style.display = 'block';
+      ph.textContent = agentBad
+        ? 'VPS Agent ไม่ตอบสนอง — ยังไม่มีภาพ MT5 (ตรวจ service บน VPS)'
+        : 'รอภาพหน้าจอ MT5 จาก VPS Agent...';
+    }
+    if (titleEl) {
+      titleEl.textContent = d.windowTitle
+        ? 'Title bar: ' + d.windowTitle
+        : d.message
+          ? mt5Esc(String(d.message).replace(/ — .*$/, ''))
+          : sec !== ''
+            ? 'รอหน้าต่าง MT5... (' + sec + ' วินาที)'
+            : '';
+    }
+  };
+
   window.mt5UnlockConnectBtn = function () {
     var b = document.getElementById('mt5ConnectBtn');
     if (!b) return;
@@ -802,24 +892,11 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
         const btn = document.getElementById('mt5ConnectBtn');
-        const sec = data.elapsedSec != null ? data.elapsedSec : '';
         const waitMsg = data.message || 'กำลังเปิดหน้าจอ MT5...';
-        const previewBox = document.getElementById('mt5LoginPreview');
-        const previewImg = document.getElementById('mt5PreviewImg');
-        const previewTitle = document.getElementById('mt5PreviewTitle');
-        if (previewBox) previewBox.style.display = 'block';
-        if (data.previewUrl && previewImg) {
-          previewImg.src = data.previewUrl;
-          previewImg.style.display = 'block';
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          window.mt5UpdateConnectProgress(data);
         }
-        if (previewTitle) {
-          previewTitle.textContent = data.windowTitle
-            ? 'Title bar: ' + data.windowTitle
-            : (sec !== '' ? 'รอหน้าต่าง MT5... (' + sec + ' วินาที)' : '');
-        }
-        if (btn) {
-          btn.innerHTML = waitMsg;
-        }
+        if (btn) btn.innerHTML = waitMsg;
         return;
       }
       if (
@@ -857,6 +934,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (pendingBtn) {
       pendingBtn.disabled = true;
       pendingBtn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
+    }
+    if (typeof window.mt5UpdateConnectProgress === 'function') {
+      window.mt5UpdateConnectProgress({ message: 'กำลังตรวจสอบ Login ที่ค้างอยู่...', elapsedSec: 0 });
     }
   }
 
@@ -1253,6 +1333,13 @@ if (mt5ConnectForm) {
       mt5ConnectBtn.style.opacity = '0.6';
       mt5ConnectBtn.style.pointerEvents = 'none';
     }
+    if (typeof window.mt5UpdateConnectProgress === 'function') {
+      window.mt5UpdateConnectProgress({
+        message: 'ส่งคำสั่ง Login ไป VPS...',
+        connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+        elapsedSec: 0
+      });
+    }
 
     try {
       const formData = new FormData(mt5ConnectForm);
@@ -1312,6 +1399,13 @@ if (mt5ConnectForm) {
         }
         if (typeof window.startMt5ConnectPolling === 'function') {
           window.startMt5ConnectPolling();
+        }
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          window.mt5UpdateConnectProgress({
+            message: json.message || 'กำลังเปิด MT5...',
+            connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+            elapsedSec: 0
+          });
         }
         return false;
       }

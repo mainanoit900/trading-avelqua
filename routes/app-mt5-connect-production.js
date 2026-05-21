@@ -309,6 +309,78 @@ async function reserveBestPort(userId) {
   }
 }
 
+async function getLoginConnectDiagnostics(account) {
+  const accountId = Number(account?.id || 0);
+  const vpsId = Number(account?.vps_id || 0);
+  let agentOnline = null;
+  let agentMessage = '';
+  if (vpsId) {
+    const live = await checkVpsAgentLiveness(vpsId).catch(() => ({ ok: false, message: '' }));
+    agentOnline = !!live.ok;
+    agentMessage = live.ok ? 'VPS Agent ออนไลน์' : (live.message || 'VPS Agent ไม่ตอบสนอง');
+  }
+
+  let commandStatus = '';
+  let commandMessage = '';
+  let commandAgeSec = null;
+  if (accountId || vpsId) {
+    const cmd = await query(
+      `
+      SELECT status, result_message, error, created_at, updated_at
+      FROM vps_system.vps_agent_commands
+      WHERE command_type IN ('login_mt5', 'connect_mt5')
+        AND (
+          ($1::bigint > 0 AND (payload->>'accountId')::bigint = $1)
+          OR (
+            $2::bigint > 0
+            AND vps_id = $2
+            AND created_at > NOW() - INTERVAL '45 minutes'
+          )
+        )
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+      [accountId, vpsId]
+    ).catch(() => ({ rows: [] }));
+    const row = cmd.rows?.[0];
+    if (row) {
+      commandStatus = String(row.status || '').toLowerCase();
+      commandMessage = String(row.result_message || row.error || '').trim().slice(0, 240);
+      const ts = row.updated_at || row.created_at;
+      if (ts) {
+        commandAgeSec = Math.max(0, Math.floor((Date.now() - new Date(ts).getTime()) / 1000));
+      }
+    }
+  }
+
+  const st = String(account?.status || '').toLowerCase();
+  let connectStep = 'เชื่อมต่อ MT5';
+  if (agentOnline === false && (commandStatus === 'pending' || !commandStatus)) {
+    connectStep = 'VPS Agent ไม่ตอบสนอง — คำสั่ง login อาจค้างในคิว';
+  } else if (commandStatus === 'pending' && commandAgeSec != null && commandAgeSec >= 45) {
+    connectStep = 'คำสั่ง login ค้างนาน — รอ Agent หรือ restart AvelquaPythonAgent';
+  } else if (commandStatus === 'pending') {
+    connectStep = 'ส่งคำสั่งแล้ว — รอ Agent รับงาน';
+  } else if (['processing', 'picked', 'running'].includes(commandStatus)) {
+    connectStep = 'Agent กำลังเปิด MT5 / Login';
+  } else if (st === 'starting') {
+    connectStep = 'กำลังเปิดหน้าจอ MT5';
+  } else if (st === 'checking') {
+    connectStep = 'ตรวจสอบ Login / Journal';
+  } else if (st === 'connecting') {
+    connectStep = 'เชื่อมต่อ MT5';
+  }
+
+  return {
+    agentOnline,
+    agentMessage,
+    commandStatus,
+    commandMessage,
+    commandAgeSec,
+    connectStep
+  };
+}
+
 async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) {
   if (!mt5Login && !accountId && !portId) return;
   await query(
@@ -838,6 +910,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         ? new Date(a.updated_at).getTime()
         : 0;
     const staleMs = Date.now() - startedAt;
+    const elapsedSec = Math.max(0, Math.floor(staleMs / 1000));
     let status = String(a.status || '').toLowerCase();
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
@@ -971,7 +1044,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     const inProgress = statusFinal === 'connecting' || statusFinal === 'checking' || statusFinal === 'starting';
     const failedMsg = a.last_error || a.last_login_message || '';
-    const elapsedSec = Math.max(0, Math.floor(staleMs / 1000));
+    const diagnostics = inProgress ? await getLoginConnectDiagnostics(a) : null;
     let userMessage = statusFinal === 'connected'
       ? MT5_SUCCESS_MSG
       : statusFinal === 'failed'
@@ -981,9 +1054,13 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const upgradeHint = /อัปเดต Agent|รอ 2.?3 นาที|Restart-Service/i.test(
         String(a.last_login_message || '')
       );
-      userMessage = upgradeHint
+      const stepHint = diagnostics?.connectStep || '';
+      const baseMsg = upgradeHint
         ? `กำลังเปิด MT5 และ Login... (${elapsedSec} วินาที)`
         : (a.last_login_message || `กำลังเปิด MT5 และตรวจสอบ Login (${elapsedSec} วินาที)...`);
+      userMessage = stepHint && !baseMsg.includes(stepHint)
+        ? `${stepHint} — ${baseMsg}`
+        : baseMsg;
     }
     const loginVerified = statusFinal === 'connected';
     if (loginVerified && !positiveMoney(a.last_equity)) {
@@ -1004,7 +1081,13 @@ async function handleMt5ConnectStatusProduction(req, res) {
       message: userMessage,
       windowTitle: windowTitleFromMessage(a.last_login_message),
       previewUrl,
-      elapsedSec
+      elapsedSec,
+      connectStep: diagnostics?.connectStep || '',
+      agentOnline: diagnostics?.agentOnline ?? null,
+      agentMessage: diagnostics?.agentMessage || '',
+      commandStatus: diagnostics?.commandStatus || '',
+      commandMessage: diagnostics?.commandMessage || '',
+      commandAgeSec: diagnostics?.commandAgeSec ?? null
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
