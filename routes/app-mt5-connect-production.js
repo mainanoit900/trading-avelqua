@@ -905,8 +905,76 @@ async function handleMt5ConnectStatusProduction(req, res) {
       LIMIT 1
     `, params);
 
-    const a = r.rows?.[0];
+    let a = r.rows?.[0];
     if (!a) return res.json({ ok: true, connected: false, status: 'none', message: 'ยังไม่มีรายการเชื่อมต่อ' });
+
+    // ถ้า front-end ส่ง accountId เก่าที่ถูกลบ/หมดอายุ ให้เด้งไปแถว active ล่าสุดทันที
+    if (accountId) {
+      const stalePicked = ['deleted', 'expired', 'ready', 'failed'].includes(
+        String(a.status || '').toLowerCase()
+      );
+      if (stalePicked) {
+        const byLogin = await query(
+          `
+          SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+                 a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+                 a.connect_started_at, a.last_balance, a.last_equity,
+                 p.folder_path
+          FROM vps_system.mt5_accounts a
+          LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+          WHERE a.user_id=$1
+            AND a.id <> $2
+            AND a.mt5_login=$3
+            AND COALESCE(a.server_name, a.mt5_server, '') = COALESCE($4, COALESCE(a.server_name, a.mt5_server, ''))
+            AND LOWER(COALESCE(a.status, '')) NOT IN ('deleted', 'expired')
+          ORDER BY
+            CASE LOWER(COALESCE(a.status, ''))
+              WHEN 'connected' THEN 0
+              WHEN 'checking' THEN 1
+              WHEN 'starting' THEN 2
+              WHEN 'connecting' THEN 3
+              ELSE 4
+            END,
+            a.updated_at DESC NULLS LAST,
+            a.id DESC
+          LIMIT 1
+        `,
+          [userId, a.id, a.mt5_login, a.server_name || null]
+        ).catch(() => ({ rows: [] }));
+
+        if (byLogin.rows?.[0]) {
+          a = byLogin.rows[0];
+        } else {
+          const latestActive = await query(
+            `
+            SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+                   a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+                   a.connect_started_at, a.last_balance, a.last_equity,
+                   p.folder_path
+            FROM vps_system.mt5_accounts a
+            LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+            WHERE a.user_id=$1
+              AND a.id <> $2
+              AND LOWER(COALESCE(a.status, '')) IN ('connected', 'connecting', 'starting', 'checking')
+              AND a.updated_at > NOW() - INTERVAL '20 minutes'
+            ORDER BY
+              CASE LOWER(COALESCE(a.status, ''))
+                WHEN 'connected' THEN 0
+                WHEN 'checking' THEN 1
+                WHEN 'starting' THEN 2
+                WHEN 'connecting' THEN 3
+                ELSE 4
+              END,
+              a.updated_at DESC NULLS LAST,
+              a.id DESC
+            LIMIT 1
+          `,
+            [userId, a.id]
+          ).catch(() => ({ rows: [] }));
+          if (latestActive.rows?.[0]) a = latestActive.rows[0];
+        }
+      }
+    }
 
     const statusEarly = String(a.status || '').toLowerCase();
     if (statusEarly === 'connected') {
