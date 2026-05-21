@@ -522,9 +522,9 @@ async function findRetryPortForLogin(userId, mt5Login, serverName) {
 }
 
 /** ปล่อยแถว mt5_accounts ที่ค้างบน vps+port เดียวกัน (กัน uq_mt5_running_vps_port ตอน INSERT) */
-async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) {
-  if (!vpsId || !portNo) return;
-  const params = [vpsId, portNo];
+async function releaseStaleVpsPortAccounts(vpsId, portId, adminPortNo, keepAccountId = null) {
+  if (!vpsId) return;
+  const params = [vpsId];
   let sql = `
     UPDATE vps_system.mt5_accounts
     SET status='expired',
@@ -535,12 +535,24 @@ async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) 
         last_login_message='ถูกแทนที่ด้วยการเชื่อมต่อใหม่',
         updated_at=NOW()
     WHERE vps_id=$1
-      AND assigned_port_no=$2
       AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting')
   `;
+  if (portId) {
+    params.push(portId);
+    sql += ` AND (port_id=$${params.length}`;
+    if (adminPortNo) {
+      params.push(adminPortNo);
+      sql += ` OR (port_id IS NULL AND assigned_port_no=$${params.length}))`;
+    } else {
+      sql += ')';
+    }
+  } else if (adminPortNo) {
+    params.push(adminPortNo);
+    sql += ` AND assigned_port_no=$${params.length}`;
+  }
   if (keepAccountId) {
     params.push(keepAccountId);
-    sql += ` AND id <> $3`;
+    sql += ` AND id <> $${params.length}`;
   }
   await query(sql, params).catch(() => {});
 }
@@ -858,7 +870,12 @@ async function handleMt5ConnectProduction(req, res) {
     ]);
 
     const keepId = acc.rows?.[0]?.id || null;
-    await releaseStaleVpsPortAccounts(reservedPort.vps_id, allocPortNo, keepId);
+    await releaseStaleVpsPortAccounts(
+      reservedPort.vps_id,
+      reservedPort.port_id,
+      allocPortNo,
+      keepId
+    );
 
     if (!acc.rows?.[0]) {
       acc = await query(`
@@ -881,7 +898,12 @@ async function handleMt5ConnectProduction(req, res) {
         `PORT ${portSlot}`
       ]).catch(async (insErr) => {
         if (insErr?.code !== '23505') throw insErr;
-        await releaseStaleVpsPortAccounts(reservedPort.vps_id, allocPortNo, null);
+        await releaseStaleVpsPortAccounts(
+          reservedPort.vps_id,
+          reservedPort.port_id,
+          allocPortNo,
+          null
+        );
         return query(`
           UPDATE vps_system.mt5_accounts
           SET

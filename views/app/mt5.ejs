@@ -634,12 +634,9 @@ document.addEventListener('DOMContentLoaded', function () {
   function mt5PortDetailLine(p) {
     if (!p) return '';
     const loginPart = p.mt5_login ? 'Login ' + p.mt5_login : 'Login —';
-    const folderPart = p.folderPortNo
-      ? 'P' + String(p.folderPortNo).padStart(2, '0') +
-        (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '')
-      : p.vpsNodeName
-        ? mt5ShortVpsName(p.vpsNodeName)
-        : '';
+    const pkgP = 'P' + String(p.slot || '').padStart(2, '0');
+    const folderPart =
+      (p.vpsNodeName ? mt5ShortVpsName(p.vpsNodeName) + ' · ' : '') + pkgP;
     let statePart = '';
     if (p.accountId) {
       statePart = p.statusLabel || p.folderState || '';
@@ -687,9 +684,10 @@ document.addEventListener('DOMContentLoaded', function () {
     hint.textContent =
       'PORT ' +
       slot +
-      ' → P' +
-      String(p.folderPortNo || slot).padStart(2, '0') +
+      ' → Folder ' +
+      String(slot).padStart(2, '0') +
       (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '') +
+      (p.folderPath ? ' · ' + p.folderPath : '') +
       ' · ' +
       (p.folderAvailable ? 'ว่าง' : p.folderState || 'ไม่ว่าง');
     if (p.folderPath) hint.title = p.folderPath;
