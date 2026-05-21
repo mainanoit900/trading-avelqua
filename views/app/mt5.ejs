@@ -770,7 +770,14 @@ document.addEventListener('DOMContentLoaded', function () {
         if (d.commandMessage) cmdLine += ' — ' + mt5Esc(d.commandMessage);
         lines.push(cmdLine);
       }
-      if (sec !== '') lines.push('<b>รอมาแล้ว:</b> ' + sec + ' วินาที');
+      if (sec !== '') {
+        const maxW = d.maxWaitSec != null ? Number(d.maxWaitSec) : 120;
+        const waitLine =
+          sec >= 60 && maxW > 0
+            ? '<b>รอมาแล้ว:</b> ' + sec + ' / ~' + maxW + ' วินาที'
+            : '<b>รอมาแล้ว:</b> ' + sec + ' วินาที';
+        lines.push(waitLine);
+      }
       if (d.waitHint) lines.push('<span class="warn">' + mt5Esc(d.waitHint) + '</span>');
       diagEl.innerHTML = lines.join('<br>') || 'กำลังเชื่อมต่อ...';
     }
@@ -896,7 +903,15 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
         const btn = document.getElementById('mt5ConnectBtn');
-        const waitMsg = data.message || 'กำลังเปิดหน้าจอ MT5...';
+        const sec = data.elapsedSec != null ? Number(data.elapsedSec) : 0;
+        const step = data.connectStep || 'กำลังเชื่อมต่อ MT5';
+        let waitMsg = data.message || step;
+        if (sec > 0) {
+          const maxW = data.maxWaitSec != null ? Number(data.maxWaitSec) : 120;
+          waitMsg =
+            step +
+            (sec >= 60 && maxW > 0 ? ' (' + sec + '/' + maxW + ' วิ)' : ' (' + sec + ' วิ)');
+        }
         if (typeof window.mt5UpdateConnectProgress === 'function') {
           window.mt5UpdateConnectProgress(data);
         }
@@ -1425,6 +1440,9 @@ if (mt5ConnectForm) {
           window.mt5UpdateConnectProgress({
             message: json.message || 'กำลังเปิด MT5...',
             connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+            waitHint: 'โดยปกติใช้เวลา 40–90 วินาที (รอสูงสุด ~2 นาที)',
+            expectedMaxSec: 90,
+            maxWaitSec: 120,
             elapsedSec: 0
           });
         }

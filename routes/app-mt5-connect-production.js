@@ -315,7 +315,37 @@ async function reserveBestPort(userId) {
   }
 }
 
-async function getLoginConnectDiagnostics(account) {
+/** เวลารอที่แสดงบน UI — แยกจาก timeout ภายใน (180s) */
+const MT5_CONNECT_HINT_TYPICAL_MAX_SEC = 90;
+const MT5_CONNECT_HINT_HARD_MAX_SEC = 120;
+
+function buildConnectWaitHint(waitSec) {
+  const sec = Math.max(0, Number(waitSec) || 0);
+  if (sec >= MT5_CONNECT_HINT_HARD_MAX_SEC) {
+    return (
+      'เกิน ' +
+      MT5_CONNECT_HINT_TYPICAL_MAX_SEC +
+      ' วินาทีแล้ว — รอได้ถึง ~2 นาที อย่ากดเชื่อมต่อซ้ำ (ถ้าค้าง restart Agent)'
+    );
+  }
+  if (sec >= 60) {
+    return (
+      'ใช้เวลานานกว่าปกติ (' +
+      sec +
+      ' วิ) — ยังยืนยัน Login อยู่ (มักจบภายใน ~' +
+      MT5_CONNECT_HINT_TYPICAL_MAX_SEC +
+      '–' +
+      MT5_CONNECT_HINT_HARD_MAX_SEC +
+      ' วิ)'
+    );
+  }
+  if (sec >= 35) {
+    return 'กำลังยืนยัน Login จาก MT5... (อาจใช้ถึง ~90 วินาที)';
+  }
+  return 'โดยปกติใช้เวลา 40–90 วินาที (รอสูงสุด ~2 นาที)';
+}
+
+async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
   const accountId = Number(account?.id || 0);
   const vpsId = Number(account?.vps_id || 0);
   let agentOnline = null;
@@ -385,13 +415,11 @@ async function getLoginConnectDiagnostics(account) {
     connectStep = 'เชื่อมต่อ MT5';
   }
 
-  let waitHint = 'โดยปกติใช้เวลา 30–60 วินาที';
-  const waitSec = commandAgeSec != null ? commandAgeSec : 0;
-  if (waitSec >= 75) {
-    waitHint = 'ใกล้ครบเวลา — ถ้ายังไม่สำเร็จให้รอจบหรือ restart AvelquaPythonAgent';
-  } else if (waitSec >= 45) {
-    waitHint = 'กำลังยืนยัน Login จาก MT5...';
-  }
+  const waitSec = Math.max(
+    Number(elapsedSec) || 0,
+    commandAgeSec != null ? commandAgeSec : 0
+  );
+  const waitHint = buildConnectWaitHint(waitSec);
 
   return {
     agentOnline,
@@ -400,7 +428,10 @@ async function getLoginConnectDiagnostics(account) {
     commandMessage,
     commandAgeSec,
     connectStep,
-    waitHint
+    waitHint,
+    waitSec,
+    expectedMaxSec: MT5_CONNECT_HINT_TYPICAL_MAX_SEC,
+    maxWaitSec: MT5_CONNECT_HINT_HARD_MAX_SEC
   };
 }
 
@@ -1420,7 +1451,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     const inProgress = statusFinal === 'connecting' || statusFinal === 'checking' || statusFinal === 'starting';
     const failedMsg = a.last_error || a.last_login_message || '';
-    const diagnostics = inProgress ? await getLoginConnectDiagnostics(a) : null;
+    const diagnostics = inProgress ? await getLoginConnectDiagnostics(a, elapsedSec) : null;
     let userMessage = statusFinal === 'connected'
       ? MT5_SUCCESS_MSG
       : statusFinal === 'failed'
@@ -1464,7 +1495,10 @@ async function handleMt5ConnectStatusProduction(req, res) {
       commandStatus: diagnostics?.commandStatus || '',
       commandMessage: diagnostics?.commandMessage || '',
       commandAgeSec: diagnostics?.commandAgeSec ?? null,
-      waitHint: diagnostics?.waitHint || ''
+      waitHint: diagnostics?.waitHint || '',
+      waitSec: diagnostics?.waitSec ?? elapsedSec,
+      expectedMaxSec: diagnostics?.expectedMaxSec ?? MT5_CONNECT_HINT_TYPICAL_MAX_SEC,
+      maxWaitSec: diagnostics?.maxWaitSec ?? MT5_CONNECT_HINT_HARD_MAX_SEC
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
