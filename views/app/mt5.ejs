@@ -400,7 +400,22 @@ document.addEventListener('DOMContentLoaded', function () {
 (function () {
   let mt5Checking = false;
   const serverPendingAccountId = '<%= typeof pendingConnectAccountId !== "undefined" && pendingConnectAccountId ? pendingConnectAccountId : "" %>';
-  let mt5PollAccountId = sessionStorage.getItem('mt5PollAccountId') || serverPendingAccountId || '';
+  const serverHasPendingConnect = !!serverPendingAccountId;
+  if (!serverHasPendingConnect) {
+    try {
+      sessionStorage.removeItem('mt5PollAccountId');
+      sessionStorage.removeItem('mt5ConnectInFlight');
+      sessionStorage.removeItem('mt5ConnectTargetSlot');
+    } catch (_) {}
+  }
+  let mt5PollAccountId = serverHasPendingConnect
+    ? String(serverPendingAccountId)
+    : '';
+  if (serverHasPendingConnect) {
+    try {
+      sessionStorage.setItem('mt5PollAccountId', mt5PollAccountId);
+    } catch (_) {}
+  }
   const urlParams = new URLSearchParams(window.location.search);
   let mt5StatusPollInFlight = false;
 
@@ -1121,6 +1136,12 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  if (!serverHasPendingConnect) {
+    if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+    const stuckPreview = document.getElementById('mt5LoginPreview');
+    if (stuckPreview && !mt5PollAccountId) stuckPreview.style.display = 'none';
+  }
+
   if (sessionStorage.getItem('mt5ConnectInFlight') === '1' && !mt5PollAccountId && !serverPendingAccountId) {
     sessionStorage.removeItem('mt5ConnectInFlight');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
@@ -1582,11 +1603,12 @@ if (mt5ConnectForm) {
       const connectTimer = setTimeout(function () {
         connectCtrl.abort();
       }, 20000);
-      const res = await fetch('/app/mt5/connect', {
+      const res = await fetch('/app/mt5/connect?_=' + Date.now(), {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Accept: 'application/json'
+          Accept: 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
         },
         credentials: 'same-origin',
         body: JSON.stringify(data),
@@ -1596,6 +1618,9 @@ if (mt5ConnectForm) {
 
       const raw = await res.text();
       let json;
+      try {
+        console.log('[mt5] connect HTTP', res.status, raw.slice(0, 400));
+      } catch (_) {}
       try {
         json = raw ? JSON.parse(raw) : {};
       } catch (_) {
