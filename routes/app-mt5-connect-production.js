@@ -17,10 +17,8 @@ const {
   reconcileConnectedAccountLive,
   tryRecoverLoginFromPortHealth,
   tryFastConnectConfirm,
-  hasRecentAgentLoginSuccess,
-  hasRecentAccountMetrics,
   findRecentLoginCommand,
-  promoteAccountConnected,
+  verifyLoginFromCommand,
   tryFastJournalFail,
   expireStuckLoginCommands,
   syncJournalFromLatestCommand,
@@ -1161,102 +1159,6 @@ async function handleMt5ConnectStatusProduction(req, res) {
       });
     }
 
-    if (['ready', 'failed'].includes(statusEarly)) {
-      const recentOk = await hasRecentAgentLoginSuccess(a.id, a.vps_id, a.mt5_login).catch(() => false);
-      const recentCmd = recentOk && a.vps_id
-        ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
-        : null;
-      const finishedAt = recentCmd?.finished_at ? new Date(recentCmd.finished_at).getTime() : 0;
-      const freshMs = finishedAt ? Date.now() - finishedAt : Number.MAX_SAFE_INTEGER;
-
-      // บางจังหวะ isPortMt5Running false หลอก ทำให้หลุดเป็น ready ทั้งที่ login เพิ่ง success
-      if (recentOk && freshMs <= 5 * 60 * 1000) {
-        await promoteAccountConnected({
-          accountId: a.id,
-          portId: a.port_id,
-          mt5Login: a.mt5_login,
-          message: MT5_SUCCESS_MSG
-        }).catch(() => {});
-
-        const fresh = await query(
-          `
-          SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
-                 a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
-                 a.connect_started_at, a.last_balance, a.last_equity,
-                 p.folder_path
-          FROM vps_system.mt5_accounts a
-          LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
-          WHERE a.id=$1
-          LIMIT 1
-        `,
-          [a.id]
-        ).catch(() => ({ rows: [a] }));
-        a = fresh.rows?.[0] || a;
-        statusEarly = String(a.status || '').toLowerCase();
-      }
-    }
-
-    if (['connecting', 'starting', 'checking'].includes(statusEarly)) {
-      const loginDoneEarly = await hasRecentAgentLoginSuccess(
-        a.id,
-        a.vps_id,
-        a.mt5_login
-      ).catch(() => false);
-      if (loginDoneEarly) {
-        const recoveredEarly = await tryRecoverLoginFromPortHealth(a).catch(() => ({
-          resolved: false
-        }));
-        if (recoveredEarly.resolved) {
-          const accEarly = await query(
-            `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
-            [a.id]
-          ).catch(() => ({ rows: [a] }));
-          const accNowEarly = accEarly.rows?.[0] || a;
-          const previewEarly = previewPublicPath(accNowEarly.id);
-          return res.json({
-            ok: true,
-            account: accNowEarly,
-            connected: true,
-            failed: false,
-            checking: false,
-            pending: false,
-            status: 'connected',
-            loginVerified: true,
-            message: recoveredEarly.message || MT5_SUCCESS_MSG,
-            windowTitle: windowTitleFromMessage(accNowEarly.last_login_message),
-            previewUrl: previewEarly ? `${previewEarly}?t=${Date.now()}` : '',
-            elapsedSec: 0
-          });
-        }
-        await promoteAccountConnected({
-          accountId: a.id,
-          portId: a.port_id,
-          mt5Login: a.mt5_login,
-          message: MT5_SUCCESS_MSG
-        }).catch(() => {});
-        const accPromoted = await query(
-          `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
-          [a.id]
-        ).catch(() => ({ rows: [a] }));
-        const accProm = accPromoted.rows?.[0] || a;
-        const previewProm = previewPublicPath(accProm.id);
-        return res.json({
-          ok: true,
-          account: accProm,
-          connected: true,
-          failed: false,
-          checking: false,
-          pending: false,
-          status: 'connected',
-          loginVerified: true,
-          message: MT5_SUCCESS_MSG,
-          windowTitle: windowTitleFromMessage(accProm.last_login_message),
-          previewUrl: previewProm ? `${previewProm}?t=${Date.now()}` : '',
-          elapsedSec: 0
-        });
-      }
-    }
-
     if (statusEarly === 'connected') {
       const liveCheck = await reconcileConnectedAccountLive(a).catch(() => ({
         changed: false,
@@ -1265,18 +1167,13 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const accLive = liveCheck.account || a;
       const stLive = String(accLive.status || '').toLowerCase();
       if (liveCheck.changed && stLive !== 'connected') {
-        const recentOk = await hasRecentAgentLoginSuccess(
-          a.id,
-          a.vps_id,
-          a.mt5_login
-        ).catch(() => false);
-        if (recentOk || hasRecentAccountMetrics(a)) {
-          await promoteAccountConnected({
-            accountId: a.id,
-            portId: a.port_id,
-            mt5Login: a.mt5_login,
-            message: MT5_SUCCESS_MSG
-          }).catch(() => {});
+        const cmdReconcile = await verifyLoginFromCommand({
+          accountId: a.id,
+          vpsId: a.vps_id,
+          mt5Login: a.mt5_login,
+          portNo: a.assigned_port_no || a.port_slot
+        }).catch(() => ({ ok: false }));
+        if (cmdReconcile.ok) {
           const accRec = await query(
             `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
             [a.id]
@@ -1346,38 +1243,32 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const staleLimitMs = 180 * 1000;
 
     if (['connecting', 'starting', 'checking'].includes(status) && staleMs > staleLimitMs) {
-      const loginDone = await hasRecentAgentLoginSuccess(
-        a.id,
-        a.vps_id,
-        a.mt5_login
-      ).catch(() => false);
-      if (loginDone) {
-        const recovered = await tryRecoverLoginFromPortHealth(a).catch(() => ({
-          resolved: false
-        }));
-        if (recovered.resolved) {
-          const accR = await query(
-            `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
-            [a.id]
-          ).catch(() => ({ rows: [a] }));
-          const accNow = accR.rows?.[0] || a;
-          const previewPath = previewPublicPath(accNow.id);
-          return res.json({
-            ok: true,
-            account: accNow,
-            connected: true,
-            failed: false,
-            checking: false,
-            pending: false,
-            status: 'connected',
-            loginVerified: true,
-            message: recovered.message || MT5_SUCCESS_MSG,
-            windowTitle: windowTitleFromMessage(accNow.last_login_message),
-            previewUrl: previewPath ? `${previewPath}?t=${Date.now()}` : '',
-            elapsedSec
-          });
-        }
-      } else {
+      const recovered = await tryRecoverLoginFromPortHealth(a).catch(() => ({
+        resolved: false
+      }));
+      if (recovered.resolved && recovered.status === 'connected') {
+        const accR = await query(
+          `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
+          [a.id]
+        ).catch(() => ({ rows: [a] }));
+        const accNow = accR.rows?.[0] || a;
+        const previewPath = previewPublicPath(accNow.id);
+        return res.json({
+          ok: true,
+          account: accNow,
+          connected: true,
+          failed: false,
+          checking: false,
+          pending: false,
+          status: 'connected',
+          loginVerified: true,
+          message: recovered.message || MT5_SUCCESS_MSG,
+          windowTitle: windowTitleFromMessage(accNow.last_login_message),
+          previewUrl: previewPath ? `${previewPath}?t=${Date.now()}` : '',
+          elapsedSec
+        });
+      }
+      {
         const cmd = a.vps_id
           ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
           : null;
@@ -1417,10 +1308,13 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const failFast = await tryFastJournalFail(a).catch(() => ({ resolved: false }));
       if (failFast.resolved) {
         resolved = failFast;
-        statusFinal = 'failed';
-        a.status = 'failed';
+        statusFinal = failFast.status || 'failed';
+        a.status = statusFinal;
         a.last_error = failFast.message || MT5_FAIL_USER_MSG;
         a.last_login_message = a.last_error;
+        if (statusFinal === 'deleted') {
+          a.port_slot = null;
+        }
       }
       const portRecover =
         elapsedSec >= 1 && !failFast.resolved
@@ -1428,7 +1322,13 @@ async function handleMt5ConnectStatusProduction(req, res) {
           : { resolved: false };
       if (portRecover.resolved) {
         resolved = portRecover;
-        statusFinal = 'connected';
+        statusFinal = portRecover.status || 'connected';
+        if (statusFinal === 'failed' || statusFinal === 'deleted') {
+          a.status = statusFinal;
+          a.last_error = portRecover.message || MT5_FAIL_USER_MSG;
+          a.last_login_message = a.last_error;
+          if (statusFinal === 'deleted') a.port_slot = null;
+        }
       }
       const fast =
         !failFast.resolved && !portRecover.resolved
@@ -1437,6 +1337,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
       if (fast.resolved) {
         resolved = fast;
         statusFinal = fast.status || 'connected';
+        if (statusFinal === 'failed' || statusFinal === 'deleted') {
+          a.status = statusFinal;
+          a.last_error = fast.message || MT5_FAIL_USER_MSG;
+          a.last_login_message = a.last_error;
+          if (statusFinal === 'deleted') a.port_slot = null;
+        }
         const freshFast = await query(
           `
           SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
@@ -1548,6 +1454,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         : baseMsg;
     }
     const loginVerified = statusFinal === 'connected';
+    const failedFinal = statusFinal === 'failed' || statusFinal === 'deleted';
     if (loginVerified && !positiveMoney(a.last_equity)) {
       ensureEquityOnConnect(a.id, userId, () => loadAccountPortContext(a.id, userId)).catch(() => {});
     }
@@ -1557,7 +1464,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       ok: true,
       account: { ...a, status: statusFinal },
       connected: loginVerified,
-      failed: statusFinal === 'failed',
+      failed: failedFinal,
       checking: inProgress,
       pending: inProgress,
       status: statusFinal,

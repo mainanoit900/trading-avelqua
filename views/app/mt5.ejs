@@ -948,18 +948,42 @@ document.addEventListener('DOMContentLoaded', function () {
     const port = portsData.ports.find(function (p) {
       return String(p.slot) === String(slot);
     });
-    if (!port || !(port.canUse || port.cssClass === 'connected')) return false;
+    if (!port || port.canUse !== true || port.cssClass !== 'connected') return false;
     const acc =
       (portsData.connectedAccounts || []).find(function (a) {
         return String(a.port_slot) === String(slot);
       }) || null;
-    const accountInfo = acc || {
-      id: port.accountId,
-      port_slot: Number(slot) || slot,
-      mt5_login: port.mt5_login
-    };
-    finishMt5ConnectSuccess(statusMsg || 'เชื่อมต่อสำเร็จ', accountInfo);
+    if (!acc || String(acc.status || '').toLowerCase() !== 'connected') return false;
+    finishMt5ConnectSuccess(statusMsg || 'เชื่อมต่อสำเร็จ', acc);
     return true;
+  }
+
+  async function finishMt5ConnectFail(message, accountInfo) {
+    mt5Checking = false;
+    if (window.mt5Checker) {
+      clearInterval(window.mt5Checker);
+      window.mt5Checker = null;
+    }
+    sessionStorage.removeItem('mt5PollAccountId');
+    sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectTargetSlot');
+    if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+    const failMsg = message || 'ผู้ใช้งานไม่ถูกต้อง';
+    const failKey = mt5OutcomeStorageKey(
+      'fail',
+      (accountInfo && accountInfo.id) || 'port',
+      (accountInfo && accountInfo.updated_at) || failMsg.slice(0, 80)
+    );
+    if (!mt5OutcomeWasShown(failKey)) {
+      mt5MarkOutcomeShown(failKey);
+      showMt5ConnectModal('error', failMsg, {
+        accountId: accountInfo && accountInfo.id,
+        dedupeKey: failKey
+      });
+    }
+    if (typeof refreshMt5PortCards === 'function') {
+      await refreshMt5PortCards().catch(function () {});
+    }
   }
 
   async function finishMt5ConnectSuccess(message, accountInfo) {
@@ -1038,7 +1062,7 @@ document.addEventListener('DOMContentLoaded', function () {
   if (urlParams.get('failed') === '1') {
     mt5Checking = false;
     sessionStorage.removeItem('mt5PollAccountId');
-    const failMsg = decodeURIComponent(urlParams.get('msg') || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
+    const failMsg = decodeURIComponent(urlParams.get('msg') || 'ผู้ใช้งานไม่ถูกต้อง');
     const failOutcomeKey = 'url-fail:' + failMsg.slice(0, 120);
     if (!mt5OutcomeWasShown(failOutcomeKey)) {
       mt5MarkOutcomeShown(failOutcomeKey);
@@ -1254,24 +1278,11 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       const outcomeUpdatedAt = data.account.updated_at || '';
-      if (stWait === 'failed' || data.failed === true) {
-        const failKey = mt5OutcomeStorageKey('fail', data.account.id, outcomeUpdatedAt);
-        if (mt5OutcomeWasShown(failKey)) {
-          mt5Checking = false;
-          if (window.mt5Checker) clearInterval(window.mt5Checker);
-          window.mt5Checker = null;
-          return;
-        }
-        mt5MarkOutcomeShown(failKey);
-        mt5Checking = false;
-        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-        sessionStorage.removeItem('mt5PollAccountId');
-        sessionStorage.removeItem('mt5ConnectInFlight');
-        const failMsg =
-          data.message || data.account.last_error || data.account.last_login_message || 'Login หรือ Password ไม่ถูกต้อง';
-        showMt5ConnectModal('error', failMsg, { accountId: data.account.id, dedupeKey: failKey });
-        if (window.mt5Checker) clearInterval(window.mt5Checker);
-        window.mt5Checker = null;
+      if (stWait === 'failed' || stWait === 'deleted' || data.failed === true) {
+        await finishMt5ConnectFail(
+          data.message || data.account.last_error || data.account.last_login_message || 'ผู้ใช้งานไม่ถูกต้อง',
+          data.account
+        );
         return;
       }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
@@ -1334,7 +1345,11 @@ document.addEventListener('DOMContentLoaded', function () {
         showMt5ConnectModal('error', offlineMsg);
         return;
       }
-      if (stWait === 'connected' && (data.connected === true || data.loginVerified === true)) {
+      if (
+        stWait === 'connected' &&
+        data.loginVerified === true &&
+        data.connected === true
+      ) {
         finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account || null);
         return;
       }
@@ -1416,7 +1431,7 @@ document.addEventListener('DOMContentLoaded', function () {
       const data = await res.json();
       if (!data.ok || !data.account) return;
       const st = String(data.account.status || '').toLowerCase();
-      if (st === 'connected' || data.connected === true) {
+      if (st === 'connected' && data.loginVerified === true && data.connected === true) {
         const inFlight = sessionStorage.getItem('mt5ConnectInFlight') === '1' || mt5Checking;
         if (inFlight && typeof finishMt5ConnectSuccess === 'function') {
           finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account);
@@ -1886,7 +1901,7 @@ if (false && mt5ConnectForm) {
       }
       const pop = typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
 
-      if (json.ok === true && json.status === 'connected') {
+      if (json.ok === true && json.status === 'connected' && json.loginVerified === true) {
         if (typeof window.finishMt5ConnectSuccess === 'function') {
           window.finishMt5ConnectSuccess(json.message || 'เชื่อมต่อสำเร็จ', json.account || null);
         } else {
@@ -1925,7 +1940,10 @@ if (false && mt5ConnectForm) {
       }
 
       sessionStorage.removeItem('mt5ConnectInFlight');
-      const errMsg = json.message || 'Login ไม่สำเร็จ — กรุณากดเชื่อมต่ออีกครั้ง';
+      const errMsg = json.message || 'ผู้ใช้งานไม่ถูกต้อง';
+      if (typeof refreshMt5PortCards === 'function') {
+        refreshMt5PortCards().catch(function () {});
+      }
       if (diagElPre) {
         diagElPre.innerHTML = '<span class="err"><b>ไม่สำเร็จ:</b> ' + mt5Esc(errMsg) + '</span>';
       }
