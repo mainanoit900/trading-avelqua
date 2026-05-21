@@ -31,7 +31,7 @@ const {
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
-const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 250);
+const CONNECT_STATUS_SYNC_MS = Number(process.env.MT5_CONNECT_STATUS_SYNC_MS || 100);
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const {
   normalizeLockedServer,
@@ -316,8 +316,8 @@ async function reserveBestPort(userId) {
 }
 
 /** เวลารอที่แสดงบน UI — แยกจาก timeout ภายใน (180s) */
-const MT5_CONNECT_HINT_TYPICAL_MAX_SEC = 90;
-const MT5_CONNECT_HINT_HARD_MAX_SEC = 120;
+const MT5_CONNECT_HINT_TYPICAL_MAX_SEC = 50;
+const MT5_CONNECT_HINT_HARD_MAX_SEC = 90;
 
 function buildConnectWaitHint(waitSec) {
   const sec = Math.max(0, Number(waitSec) || 0);
@@ -339,10 +339,10 @@ function buildConnectWaitHint(waitSec) {
       ' วิ)'
     );
   }
-  if (sec >= 35) {
-    return 'กำลังยืนยัน Login จาก MT5... (อาจใช้ถึง ~90 วินาที)';
+  if (sec >= 25) {
+    return 'กำลังยืนยัน Login จาก MT5... (อาจใช้ถึง ~50 วินาที)';
   }
-  return 'โดยปกติใช้เวลา 40–90 วินาที (รอสูงสุด ~2 นาที)';
+  return 'โดยปกติใช้เวลา 20–50 วินาที (รอสูงสุด ~90 วิ)';
 }
 
 async function getLoginConnectDiagnostics(account, elapsedSec = 0) {

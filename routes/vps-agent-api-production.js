@@ -974,6 +974,39 @@ router.post('/connect-result', async (req, res) => {
         return res.json({ ok: true, connected: true, earlyPath: 'journal_during_starting' });
       }
 
+      const connBal = positiveMoney(req.body.balance);
+      const connEq = positiveMoney(req.body.equity);
+      if (loginHint && (connBal > 0 || connEq > 0)) {
+        await promoteAccountConnected({
+          accountId,
+          portId,
+          mt5Login: loginHint,
+          message: MT5_EARLY_SUCCESS_MSG,
+          balance: connBal,
+          equity: connEq
+        });
+        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+        return res.json({ ok: true, connected: true, earlyPath: 'metrics_during_checking' });
+      }
+
+      if (loginHint && windowTitle && windowTitle.includes(loginHint)) {
+        await promoteAccountConnected({
+          accountId,
+          portId,
+          mt5Login: loginHint,
+          message: MT5_EARLY_SUCCESS_MSG,
+          balance: connBal,
+          equity: connEq
+        });
+        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+        await patchAccountMt5Preview(accountId, {
+          message: MT5_EARLY_SUCCESS_MSG,
+          windowTitle,
+          previewB64
+        });
+        return res.json({ ok: true, connected: true, earlyPath: 'window_title_during_checking' });
+      }
+
       await patchAccountMt5Preview(accountId, {
         status,
         message: message || (status === 'starting' ? 'กำลังเปิดหน้าจอ MT5...' : 'กำลังตรวจ Login MT5...'),

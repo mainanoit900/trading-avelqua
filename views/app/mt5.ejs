@@ -1440,9 +1440,9 @@ if (mt5ConnectForm) {
           window.mt5UpdateConnectProgress({
             message: json.message || 'กำลังเปิด MT5...',
             connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
-            waitHint: 'โดยปกติใช้เวลา 40–90 วินาที (รอสูงสุด ~2 นาที)',
-            expectedMaxSec: 90,
-            maxWaitSec: 120,
+            waitHint: 'โดยปกติใช้เวลา 20–50 วินาที (รอสูงสุด ~90 วิ)',
+            expectedMaxSec: 50,
+            maxWaitSec: 90,
             elapsedSec: 0
           });
         }

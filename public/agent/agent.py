@@ -64,8 +64,8 @@ PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "20"))
 PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", "120"))
 PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
 PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
-CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
-JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.2"))
+CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "35"))
+JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.1"))
 
 
 def _journal_timeout_sec() -> int:
@@ -76,9 +76,9 @@ def _journal_timeout_sec() -> int:
             os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "50"),
         )
     )
-    return max(35, min(50, raw))
-MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.45"))
-JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "6"))
+    return max(28, min(38, raw))
+MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.2"))
+JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
@@ -2579,7 +2579,7 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
+        if elapsed < 12 and (last_wizard_at <= wait_start or now - last_wizard_at >= 3.0):
             srv = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
             automate_mt5_open_account_wizard(server=srv)
@@ -2599,6 +2599,13 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
         if j_out is True:
+            if now - last_api_at >= 0.25:
+                last_api_at = now
+                api_ok, api_detail = _connect_on_api_verify(
+                    payload, port, port_dir, login, proc_pid, joined or last_title, preview_b64
+                )
+                if api_ok:
+                    return True, f"api verified; {api_detail}", j_chunk
             _send_early_connect_if_journal_ok(
                 payload, port, proc_pid, login, j_chunk, early_sent, last_title
             )
@@ -2630,7 +2637,7 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        if ok_w and window_ok_streak >= 1 and now - last_api_at >= 1.0:
+        if ok_w and window_ok_streak >= 1 and now - last_api_at >= 0.35:
             last_api_at = now
             api_ok, api_detail = _connect_on_api_verify(
                 payload, port, port_dir, login, proc_pid, joined, preview_b64
@@ -2683,7 +2690,7 @@ def wait_mt5_login_hybrid(
                 )
                 return True, "socket verified; journal ok", j_rel_chunk or joined
 
-        if window_ok_streak >= 2 and j_out is True:
+        if window_ok_streak >= 1 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
             except Exception:
@@ -2746,7 +2753,7 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
 
-        time.sleep(0.08 if ok_w else 0.18)
+        time.sleep(0.05 if ok_w else 0.1)
 
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
@@ -3055,7 +3062,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
-            time.sleep(0.5)
+            time.sleep(0.25)
             automate_mt5_login_server_form(login, password, server)
         return proc
 
