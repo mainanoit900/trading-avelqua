@@ -18,6 +18,7 @@ const {
   tryRecoverLoginFromPortHealth,
   tryFastConnectConfirm,
   hasRecentAgentLoginSuccess,
+  hasRecentAccountMetrics,
   findRecentLoginCommand,
   promoteAccountConnected,
   tryFastJournalFail,
@@ -1090,6 +1091,67 @@ async function handleMt5ConnectStatusProduction(req, res) {
       }
     }
 
+    if (['connecting', 'starting', 'checking'].includes(statusEarly)) {
+      const loginDoneEarly = await hasRecentAgentLoginSuccess(
+        a.id,
+        a.vps_id,
+        a.mt5_login
+      ).catch(() => false);
+      if (loginDoneEarly) {
+        const recoveredEarly = await tryRecoverLoginFromPortHealth(a).catch(() => ({
+          resolved: false
+        }));
+        if (recoveredEarly.resolved) {
+          const accEarly = await query(
+            `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
+            [a.id]
+          ).catch(() => ({ rows: [a] }));
+          const accNowEarly = accEarly.rows?.[0] || a;
+          const previewEarly = previewPublicPath(accNowEarly.id);
+          return res.json({
+            ok: true,
+            account: accNowEarly,
+            connected: true,
+            failed: false,
+            checking: false,
+            pending: false,
+            status: 'connected',
+            loginVerified: true,
+            message: recoveredEarly.message || MT5_SUCCESS_MSG,
+            windowTitle: windowTitleFromMessage(accNowEarly.last_login_message),
+            previewUrl: previewEarly ? `${previewEarly}?t=${Date.now()}` : '',
+            elapsedSec: 0
+          });
+        }
+        await promoteAccountConnected({
+          accountId: a.id,
+          portId: a.port_id,
+          mt5Login: a.mt5_login,
+          message: MT5_SUCCESS_MSG
+        }).catch(() => {});
+        const accPromoted = await query(
+          `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
+          [a.id]
+        ).catch(() => ({ rows: [a] }));
+        const accProm = accPromoted.rows?.[0] || a;
+        const previewProm = previewPublicPath(accProm.id);
+        return res.json({
+          ok: true,
+          account: accProm,
+          connected: true,
+          failed: false,
+          checking: false,
+          pending: false,
+          status: 'connected',
+          loginVerified: true,
+          message: MT5_SUCCESS_MSG,
+          windowTitle: windowTitleFromMessage(accProm.last_login_message),
+          previewUrl: previewProm ? `${previewProm}?t=${Date.now()}` : '',
+          elapsedSec: 0
+        });
+      }
+    }
+
     if (statusEarly === 'connected') {
       const liveCheck = await reconcileConnectedAccountLive(a).catch(() => ({
         changed: false,
@@ -1098,6 +1160,39 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const accLive = liveCheck.account || a;
       const stLive = String(accLive.status || '').toLowerCase();
       if (liveCheck.changed && stLive !== 'connected') {
+        const recentOk = await hasRecentAgentLoginSuccess(
+          a.id,
+          a.vps_id,
+          a.mt5_login
+        ).catch(() => false);
+        if (recentOk || hasRecentAccountMetrics(a)) {
+          await promoteAccountConnected({
+            accountId: a.id,
+            portId: a.port_id,
+            mt5Login: a.mt5_login,
+            message: MT5_SUCCESS_MSG
+          }).catch(() => {});
+          const accRec = await query(
+            `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
+            [a.id]
+          ).catch(() => ({ rows: [a] }));
+          const accBack = accRec.rows?.[0] || a;
+          const previewBack = previewPublicPath(accBack.id);
+          return res.json({
+            ok: true,
+            account: { ...accBack, status: 'connected' },
+            connected: true,
+            failed: false,
+            checking: false,
+            pending: false,
+            status: 'connected',
+            loginVerified: true,
+            message: MT5_SUCCESS_MSG,
+            windowTitle: windowTitleFromMessage(accBack.last_login_message),
+            previewUrl: previewBack ? `${previewBack}?t=${Date.now()}` : '',
+            elapsedSec: 0
+          });
+        }
         const previewPathReset = previewPublicPath(accLive.id);
         return res.json({
           ok: true,
