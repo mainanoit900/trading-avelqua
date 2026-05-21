@@ -3725,6 +3725,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
       LEFT JOIN vps_system.mt5_accounts ma ON ma.id=bi.mt5_account_id
       WHERE bi.user_id=$1
+        AND LOWER(COALESCE(bi.status, '')) NOT IN ('removed', 'deleted')
       ORDER BY bi.id DESC
       LIMIT 20
     `, [userId]);

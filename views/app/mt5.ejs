@@ -1747,30 +1747,16 @@ async function loadMt5LiveDashboard() {
                   <span class="mt5-dd-ico chart" aria-hidden="true"></span>
                   <span class="mt5-dd-label">กราฟ</span>
                 </button>
-                <button type="button" class="mt5-action-dd-item" onclick="mt5CloseAllActionDd(); mt5SelectPortSlot(${portSlot || 0}, {})">
-                  <span class="mt5-dd-ico add" aria-hidden="true"></span>
-                  <span class="mt5-dd-label">เพิ่มตัว</span>
-                </button>
-                ${
-                  histActive
-                    ? `<form method="POST" action="/app/mt5/stop/${i.id}" class="mt5-action-dd-form" onsubmit="return confirm('หยุดการเทรด ${escAttr(instLabel)} ใช่ไหม? (MT5 ยังเปิดอยู่)')">
-                  <button type="submit" class="mt5-action-dd-item danger">
-                    <span class="mt5-dd-ico stop" aria-hidden="true"></span>
-                    <span class="mt5-dd-label">หยุด</span>
-                  </button>
-                </form>`
-                    : ''
-                }
-                <form method="POST" action="${removeUrl}" class="mt5-action-dd-form" onsubmit="return confirm('ลบรายการ ${escAttr(instLabel)} (PORT ${portSlot || '-'}) ออกจากระบบใช่ไหม?')">
-                  <button type="submit" class="mt5-action-dd-item muted" ${histActive ? 'disabled title="หยุด BOT ก่อน จึงจะลบได้"' : ''}>
-                    <span class="mt5-dd-ico remove" aria-hidden="true"></span>
-                    <span class="mt5-dd-label">ลบ</span>
-                  </button>
-                </form>
                 <form method="POST" action="/app/mt5/request-restart/${i.id}" class="mt5-action-dd-form" onsubmit="return confirm('Restart เฉพาะรายการ ${escAttr(instLabel)} (ID ${i.id}) ใช่ไหม?\\n\\nไม่กระทบแถวอื่นบน PORT เดียวกัน')">
                   <button type="submit" class="mt5-action-dd-item warn" ${histActive ? '' : 'disabled title="เปิด BOT ก่อน จึงจะ Restart ได้"'}>
                     <span class="mt5-dd-ico restart" aria-hidden="true"></span>
                     <span class="mt5-dd-label">Restart</span>
+                  </button>
+                </form>
+                <form method="POST" action="${removeUrl}" class="mt5-action-dd-form" onsubmit="return confirm('ลบแถว ${escAttr(instLabel)} (PORT ${portSlot || '-'}) ออกจาก Live Dashboard ใช่ไหม?')">
+                  <button type="submit" class="mt5-action-dd-item danger" ${histActive ? 'disabled title="หยุด BOT ก่อน จึงจะลบแถวได้"' : ''}>
+                    <span class="mt5-dd-ico remove" aria-hidden="true"></span>
+                    <span class="mt5-dd-label">ลบ</span>
                   </button>
                 </form>
               </div>
