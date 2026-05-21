@@ -65,7 +65,18 @@ PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", 
 PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
 PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
-JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.25"))
+JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.2"))
+
+
+def _journal_timeout_sec() -> int:
+    """จำกัดสูงสุด 60s — .env ที่ตั้ง 90 ทำให้ผู้ใช้รอนานเกินไป"""
+    raw = int(
+        os.getenv(
+            "AVELQUA_JOURNAL_TIMEOUT_SEC",
+            os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "50"),
+        )
+    )
+    return max(35, min(60, raw))
 MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.45"))
 JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "10"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
@@ -2888,9 +2899,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         proc_pid = procs_existing[0].pid if procs_existing else None
         log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid} (no kill/relaunch)")
         journal_since = time.time()
-        journal_timeout = int(
-            os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", str(CONNECT_TIMEOUT_SECONDS))
-        )
+        journal_timeout = _journal_timeout_sec()
         ok, msg, journal_chunk = wait_mt5_login_hybrid(
             port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
         )
@@ -3018,7 +3027,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
-            time.sleep(0.9)
+            time.sleep(0.5)
             automate_mt5_login_server_form(login, password, server)
         return proc
 
@@ -3033,9 +3042,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(
-        os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", str(CONNECT_TIMEOUT_SECONDS))
-    )
+    journal_timeout = _journal_timeout_sec()
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(

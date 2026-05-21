@@ -768,6 +768,7 @@ document.addEventListener('DOMContentLoaded', function () {
         lines.push(cmdLine);
       }
       if (sec !== '') lines.push('<b>รอมาแล้ว:</b> ' + sec + ' วินาที');
+      if (d.waitHint) lines.push('<span class="warn">' + mt5Esc(d.waitHint) + '</span>');
       diagEl.innerHTML = lines.join('<br>') || 'กำลังเชื่อมต่อ...';
     }
     if (d.previewUrl && img) {
@@ -930,7 +931,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.__mt5FinishSuccessRunning = false;
     sessionStorage.removeItem('mt5ConnectedShownId');
     sessionStorage.removeItem('mt5OutcomeShown');
-    window.mt5Checker = setInterval(checkMt5Connected, 150);
+    window.mt5Checker = setInterval(checkMt5Connected, 100);
     checkMt5Connected();
   };
 

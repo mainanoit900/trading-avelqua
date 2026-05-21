@@ -383,13 +383,22 @@ async function getLoginConnectDiagnostics(account) {
     connectStep = 'เชื่อมต่อ MT5';
   }
 
+  let waitHint = 'โดยปกติใช้เวลา 30–60 วินาที';
+  const waitSec = commandAgeSec != null ? commandAgeSec : 0;
+  if (waitSec >= 75) {
+    waitHint = 'ใกล้ครบเวลา — ถ้ายังไม่สำเร็จให้รอจบหรือ restart AvelquaPythonAgent';
+  } else if (waitSec >= 45) {
+    waitHint = 'กำลังยืนยัน Login จาก MT5...';
+  }
+
   return {
     agentOnline,
     agentMessage,
     commandStatus,
     commandMessage,
     commandAgeSec,
-    connectStep
+    connectStep,
+    waitHint
   };
 }
 
@@ -1033,7 +1042,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         a.last_login_message = a.last_error;
       }
       const portRecover =
-        elapsedSec >= 12 && !failFast.resolved
+        elapsedSec >= 5 && !failFast.resolved
           ? await tryRecoverLoginFromPortHealth(a).catch(() => ({ resolved: false }))
           : { resolved: false };
       if (portRecover.resolved) {
@@ -1066,7 +1075,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         }
       }
     }
-    if (shouldSyncJournal && !resolved.resolved && elapsedSec >= 3 && a.folder_path && a.vps_id && a.mt5_login) {
+    if (shouldSyncJournal && !resolved.resolved && elapsedSec >= 12 && a.folder_path && a.vps_id && a.mt5_login) {
       await queueJournalReadVerify({
         accountId: a.id,
         vpsId: a.vps_id,
@@ -1178,7 +1187,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
       agentMessage: diagnostics?.agentMessage || '',
       commandStatus: diagnostics?.commandStatus || '',
       commandMessage: diagnostics?.commandMessage || '',
-      commandAgeSec: diagnostics?.commandAgeSec ?? null
+      commandAgeSec: diagnostics?.commandAgeSec ?? null,
+      waitHint: diagnostics?.waitHint || ''
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
