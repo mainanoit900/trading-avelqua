@@ -2060,39 +2060,9 @@ function deletePortCountdown(e, form) {
     alert('กรุณากด 「หยุด BOT」 ในขั้นตอน 3 ก่อนลบ PORT นี้');
     return false;
   }
-
-  let sec = 15;
-
-  const modal = document.createElement('div');
-  modal.className = 'mt5-lux-modal';
-  modal.innerHTML = `
-    <div class="mt5-lux-backdrop"></div>
-    <div class="mt5-lux-card error">
-      <div class="mt5-lux-icon">⚠️</div>
-      <h3>กำลังลบ PORT</h3>
-      <p>ระบบจะปิด terminal64.exe เฉพาะ PORT นี้ใน <b id="delCount">15</b> วินาที</p>
-      <button type="button" id="cancelDeletePort">ยกเลิก</button>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-
-  const timer = setInterval(() => {
-    sec--;
-    const el = document.getElementById('delCount');
-    if (el) el.innerText = sec;
-
-    if (sec <= 0) {
-      clearInterval(timer);
-      form.submit();
-    }
-  }, 1000);
-
-  document.getElementById('cancelDeletePort').onclick = () => {
-    clearInterval(timer);
-    modal.remove();
-  };
-
+  if (confirm('ยืนยันลบ PORT นี้? ระบบจะปิด MT5 บน PORT นี้ทันที')) {
+    form.submit();
+  }
   return false;
 }
 </script>
