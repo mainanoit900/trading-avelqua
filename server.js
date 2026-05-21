@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const rateLimit = require('express-rate-limit');
@@ -11,7 +12,7 @@ const helmet = require('helmet');
 
 const { injectUser } = require('./middleware/requireAuth');
 const { languageMiddleware, normalizeLocale, localeCache } = require('./services/i18n');
-const { query, repairVpsAgentCommandSequences } = require('./config/database');
+const { query, pool, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
 
 const app = express();
@@ -38,9 +39,19 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.urlencoded({ extended: true, limit: '4mb' }));
-// Agent ส่ง previewImage base64 ใน /api/vps-agent/connect-result (เดิม limit 100kb → 500)
-app.use(express.json({ limit: '4mb' }));
+app.use(express.urlencoded({ extended: true, limit: '8mb' }));
+app.use(express.json({ limit: '8mb' }));
+
+app.use((err, req, res, next) => {
+  if (err && (err.type === 'entity.too.large' || err.status === 413)) {
+    console.error('PAYLOAD TOO LARGE:', req.method, req.path, err.length || err.message);
+    return res.status(413).json({
+      ok: false,
+      message: 'ข้อมูลจาก VPS ใหญ่เกินไป (ภาพหน้าจอ) — ลองเชื่อมต่อใหม่'
+    });
+  }
+  return next(err);
+});
 app.use(cookieParser());
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/downloads', express.static(path.join(__dirname, 'public/downloads')));
@@ -49,6 +60,11 @@ app.use('/mt5-previews', express.static(path.join(__dirname, 'public/mt5-preview
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'trading-avelqua-secret',
+    store: new PgSession({
+      pool,
+      tableName: process.env.SESSION_TABLE || 'user_sessions',
+      createTableIfMissing: true
+    }),
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -619,6 +635,12 @@ ensureOptionalTables()
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
       startPackageExpiryWorker();
+      try {
+        const { startMt5EquityPoller } = require('./lib/mt5EquityPoller');
+        startMt5EquityPoller();
+      } catch (pollerErr) {
+        console.error('mt5 equity poller start error:', pollerErr.message);
+      }
     });
   })
   .catch((error) => {
