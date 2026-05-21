@@ -153,16 +153,15 @@ _configure_stdio_utf8()
 
 def log(msg: str) -> None:
     text = f"{datetime.now():%Y-%m-%d %H:%M:%S} - {msg}"
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    try:
+        text.encode(enc)
+    except (UnicodeEncodeError, LookupError, TypeError):
+        text = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
     try:
         print(text, flush=True)
     except UnicodeEncodeError:
-        try:
-            print(
-                text.encode("utf-8", errors="replace").decode("utf-8", errors="replace"),
-                flush=True,
-            )
-        except Exception:
-            print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
+        print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(text + "\n")
@@ -4419,7 +4418,8 @@ def main() -> None:
                     handle_command(cmd)
 
             except Exception as e:
-                log(f"COMMAND POLL ERROR: {e}")
+                err = str(e).encode("ascii", errors="replace").decode("ascii")
+                log(f"COMMAND POLL ERROR: {err}")
 
             time.sleep(LOOP_SECONDS)
 
