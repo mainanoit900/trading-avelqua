@@ -138,9 +138,31 @@ def mt5_existing_login_config(port_dir: Path) -> Optional[Path]:
     return None
 
 
+def _configure_stdio_utf8() -> None:
+    """Windows service console มักเป็น cp874/cp1252 — กัน COMMAND POLL ERROR จากข้อความไทย"""
+    for stream in (sys.stdout, sys.stderr):
+        try:
+            if stream is not None and hasattr(stream, "reconfigure"):
+                stream.reconfigure(encoding="utf-8", errors="replace")
+        except Exception:
+            pass
+
+
+_configure_stdio_utf8()
+
+
 def log(msg: str) -> None:
     text = f"{datetime.now():%Y-%m-%d %H:%M:%S} - {msg}"
-    print(text, flush=True)
+    try:
+        print(text, flush=True)
+    except UnicodeEncodeError:
+        try:
+            print(
+                text.encode("utf-8", errors="replace").decode("utf-8", errors="replace"),
+                flush=True,
+            )
+        except Exception:
+            print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(text + "\n")
@@ -4107,7 +4129,11 @@ def handle_command(cmd: Dict[str, Any]) -> None:
     cmd_id = cmd.get("id")
     ctype = str(cmd.get("command_type") or "").lower()
     payload = cmd.get("payload") or {}
-    log(f"COMMAND RECEIVED ID={cmd_id} TYPE={ctype} PAYLOAD={safe_json(payload)}")
+    log(
+        f"COMMAND RECEIVED ID={cmd_id} TYPE={ctype} "
+        f"account={payload_get(payload, 'accountId', 'account_id')} "
+        f"port={payload_get(payload, 'port', 'portNumber', 'portSlot', 'vpsPortNumber')}"
+    )
     try:
         if ctype in ("status", "service_status"):
             command_result(cmd_id, True, {

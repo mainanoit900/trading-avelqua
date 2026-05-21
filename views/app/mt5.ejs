@@ -950,19 +950,36 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         return;
       }
-      if (!data.account) {
-        if (data.status === 'none' && data.message) {
+      if (!data.account || data.staleAccount === true) {
+        if (data.status === 'none' || data.staleAccount) {
+          mt5Checking = false;
+          if (window.mt5Checker) clearInterval(window.mt5Checker);
+          window.mt5Checker = null;
+          sessionStorage.removeItem('mt5PollAccountId');
+          sessionStorage.removeItem('mt5ConnectInFlight');
+          sessionStorage.removeItem('mt5ConnectTargetSlot');
+          if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
           const btn = document.getElementById('mt5ConnectBtn');
           if (btn && btn.disabled) {
-            mt5Checking = false;
-            if (window.mt5Checker) clearInterval(window.mt5Checker);
-            if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-            showMt5ConnectModal('error', data.message || 'ไม่พบรายการเชื่อมต่อ กรุณากดเชื่อมต่ออีกครั้ง');
+            showMt5ConnectModal(
+              'error',
+              data.message || 'ไม่พบรายการเชื่อมต่อ กรุณากดเชื่อมต่ออีกครั้ง'
+            );
           }
         }
         return;
       }
       const stWait = String(data.account.status || data.status || '').toLowerCase();
+      if (stWait === 'deleted' || stWait === 'expired') {
+        mt5Checking = false;
+        if (window.mt5Checker) clearInterval(window.mt5Checker);
+        window.mt5Checker = null;
+        sessionStorage.removeItem('mt5PollAccountId');
+        sessionStorage.removeItem('mt5ConnectInFlight');
+        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+        showMt5ConnectModal('error', 'บัญชีนี้ถูกยกเลิกแล้ว — กรุณากดเชื่อมต่อใหม่');
+        return;
+      }
       const outcomeUpdatedAt = data.account.updated_at || '';
       if (stWait === 'failed' || data.failed === true) {
         const failKey = mt5OutcomeStorageKey('fail', data.account.id, outcomeUpdatedAt);
@@ -1060,7 +1077,27 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   if (mt5PollAccountId && !urlParams.has('connected') && urlParams.get('failed') !== '1') {
-    window.startMt5ConnectPolling();
+    fetch('/app/mt5/connect-status?accountId=' + encodeURIComponent(mt5PollAccountId), {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (data) {
+        if (data && (data.status === 'none' || data.staleAccount)) {
+          sessionStorage.removeItem('mt5PollAccountId');
+          sessionStorage.removeItem('mt5ConnectInFlight');
+          mt5PollAccountId = '';
+          if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+          return;
+        }
+        window.startMt5ConnectPolling();
+      })
+      .catch(function () {
+        sessionStorage.removeItem('mt5PollAccountId');
+        sessionStorage.removeItem('mt5ConnectInFlight');
+      });
   }
 
   async function mt5BootstrapConnectedState() {

@@ -1090,6 +1090,20 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusEarly = String(a.status || '').toLowerCase();
 
+    if (['deleted', 'expired'].includes(statusEarly)) {
+      return res.json({
+        ok: true,
+        connected: false,
+        failed: false,
+        checking: false,
+        pending: false,
+        status: 'none',
+        staleAccount: true,
+        message: 'บัญชีนี้ถูกยกเลิกแล้ว — กรุณากดเชื่อมต่อใหม่',
+        elapsedSec: 0
+      });
+    }
+
     if (['ready', 'failed'].includes(statusEarly)) {
       const recentOk = await hasRecentAgentLoginSuccess(a.id, a.vps_id, a.mt5_login).catch(() => false);
       const recentCmd = recentOk && a.vps_id
