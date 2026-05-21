@@ -681,6 +681,7 @@ async function handleMt5ConnectProduction(req, res) {
         status='connecting',
         last_error=NULL,
         last_login_message='กำลังเปิด MT5 และ Login...',
+        last_journal_evidence=NULL,
         connect_started_at=NOW(),
         updated_at=NOW()
       WHERE user_id=$1
@@ -707,9 +708,9 @@ async function handleMt5ConnectProduction(req, res) {
         INSERT INTO vps_system.mt5_accounts
         (user_id, vps_id, port_id, port_slot, assigned_port_no, windows_port_no,
          mt5_login, mt5_password, broker, server_name, mt5_server, account_name, status,
-         last_error, last_login_message, connect_started_at, updated_at)
+         last_error, last_login_message, last_journal_evidence, connect_started_at, updated_at)
         VALUES
-        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'กำลังเปิด MT5 และ Login...',NOW(),NOW())
+        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'กำลังเปิด MT5 และ Login...',NULL,NOW(),NOW())
         RETURNING id
       `, [
         userId,
@@ -739,6 +740,7 @@ async function handleMt5ConnectProduction(req, res) {
             status='connecting',
             last_error=NULL,
             last_login_message='กำลังเปิด MT5 และ Login...',
+            last_journal_evidence=NULL,
             connect_started_at=NOW(),
             updated_at=NOW()
           WHERE user_id=$1

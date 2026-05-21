@@ -2099,11 +2099,32 @@ def _read_log_tail(path: Path, max_bytes: int = 262144) -> str:
             return ""
 
 
+def _parse_mt5_journal_line_time_ms(line: str) -> Optional[float]:
+    m = re.match(
+        r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?",
+        str(line or "").strip(),
+    )
+    if not m:
+        return None
+    ms = int(str(m.group(7) or "0").ljust(3, "0")[:3]) if m.group(7) else 0
+    dt = datetime(
+        int(m.group(1)),
+        int(m.group(2)),
+        int(m.group(3)),
+        int(m.group(4)),
+        int(m.group(5)),
+        int(m.group(6)),
+        ms * 1000,
+    )
+    return dt.timestamp()
+
+
 def _journal_outcome_for_login(
     text: str,
     login: str,
     failed_words: List[str],
     server: str = LOCKED_MT5_SERVER,
+    since_ts: float = 0.0,
 ) -> Optional[bool]:
     """
     อ่าน Journal ตามรูปแบบ MT5 จริง (ล็อค Server MohicansMarkets-Live):
@@ -2126,6 +2147,7 @@ def _journal_outcome_for_login(
         re.I,
     )
 
+    since_ts = float(since_ts or 0)
     lines = text.splitlines()
     for line in reversed(lines):
         low = line.lower()
@@ -2133,11 +2155,11 @@ def _journal_outcome_for_login(
             continue
         if server.lower() not in low:
             continue
+        if since_ts > 0:
+            line_ts = _parse_mt5_journal_line_time_ms(line)
+            if line_ts is None or line_ts < since_ts - 5:
+                continue
         if fail_rx.search(line):
-            return False
-        if any(w in low for w in failed_words):
-            return False
-        if "authorization on" in low and "failed" in low:
             return False
         if ok_rx.search(line):
             return True
@@ -2340,7 +2362,9 @@ def check_mt5_journal_login_result(
         uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         newest = uniq[0]
         chunk = _read_log_tail(newest)
-        outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
+        outcome = _journal_outcome_for_login(
+            chunk, login, failed_words, LOCKED_MT5_SERVER, since_ts
+        )
         if outcome is False:
             log(f"MT5 JOURNAL FAIL login={login} file={newest.name} server={LOCKED_MT5_SERVER}")
             return False, JOURNAL_FAIL_MSG, chunk
@@ -2403,7 +2427,9 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
         return None, ""
     uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     chunk = _read_log_tail(uniq[0])
-    outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
+    outcome = _journal_outcome_for_login(
+        chunk, login, failed_words, LOCKED_MT5_SERVER, since_ts
+    )
     if outcome is True:
         return True, chunk
     if outcome is False:
@@ -2667,7 +2693,7 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
         elif now - last_progress_at >= 0.9:
-            j_hint, j_hint_chunk = _quick_journal_probe(port_dir, login, journal_since - 120)
+            j_hint, j_hint_chunk = _quick_journal_probe(port_dir, login, journal_since)
             hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
             send_connect_result(
                 payload,
@@ -2861,8 +2887,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             }
         proc_pid = procs_existing[0].pid if procs_existing else None
         log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid} (no kill/relaunch)")
-        journal_since = time.time() - 120
-        journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "10"))
+        journal_since = time.time()
+        journal_timeout = int(
+            os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", str(CONNECT_TIMEOUT_SECONDS))
+        )
         ok, msg, journal_chunk = wait_mt5_login_hybrid(
             port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
         )

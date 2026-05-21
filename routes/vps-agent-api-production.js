@@ -898,21 +898,6 @@ router.post('/connect-result', async (req, res) => {
       if (journalBlob) {
         await processInboundConnectJournal(accountId, node.id, journalBlob).catch(() => {});
       }
-      const titleBlob = `${windowTitle} ${message} ${journalBlob}`;
-      if (
-        (journalBlob &&
-          loginHint &&
-          parseMt5JournalOutcome(journalBlob, loginHint, undefined, sinceMs) === 'failed') ||
-        messageIndicatesLoginFailed(titleBlob, loginHint, sinceMs)
-      ) {
-        await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
-          vpsId: node.id,
-          portNo,
-          reason: 'journal_during_checking'
-        }).catch(() => {});
-        return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
-      }
-
       if (
         journalBlob &&
         loginHint &&
