@@ -899,11 +899,18 @@ document.addEventListener('DOMContentLoaded', function () {
         if (btn) btn.innerHTML = waitMsg;
         return;
       }
-      if (
-        stWait === 'connected' ||
-        data.connected === true ||
-        data.loginVerified === true
-      ) {
+      if (data.mt5Offline || stWait === 'ready') {
+        mt5Checking = false;
+        if (window.mt5Checker) clearInterval(window.mt5Checker);
+        window.mt5Checker = null;
+        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+        showMt5ConnectModal(
+          'error',
+          data.message || 'MT5 บน VPS ไม่ทำงาน — กรุณากรอก Login/Password แล้วกดเชื่อมต่อใหม่'
+        );
+        return;
+      }
+      if (stWait === 'connected' && (data.connected === true || data.loginVerified === true)) {
         finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account || null);
         return;
       }

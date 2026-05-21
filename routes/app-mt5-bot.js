@@ -1652,8 +1652,9 @@ router.get('/mt5/diagnostics', requireLogin, async (req, res) => {
 router.get('/mt5/ports-state', requireLogin, async (req, res) => {
   try {
     const userId = req.user.id;
+    const { reconcileConnectedAccountLive } = require('../lib/mt5LoginCommandVerify');
     const summary = await getPortSummaryReadOnly(userId);
-    const accounts = await safeQuery(
+    let accounts = await safeQuery(
       `
       SELECT a.id, a.port_slot, a.mt5_login, a.status, a.last_balance, a.last_equity, (
         SELECT COUNT(*)::int FROM vps_system.bot_instances bi
@@ -1669,6 +1670,16 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     `,
       [userId]
     );
+
+    for (const acc of accounts || []) {
+      if (String(acc?.status || '').toLowerCase() !== 'connected') continue;
+      const row = await reconcileConnectedAccountLive(acc).catch(() => null);
+      if (row?.changed && row.account) {
+        acc.status = row.account.status;
+        acc.last_error = row.account.last_error;
+        acc.last_login_message = row.account.last_login_message;
+      }
+    }
 
     const ports = [];
     for (let slot = 1; slot <= summary.totalPorts; slot++) {
@@ -1758,6 +1769,17 @@ router.get('/mt5', async (req, res) => {
     ORDER BY a.port_slot ASC, a.id ASC
   `, [userId]);
 
+  const { reconcileConnectedAccountLive } = require('../lib/mt5LoginCommandVerify');
+  for (const acc of accounts || []) {
+    if (String(acc?.status || '').toLowerCase() !== 'connected') continue;
+    const row = await reconcileConnectedAccountLive(acc).catch(() => null);
+    if (row?.changed && row.account) {
+      acc.status = row.account.status;
+      acc.last_error = row.account.last_error;
+      acc.last_login_message = row.account.last_login_message;
+    }
+  }
+
   const portSlotAccounts = await safeQuery(`
     SELECT a.*, (
       SELECT COUNT(*)::int FROM vps_system.bot_instances bi
@@ -1769,6 +1791,16 @@ router.get('/mt5', async (req, res) => {
       AND LOWER(TRIM(COALESCE(a.status,''))) NOT IN ('deleted', 'expired')
     ORDER BY a.port_slot ASC, a.id ASC
   `, [userId]);
+
+  for (const acc of portSlotAccounts || []) {
+    if (String(acc?.status || '').toLowerCase() !== 'connected') continue;
+    const row = await reconcileConnectedAccountLive(acc).catch(() => null);
+    if (row?.changed && row.account) {
+      acc.status = row.account.status;
+      acc.last_error = row.account.last_error;
+      acc.last_login_message = row.account.last_login_message;
+    }
+  }
 
   const pendingConnectAccount = (accounts || []).find((row) =>
     ['checking', 'connecting', 'starting'].includes(String(row.status || '').toLowerCase())

@@ -14,6 +14,7 @@ const { requireLogin } = require('../middleware/requireAuth');
 const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
+  reconcileConnectedAccountLive,
   tryFastConnectConfirm,
   tryFastJournalFail,
   expireStuckLoginCommands,
@@ -887,18 +888,42 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     const statusEarly = String(a.status || '').toLowerCase();
     if (statusEarly === 'connected') {
-      const previewPathEarly = previewPublicPath(a.id);
+      const liveCheck = await reconcileConnectedAccountLive(a).catch(() => ({
+        changed: false,
+        account: a
+      }));
+      const accLive = liveCheck.account || a;
+      const stLive = String(accLive.status || '').toLowerCase();
+      if (liveCheck.changed && stLive !== 'connected') {
+        const previewPathReset = previewPublicPath(accLive.id);
+        return res.json({
+          ok: true,
+          account: accLive,
+          connected: false,
+          failed: stLive === 'failed',
+          checking: false,
+          pending: false,
+          status: stLive,
+          loginVerified: false,
+          message: liveCheck.message || accLive.last_login_message || accLive.last_error,
+          windowTitle: windowTitleFromMessage(accLive.last_login_message),
+          previewUrl: previewPathReset ? `${previewPathReset}?t=${Date.now()}` : '',
+          elapsedSec: 0,
+          mt5Offline: stLive === 'ready'
+        });
+      }
+      const previewPathEarly = previewPublicPath(accLive.id);
       return res.json({
         ok: true,
-        account: { ...a, status: 'connected' },
+        account: { ...accLive, status: 'connected' },
         connected: true,
         failed: false,
         checking: false,
         pending: false,
         status: 'connected',
         loginVerified: true,
-        message: a.last_login_message || MT5_SUCCESS_MSG,
-        windowTitle: windowTitleFromMessage(a.last_login_message),
+        message: accLive.last_login_message || MT5_SUCCESS_MSG,
+        windowTitle: windowTitleFromMessage(accLive.last_login_message),
         previewUrl: previewPathEarly ? `${previewPathEarly}?t=${Date.now()}` : '',
         elapsedSec: 0
       });
