@@ -44,9 +44,11 @@ document.addEventListener('DOMContentLoaded', function () {
 .mt5-connect-diag b{color:#e2e8f0}
 .mt5-connect-diag .warn{color:#fbbf24}
 .mt5-connect-diag .err{color:#f87171}
-.port-detail{display:block;font-size:11px;color:#94a3b8;margin-top:2px;line-height:1.35}
-.port-detail[title]{cursor:help}
-.port-item.folder-busy:not(.connected) .port-main small{color:#fbbf24}
+.port-pkg-line{display:block;font-size:11px;color:#cbd5e1;margin-top:2px}
+.port-folder-line{display:block;font-size:10px;color:#64748b;margin-top:2px}
+.port-folder-line[title]{cursor:help}
+.port-item.folder-busy:not(.connected) .port-folder-line{color:#fbbf24}
+.port-item.connected .port-pkg-line{color:#86efac}
 </style>
 
 
@@ -114,8 +116,8 @@ document.addEventListener('DOMContentLoaded', function () {
   <section class="mt5-grid mt5-grid-2">
     <div class="mt5-card">
       <div class="mt5-card-head">
-        <h2>1) เลือก PORT ตามแพ็กเกจ</h2>
-        <span>แพ็กเกจ <%= totalPorts %> PORT · แต่ละ PORT = Login คนละบัญชี · ไม่ซ้ำข้าม PORT</span>
+        <h2>1) PORT แพ็กเกจ</h2>
+        <span>ช่องเปิด BOT ตามแพ็กเกจ (<%= totalPorts %> ช่อง) · 1 ช่อง = 1 Login · ไม่ซ้ำข้ามช่อง</span>
       </div>
       <div class="port-list" id="mt5PortList">
         <% if (totalPorts <= 0) { %>
@@ -176,13 +178,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
     <div class="mt5-card">
       <div class="mt5-card-head">
-        <h2>2) Login MT5</h2>
-        <span><%= fixedServer %> — ตรวจบัญชีจริง · ไม่เปิด BOT</span>
+        <h2>2) Login MT5 (FolderPort)</h2>
+        <span><%= fixedServer %> — เปิด MT5 บนโฟลเดอร์ VPS (FolderPort) · ยังไม่รัน BOT</span>
       </div>
 
       <div class="mt5-login-port-pill" id="mt5LoginPortPill">
         ดู/จัดการ: <b id="mt5LoginPortLabel">คลิก PORT ด้านบน</b>
-        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">คลิก <b>PORT ว่าง</b> แล้วกรอก Login — แต่ละ PORT ใช้บัญชี MT5 คนละเลข (Login เดิมใช้ได้แค่ PORT เดิม)</small>
+        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">เลือก <b>PORT แพ็กเกจว่าง</b> → ระบบเปิด <b>FolderPort</b> คู่กันบน VPS (PORT 2 = FolderPort P02)</small>
       </div>
 
       <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="return window.mt5PrepareConnectSubmit(event)">
@@ -227,7 +229,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   <section class="mt5-card" id="mt5BotSection">
     <div class="mt5-card-head">
-      <h2>3) เปิด / หยุด BOT</h2>
+      <h2>3) เปิด / หยุด BOT (PORT แพ็กเกจ)</h2>
       <span id="mt5BotSectionSubtitle"><% if (typeof activePortSlot !== 'undefined' && activePortSlot) { %>PORT <%= activePortSlot %> — ตั้งค่าเปิด/หยุด BOT<% } else { %>เลือก PORT จากขั้นตอน 1<% } %></span>
     </div>
 
@@ -630,26 +632,38 @@ document.addEventListener('DOMContentLoaded', function () {
     return n.replace(/^VPS[-_\s]*/i, '') || n || 'VPS';
   }
 
-  /** บรรทัดเดียว: Login · FolderPort · สถานะ (ไม่ซ้ำกับ meta แยก) */
-  function mt5PortDetailLine(p) {
+  function mt5FolderPortState(p) {
     if (!p) return '';
-    const loginPart = p.mt5_login ? 'Login ' + p.mt5_login : 'Login —';
-    const pkgP = 'P' + String(p.slot || '').padStart(2, '0');
-    const folderPart =
-      (p.vpsNodeName ? mt5ShortVpsName(p.vpsNodeName) + ' · ' : '') + pkgP;
-    let statePart = '';
-    if (p.accountId) {
-      statePart = p.statusLabel || p.folderState || '';
-    } else if (p.folderAvailable === false) {
-      statePart = p.folderMt5Login
-        ? 'ไม่ว่าง · MT5 ' + p.folderMt5Login
-        : 'ไม่ว่าง';
-    } else if (p.folderAvailable === true) {
-      statePart = 'ว่าง';
-    } else {
-      statePart = p.folderState || 'ว่าง';
+    if (p.accountId) return p.statusLabel || 'เชื่อมต่อแล้ว';
+    if (p.folderAvailable === false) {
+      return p.folderMt5Login ? 'ไม่ว่าง · MT5 ' + p.folderMt5Login : 'ไม่ว่าง';
     }
-    return [loginPart, folderPart, statePart].filter(Boolean).join(' · ');
+    if (p.folderAvailable === true) return 'ว่าง';
+    return p.folderState || '—';
+  }
+
+  /** การ์ด PORT แพ็กเกจ: บรรทัด Login (เปิดบอท) + บรรทัด FolderPort (เปิด MT5 บน VPS) */
+  function mt5PortCardLinesHtml(p) {
+    if (!p) return '';
+    const loginLine =
+      'แพ็กเกจ · ' + (p.mt5_login ? 'Login ' + p.mt5_login : 'ยังไม่ Login');
+    const fpNo = p.folderPortNo != null ? p.folderPortNo : p.slot;
+    const folderLine =
+      'FolderPort P' +
+      String(fpNo).padStart(2, '0') +
+      (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '') +
+      ' · ' +
+      mt5FolderPortState(p);
+    return (
+      '<small class="port-pkg-line">' +
+      mt5Esc(loginLine) +
+      '</small>' +
+      '<small class="port-folder-line"' +
+      (p.folderPath ? ' title="' + mt5Esc(p.folderPath) + '"' : '') +
+      '>' +
+      mt5Esc(folderLine) +
+      '</small>'
+    );
   }
 
   function mt5UpdateFolderPortHint(slot, portsList) {
@@ -661,35 +675,42 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     if (!p) {
       hint.textContent =
-        'ใช้ PORT ' + slot + ' · โฟลเดอร์ VPS ตามเลข PORT (อ้างอิง /admin/vps/…/ports)';
+        'PORT แพ็กเกจ ' + slot + ' → FolderPort P' + String(slot).padStart(2, '0') + ' บน VPS';
       return;
     }
     if (p.accountId) {
       hint.textContent =
-        'PORT ' + slot + ' · Login ' + (p.mt5_login || '—') +
-        (p.folderPath ? ' · ' + p.folderPath : '') +
-        (p.vpsNodeName ? ' · ' + p.vpsNodeName : '');
+        'PORT แพ็กเกจ ' +
+        slot +
+        ' (Login ' +
+        (p.mt5_login || '—') +
+        ') · FolderPort P' +
+        String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
+        (p.folderPath ? ' · ' + p.folderPath : '');
       return;
     }
     if (p.folderAvailable === false) {
       hint.innerHTML =
-        'PORT ' + slot + ' · <span class="warn">โฟลเดอร์ไม่ว่าง</span>' +
-        (p.folderMt5Login ? ' (MT5 Login ' + mt5Esc(p.folderMt5Login) + ')' : '') +
-        (p.folderPath ? ' · ' + mt5Esc(p.folderPath) : '') +
+        'PORT แพ็กเกจ ' +
+        slot +
+        ' → <span class="warn">FolderPort P' +
+        String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
+        ' ไม่ว่าง</span>' +
+        (p.folderMt5Login ? ' (MT5 ' + mt5Esc(p.folderMt5Login) + ')' : '') +
         (p.adminPortsUrl
-          ? ' · <a href="' + mt5Esc(p.adminPortsUrl) + '" target="_blank" rel="noopener" style="color:#38bdf8">ดูใน Admin</a>'
+          ? ' · <a href="' + mt5Esc(p.adminPortsUrl) + '" target="_blank" rel="noopener" style="color:#38bdf8">Admin</a>'
           : '');
       return;
     }
     hint.textContent =
-      'PORT ' +
+      'PORT แพ็กเกจ ' +
       slot +
-      ' → Folder ' +
-      String(slot).padStart(2, '0') +
+      ' → FolderPort P' +
+      String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
       (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '') +
-      (p.folderPath ? ' · ' + p.folderPath : '') +
       ' · ' +
-      (p.folderAvailable ? 'ว่าง' : p.folderState || 'ไม่ว่าง');
+      mt5FolderPortState(p) +
+      ' (เปิด MT5 ที่นี่ — ขั้นตอน 3 ค่อยเปิด BOT)';
     if (p.folderPath) hint.title = p.folderPath;
   }
   window.mt5UpdateFolderPortHint = mt5UpdateFolderPortHint;
@@ -712,13 +733,10 @@ document.addEventListener('DOMContentLoaded', function () {
       ' data-folder-available="' + (p.folderAvailable === true ? '1' : p.folderAvailable === false ? '0' : '') + '"' +
       ' data-folder-state="' + mt5Esc(p.folderState || '') + '">' +
       '<div class="port-main port-slot-pick-hit" role="button" tabindex="0" data-port-slot="' + p.slot + '">' +
-      '<div><b>PORT ' + p.slot + '</b>' +
-      '<small class="port-detail"' +
-      (p.folderPath ? ' title="' + mt5Esc(p.folderPath) + '"' : '') +
-      '>' +
-      mt5Esc(mt5PortDetailLine(p)) +
-      '</small></div>' +
-      '<span>' + mt5Esc(p.accountId ? p.statusLabel : '') + '</span></div>' +
+      '<div><b>PORT ' + p.slot + '</b>' + mt5PortCardLinesHtml(p) + '</div>' +
+      '<span>' +
+      mt5Esc(p.accountId ? (p.botRunning ? 'BOT รัน' : 'พร้อมเปิด BOT') : '') +
+      '</span></div>' +
       actions +
       '</div>'
     );
@@ -1455,12 +1473,12 @@ function mt5SelectPortSlot(slot, opts) {
   mt5SelectedPortSlot.value = String(n);
   try { localStorage.setItem('mt5ActivePortSlot', String(n)); } catch (_) {}
   const lbl = document.getElementById('mt5LoginPortLabel');
-  if (lbl) lbl.textContent = 'PORT ' + n;
+  if (lbl) lbl.textContent = 'PORT แพ็กเกจ ' + n;
   if (typeof window.mt5UpdateFolderPortHint === 'function') {
     window.mt5UpdateFolderPortHint(String(n));
   }
   const sub = document.getElementById('mt5BotSectionSubtitle');
-  if (sub) sub.textContent = 'PORT ' + n + ' — ตั้งค่าเปิด/หยุด BOT';
+  if (sub) sub.textContent = 'PORT แพ็กเกจ ' + n + ' — เปิด/หยุด BOT (MT5 เปิดอยู่ที่ FolderPort)';
   document.querySelectorAll('.port-item[data-port-slot]').forEach(function (el) {
     el.classList.toggle('selected', Number(el.getAttribute('data-port-slot')) === n);
   });
