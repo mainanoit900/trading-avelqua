@@ -25,6 +25,10 @@ async function releaseRedisLock(key) {
 }
 
 const { requireLogin, prefersJsonResponse } = require('../middleware/requireAuth');
+
+function getUser(req) {
+  return req.user || req.session?.user || null;
+}
 const { query, getClient, repairVpsAgentCommandSequences } = require('../config/database');
 const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
@@ -327,6 +331,72 @@ router.post('/mt5/test-release-port', async (req, res) => {
       ok: false,
       message: err.message
     });
+  }
+});
+
+/** Agent — อัปเดต balance/equity (รองรับ token ก่อน requireLogin) */
+router.post('/mt5/account-metrics', async (req, res) => {
+  try {
+    const token =
+      req.headers['x-agent-token'] ||
+      String(req.headers.authorization || '').replace(/^Bearer\s+/i, '').trim() ||
+      '';
+    if (token) {
+      const nodeRes = await query(
+        `SELECT id FROM vps_system.vps_nodes WHERE agent_token=$1 LIMIT 1`,
+        [token]
+      );
+      if (!nodeRes.rows?.[0]) {
+        return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+      }
+    } else if (!getUser(req)) {
+      return res.status(401).json({ ok: false, message: 'Unauthorized' });
+    }
+
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0);
+    const userId = Number(req.body?.userId || req.body?.user_id || 0);
+    const portNumber = Number(req.body?.portNumber || req.body?.port || 0);
+    const balance = positiveMoney(req.body?.balance);
+    const equity = positiveMoney(req.body?.equity);
+
+    if (!accountId && !userId) {
+      return res.json({ ok: false, message: 'accountId or userId required' });
+    }
+
+    const params = [];
+    const where = [];
+    if (accountId) {
+      params.push(accountId);
+      where.push(`id=$${params.length}`);
+    }
+    if (userId) {
+      params.push(userId);
+      where.push(`user_id=$${params.length}`);
+    }
+    if (portNumber) {
+      params.push(portNumber);
+      where.push(`(assigned_port_no=$${params.length} OR port_slot=$${params.length})`);
+    }
+    params.push(balance);
+    params.push(equity);
+    const balIdx = params.length - 1;
+    const eqIdx = params.length;
+
+    await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET last_balance = COALESCE($${balIdx}::numeric, last_balance),
+          last_equity = COALESCE($${eqIdx}::numeric, last_equity),
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE ${where.join(' AND ')}
+    `,
+      params
+    );
+
+    return res.json({ ok: true, balance, equity });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
   }
 });
 

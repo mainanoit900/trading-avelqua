@@ -863,6 +863,60 @@ router.post('/command-result', async (req, res) => {
   }
 });
 
+/** Agent อัปเดต Balance/Equity — ต้องใช้ x-agent-token (ไม่ใช้ session login) */
+router.post('/account-metrics', async (req, res) => {
+  try {
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0);
+    const userId = Number(req.body?.userId || req.body?.user_id || 0);
+    const portNumber = Number(req.body?.portNumber || req.body?.port || 0);
+    const balance = positiveMoney(req.body?.balance);
+    const equity = positiveMoney(req.body?.equity);
+
+    if (!accountId && !userId) {
+      return res.json({ ok: false, message: 'accountId or userId required' });
+    }
+
+    const params = [];
+    const where = [];
+    if (accountId) {
+      params.push(accountId);
+      where.push(`id=$${params.length}`);
+    }
+    if (userId) {
+      params.push(userId);
+      where.push(`user_id=$${params.length}`);
+    }
+    if (portNumber) {
+      params.push(portNumber);
+      where.push(`(assigned_port_no=$${params.length} OR port_slot=$${params.length})`);
+    }
+
+    params.push(balance);
+    params.push(equity);
+    const balIdx = params.length - 1;
+    const eqIdx = params.length;
+
+    await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET last_balance = COALESCE($${balIdx}::numeric, last_balance),
+          last_equity = COALESCE($${eqIdx}::numeric, last_equity),
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE ${where.join(' AND ')}
+    `,
+      params
+    );
+
+    return res.json({ ok: true, balance, equity, node_id: node.id });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+});
+
 router.post('/connect-result', async (req, res) => {
   try {
     await ensureAgentTables();

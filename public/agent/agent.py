@@ -1709,7 +1709,7 @@ def send_account_metrics(
     try:
         url = os.getenv(
             "AVELQUA_ACCOUNT_METRICS_URL",
-            "https://trading.avelqua.com/app/mt5/account-metrics",
+            "https://trading.avelqua.com/api/vps-agent/account-metrics",
         )
         body = {
             "accountId": account_id,
