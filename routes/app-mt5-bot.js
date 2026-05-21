@@ -1790,6 +1790,10 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       });
     }
 
+    const firstEmptySlot =
+      ports.find((p) => !p.accountId && p.cssClass !== 'connected' && p.cssClass !== 'checking')
+        ?.slot || null;
+
     const connectedAccounts = accountsForRunForm(accounts, []).map((a) => ({
       id: Number(a.id),
       port_slot: Number(a.port_slot),
@@ -1817,6 +1821,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       canAddPermanent: summary.canAddPermanent,
       packageExpired: summary.packageExpired,
       ports,
+      firstEmptySlot,
       connectedAccounts,
       bots: (bots || []).map((b) => ({
         id: Number(b.id),

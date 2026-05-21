@@ -231,7 +231,8 @@ async function clearExpiredLocks() {
 
 const { findMt5LoginInUse, mt5LoginInUseMessage } = require('../lib/mt5LoginDuplicate');
 
-async function reserveBestPort(userId) {
+async function reserveBestPort(userId, preferredPortNo = 0) {
+  const preferNo = num(preferredPortNo, 0);
   await clearExpiredLocks();
 
   const agentGate = await assertVpsAgentOnline();
@@ -275,6 +276,7 @@ async function reserveBestPort(userId) {
             AND LOWER(COALESCE(a.status,'')) IN ('connecting','checking','connected','ready')
         )
       ORDER BY
+        CASE WHEN $4 > 0 AND p.port_no = $4 THEN 0 ELSE 1 END,
         COALESCE(n.cpu_percent,0) ASC,
         COALESCE(n.ram_percent,0) ASC,
         COALESCE(n.ping_ms,0) ASC,
@@ -282,7 +284,7 @@ async function reserveBestPort(userId) {
         p.port_no ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
-    `, [MAX_CPU, MAX_RAM, MAX_PING]);
+    `, [MAX_CPU, MAX_RAM, MAX_PING, preferNo]);
 
     const port = r.rows?.[0];
     if (!port) {
@@ -758,7 +760,7 @@ async function handleMt5ConnectProduction(req, res) {
         throw new Error(`PORT ${requestedSlot} ไม่ว่าง กรุณาเลือก PORT ที่ยังไม่ใช้งาน`);
       }
       portSlot = requestedSlot;
-      const reserve = await reserveBestPort(userId);
+      const reserve = await reserveBestPort(userId, requestedSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (retryPort) {
@@ -784,7 +786,7 @@ async function handleMt5ConnectProduction(req, res) {
       if (!portSlot) {
         throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
       }
-      const reserve = await reserveBestPort(userId);
+      const reserve = await reserveBestPort(userId, portSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     }
@@ -965,7 +967,8 @@ async function handleMt5ConnectProduction(req, res) {
       portId: reservedPort.port_id,
       portNo: allocPortNo,
       portSlot,
-      message: `กำลังเปิด MT5 — ${pickName} (${serverName})`,
+      folderPath: reservedPort.folder_path || null,
+      message: `กำลังเปิด MT5 — PORT ${portSlot} · โฟลเดอร์ VPS ${pickName} (${serverName})`,
       aiConnect: connectAdvice
     });
   } catch (e) {
