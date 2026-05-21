@@ -641,6 +641,57 @@ async function handleMt5ConnectProduction(req, res) {
       });
     }
 
+    // ป้องกันผู้ใช้กดเชื่อมต่อซ้ำแล้วรีสตาร์ท flow เดิมจนคำสั่งถูก cancel วน
+    const inProgressAccount = await query(
+      `
+      SELECT id, port_slot
+      FROM vps_system.mt5_accounts
+      WHERE user_id=$1
+        AND mt5_login=$2
+        AND COALESCE(server_name, mt5_server, '')=$3
+        AND LOWER(COALESCE(status, '')) IN ('connecting', 'starting', 'checking')
+      ORDER BY updated_at DESC, id DESC
+      LIMIT 1
+    `,
+      [userId, mt5Login, serverName]
+    ).catch(() => ({ rows: [] }));
+
+    if (inProgressAccount.rows?.[0]) {
+      const pendingAcc = inProgressAccount.rows[0];
+      const activeCmd = await query(
+        `
+        SELECT id, status
+        FROM vps_system.vps_agent_commands
+        WHERE command_type IN ('login_mt5', 'connect_mt5')
+          AND (payload->>'accountId')::text = $1::text
+          AND LOWER(COALESCE(status, '')) IN ('pending', 'processing', 'picked', 'running')
+          AND created_at > NOW() - INTERVAL '10 minutes'
+        ORDER BY
+          CASE LOWER(COALESCE(status, ''))
+            WHEN 'processing' THEN 0
+            WHEN 'picked' THEN 1
+            WHEN 'running' THEN 2
+            WHEN 'pending' THEN 3
+            ELSE 4
+          END,
+          id DESC
+        LIMIT 1
+      `,
+        [pendingAcc.id]
+      ).catch(() => ({ rows: [] }));
+
+      if (activeCmd.rows?.[0]) {
+        return res.json({
+          ok: true,
+          status: 'queued',
+          accountId: pendingAcc.id,
+          commandId: activeCmd.rows[0].id,
+          portSlot: Number(pendingAcc.port_slot || 0) || null,
+          message: 'กำลังเชื่อมต่อบัญชีนี้อยู่แล้ว กรุณารอสักครู่'
+        });
+      }
+    }
+
     await cancelPendingLoginCommands({ mt5Login });
 
     const requestedSlot = num(req.body.port_slot || req.body.portSlot);
