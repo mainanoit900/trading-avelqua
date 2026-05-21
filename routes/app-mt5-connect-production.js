@@ -40,7 +40,8 @@ const {
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
-  buildMt5LoginPayload
+  buildMt5LoginPayload,
+  folderPathForPackageSlot
 } = require('../lib/adminVpsPortPicker');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
@@ -279,7 +280,10 @@ async function reserveBestPort(userId, preferredPortNo = 0) {
             AND LOWER(COALESCE(a.status,'')) IN ('connecting','checking','connected','ready')
         )
       ORDER BY
-        CASE WHEN $4 > 0 AND p.port_no = $4 THEN 0 ELSE 1 END,
+        CASE
+          WHEN $4 > 0 AND (p.port_no = $4 OR p.port_no = $4 + 100) THEN 0
+          ELSE 1
+        END,
         COALESCE(n.cpu_percent,0) ASC,
         COALESCE(n.ram_percent,0) ASC,
         COALESCE(n.ping_ms,0) ASC,
@@ -293,10 +297,12 @@ async function reserveBestPort(userId, preferredPortNo = 0) {
     if (!port) {
       await client.query('ROLLBACK');
       const preferMsg =
-        adminReserve.code === 'AGENT_OFFLINE'
-          ? adminReserve.message
-          : adminReserve.message ||
-            'ไม่มี VPS/PORT ว่าง — ตรวจสอบ /admin/vps/ports (ข้าม PORT ใช้งาน/ปิด) และ /admin/vps/edit (CPU/RAM/PING)';
+        preferNo > 0
+          ? `Folder PORT ${String(preferNo).padStart(2, '0')} ไม่ว่างหรือไม่ตรงแพ็กเกจ — ตรวจ /admin/vps/…/ports`
+          : adminReserve.code === 'AGENT_OFFLINE'
+            ? adminReserve.message
+            : adminReserve.message ||
+              'ไม่มี VPS/PORT ว่าง — ตรวจสอบ /admin/vps/ports (ข้าม PORT ใช้งาน/ปิด) และ /admin/vps/edit (CPU/RAM/PING)';
       return { ok: false, message: preferMsg, code: adminReserve.code };
     }
 
@@ -830,6 +836,13 @@ async function handleMt5ConnectProduction(req, res) {
     const allocPortNo = num(
       reservedPort.port_number || parsePortNumber(reservedPort) || portSlot
     );
+    const folderPortNo = parsePortNumber(reservedPort);
+    if (portSlot > 0 && folderPortNo > 0 && folderPortNo !== portSlot) {
+      throw new Error(
+        `Folder PORT P${String(folderPortNo).padStart(2, '0')} ไม่ตรง PORT แพ็กเกจ ${portSlot} — ตรวจ /admin/vps/ports`
+      );
+    }
+    reservedPort.folder_path = folderPathForPackageSlot(reservedPort, portSlot);
 
     // ไม่พึ่ง ON CONFLICT เพราะฐานข้อมูลเดิมบางชุดอาจยังไม่มี unique constraint ครบ
     // ใช้วิธี UPDATE ก่อน ถ้าไม่มีค่อย INSERT เพื่อไม่ให้ deploy แล้วล้ม

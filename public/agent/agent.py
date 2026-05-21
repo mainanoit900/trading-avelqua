@@ -556,10 +556,28 @@ def normalize_port(port: Any) -> int:
     return n
 
 
+def _folder_candidates_for_port(n: int) -> List[Path]:
+    if n <= 0:
+        return []
+    return [
+        MT5_ROOT / f"VPS-WIN-01-PORT-{n:02d}",
+        MT5_ROOT / f"VPS-WIN-01-PORT-{n}",
+        MT5_ROOT / f"PORT{n:02d}",
+        MT5_ROOT / f"PORT{n}",
+    ]
+
+
 def resolve_mt5_port_dir(port: Any, payload: Optional[Dict[str, Any]] = None) -> Path:
     payload = payload or {}
 
-    # ✅ ใช้ path จริงจากเว็บ (รองรับหลาย VPS)
+    slot_raw = payload_get(payload, "portSlot", "port_slot")
+    n = 0
+    if slot_raw:
+        n = normalize_port(slot_raw)
+    else:
+        n = normalize_port(port) if port not in (None, "") else 0
+
+    # ✅ ใช้ path จริงจากเว็บ (รองรับหลาย VPS) — ต้องตรงเลข PORT แพ็กเกจ
     folder = payload_get(payload, "vpsFolderPath", "folder_path", "path")
     if folder:
         p = Path(folder).expanduser()
@@ -567,15 +585,27 @@ def resolve_mt5_port_dir(port: Any, payload: Optional[Dict[str, Any]] = None) ->
         if str(p).lower().endswith(r"mql5\experts"):
             p = p.parent.parent
 
-        if not p.exists():
-            raise RuntimeError(f"PORT not found: {p}")
-
-        # 🔒 เช็คว่า port ตรงกันจริง
-        n = normalize_port(port)
         m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", p.name)
+        folder_no = int(m.group(1)) if m else 0
 
-        if m and int(m.group(1)) != n:
-            log(f"PORT mismatch warning: selected={n} folder={p.name} — using folder_path from payload")
+        if folder_no and folder_no != n:
+            for strict in _folder_candidates_for_port(n):
+                if strict.exists():
+                    log(
+                        f"PORT mismatch: slot={n} payload_folder={p.name} "
+                        f"— using {strict.name}"
+                    )
+                    return strict
+            raise RuntimeError(
+                f"PORT mismatch: selected={n} folder={p.name} (โฟลเดอร์ไม่ตรง PORT แพ็กเกจ)"
+            )
+
+        if not p.exists():
+            for strict in _folder_candidates_for_port(n):
+                if strict.exists():
+                    log(f"PORT folder missing {p.name} — fallback {strict.name}")
+                    return strict
+            raise RuntimeError(f"PORT not found: {p}")
 
         return p
 
@@ -2827,6 +2857,15 @@ def wait_mt5_login_hybrid(
             )
             return False, msg_j, chunk_j
 
+    cleanup_mt5_after_login_fail(port, payload, port_dir)
+    send_connect_result(
+        payload,
+        "failed",
+        JOURNAL_TIMEOUT_MSG,
+        port,
+        process_id=proc_pid,
+        journal_evidence=chunk,
+    )
     return False, JOURNAL_TIMEOUT_MSG, chunk
 
 
@@ -2836,7 +2875,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     - exact PORT isolation
     - ยืนยันล็อกอินสำเร็จเฉพาะจาก Journal: เลข login + "authorized on" เท่านั้น
     """
-    port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
+    port = payload_get(payload, "portSlot", "port_slot", "port", "port_no", "portNumber", "vpsPortNumber", "folderPort")
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
     server = resolve_mt5_server(payload)
