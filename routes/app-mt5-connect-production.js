@@ -19,6 +19,7 @@ const {
   tryFastConnectConfirm,
   hasRecentAgentLoginSuccess,
   findRecentLoginCommand,
+  promoteAccountConnected,
   tryFastJournalFail,
   expireStuckLoginCommands,
   syncJournalFromLatestCommand,
@@ -1052,7 +1053,43 @@ async function handleMt5ConnectStatusProduction(req, res) {
       }
     }
 
-    const statusEarly = String(a.status || '').toLowerCase();
+    let statusEarly = String(a.status || '').toLowerCase();
+
+    if (['ready', 'failed'].includes(statusEarly)) {
+      const recentOk = await hasRecentAgentLoginSuccess(a.id, a.vps_id, a.mt5_login).catch(() => false);
+      const recentCmd = recentOk && a.vps_id
+        ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
+        : null;
+      const finishedAt = recentCmd?.finished_at ? new Date(recentCmd.finished_at).getTime() : 0;
+      const freshMs = finishedAt ? Date.now() - finishedAt : Number.MAX_SAFE_INTEGER;
+
+      // บางจังหวะ isPortMt5Running false หลอก ทำให้หลุดเป็น ready ทั้งที่ login เพิ่ง success
+      if (recentOk && freshMs <= 5 * 60 * 1000) {
+        await promoteAccountConnected({
+          accountId: a.id,
+          portId: a.port_id,
+          mt5Login: a.mt5_login,
+          message: MT5_SUCCESS_MSG
+        }).catch(() => {});
+
+        const fresh = await query(
+          `
+          SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+                 a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+                 a.connect_started_at, a.last_balance, a.last_equity,
+                 p.folder_path
+          FROM vps_system.mt5_accounts a
+          LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+          WHERE a.id=$1
+          LIMIT 1
+        `,
+          [a.id]
+        ).catch(() => ({ rows: [a] }));
+        a = fresh.rows?.[0] || a;
+        statusEarly = String(a.status || '').toLowerCase();
+      }
+    }
+
     if (statusEarly === 'connected') {
       const liveCheck = await reconcileConnectedAccountLive(a).catch(() => ({
         changed: false,
