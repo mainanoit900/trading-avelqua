@@ -2527,7 +2527,7 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
 
 
 def _early_connect_enabled() -> bool:
-    return os.getenv("AVELQUA_EARLY_CONNECT", "true").lower() not in ("0", "false", "no")
+    return os.getenv("AVELQUA_EARLY_CONNECT", "false").lower() in ("1", "true", "yes")
 
 
 def _send_early_connect_if_journal_ok(

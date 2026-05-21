@@ -974,28 +974,6 @@ router.post('/connect-result', async (req, res) => {
         });
       }
 
-      if (
-        journalBlob &&
-        loginHint &&
-        parseJournalRelaxed(journalBlob, loginHint, sinceMs) === 'success'
-      ) {
-        await promoteAccountConnected({
-          accountId,
-          portId,
-          mt5Login: loginHint,
-          message: MT5_EARLY_SUCCESS_MSG,
-          balance: positiveMoney(req.body.balance),
-          equity: positiveMoney(req.body.equity)
-        });
-        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
-        await patchAccountMt5Preview(accountId, {
-          message: MT5_EARLY_SUCCESS_MSG,
-          windowTitle,
-          previewB64
-        });
-        return res.json({ ok: true, connected: true, earlyPath: 'journal_during_starting' });
-      }
-
       await patchAccountMt5Preview(accountId, {
         status,
         message: message || (status === 'starting' ? 'กำลังเปิดหน้าจอ MT5...' : 'กำลังตรวจ Login MT5...'),

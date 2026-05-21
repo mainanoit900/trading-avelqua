@@ -16,9 +16,10 @@ const {
   resolveStuckLoginAccount,
   reconcileConnectedAccountLive,
   tryRecoverLoginFromPortHealth,
-  tryFastConnectConfirm,
   findRecentLoginCommand,
   verifyLoginFromCommand,
+  isAccountLoginJournalVerified,
+  probeRecentLoginCommandFailed,
   tryFastJournalFail,
   expireStuckLoginCommands,
   syncJournalFromLatestCommand,
@@ -1173,6 +1174,46 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     if (statusEarly === 'connected') {
+      const journalOkEarly = await isAccountLoginJournalVerified(a).catch(() => ({ ok: false }));
+      if (!journalOkEarly.ok) {
+        const cmdFailEarly = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
+        if (cmdFailEarly.failed) {
+          await failAccountFromJournal(a.id, a.port_id, cmdFailEarly.message, {
+            vpsId: a.vps_id,
+            portNo: a.assigned_port_no || a.port_slot,
+            folderPath: a.folder_path,
+            reason: 'login_cmd_failed',
+            killMt5: true,
+            clearPackagePort: true
+          }).catch(() => {});
+          return res.json({
+            ok: true,
+            account: { ...a, status: 'deleted', port_slot: null },
+            connected: false,
+            failed: true,
+            checking: false,
+            pending: false,
+            status: 'deleted',
+            loginVerified: false,
+            message: cmdFailEarly.message || MT5_FAIL_USER_MSG,
+            elapsedSec: 0
+          });
+        }
+        const previewBad = previewPublicPath(a.id);
+        return res.json({
+          ok: true,
+          account: { ...a, status: 'checking' },
+          connected: false,
+          failed: false,
+          checking: true,
+          pending: true,
+          status: 'checking',
+          loginVerified: false,
+          message: 'กำลังยืนยัน Login จาก Journal...',
+          previewUrl: previewBad ? `${previewBad}?t=${Date.now()}` : '',
+          elapsedSec: 0
+        });
+      }
       const liveCheck = await reconcileConnectedAccountLive(a).catch(() => ({
         changed: false,
         account: a
@@ -1226,16 +1267,19 @@ async function handleMt5ConnectStatusProduction(req, res) {
         });
       }
       const previewPathEarly = previewPublicPath(accLive.id);
+      const journalOkLive = await isAccountLoginJournalVerified(accLive).catch(() => ({ ok: false }));
       return res.json({
         ok: true,
-        account: { ...accLive, status: 'connected' },
-        connected: true,
+        account: { ...accLive, status: journalOkLive.ok ? 'connected' : 'checking' },
+        connected: journalOkLive.ok,
         failed: false,
-        checking: false,
-        pending: false,
-        status: 'connected',
-        loginVerified: true,
-        message: accLive.last_login_message || MT5_SUCCESS_MSG,
+        checking: !journalOkLive.ok,
+        pending: !journalOkLive.ok,
+        status: journalOkLive.ok ? 'connected' : 'checking',
+        loginVerified: journalOkLive.ok,
+        message: journalOkLive.ok
+          ? accLive.last_login_message || MT5_SUCCESS_MSG
+          : 'กำลังยืนยัน Login จาก Journal...',
         windowTitle: windowTitleFromMessage(accLive.last_login_message),
         previewUrl: previewPathEarly ? `${previewPathEarly}?t=${Date.now()}` : '',
         elapsedSec: 0
@@ -1318,6 +1362,31 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let resolved = { resolved: false };
     if (shouldSyncJournal) {
+      const cmdFailed = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
+      if (cmdFailed.failed) {
+        await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no || a.port_slot,
+          folderPath: a.folder_path,
+          reason: 'login_cmd_failed',
+          killMt5: true,
+          clearPackagePort: true
+        }).catch(() => {});
+        return res.json({
+          ok: true,
+          account: { ...a, status: 'deleted', port_slot: null },
+          connected: false,
+          failed: true,
+          checking: false,
+          pending: false,
+          status: 'deleted',
+          loginVerified: false,
+          message: cmdFailed.message || MT5_FAIL_USER_MSG,
+          windowTitle: windowTitleFromMessage(a.last_login_message),
+          previewUrl: previewPublicPath(a.id) ? `${previewPublicPath(a.id)}?t=${Date.now()}` : '',
+          elapsedSec
+        });
+      }
       const failFast = await tryFastJournalFail(a).catch(() => ({ resolved: false }));
       if (failFast.resolved) {
         resolved = failFast;
@@ -1341,37 +1410,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
           a.last_error = portRecover.message || MT5_FAIL_USER_MSG;
           a.last_login_message = a.last_error;
           if (statusFinal === 'deleted') a.port_slot = null;
-        }
-      }
-      const fast =
-        !failFast.resolved && !portRecover.resolved
-          ? await tryFastConnectConfirm(a).catch(() => ({ resolved: false }))
-          : { resolved: false };
-      if (fast.resolved) {
-        resolved = fast;
-        statusFinal = fast.status || 'connected';
-        if (statusFinal === 'failed' || statusFinal === 'deleted') {
-          a.status = statusFinal;
-          a.last_error = fast.message || MT5_FAIL_USER_MSG;
-          a.last_login_message = a.last_error;
-          if (statusFinal === 'deleted') a.port_slot = null;
-        }
-        const freshFast = await query(
-          `
-          SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
-                 a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
-                 a.connect_started_at, a.last_balance, a.last_equity,
-                 p.folder_path
-          FROM vps_system.mt5_accounts a
-          LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
-          WHERE a.id=$1 AND a.user_id=$2
-          LIMIT 1
-        `,
-          [a.id, userId]
-        ).catch(() => ({ rows: [] }));
-        if (freshFast.rows?.[0]) {
-          Object.assign(a, freshFast.rows[0]);
-          statusFinal = String(a.status || statusFinal).toLowerCase();
+        } else if (statusFinal === 'connected') {
+          const vRecover = await isAccountLoginJournalVerified(a).catch(() => ({ ok: false }));
+          if (!vRecover.ok) {
+            resolved = { resolved: false };
+            statusFinal = 'checking';
+          }
         }
       }
     }
@@ -1434,9 +1478,15 @@ async function handleMt5ConnectStatusProduction(req, res) {
           a.last_error = resolved.status === 'failed' ? resolved.message : null;
         }
         if (statusFinal === 'connected') {
-          a.status = 'connected';
-          a.last_error = null;
-          a.last_login_message = resolved.message || MT5_SUCCESS_MSG;
+          const vResolved = await isAccountLoginJournalVerified(a).catch(() => ({ ok: false }));
+          if (!vResolved.ok) {
+            statusFinal = 'checking';
+            a.status = 'checking';
+          } else {
+            a.status = 'connected';
+            a.last_error = null;
+            a.last_login_message = resolved.message || MT5_SUCCESS_MSG;
+          }
         } else if (statusFinal === 'failed') {
           a.status = 'failed';
           a.last_error = resolved.message || a.last_error;
@@ -1466,7 +1516,15 @@ async function handleMt5ConnectStatusProduction(req, res) {
         ? `${stepHint} — ${baseMsg}`
         : baseMsg;
     }
-    const loginVerified = statusFinal === 'connected';
+    const journalVerified =
+      statusFinal === 'connected'
+        ? (await isAccountLoginJournalVerified(a).catch(() => ({ ok: false }))).ok
+        : false;
+    const loginVerified = journalVerified;
+    if (statusFinal === 'connected' && !journalVerified) {
+      statusFinal = 'checking';
+      a.status = 'checking';
+    }
     const failedFinal = statusFinal === 'failed' || statusFinal === 'deleted';
     if (loginVerified && !positiveMoney(a.last_equity)) {
       ensureEquityOnConnect(a.id, userId, () => loadAccountPortContext(a.id, userId)).catch(() => {});

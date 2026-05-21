@@ -1213,23 +1213,8 @@ document.addEventListener('DOMContentLoaded', function () {
           headers: { Accept: 'application/json' }
         })
       ];
-      if (inFlight) {
-        fetches.push(
-          fetch('/app/mt5/ports-state', {
-            cache: 'no-store',
-            credentials: 'same-origin',
-            headers: { Accept: 'application/json' }
-          })
-        );
-      }
       const results = await Promise.all(fetches);
       const res = results[0];
-      if (inFlight && results[1] && results[1].ok) {
-        try {
-          const portsData = await results[1].json();
-          if (tryFinishFromPortsState(portsData, 'เชื่อมต่อสำเร็จ')) return;
-        } catch (_) {}
-      }
       const text = await res.text();
       let data;
       try {
@@ -1267,6 +1252,14 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       const stWait = String(data.account.status || data.status || '').toLowerCase();
+      const cmdStFail = String(data.commandStatus || '').toLowerCase();
+      if (['failed', 'error', 'cancelled'].includes(cmdStFail)) {
+        await finishMt5ConnectFail(
+          data.message || 'User หรือ รหัส ไม่ถูกต้อง',
+          data.account
+        );
+        return;
+      }
       if (stWait === 'deleted' || stWait === 'expired') {
         mt5Checking = false;
         if (window.mt5Checker) clearInterval(window.mt5Checker);
@@ -1348,9 +1341,18 @@ document.addEventListener('DOMContentLoaded', function () {
       if (
         stWait === 'connected' &&
         data.loginVerified === true &&
-        data.connected === true
+        data.connected === true &&
+        !/ไม่ถูกต้อง|ผิด|failed|timeout/i.test(
+          String(data.message || data.account.last_error || data.account.last_login_message || '')
+        )
       ) {
         finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account || null);
+        return;
+      }
+      if (
+        stWait === 'connected' &&
+        (!data.loginVerified || !data.connected)
+      ) {
         return;
       }
     } catch (e) {} finally {
