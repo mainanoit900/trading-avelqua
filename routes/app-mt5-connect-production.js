@@ -405,16 +405,16 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
     connectStep = 'VPS Agent ไม่ตอบสนอง — คำสั่ง login อาจค้างในคิว';
   } else if (commandStatus === 'pending' && commandAgeSec != null && commandAgeSec >= 45) {
     connectStep = 'คำสั่ง login ค้างนาน — รอ Agent หรือ restart AvelquaPythonAgent';
+  } else if (st === 'checking') {
+    connectStep = 'ตรวจ Login — อ่าน Journal';
+  } else if (st === 'starting') {
+    connectStep = 'เปิด MT5 — รอหน้าต่างโปรแกรม';
+  } else if (['processing', 'picked', 'running'].includes(commandStatus)) {
+    connectStep = 'Agent รับงานแล้ว — กำลังดำเนินการ';
   } else if (commandStatus === 'pending') {
     connectStep = 'ส่งคำสั่งแล้ว — รอ Agent รับงาน';
-  } else if (['processing', 'picked', 'running'].includes(commandStatus)) {
-    connectStep = 'Agent กำลังเปิด MT5 / Login';
-  } else if (st === 'starting') {
-    connectStep = 'กำลังเปิดหน้าจอ MT5';
-  } else if (st === 'checking') {
-    connectStep = 'ตรวจสอบ Login / Journal';
   } else if (st === 'connecting') {
-    connectStep = 'เชื่อมต่อ MT5';
+    connectStep = 'ส่งคำสั่งไป VPS';
   }
 
   const waitSec = Math.max(
