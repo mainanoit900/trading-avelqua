@@ -64,19 +64,19 @@ PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "20"))
 PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", "120"))
 PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
 PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
-CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "35"))
-JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.1"))
+CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "28"))
+JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.08"))
 
 
 def _journal_timeout_sec() -> int:
-    """จำกัดสูงสุด 60s — .env ที่ตั้ง 90 ทำให้ผู้ใช้รอนานเกินไป"""
+    """จำกัดสูงสุด ~32s — user จริงมักจบใน 15–30s เมื่อ journal ตอบเร็ว"""
     raw = int(
         os.getenv(
             "AVELQUA_JOURNAL_TIMEOUT_SEC",
-            os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "50"),
+            os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "30"),
         )
     )
-    return max(28, min(38, raw))
+    return max(22, min(32, raw))
 MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.2"))
 JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
@@ -2600,7 +2600,7 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if elapsed < 12 and (last_wizard_at <= wait_start or now - last_wizard_at >= 3.0):
+        if elapsed < 8 and (last_wizard_at <= wait_start or now - last_wizard_at >= 2.5):
             srv = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
             automate_mt5_open_account_wizard(server=srv)

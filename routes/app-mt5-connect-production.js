@@ -318,8 +318,8 @@ async function reserveBestPort(userId, preferredPortNo = 0) {
 }
 
 /** เวลารอที่แสดงบน UI — แยกจาก timeout ภายใน (180s) */
-const MT5_CONNECT_HINT_TYPICAL_MAX_SEC = 50;
-const MT5_CONNECT_HINT_HARD_MAX_SEC = 90;
+const MT5_CONNECT_HINT_TYPICAL_MAX_SEC = 35;
+const MT5_CONNECT_HINT_HARD_MAX_SEC = 60;
 
 function buildConnectWaitHint(waitSec) {
   const sec = Math.max(0, Number(waitSec) || 0);
@@ -327,24 +327,24 @@ function buildConnectWaitHint(waitSec) {
     return (
       'เกิน ' +
       MT5_CONNECT_HINT_TYPICAL_MAX_SEC +
-      ' วินาทีแล้ว — รอได้ถึง ~2 นาที อย่ากดเชื่อมต่อซ้ำ (ถ้าค้าง restart Agent)'
+      ' วินาทีแล้ว — รอได้ถึง ~' +
+      MT5_CONNECT_HINT_HARD_MAX_SEC +
+      ' วิ อย่ากดซ้ำ (ถ้าค้าง restart Agent)'
     );
   }
-  if (sec >= 60) {
+  if (sec >= 40) {
     return (
       'ใช้เวลานานกว่าปกติ (' +
       sec +
       ' วิ) — ยังยืนยัน Login อยู่ (มักจบภายใน ~' +
       MT5_CONNECT_HINT_TYPICAL_MAX_SEC +
-      '–' +
-      MT5_CONNECT_HINT_HARD_MAX_SEC +
       ' วิ)'
     );
   }
-  if (sec >= 25) {
-    return 'กำลังยืนยัน Login จาก MT5... (อาจใช้ถึง ~50 วินาที)';
+  if (sec >= 18) {
+    return 'กำลังยืนยัน Login จาก MT5... (มักจบภายใน ~35 วินาที)';
   }
-  return 'โดยปกติใช้เวลา 20–50 วินาที (รอสูงสุด ~90 วิ)';
+  return 'โดยปกติใช้เวลา 15–35 วินาที — หลังสำเร็จไปขั้นตอน 3 เลือกบอทแล้วเปิด BOT';
 }
 
 async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
@@ -1366,7 +1366,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         a.last_login_message = a.last_error;
       }
       const portRecover =
-        elapsedSec >= 2 && !failFast.resolved
+        elapsedSec >= 1 && !failFast.resolved
           ? await tryRecoverLoginFromPortHealth(a).catch(() => ({ resolved: false }))
           : { resolved: false };
       if (portRecover.resolved) {
@@ -1399,15 +1399,19 @@ async function handleMt5ConnectStatusProduction(req, res) {
         }
       }
     }
-    if (shouldSyncJournal && !resolved.resolved && elapsedSec >= 12 && a.folder_path && a.vps_id && a.mt5_login) {
-      await queueJournalReadVerify({
-        accountId: a.id,
-        vpsId: a.vps_id,
-        folderPath: a.folder_path,
-        mt5Login: a.mt5_login,
-        portNo: a.assigned_port_no || a.port_slot,
-        allowDuringLogin: true
-      }).catch(() => {});
+    if (shouldSyncJournal && !resolved.resolved && elapsedSec >= 22 && a.folder_path && a.vps_id && a.mt5_login) {
+      const recentCmd = await findRecentLoginCommand(a.id, a.vps_id).catch(() => null);
+      const recentSt = String(recentCmd?.status || '').toLowerCase();
+      if (!['success', 'done'].includes(recentSt)) {
+        await queueJournalReadVerify({
+          accountId: a.id,
+          vpsId: a.vps_id,
+          folderPath: a.folder_path,
+          mt5Login: a.mt5_login,
+          portNo: a.assigned_port_no || a.port_slot,
+          allowDuringLogin: true
+        }).catch(() => {});
+      }
     }
     if (shouldSyncJournal && !resolved.resolved) {
       const syncNow = Date.now();
