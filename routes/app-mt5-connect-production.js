@@ -17,6 +17,8 @@ const {
   reconcileConnectedAccountLive,
   tryRecoverLoginFromPortHealth,
   tryFastConnectConfirm,
+  hasRecentAgentLoginSuccess,
+  findRecentLoginCommand,
   tryFastJournalFail,
   expireStuckLoginCommands,
   syncJournalFromLatestCommand,
@@ -951,26 +953,70 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
       : { rows: [] };
-    const staleLimitMs = 120 * 1000;
+    const staleLimitMs = 180 * 1000;
 
     if (['connecting', 'starting', 'checking'].includes(status) && staleMs > staleLimitMs) {
-      const agentLive = a.vps_id
-        ? await checkVpsAgentLiveness(a.vps_id).catch(() => ({ ok: false }))
-        : { ok: false };
-      const staleMsg = agentLive.ok
-        ? 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่'
-        : (agentLive.message ||
-            'VPS Agent ไม่ตอบสนอง — คำสั่ง login ไม่ถูกดำเนินการ กรุณารอแล้วลองใหม่');
-      await failAccountFromJournal(a.id, a.port_id, staleMsg, {
-        vpsId: a.vps_id,
-        portNo: a.assigned_port_no,
-        folderPath: a.folder_path,
-        reason: 'connect_poll_timeout',
-        agentOffline: !agentLive.ok
-      }).catch(() => {});
-      status = 'failed';
-      a.last_error = staleMsg;
-      a.last_login_message = staleMsg;
+      const loginDone = await hasRecentAgentLoginSuccess(
+        a.id,
+        a.vps_id,
+        a.mt5_login
+      ).catch(() => false);
+      if (loginDone) {
+        const recovered = await tryRecoverLoginFromPortHealth(a).catch(() => ({
+          resolved: false
+        }));
+        if (recovered.resolved) {
+          const accR = await query(
+            `SELECT a.*, p.folder_path FROM vps_system.mt5_accounts a LEFT JOIN vps_system.vps_ports p ON p.id=a.port_id WHERE a.id=$1`,
+            [a.id]
+          ).catch(() => ({ rows: [a] }));
+          const accNow = accR.rows?.[0] || a;
+          const previewPath = previewPublicPath(accNow.id);
+          return res.json({
+            ok: true,
+            account: accNow,
+            connected: true,
+            failed: false,
+            checking: false,
+            pending: false,
+            status: 'connected',
+            loginVerified: true,
+            message: recovered.message || MT5_SUCCESS_MSG,
+            windowTitle: windowTitleFromMessage(accNow.last_login_message),
+            previewUrl: previewPath ? `${previewPath}?t=${Date.now()}` : '',
+            elapsedSec
+          });
+        }
+      } else {
+        const cmd = a.vps_id
+          ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
+          : null;
+        const cmdSt = String(cmd?.status || '').toLowerCase();
+        if (['pending', 'processing', 'picked', 'running'].includes(cmdSt)) {
+          /* Agent ยังทำ login อยู่ — อย่า timeout/kill MT5 */
+        } else if (staleMs <= staleLimitMs + 60 * 1000) {
+          /* รอเพิ่มอีกนาทีถ้ายังไม่มีคำสั่งค้าง */
+        } else {
+          const agentLive = a.vps_id
+            ? await checkVpsAgentLiveness(a.vps_id).catch(() => ({ ok: false }))
+            : { ok: false };
+          const staleMsg = agentLive.ok
+            ? 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่'
+            : (agentLive.message ||
+                'VPS Agent ไม่ตอบสนอง — คำสั่ง login ไม่ถูกดำเนินการ กรุณารอแล้วลองใหม่');
+          await failAccountFromJournal(a.id, a.port_id, staleMsg, {
+            vpsId: a.vps_id,
+            portNo: a.assigned_port_no,
+            folderPath: a.folder_path,
+            reason: 'connect_poll_timeout',
+            agentOffline: !agentLive.ok,
+            killMt5: false
+          }).catch(() => {});
+          status = 'failed';
+          a.last_error = staleMsg;
+          a.last_login_message = staleMsg;
+        }
+      }
     }
 
     let statusFinal = status;
