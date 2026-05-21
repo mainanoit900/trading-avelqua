@@ -678,7 +678,7 @@ router.get('/queue', async (req, res) => {
     if (shouldRunQueueMaintenance(node.id)) {
       const { pruneMetricsCommandBacklog } = require('../lib/agentDeploy');
       await expireStuckMaintenanceCommands(node.id).catch(() => {});
-      await expireStuckLoginCommands(node.id, 90).catch(() => ({ expired: 0 }));
+      await expireStuckLoginCommands(node.id, 150).catch(() => ({ expired: 0 }));
       const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
       await expireStalePendingAgentCommands(node.id, 900).catch(() => ({}));
       await pruneMetricsCommandBacklog(node.id, { keep: 2 }).catch(() => {});

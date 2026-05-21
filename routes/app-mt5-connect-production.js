@@ -15,6 +15,7 @@ const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
   reconcileConnectedAccountLive,
+  tryRecoverLoginFromPortHealth,
   tryFastConnectConfirm,
   tryFastJournalFail,
   expireStuckLoginCommands,
@@ -338,7 +339,15 @@ async function getLoginConnectDiagnostics(account) {
             AND created_at > NOW() - INTERVAL '45 minutes'
           )
         )
-      ORDER BY id DESC
+      ORDER BY
+        CASE LOWER(COALESCE(status, ''))
+          WHEN 'processing' THEN 0
+          WHEN 'picked' THEN 1
+          WHEN 'running' THEN 2
+          WHEN 'pending' THEN 3
+          ELSE 4
+        END,
+        id DESC
       LIMIT 1
     `,
       [accountId, vpsId]
@@ -977,9 +986,18 @@ async function handleMt5ConnectStatusProduction(req, res) {
         a.last_error = failFast.message || MT5_FAIL_USER_MSG;
         a.last_login_message = a.last_error;
       }
-      const fast = !failFast.resolved
-        ? await tryFastConnectConfirm(a).catch(() => ({ resolved: false }))
-        : { resolved: false };
+      const portRecover =
+        elapsedSec >= 12 && !failFast.resolved
+          ? await tryRecoverLoginFromPortHealth(a).catch(() => ({ resolved: false }))
+          : { resolved: false };
+      if (portRecover.resolved) {
+        resolved = portRecover;
+        statusFinal = 'connected';
+      }
+      const fast =
+        !failFast.resolved && !portRecover.resolved
+          ? await tryFastConnectConfirm(a).catch(() => ({ resolved: false }))
+          : { resolved: false };
       if (fast.resolved) {
         resolved = fast;
         statusFinal = fast.status || 'connected';
