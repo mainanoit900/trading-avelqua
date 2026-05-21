@@ -1804,6 +1804,15 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
 
     const bots = await loadProductionBots();
 
+    const { enrichPackagePortsForUi } = require('../lib/mt5VpsFolderPorts');
+    const enriched = await enrichPackagePortsForUi(ports, accounts).catch(() => ({
+      ports,
+      vpsNodes: [],
+      vpsOnlineCount: 0,
+      vpsTotalCount: 0,
+      folderPorts: []
+    }));
+
     return res.json({
       ok: true,
       totalPorts: summary.totalPorts,
@@ -1820,8 +1829,15 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       canAddTemporary: summary.canAddTemporary,
       canAddPermanent: summary.canAddPermanent,
       packageExpired: summary.packageExpired,
-      ports,
-      firstEmptySlot,
+      ports: enriched.ports,
+      vpsNodes: enriched.vpsNodes,
+      vpsOnlineCount: enriched.vpsOnlineCount,
+      vpsTotalCount: enriched.vpsTotalCount,
+      folderPorts: enriched.folderPorts,
+      firstEmptySlot:
+        enriched.ports.find(
+          (p) => p.canPick && !p.accountId && p.cssClass !== 'connected' && p.cssClass !== 'checking'
+        )?.slot || firstEmptySlot,
       connectedAccounts,
       bots: (bots || []).map((b) => ({
         id: Number(b.id),

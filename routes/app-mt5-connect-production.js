@@ -240,7 +240,7 @@ async function reserveBestPort(userId, preferredPortNo = 0) {
     return { ok: false, message: agentGate.message, code: 'AGENT_OFFLINE' };
   }
 
-  const adminReserve = await reserveAdminPortForLogin(userId);
+  const adminReserve = await reserveAdminPortForLogin(userId, preferNo);
   if (adminReserve.ok) return adminReserve;
 
   const client = await getClient();

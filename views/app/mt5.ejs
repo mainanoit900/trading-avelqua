@@ -44,6 +44,11 @@ document.addEventListener('DOMContentLoaded', function () {
 .mt5-connect-diag b{color:#e2e8f0}
 .mt5-connect-diag .warn{color:#fbbf24}
 .mt5-connect-diag .err{color:#f87171}
+.mt5-vps-status-bar{font-size:12px;padding:8px 12px;border-radius:8px;margin-bottom:10px;background:#0f172a;border:1px solid #334155;color:#94a3b8;line-height:1.5}
+.mt5-vps-status-bar.online{border-color:#22c55e;color:#bbf7d0}
+.mt5-vps-status-bar.offline{border-color:#f59e0b;color:#fde68a}
+.port-folder-meta{display:block;font-size:10px;color:#64748b;margin-top:3px;max-width:100%;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.port-item.folder-busy:not(.connected) .port-main small{color:#fbbf24}
 </style>
 
 
@@ -114,6 +119,7 @@ document.addEventListener('DOMContentLoaded', function () {
         <h2>1) เลือก PORT ตามแพ็กเกจ</h2>
         <span>แพ็กเกจให้ <%= includedPorts || 1 %> PORT (สูงสุด <%= packagePortRange || ('1 - ' + packageMaxPorts) %>) · ใช้ได้ <%= totalPorts %> PORT / Lot <%= packageLotMin %>-<%= packageLotMax %></span>
       </div>
+      <div id="mt5VpsStatusBar" class="mt5-vps-status-bar" style="display:none" aria-live="polite"></div>
       <div class="port-list" id="mt5PortList">
         <% if (totalPorts <= 0) { %>
           <div class="port-item cancelled"><div class="port-main"><div><b>PORT 0</b><small>แพ็คเกจหมดอายุ</small></div><span>ใช้งานไม่ได้</span></div></div>
@@ -444,6 +450,26 @@ document.addEventListener('DOMContentLoaded', function () {
       );
       return false;
     }
+    const portRow = (window.__mt5PortsState && window.__mt5PortsState.ports || []).find(function (p) {
+      return String(p.slot) === String(connectSlot);
+    });
+    if (portRow && portRow.folderAvailable === false && !portRow.accountId) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'PORT ' + connectSlot + ' — โฟลเดอร์ VPS ไม่ว่าง' +
+          (portRow.folderMt5Login ? ' (MT5 เปิด Login ' + portRow.folderMt5Login + ')' : '') +
+          (portRow.folderPath ? ' · ' + portRow.folderPath : '') +
+          ' — เลือก PORT อื่นหรือปิด MT5 ใน Admin'
+      );
+      return false;
+    }
+    if (window.__mt5PortsState && (window.__mt5PortsState.vpsOnlineCount || 0) < 1) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'ไม่มี VPS Windows ที่ Agent online — ตรวจ /admin/vps แล้ว restart Agent'
+      );
+      return false;
+    }
     const slotInput = document.getElementById('mt5SelectedPortSlot');
     if (slotInput) slotInput.value = String(connectSlot);
     mt5SaveLoginIfRemembered();
@@ -593,8 +619,58 @@ document.addEventListener('DOMContentLoaded', function () {
       .replace(/"/g, '&quot;');
   }
 
+  function mt5FolderMetaHtml(p) {
+    if (!p || (!p.folderPath && !p.vpsNodeName && !p.folderState)) return '';
+    const parts = [];
+    if (p.vpsNodeName) parts.push(p.vpsNodeName);
+    if (p.folderPortNo) parts.push('Folder PORT ' + String(p.folderPortNo).padStart(2, '0'));
+    if (p.folderPath) parts.push(p.folderPath);
+    if (p.folderState) parts.push(p.folderState);
+    return '<span class="port-folder-meta">' + mt5Esc(parts.join(' · ')) + '</span>';
+  }
+
+  function mt5UpdateFolderPortHint(slot, portsList) {
+    const hint = document.getElementById('mt5LoginPortHint');
+    if (!hint || !slot) return;
+    const ports = portsList || (window.__mt5PortsState && window.__mt5PortsState.ports) || [];
+    const p = ports.find(function (x) {
+      return String(x.slot) === String(slot);
+    });
+    if (!p) {
+      hint.textContent =
+        'ใช้ PORT ' + slot + ' · โฟลเดอร์ VPS ตามเลข PORT (อ้างอิง /admin/vps/…/ports)';
+      return;
+    }
+    if (p.accountId) {
+      hint.textContent =
+        'PORT ' + slot + ' · Login ' + (p.mt5_login || '—') +
+        (p.folderPath ? ' · ' + p.folderPath : '') +
+        (p.vpsNodeName ? ' · ' + p.vpsNodeName : '');
+      return;
+    }
+    if (p.folderAvailable === false) {
+      hint.innerHTML =
+        'PORT ' + slot + ' · <span class="warn">โฟลเดอร์ไม่ว่าง</span>' +
+        (p.folderMt5Login ? ' (MT5 Login ' + mt5Esc(p.folderMt5Login) + ')' : '') +
+        (p.folderPath ? ' · ' + mt5Esc(p.folderPath) : '') +
+        (p.adminPortsUrl
+          ? ' · <a href="' + mt5Esc(p.adminPortsUrl) + '" target="_blank" rel="noopener" style="color:#38bdf8">ดูใน Admin</a>'
+          : '');
+      return;
+    }
+    hint.textContent =
+      'PORT ' + slot + ' → Folder PORT ' + String(p.folderPortNo || slot).padStart(2, '0') +
+      (p.vpsNodeName ? ' · ' + p.vpsNodeName : '') +
+      (p.folderPath ? ' · ' + p.folderPath : '') +
+      ' · ' + (p.folderState || 'ว่าง (พร้อม Login)');
+  }
+  window.mt5UpdateFolderPortHint = mt5UpdateFolderPortHint;
+
   function renderPortItemHtml(p) {
     const botRun = !!(p.botRunning || p.bot_running);
+    const busyFolder = !p.accountId && p.folderAvailable === false;
+    const extraClass =
+      (busyFolder ? ' folder-busy' : '') + (p.canPick === false ? ' port-unpickable' : '');
     const delBtn = botRun
       ? '<button class="mt5-btn mini delete" type="submit" disabled title="กรุณากด หยุด BOT ในขั้นตอน 3 ก่อนลบ">ลบ</button>'
       : '<button class="mt5-btn mini delete" type="submit">ลบ</button>';
@@ -604,13 +680,37 @@ document.addEventListener('DOMContentLoaded', function () {
       : '';
     const actions = p.accountId ? '<div class="port-actions">' + del + '</div>' : '';
     return (
-      '<div class="port-item port-slot-pick ' + mt5Esc(p.cssClass) + '" data-port-slot="' + p.slot + '">' +
+      '<div class="port-item port-slot-pick ' + mt5Esc(p.cssClass) + extraClass + '" data-port-slot="' + p.slot + '"' +
+      ' data-folder-available="' + (p.folderAvailable === true ? '1' : p.folderAvailable === false ? '0' : '') + '"' +
+      ' data-folder-state="' + mt5Esc(p.folderState || '') + '">' +
       '<div class="port-main port-slot-pick-hit" role="button" tabindex="0" data-port-slot="' + p.slot + '">' +
-      '<div><b>PORT ' + p.slot + '</b><small>' + mt5Esc(p.sublabel) + '</small></div>' +
+      '<div><b>PORT ' + p.slot + '</b><small>' + mt5Esc(p.sublabel) + '</small>' + mt5FolderMetaHtml(p) + '</div>' +
       '<span>' + mt5Esc(p.statusLabel) + '</span></div>' +
       actions +
       '</div>'
     );
+  }
+
+  function renderMt5VpsStatusBar(data) {
+    const bar = document.getElementById('mt5VpsStatusBar');
+    if (!bar || !data) return;
+    const total = Number(data.vpsTotalCount || 0);
+    const online = Number(data.vpsOnlineCount || 0);
+    if (!total) {
+      bar.style.display = 'none';
+      return;
+    }
+    bar.style.display = 'block';
+    bar.className = 'mt5-vps-status-bar ' + (online > 0 ? 'online' : 'offline');
+    const nodes = (data.vpsNodes || [])
+      .map(function (n) {
+        return mt5Esc(n.nodeName) + ': ' + (n.agentOnline ? 'Agent online' : 'offline');
+      })
+      .join(' · ');
+    bar.innerHTML =
+      '<b>VPS Windows:</b> ' + online + '/' + total + ' พร้อมรับ Login' +
+      (nodes ? ' — ' + nodes : '') +
+      ' · <a href="/admin/vps" target="_blank" rel="noopener" style="color:#38bdf8">/admin/vps</a>';
   }
 
   function renderMt5RunFormHtml(connected, bots) {
@@ -676,6 +776,8 @@ document.addEventListener('DOMContentLoaded', function () {
       });
       const data = await res.json();
       if (!data.ok) return;
+      window.__mt5PortsState = data;
+      renderMt5VpsStatusBar(data);
       const list = document.getElementById('mt5PortList');
       if (list && Array.isArray(data.ports)) {
         list.innerHTML = data.ports.map(renderPortItemHtml).join('');
@@ -684,6 +786,8 @@ document.addEventListener('DOMContentLoaded', function () {
         const emptyApi = data.firstEmptySlot != null ? String(data.firstEmptySlot) : '';
         if (!cur || !document.querySelector('.port-item.selected')) {
           mt5EnsureEmptyPortSelected({ fromApi: emptyApi });
+        } else if (cur && typeof mt5UpdateFolderPortHint === 'function') {
+          mt5UpdateFolderPortHint(cur, data.ports);
         }
       }
       const cntEl = document.getElementById('mt5ConnectedCount');
@@ -775,10 +879,8 @@ document.addEventListener('DOMContentLoaded', function () {
     if (slot && typeof window.mt5SelectPortSlot === 'function') {
       window.mt5SelectPortSlot(slot, { navigate: false });
     }
-    const hint = document.getElementById('mt5LoginPortHint');
-    if (hint && slot) {
-      hint.textContent =
-        'ใช้ PORT ' + slot + ' (ว่าง) · โฟลเดอร์ VPS ตามเลข PORT — ระบบตรวจ Login จริงจาก Journal';
+    if (slot && typeof mt5UpdateFolderPortHint === 'function') {
+      mt5UpdateFolderPortHint(slot);
     }
     return slot;
   }
@@ -1322,6 +1424,9 @@ function mt5SelectPortSlot(slot, opts) {
   try { localStorage.setItem('mt5ActivePortSlot', String(n)); } catch (_) {}
   const lbl = document.getElementById('mt5LoginPortLabel');
   if (lbl) lbl.textContent = 'PORT ' + n;
+  if (typeof window.mt5UpdateFolderPortHint === 'function') {
+    window.mt5UpdateFolderPortHint(String(n));
+  }
   const sub = document.getElementById('mt5BotSectionSubtitle');
   if (sub) sub.textContent = 'PORT ' + n + ' — ตั้งค่าเปิด/หยุด BOT';
   document.querySelectorAll('.port-item[data-port-slot]').forEach(function (el) {
@@ -1631,6 +1736,10 @@ try {
     mt5EnsureEmptyPortSelected({});
   }
 } catch (_) {}
+
+if (typeof refreshMt5PortCards === 'function') {
+  refreshMt5PortCards().catch(function () {});
+}
 
 /* fetch submit ถูกปิด — ใช้ form POST + redirect (window.mt5PrepareConnectSubmit) */
 if (false && mt5ConnectForm) {
