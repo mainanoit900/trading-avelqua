@@ -292,6 +292,33 @@ def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dic
         return None
 
 
+_LAST_LOGIN_PROGRESS_HEARTBEAT_AT = 0.0
+
+
+def send_login_progress_heartbeat(login: str = "", port: Any = None) -> None:
+    """คงสถานะ Agent online ระหว่างคำสั่ง login_mt5 ที่อาจใช้เวลานาน"""
+    global _LAST_LOGIN_PROGRESS_HEARTBEAT_AT
+    now = time.time()
+    interval_sec = float(os.getenv("AVELQUA_LOGIN_PROGRESS_HEARTBEAT_SEC", "12"))
+    if now - _LAST_LOGIN_PROGRESS_HEARTBEAT_AT < max(5.0, interval_sec):
+        return
+    _LAST_LOGIN_PROGRESS_HEARTBEAT_AT = now
+    body = {
+        "status": "online",
+        "service_name": SERVICE_NAME,
+        "computer_name": platform.node(),
+        "agent_type": "python",
+        "agent_version": AGENT_VERSION,
+        "agent_build_id": AGENT_BUILD_ID,
+    }
+    if login:
+        body["login_progress"] = f"port={port or ''} login={str(login)[:32]}"
+    try:
+        api("POST", "/heartbeat", body, timeout=4)
+    except Exception:
+        pass
+
+
 def _maybe_self_deploy_agent(heartbeat_res: Dict[str, Any]) -> None:
     """ดาวน์โหลด agent.py ล่าสุดเมื่อเซิร์ฟเวอร์บอกว่าเวอร์ชันเก่า (กัน deploy ค้างแต่ service ไม่รีสตาร์ท)"""
     global _LAST_SELF_DEPLOY_AT
@@ -2542,6 +2569,7 @@ def wait_mt5_login_hybrid(
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
         now = time.time()
+        send_login_progress_heartbeat(login, port)
 
         if now - last_gate_at >= 3.0:
             try:
