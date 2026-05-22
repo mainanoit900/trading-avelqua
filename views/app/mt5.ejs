@@ -218,10 +218,10 @@ document.addEventListener('DOMContentLoaded', function () {
           จำเลข Login (ไม่เก็บรหัสผ่าน)
         </label>
 
-        <label>Server (ล็อคตามประเภทบัญชี)</label>
+        <label>Server</label>
         <input id="mt5ServerDisplay" value="<%= fixedServer %>" disabled readonly>
         <input type="hidden" name="server_name" id="mt5ServerHidden" value="<%= fixedServer %>">
-        <small id="mt5ServerHint" style="color:#94a3b8;display:block;margin-top:4px">จริง (2·9หลัก) → <b><%= fixedServer %></b> · ทดลอง (8·8หลัก) → <b><%= typeof mt5DemoServer !== 'undefined' ? mt5DemoServer : 'MohicansMarkets-Demo' %></b></small>
+        <small id="mt5ServerHint" style="color:#94a3b8;display:block;margin-top:4px">ใช้ <b><%= fixedServer %></b> เท่านั้น (Mohicans Markets)</small>
 
         <button type="submit" id="mt5ConnectBtn" class="mt5-btn primary" <%= packageExpired ? 'disabled' : '' %>>
   <%= packageExpired ? 'แพ็คเกจหมดอายุ' : 'เชื่อมต่อ' %>
@@ -1122,8 +1122,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const MT5_SERVER_DEMO = '<%= typeof mt5DemoServer !== "undefined" ? mt5DemoServer : "MohicansMarkets-Demo" %>';
 
   function mt5ResolveServerForLogin(login) {
-    const s = String(login || '').trim().replace(/\s/g, '');
-    if (/^8\d{7}$/.test(s)) return MT5_SERVER_DEMO;
+    void login;
     return MT5_SERVER_LIVE;
   }
 

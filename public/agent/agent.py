@@ -95,7 +95,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v42"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v43"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2460,13 +2460,15 @@ def _existing_mt5_session_for_login(
 
 
 def resolve_mt5_server(payload: Dict[str, Any], login: Optional[str] = None) -> str:
-    """จริง 2·9หลัก → Live, ทดลอง 8·8หลัก → Demo (ตรงกับเว็บ)"""
-    login_s = str(login or payload_get(payload, "mt5Login", "login") or "").strip()
+    """MohicansMarkets-Live — ตรงโบรกเกอร์ (ไม่บังคับ Demo จากเลข 8 หลัก)"""
+    _ = login
     server = str(payload_get(payload, "serverName", "server") or "").strip()
     if server in (MT5_LIVE_SERVER, MT5_DEMO_SERVER):
         return server
-    if len(login_s) == 8 and login_s.isdigit() and login_s.startswith("8"):
-        return MT5_DEMO_SERVER
+    if os.getenv("MT5_AUTO_DEMO_SERVER", "0").lower() in ("1", "true", "yes"):
+        login_s = str(login or payload_get(payload, "mt5Login", "login") or "").strip()
+        if len(login_s) == 8 and login_s.isdigit() and login_s.startswith("8"):
+            return MT5_DEMO_SERVER
     return MT5_LIVE_SERVER
 
 
