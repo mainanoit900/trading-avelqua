@@ -1463,12 +1463,22 @@ async function handleMt5ConnectStatusProduction(req, res) {
       loginVerified
     );
     let connectStep = progress.connectStep;
+    const loginMsg = String(a.last_login_message || '').trim();
     if (inProgress && !cmdMeta.commandId && elapsedSec >= 8) {
       connectStep = '① ส่งคำสั่งแล้ว — ยังไม่เห็นคำสั่งในคิว VPS';
     }
     if (inProgress && agentMeta.agentOnline === false && elapsedSec >= 20) {
       connectStep = '② VPS Agent ไม่ตอบสนอง — ตรวจ /admin/vps';
     }
+    if (inProgress && ['success', 'done'].includes(cmdSt)) {
+      connectStep = '④ กำลังตรวจ Login จาก Journal MT5';
+      if (/MT5 เปิดแล้ว|ยังไม่เห็นเลข|title bar|หน้าต่าง MT5/i.test(loginMsg)) {
+        connectStep = '④ รอเลข Login บนหน้าต่าง MT5 — ตรวจรหัสผ่านและ Server';
+      }
+    }
+    const statusDetail = loginMsg
+      ? loginMsg.replace(/\s*\(\s*\d+\s*วิ(?:นาที)?\s*\)/g, '').trim()
+      : '';
     return res.json({
       ok: true,
       account: { ...a, status: statusFinal },
@@ -1481,6 +1491,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       legacyReady: statusFinal === 'ready',
       message: userMessage,
       windowTitle: windowTitleFromMessage(a.last_login_message),
+      statusDetail,
       previewUrl,
       elapsedSec,
       maxWaitSec,
