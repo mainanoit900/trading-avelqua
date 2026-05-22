@@ -76,9 +76,9 @@ def _journal_timeout_sec() -> int:
             os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "30"),
         )
     )
-    return max(35, min(90, raw))
+    return max(45, min(90, raw))
 MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.2"))
-JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "25"))
+JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "35"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
@@ -2613,6 +2613,68 @@ def _send_early_connect_if_journal_ok(
     return True
 
 
+def _safe_exc_text(exc: BaseException) -> str:
+    try:
+        return str(exc).encode("utf-8", errors="replace").decode("utf-8")
+    except Exception:
+        return repr(exc)
+
+
+def _connect_on_snapshot_success(
+    payload: Dict[str, Any],
+    port: Any,
+    port_dir: Path,
+    login: str,
+    proc_pid: Any,
+    joined: str,
+    preview_b64: str = "",
+) -> Tuple[bool, str]:
+    """ยืนยันเมื่อมี balance/equity จริง — กรณี journal ช้าแต่ MT5 login แล้ว"""
+    login_s = str(login).strip()
+    if not login_s:
+        return False, ""
+    snap = account_snapshot(port, payload)
+    if not _snap_positive(snap):
+        return False, ""
+    pw = str(payload_get(payload, "mt5Password", "password") or "")
+    srv = resolve_mt5_server(payload)
+    api_ok, api_detail = mt5_login_verify_api(port_dir, login_s, pw, srv)
+    if api_ok:
+        try:
+            enforce_login_no_trading(port_dir, port, payload, login_s, pw, srv)
+        except Exception:
+            pass
+        send_connect_result(
+            payload,
+            "connected",
+            "เชื่อมต่อสำเร็จ — ยืนยันบัญชีจาก MT5 แล้ว",
+            port,
+            process_id=proc_pid,
+            journal_evidence=joined or "",
+            window_title=joined or "",
+            preview_b64=preview_b64,
+            window_verified=True,
+        )
+        return True, f"snapshot+api; {api_detail}"
+    ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
+    joined_s = str(joined or "")
+    if ok_w or (login_s in joined_s):
+        send_connect_result(
+            payload,
+            "connected",
+            "เชื่อมต่อสำเร็จ — เห็นบัญชีและยอดเงินบน MT5",
+            port,
+            process_id=proc_pid,
+            journal_evidence=joined_s,
+            window_title=joined_s,
+            preview_b64=preview_b64,
+            window_verified=bool(ok_w),
+        )
+        bal = snap.get("balance")
+        return True, f"snapshot+window balance={bal}"
+    return False, ""
+
+
 def _connect_on_api_verify(
     payload: Dict[str, Any],
     port: Any,
@@ -2664,6 +2726,7 @@ def wait_mt5_login_hybrid(
     last_gate_at = 0.0
     last_api_at = 0.0
     last_probe_at = 0.0
+    last_snap_at = 0.0
     last_title = ""
     window_ok_streak = 0
     wait_start = time.time()
@@ -2751,6 +2814,14 @@ def wait_mt5_login_hybrid(
             )
             if api_ok:
                 return True, f"api verified; {api_detail}", api_detail
+
+        if elapsed >= 12 and now - last_snap_at >= 2.0:
+            last_snap_at = now
+            snap_ok, snap_detail = _connect_on_snapshot_success(
+                payload, port, port_dir, login, proc_pid, joined, preview_b64
+            )
+            if snap_ok:
+                return True, snap_detail, snap_detail
 
         if sock_ok and ok_w and j_out is True:
             try:
@@ -2922,6 +2993,12 @@ def wait_mt5_login_hybrid(
     if api_ok:
         return True, f"api verified (final); {api_detail}", api_detail
 
+    snap_ok, snap_detail = _connect_on_snapshot_success(
+        payload, port, port_dir, login, proc_pid, joined_final, preview_b64
+    )
+    if snap_ok:
+        return True, snap_detail, snap_detail
+
     remain = max(5, int(deadline - time.time()))
     remain = min(remain, JOURNAL_EXTENDED_CAP_SEC if ok_w_end else max(JOURNAL_EXTENDED_CAP_SEC, 15))
     if remain >= 5:
@@ -2947,16 +3024,22 @@ def wait_mt5_login_hybrid(
             )
             return False, msg_j, chunk_j
 
+    fail_hint = JOURNAL_TIMEOUT_MSG
+    if not ok_w_end and not joined_final.strip():
+        fail_hint = (
+            "MT5 ยังไม่แสดงเลขบัญชีบนหน้าต่าง — "
+            "ตรวจรหัสผ่าน / Server MohicansMarkets-Live แล้วกดเชื่อมต่อใหม่"
+        )
     cleanup_mt5_after_login_fail(port, payload, port_dir)
     send_connect_result(
         payload,
         "failed",
-        JOURNAL_TIMEOUT_MSG,
+        fail_hint,
         port,
         process_id=proc_pid,
         journal_evidence=chunk,
     )
-    return False, JOURNAL_TIMEOUT_MSG, chunk
+    return False, fail_hint, chunk
 
 
 def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -4464,10 +4547,11 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, False, {"command_type": ctype}, err_unknown)
 
     except Exception as e:
-        log(f"COMMAND ERROR ID={cmd_id}: {e}")
+        err_txt = _safe_exc_text(e)
+        log(f"COMMAND ERROR ID={cmd_id}: {err_txt}")
         if ctype in ("connect_mt5", "login_mt5"):
             try:
-                send_connect_result(payload, "failed", str(e))
+                send_connect_result(payload, "failed", err_txt[:500])
             except Exception:
                 pass
             try:
@@ -4478,9 +4562,9 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                         "action": ctype,
                         "status": "failed",
                         "login": payload_get(payload, "mt5Login", "login"),
-                        "message": str(e)[:500],
+                        "message": err_txt[:500],
                     },
-                    str(e)[:500],
+                    err_txt[:500],
                 )
             except Exception:
                 pass
