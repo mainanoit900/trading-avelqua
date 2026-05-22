@@ -28,7 +28,8 @@ const {
   tryApplyPendingJournalRead,
   queueJournalReadVerify,
   queueStopMt5ForAccount,
-  failAccountFromJournal
+  failAccountFromJournal,
+  probeRecentLoginCommandFailed
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -739,6 +740,25 @@ router.post('/connect-result', async (req, res) => {
 
     if (status === 'starting' || status === 'checking') {
       const loginHint = String(mt5Login || '').trim();
+      const accProbe = await query(
+        `SELECT id, mt5_login, vps_id, port_id, assigned_port_no, port_slot, folder_path
+         FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+        [accountId]
+      ).catch(() => ({ rows: [] }));
+      const accRow = accProbe.rows?.[0];
+      if (accRow) {
+        const cmdFail = await probeRecentLoginCommandFailed(accRow).catch(() => ({ failed: false }));
+        if (cmdFail.failed) {
+          await failAccountFromJournal(accountId, portId, cmdFail.message, {
+            vpsId: node.id,
+            portNo,
+            folderPath: accRow.folder_path,
+            reason: cmdFail.authFail ? 'login_cmd_failed' : 'login_journal_timeout',
+            killMt5: false
+          }).catch(() => {});
+          return res.json({ ok: true, failed: true, message: cmdFail.message });
+        }
+      }
       const titleBlob = `${windowTitle} ${message}`;
       if (messageIndicatesLoginFailed(titleBlob, loginHint)) {
         await failAccountFromJournal(accountId, portId, MT5_FAIL_USER_MSG, {
