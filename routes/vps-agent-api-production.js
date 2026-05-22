@@ -991,7 +991,7 @@ router.post('/connect-result', async (req, res) => {
           ? new Date(ageRow.rows[0].connect_started_at).getTime()
           : 0;
         const ageSec = started ? Math.floor((Date.now() - started) / 1000) : 0;
-        if (ageSec >= 18) {
+        if (ageSec >= 12) {
           await promoteAccountConnected({
             accountId,
             portId,
@@ -1000,6 +1000,32 @@ router.post('/connect-result', async (req, res) => {
           });
           await finishPendingLoginCommands(accountId, node.id).catch(() => {});
           return res.json({ ok: true, connected: true, fastPath: 'window_title_checking' });
+        }
+      }
+
+      if (loginHint && portNo) {
+        const ageRow2 = await query(
+          `SELECT connect_started_at FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+          [accountId]
+        ).catch(() => ({ rows: [] }));
+        const started2 = ageRow2.rows?.[0]?.connect_started_at
+          ? new Date(ageRow2.rows[0].connect_started_at).getTime()
+          : 0;
+        const ageSec2 = started2 ? Math.floor((Date.now() - started2) / 1000) : 0;
+        if (ageSec2 >= 14) {
+          const portRunChk = await verifyPortLoginWithFallback(node.id, portNo, loginHint, {
+            requireLoginMatch: false
+          }).catch(() => ({ ok: false }));
+          if (portRunChk.ok) {
+            await promoteAccountConnected({
+              accountId,
+              portId,
+              mt5Login: loginHint,
+              message: MT5_SUCCESS_MSG
+            });
+            await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+            return res.json({ ok: true, connected: true, fastPath: 'port_health_checking' });
+          }
         }
       }
 
