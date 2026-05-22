@@ -95,7 +95,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v43"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v44"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1919,13 +1919,27 @@ def _run_powershell(command: str, timeout: int = 8) -> str:
         return ""
 
 
+def _sanitize_mt5_window_title(raw: str) -> str:
+    """กรอง title ที่ไม่ใช่หน้าต่างบัญชี (เช่น tasklist แสดงแค่ terminal64.exe)"""
+    t = str(raw or "").strip()
+    if not t:
+        return ""
+    low = t.lower()
+    if low in ("terminal64.exe", "metatrader 5", "meta trader 5", "login"):
+        return ""
+    if re.match(r"^terminal64\.exe\s+\d+\s+", t, re.I):
+        return ""
+    if "nt authority" in low or "services" in low and "k" in low and not re.search(r"\d{4,}", t):
+        return ""
+    return t
+
+
 def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[str]:
     """Return MainWindowTitle values for terminal64.exe matched to this PORT folder."""
     titles: List[str] = []
     port_dir = resolve_mt5_port_dir(port, payload)
     root = str(port_dir).rstrip("\\/").lower()
 
-    # Primary: psutil gives path + pid, then PowerShell gives MainWindowTitle.
     pid_set = set()
     for proc in mt5_port_processes(port, payload):
         try:
@@ -1942,30 +1956,31 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
                 data = [data]
             for item in data:
                 try:
-                    if int(item.get("Id") or 0) in pid_set:
-                        title = str(item.get("MainWindowTitle") or "").strip()
-                        if title:
-                            titles.append(title)
+                    pid = int(item.get("Id") or 0)
+                    if pid not in pid_set:
+                        continue
+                    path_low = str(item.get("Path") or "").lower().replace("/", "\\")
+                    if root and path_low and root not in path_low:
+                        continue
+                    title = _sanitize_mt5_window_title(str(item.get("MainWindowTitle") or ""))
+                    if title:
+                        titles.append(title)
                 except Exception:
                     pass
         except Exception:
             pass
 
-    # Fallback: tasklist /v can see window title even when PowerShell returns empty.
-    if not titles:
-        try:
-            out = subprocess.check_output(
-                'tasklist /v /fi "imagename eq terminal64.exe"',
-                shell=True,
-                stderr=subprocess.DEVNULL,
-                timeout=8,
-            ).decode(errors="ignore")
-            for line in out.splitlines():
-                low = line.lower()
-                if "terminal64.exe" in low and (root in low or not pid_set):
-                    titles.append(line.strip())
-        except Exception:
-            pass
+    if not titles and pid_set:
+        for pid in pid_set:
+            try:
+                ps_one = (
+                    f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).MainWindowTitle"
+                )
+                title = _sanitize_mt5_window_title(_run_powershell(ps_one, timeout=4))
+                if title:
+                    titles.append(title)
+            except Exception:
+                pass
     return titles
 
 
@@ -3015,14 +3030,22 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
         elif now - last_progress_at >= 2.0:
-            hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
+            if not joined and elapsed >= 8:
+                hint = (
+                    f"MT5 เปิดแล้ว ({elapsed} วิ) — ยังไม่เห็นเลข {login} บน title "
+                    f"(ตรวจรหัสผ่าน + Server {server})"
+                )
+            elif not joined:
+                hint = f"กำลังเปิด MT5 ({elapsed} วินาที)..."
+            else:
+                hint = joined
             send_connect_result(
                 payload,
                 "starting" if elapsed < 6 else "checking",
                 hint,
                 port,
                 process_id=proc_pid,
-                window_title=joined,
+                window_title=joined or hint,
                 preview_b64=preview_b64,
             )
             last_progress_at = now
