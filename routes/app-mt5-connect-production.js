@@ -21,7 +21,13 @@ const {
   isLegacyWindowVerifiedMessage
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
-const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG, MT5_FAIL_USER_MSG } = require('../lib/mt5Server');
+const {
+  normalizeLockedServer,
+  MT5_LOCKED_SERVER,
+  MT5_SUCCESS_MSG,
+  MT5_FAIL_USER_MSG,
+  MT5_LOGIN_TIMEOUT_MSG
+} = require('../lib/mt5Server');
 const { messageIndicatesLoginFailed } = require('../lib/mt5JournalVerify');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
@@ -917,6 +923,7 @@ async function handleMt5ConnectProduction(req, res) {
       WHERE user_id=$1
         AND mt5_login=$6
         AND COALESCE(server_name, mt5_server, '')=$8
+        AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
       RETURNING id
     `, [
       userId,
@@ -974,6 +981,7 @@ async function handleMt5ConnectProduction(req, res) {
           WHERE user_id=$1
             AND mt5_login=$6
             AND COALESCE(server_name, mt5_server, '')=$8
+            AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
           RETURNING id
         `, [
           userId,
@@ -987,6 +995,44 @@ async function handleMt5ConnectProduction(req, res) {
           `PORT ${portSlot}`
         ]);
       });
+    }
+
+    if (!acc.rows?.[0]) {
+      acc = await query(
+        `
+        UPDATE vps_system.mt5_accounts
+        SET
+          vps_id=$2,
+          port_id=$3,
+          port_slot=$4,
+          assigned_port_no=$5,
+          windows_port_no=$5,
+          mt5_password=$7,
+          broker='MH Markets',
+          server_name=$8,
+          account_name=$9,
+          status='connecting',
+          last_error=NULL,
+          last_login_message='กำลังเปิด MT5 และ Login...',
+          updated_at=NOW()
+        WHERE user_id=$1
+          AND mt5_login=$6
+          AND COALESCE(server_name, mt5_server, '')=$8
+          AND LOWER(TRIM(COALESCE(status, ''))) IN ('deleted', 'expired', 'failed', 'ready', 'cancelled')
+        RETURNING id
+      `,
+        [
+          userId,
+          reservedPort.vps_id,
+          reservedPort.port_id,
+          portSlot,
+          allocPortNo,
+          mt5Login,
+          mt5Password,
+          serverName,
+          `PORT ${portSlot}`
+        ]
+      ).catch(() => ({ rows: [] }));
     }
 
     const accountId = acc.rows[0].id;
@@ -1097,6 +1143,25 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const updatedAt = a.updated_at ? new Date(a.updated_at).getTime() : 0;
     const staleMs = Date.now() - updatedAt;
     let status = String(a.status || '').toLowerCase();
+
+    if (['deleted', 'expired'].includes(status)) {
+      const { MT5_LOGIN_TIMEOUT_MSG } = require('../lib/mt5Server');
+      const blob = String(a.last_error || a.last_login_message || '').trim();
+      let userMsg = 'เชื่อมต่อไม่สำเร็จ — กรุณาเลือก PORT ว่างแล้วกดเชื่อมต่อใหม่';
+      if (blob && !/^ว่าง$/i.test(blob)) {
+        userMsg = /ทันเวลา|timeout/i.test(blob) ? MT5_LOGIN_TIMEOUT_MSG : blob;
+      }
+      return res.json({
+        ok: true,
+        account: { ...a, status: 'failed' },
+        connected: false,
+        failed: true,
+        staleAccount: true,
+        status: 'failed',
+        loginVerified: false,
+        message: userMsg
+      });
+    }
     const loginNum = String(a.mt5_login || '').trim();
     const msgBlobEarly = String(a.last_login_message || a.last_error || '');
     if (messageIndicatesLoginFailed(msgBlobEarly, loginNum)) {
@@ -1207,7 +1272,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let userMessage = statusFinal === 'connected'
       ? MT5_SUCCESS_MSG
       : statusFinal === 'failed'
-        ? (failedMsg || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด')
+        ? (/ทันเวลา|timeout/i.test(failedMsg)
+            ? MT5_LOGIN_TIMEOUT_MSG
+            : failedMsg || MT5_FAIL_USER_MSG)
         : (a.last_login_message || a.last_error || statusFinal);
     if (inProgress) {
       const upgradeHint = /อัปเดต Agent|รอ 2.?3 นาที|Restart-Service/i.test(

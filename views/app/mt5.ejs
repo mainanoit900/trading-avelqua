@@ -533,6 +533,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     const slotInput = document.getElementById('mt5SelectedPortSlot');
     if (slotInput) slotInput.value = String(connectSlot);
+    if (typeof window.mt5SelectPortSlot === 'function') {
+      window.mt5SelectPortSlot(connectSlot, { navigate: false });
+    }
     mt5SaveLoginIfRemembered();
     sessionStorage.setItem('mt5ConnectInFlight', '1');
     mt5ClearConnectModalDedupe();
@@ -878,6 +881,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const actions = p.accountId ? '<div class="port-actions">' + del + '</div>' : '';
     return (
       '<div class="port-item port-slot-pick ' + mt5Esc(p.cssClass) + extraClass + '" data-port-slot="' + p.slot + '"' +
+      (p.mt5_login ? ' data-mt5-login="' + mt5Esc(p.mt5_login) + '"' : '') +
       ' data-folder-available="' + (p.folderAvailable === true ? '1' : p.folderAvailable === false ? '0' : '') + '"' +
       ' data-folder-state="' + mt5Esc(p.folderState || '') + '">' +
       '<div class="port-main port-slot-pick-hit" role="button" tabindex="0" data-port-slot="' + p.slot + '">' +
@@ -885,14 +889,15 @@ document.addEventListener('DOMContentLoaded', function () {
       '<span>' +
       mt5Esc(
         p.accountId
-          ? p.mt5NeedReopen
-            ? 'MT5 ปิด — กดเชื่อมต่อ'
-            : p.botRunning
-              ? 'BOT รัน'
-              : p.mt5Running
-                ? 'MT5 เปิด'
-                : 'พร้อมเปิด BOT'
-          : ''
+          ? p.statusLabel ||
+            (p.mt5NeedReopen
+              ? 'MT5 ปิด — กดเชื่อมต่อ'
+              : p.botRunning
+                ? 'BOT รัน'
+                : p.mt5Running
+                  ? 'MT5 เปิด'
+                  : 'พร้อมเปิด BOT')
+          : 'ว่าง'
       ) +
       '</span></div>' +
       actions +
@@ -1262,6 +1267,28 @@ document.addEventListener('DOMContentLoaded', function () {
     } catch (_) {}
   }
 
+  function mt5NormalizeFailMessage(message, accountInfo) {
+    const m = String(message || '').trim();
+    const accErr = accountInfo
+      ? String(accountInfo.last_error || accountInfo.last_login_message || '').trim()
+      : '';
+    if (/กำลังเปิด MT5|กำลังตรวจ|ขั้นที่\s*\d|\/\d+\s*วิ\)|\(\d+\s*วิ/.test(m)) {
+      if (accErr && !/กำลังเปิด|กำลังตรวจ/.test(accErr) && !/^ว่าง$/i.test(accErr)) {
+        return accErr;
+      }
+      if (/ทันเวลา|timeout/i.test(accErr)) {
+        return 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่อีกครั้ง';
+      }
+      return 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่อีกครั้ง';
+    }
+    if (!m || /^ว่าง$/i.test(m)) {
+      return accErr && !/^ว่าง$/i.test(accErr)
+        ? accErr
+        : 'เชื่อมต่อไม่สำเร็จ — กรุณาเลือก PORT ว่างแล้วกดเชื่อมต่อใหม่';
+    }
+    return m;
+  }
+
   async function finishMt5ConnectFail(message, accountInfo) {
     mt5Checking = false;
     if (window.mt5Checker) {
@@ -1272,7 +1299,7 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-    const failMsg = message || 'User หรือ รหัส ไม่ถูกต้อง';
+    const failMsg = mt5NormalizeFailMessage(message, accountInfo);
     await mt5CleanupAfterLoginFail(accountInfo, failMsg);
     const failKey = mt5OutcomeStorageKey('fail', (accountInfo && accountInfo.id) || 'port');
     mt5MarkOutcomeShown(failKey);
@@ -1283,10 +1310,16 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     if (typeof refreshMt5PortCards === 'function') {
       await refreshMt5PortCards().catch(function () {});
+      const empty = mt5FirstEmptyPortSlotFromDom();
+      if (empty && typeof window.mt5SelectPortSlot === 'function') {
+        window.mt5SelectPortSlot(empty, { navigate: false });
+      }
       setTimeout(function () {
         refreshMt5PortCards().catch(function () {});
       }, 2500);
     }
+    const previewBox = document.getElementById('mt5LoginPreview');
+    if (previewBox) previewBox.style.display = 'none';
   }
 
   async function finishMt5ConnectSuccess(message, accountInfo) {
@@ -1681,6 +1714,12 @@ document.addEventListener('DOMContentLoaded', function () {
           if (btn) btn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
         }
         return;
+      }
+      if (data.account && data.account.port_slot != null && inFlight) {
+        const pollSlot = String(data.account.port_slot);
+        if (pollSlot && typeof window.mt5SelectPortSlot === 'function') {
+          window.mt5SelectPortSlot(pollSlot, { navigate: false });
+        }
       }
       if (!data.account || data.staleAccount === true) {
         if (data.status === 'none' || data.staleAccount) {
