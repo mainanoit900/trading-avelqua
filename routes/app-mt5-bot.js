@@ -1765,6 +1765,23 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       }
     }
 
+    const healthByPort = new Map();
+    const vpsIds = [...new Set((accounts || []).map((a) => Number(a.vps_id || 0)).filter(Boolean))];
+    if (vpsIds.length) {
+      const hRows = await safeQuery(
+        `
+        SELECT node_id, port_number, running, mt5_login
+        FROM vps_system.vps_port_health
+        WHERE node_id = ANY($1::bigint[])
+          AND updated_at > NOW() - INTERVAL '10 minutes'
+        `,
+        [vpsIds]
+      );
+      for (const row of hRows || []) {
+        healthByPort.set(`${row.node_id}:${row.port_number}`, row);
+      }
+    }
+
     const ports = [];
     for (let slot = 1; slot <= summary.totalPorts; slot++) {
       const acc = pickAccountForPortSlot(accounts, slot);
@@ -1773,6 +1790,15 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       const equity = acc?.last_equity ?? acc?.last_balance;
       const equityPart =
         equity != null && equity !== '' ? ` / Equity: ${equity}` : '';
+      const vpsId = acc ? Number(acc.vps_id || 0) : 0;
+      const health =
+        vpsId > 0
+          ? healthByPort.get(`${vpsId}:${slot}`) ||
+            healthByPort.get(`${vpsId}:${100 + slot}`)
+          : null;
+      const mt5Running = health ? !!health.running : false;
+      const mt5NeedReopen =
+        !!acc && String(acc.status || '').toLowerCase() === 'connected' && !mt5Running;
       ports.push({
         slot,
         accountId: acc ? Number(acc.id) : null,
@@ -1784,6 +1810,8 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         botRunning: meta.botRunning,
         canDelete: meta.canDelete,
         statusLabel: meta.statusLabel,
+        mt5Running,
+        mt5NeedReopen,
         sublabel: acc
           ? `Login: ${acc.mt5_login}${equityPart}`
           : 'ยังไม่เชื่อมต่อ'

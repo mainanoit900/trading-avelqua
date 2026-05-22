@@ -3249,7 +3249,17 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             except Exception:
                 pass
 
-            if login and title_text and title_text.strip() and login in title_text:
+            try:
+                proc_alive = p.is_running()
+            except Exception:
+                proc_alive = False
+            if (
+                login
+                and proc_alive
+                and title_text
+                and title_text.strip()
+                and login in title_text
+            ):
                 log(
                     f"BLOCK DUPLICATE LOGIN OTHER PORT login={login} pid={p.pid} "
                     f"title={(title_text or '')[:80]}"
@@ -4454,7 +4464,38 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, restart_ea_command(payload))
 
         elif ctype in ("connect_mt5", "login_mt5"):
-            command_result(cmd_id, True, start_mt5_bot(payload))
+            def _login_mt5_worker() -> None:
+                try:
+                    result = start_mt5_bot(payload)
+                    command_result(cmd_id, True, result)
+                except Exception as e:
+                    err_txt = str(e).encode("ascii", errors="replace").decode("ascii")
+                    log(f"COMMAND ERROR ID={cmd_id}: {err_txt}")
+                    try:
+                        send_connect_result(payload, "failed", err_txt[:500])
+                    except Exception:
+                        pass
+                    try:
+                        command_result(
+                            cmd_id,
+                            False,
+                            {
+                                "action": ctype,
+                                "status": "failed",
+                                "login": payload_get(payload, "mt5Login", "login"),
+                                "message": err_txt[:500],
+                            },
+                            err_txt[:500],
+                        )
+                    except Exception:
+                        pass
+
+            threading.Thread(
+                target=_login_mt5_worker,
+                daemon=True,
+                name=f"avelqua-login-{cmd_id}",
+            ).start()
+            log(f"LOGIN_MT5 THREAD START ID={cmd_id} port={payload_get(payload, 'port', 'portSlot')}")
 
         elif ctype in ("run_mt5_bot", "run_mt5"):
             command_result(cmd_id, True, run_bot_command(payload))

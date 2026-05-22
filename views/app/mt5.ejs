@@ -687,7 +687,14 @@ document.addEventListener('DOMContentLoaded', function () {
   function mt5PortCardLinesHtml(p) {
     if (!p) return '';
     const loginLine =
-      'แพ็กเกจ · ' + (p.mt5_login ? 'Login ' + p.mt5_login : 'ยังไม่ Login');
+      'แพ็กเกจ · ' + (p.mt5_login ? 'Login ' + p.mt5_login : 'ยังไม่ Login') +
+      (p.mt5NeedReopen
+        ? ' · MT5 ปิด — กดเชื่อมต่อเพื่อเปิด'
+        : p.mt5Running
+          ? ' · MT5 เปิด'
+          : p.accountId
+            ? ' · MT5 ปิด'
+            : '');
     const fpNo = p.folderPortNo != null ? p.folderPortNo : p.slot;
     const folderLine =
       'FolderPort P' +
@@ -728,6 +735,13 @@ document.addEventListener('DOMContentLoaded', function () {
         ') · FolderPort P' +
         String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
         (p.folderPath ? ' · ' + p.folderPath : '');
+      return;
+    }
+    if (p.mt5NeedReopen) {
+      hint.innerHTML =
+        'PORT ' +
+        slot +
+        ' เชื่อมต่อแล้วแต่ <span class="warn">MT5 ยังไม่เปิดบน VPS</span> — กรอกรหัสผ่านแล้วกด <b>เชื่อมต่อ</b> (ไม่ใช้ Login ซ้ำกับ PORT อื่น)';
       return;
     }
     if (p.folderRunning || p.folderAvailable === false) {
@@ -774,7 +788,17 @@ document.addEventListener('DOMContentLoaded', function () {
       '<div class="port-main port-slot-pick-hit" role="button" tabindex="0" data-port-slot="' + p.slot + '">' +
       '<div><b>PORT ' + p.slot + '</b>' + mt5PortCardLinesHtml(p) + '</div>' +
       '<span>' +
-      mt5Esc(p.accountId ? (p.botRunning ? 'BOT รัน' : 'พร้อมเปิด BOT') : '') +
+      mt5Esc(
+        p.accountId
+          ? p.mt5NeedReopen
+            ? 'MT5 ปิด — กดเชื่อมต่อ'
+            : p.botRunning
+              ? 'BOT รัน'
+              : p.mt5Running
+                ? 'MT5 เปิด'
+                : 'พร้อมเปิด BOT'
+          : ''
+      ) +
       '</span></div>' +
       actions +
       '</div>'
