@@ -205,7 +205,8 @@ document.addEventListener('DOMContentLoaded', function () {
   </div>
 
         <label>MT5 Login</label>
-        <input name="mt5_login" id="mt5LoginInput" placeholder="เช่น 12345678" inputmode="numeric" autocomplete="username" required>
+        <input name="mt5_login" id="mt5LoginInput" placeholder="จริง: 201200244 · ทดลอง: 89610453" inputmode="numeric" pattern="[0-9]*" maxlength="9" autocomplete="username" required>
+        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">บัญชีจริง: ขึ้นต้น <b>2</b> · 9 หลัก · ทดลอง: ขึ้นต้น <b>8</b> · 8 หลัก — นอกนี้ถือว่า Login ผิด (ไม่เปิด MT5)</small>
 
         <label>Password</label>
         <input name="mt5_password" id="mt5PasswordInput" type="password" placeholder="รหัสผ่าน MT5" autocomplete="current-password" required>
@@ -843,13 +844,15 @@ document.addEventListener('DOMContentLoaded', function () {
   window.refreshMt5PortCards = refreshMt5PortCards;
 
   const MT5_SAVED_LOGIN_KEY = 'mt5SavedLogin';
+  const MT5_LOGIN_LIVE_RX = /^2\d{8}$/;
+  const MT5_LOGIN_DEMO_RX = /^8\d{7}$/;
 
   function mt5LoadSavedLogin() {
     try {
       const el = document.getElementById('mt5LoginInput');
       if (!el) return;
       const saved = localStorage.getItem(MT5_SAVED_LOGIN_KEY);
-      if (saved && /^\d{5,12}$/.test(saved)) el.value = saved;
+      if (saved && (MT5_LOGIN_LIVE_RX.test(saved) || MT5_LOGIN_DEMO_RX.test(saved))) el.value = saved;
     } catch (_) {}
   }
 
@@ -862,15 +865,32 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       const login = String(el.value || '').trim();
-      if (/^\d{5,12}$/.test(login)) localStorage.setItem(MT5_SAVED_LOGIN_KEY, login);
+      if (MT5_LOGIN_LIVE_RX.test(login) || MT5_LOGIN_DEMO_RX.test(login)) {
+        localStorage.setItem(MT5_SAVED_LOGIN_KEY, login);
+      }
     } catch (_) {}
   }
 
+  function mt5ClassifyLogin(login) {
+    const s = String(login || '').trim().replace(/\s/g, '');
+    if (!s) return { ok: false, type: '' };
+    if (MT5_LOGIN_LIVE_RX.test(s)) return { ok: true, type: 'live' };
+    if (MT5_LOGIN_DEMO_RX.test(s)) return { ok: true, type: 'demo' };
+    return { ok: false, type: 'invalid' };
+  }
+
   function mt5ValidateLoginForm() {
-    const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
+    const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim().replace(/\s/g, '');
     const pw = String((document.getElementById('mt5PasswordInput') || {}).value || '').trim();
-    if (!/^\d{5,12}$/.test(login)) {
-      return 'กรุณากรอก MT5 Login เป็นตัวเลข 5–12 หลัก';
+    if (!login) {
+      return 'กรุณากรอก Login MT5';
+    }
+    if (!/^\d+$/.test(login)) {
+      return 'User หรือ รหัส ไม่ถูกต้อง';
+    }
+    const kind = mt5ClassifyLogin(login);
+    if (!kind.ok) {
+      return 'User หรือ รหัส ไม่ถูกต้อง — บัญชีจริงขึ้นต้น 2 (9 หลัก) · ทดลองขึ้นต้น 8 (8 หลัก)';
     }
     if (!pw || pw.length < 4) {
       return 'กรุณากรอกรหัสผ่าน MT5';

@@ -62,6 +62,7 @@ const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnec
 const { positiveMoney, ensureEquityOnConnect } = require('../lib/mt5EquitySync');
 const { loadAccountPortContext } = require('../lib/mt5AccountPort');
 const { checkVpsAgentLiveness, assertVpsAgentOnline } = require('../lib/vpsAgentLiveness');
+const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
 const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
 const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 
@@ -642,13 +643,22 @@ async function handleMt5ConnectProduction(req, res) {
 
     const userId = Number((req.user || req.session?.user || {}).id || 0);
     if (!userId) throw new Error('กรุณาเข้าสู่ระบบใหม่');
-    const mt5Login = clean(req.body.mt5_login || req.body.mt5Login);
+    const loginRaw = clean(req.body.mt5_login || req.body.mt5Login);
+    const loginFmt = validateMt5LoginFormat(loginRaw);
+    if (!loginFmt.ok) {
+      throw new Error(loginFmt.message || 'กรุณากรอก Login MT5');
+    }
+    const mt5Login = loginFmt.normalized;
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
     const serverName = normalizeLockedServer(clean(req.body.server_name || req.body.serverName));
 
-    console.log('[mt5-connect] start', { userId, mt5Login, port_slot: req.body.port_slot || req.body.portSlot });
+    console.log('[mt5-connect] start', {
+      userId,
+      mt5Login,
+      loginType: loginFmt.type,
+      port_slot: req.body.port_slot || req.body.portSlot
+    });
 
-    if (!mt5Login) throw new Error('กรุณากรอก Login MT5');
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
     const agentGateEarly = await assertVpsAgentOnline();

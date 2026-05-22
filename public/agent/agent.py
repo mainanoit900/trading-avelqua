@@ -85,6 +85,22 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
 JOURNAL_FAIL_MSG = "User หรือ รหัส ไม่ถูกต้อง"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
+MT5_LOGIN_LIVE_RE = re.compile(r"^2\d{8}$")  # บัญชีจริง 9 หลัก ขึ้นต้น 2
+MT5_LOGIN_DEMO_RE = re.compile(r"^8\d{7}$")  # ทดลอง 8 หลัก ขึ้นต้น 8
+
+
+def validate_mt5_login_format(login: str) -> Tuple[bool, str, str]:
+    """ตรวจรูปแบบเลขบัญชีก่อนเปิด MT5 / อ่าน Journal — ผิดรูปแบบ = User ผิดทันที"""
+    s = str(login or "").strip().replace(" ", "")
+    if not s:
+        return False, "", "กรุณากรอก Login MT5"
+    if not s.isdigit():
+        return False, "", JOURNAL_FAIL_MSG
+    if MT5_LOGIN_LIVE_RE.match(s):
+        return True, "live", ""
+    if MT5_LOGIN_DEMO_RE.match(s):
+        return True, "demo", ""
+    return False, "", JOURNAL_FAIL_MSG
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
 AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v33"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
@@ -2920,6 +2936,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("payload.mt5Login is required")
     if not password:
         raise RuntimeError("payload.mt5Password is required")
+
+    fmt_ok, _fmt_type, fmt_msg = validate_mt5_login_format(login)
+    if not fmt_ok:
+        log(f"LOGIN FORMAT REJECT PORT={port} LOGIN={login!r} msg={fmt_msg}")
+        send_connect_result(payload, "failed", fmt_msg or JOURNAL_FAIL_MSG, port)
+        raise RuntimeError(fmt_msg or JOURNAL_FAIL_MSG)
 
     port_dir = resolve_mt5_port_dir(port, payload)
     terminal = port_dir / "terminal64.exe"
