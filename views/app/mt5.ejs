@@ -435,7 +435,26 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   const urlParams = new URLSearchParams(window.location.search);
   const packageExpired = <%= packageExpired ? 'true' : 'false' %>;
+  const MT5_CONNECT_MIN_UI_MS = 3500;
   let mt5StatusPollInFlight = false;
+
+  function mt5ConnectUiElapsedMs() {
+    const t = Number(
+      sessionStorage.getItem('mt5ConnectStartedAt') ||
+        window.__mt5ConnectTickStarted ||
+        0
+    );
+    return t > 0 ? Date.now() - t : 0;
+  }
+
+  function mt5CanFinishConnectSuccess(data) {
+    if (!data || data.loginVerified !== true || data.connected !== true) return false;
+    const step = data.progressStep != null ? Number(data.progressStep) : 0;
+    const total = Number(data.progressTotal || 4) || 4;
+    const cmdSt = String(data.commandStatus || '').toLowerCase();
+    const stepReady = step >= total || ['success', 'done'].includes(cmdSt);
+    return mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS && stepReady;
+  }
 
   window.mt5PrepareConnectSubmit = async function () {
     if (packageExpired) {
@@ -546,6 +565,8 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     mt5SaveLoginIfRemembered();
     sessionStorage.setItem('mt5ConnectInFlight', '1');
+    sessionStorage.setItem('mt5ConnectStartedAt', String(Date.now()));
+    window.__mt5ConnectProgressMax = 0;
     mt5ClearConnectModalDedupe();
     sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
     const btn = document.getElementById('mt5ConnectBtn');
@@ -615,9 +636,26 @@ document.addEventListener('DOMContentLoaded', function () {
         pop('error', json.message || 'เชื่อมต่อไม่สำเร็จ');
         return false;
       }
-      if (json.ok && json.status === 'connected' && json.loginVerified) {
+      if (
+        json.ok &&
+        json.status === 'connected' &&
+        json.loginVerified === true &&
+        mt5CanFinishConnectSuccess(json)
+      ) {
         if (typeof window.finishMt5ConnectSuccess === 'function') {
           window.finishMt5ConnectSuccess(json.message || 'เชื่อมต่อสำเร็จ', json.account || null);
+        }
+        return false;
+      }
+      if (json.ok && json.status === 'connected' && json.loginVerified === true && json.accountId) {
+        if (typeof window.setMt5PollAccountId === 'function') {
+          window.setMt5PollAccountId(json.accountId);
+        }
+        if (typeof window.startMt5ConnectPolling === 'function') {
+          window.startMt5ConnectPolling();
+        }
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          window.mt5UpdateConnectProgress(json);
         }
         return false;
       }
@@ -1530,6 +1568,7 @@ document.addEventListener('DOMContentLoaded', function () {
     mt5StopConnectPolling();
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectStartedAt');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
@@ -1583,6 +1622,7 @@ document.addEventListener('DOMContentLoaded', function () {
     mt5StopConnectPolling();
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectStartedAt');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
@@ -1790,6 +1830,7 @@ document.addEventListener('DOMContentLoaded', function () {
   window.mt5ClearConnectSession = function () {
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectStartedAt');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     mt5PollAccountId = '';
     mt5Checking = false;
@@ -2141,9 +2182,20 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       if (
-        stWait === 'connected' &&
+        inFlight &&
         data.loginVerified === true &&
         data.connected === true &&
+        !mt5CanFinishConnectSuccess(data)
+      ) {
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          window.mt5UpdateConnectProgress(data);
+        }
+        return;
+      }
+      if (
+        (stWait === 'connected' || data.connected === true) &&
+        data.loginVerified === true &&
+        mt5CanFinishConnectSuccess(data) &&
         !/ไม่ถูกต้อง|ผิด|failed|timeout/i.test(
           String(data.message || data.account.last_error || data.account.last_login_message || '')
         )
@@ -2166,14 +2218,15 @@ document.addEventListener('DOMContentLoaded', function () {
       ) {
         const secGhost = data.elapsedSec != null ? Number(data.elapsedSec) : 0;
         if (typeof window.mt5UpdateConnectProgress === 'function') {
-          window.mt5UpdateConnectProgress(data);
-        }
-        if (data.mt5Offline && data.account && inFlight && secGhost >= 3) {
-          finishMt5ConnectSuccess(
-            data.message || 'เชื่อมต่อสำเร็จ — ไปขั้นตอน 3 เปิด BOT',
-            data.account
+          window.mt5UpdateConnectProgress(
+            Object.assign({}, data, {
+              status: 'checking',
+              account: Object.assign({}, data.account || {}, { status: 'checking' }),
+              progressStep: Math.max(Number(data.progressStep || 0), 3),
+              progressStepLabel: data.progressStepLabel || 'ตรวจ Login',
+              connectStep: data.connectStep || '④ กำลังตรวจ Login จาก Journal MT5...'
+            })
           );
-          return;
         }
         if (inFlight && secGhost >= 20 && !data.commandStatus) {
           if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
@@ -2200,8 +2253,13 @@ document.addEventListener('DOMContentLoaded', function () {
     if (window.mt5Checker) clearInterval(window.mt5Checker);
     if (window.mt5ElapsedTicker) clearInterval(window.mt5ElapsedTicker);
     syncMt5PollAccountId();
-    window.__mt5ConnectProgressMax = 0;
-    if (!window.__mt5ConnectTickStarted) window.__mt5ConnectTickStarted = Date.now();
+    if (!window.__mt5ConnectTickStarted) {
+      window.__mt5ConnectTickStarted = Date.now();
+      sessionStorage.setItem('mt5ConnectStartedAt', String(window.__mt5ConnectTickStarted));
+    }
+    if (typeof window.__mt5ConnectProgressMax !== 'number') {
+      window.__mt5ConnectProgressMax = 0;
+    }
     mt5Checking = true;
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
       window.mt5SetCancelConnectVisible(true);
@@ -2256,6 +2314,7 @@ document.addEventListener('DOMContentLoaded', function () {
     urlParams.get('connect_account') === null
   ) {
     sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectStartedAt');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
@@ -2277,10 +2336,11 @@ document.addEventListener('DOMContentLoaded', function () {
           return String(p.slot) === String(target);
         });
         if (port && port.cssClass === 'connected') {
+          const pollId = sessionStorage.getItem('mt5PollAccountId') || '';
           const acc = (pd.connectedAccounts || []).find(function (a) {
             return String(a.port_slot) === String(target);
           });
-          if (acc) {
+          if (acc && pollId && String(acc.id) === String(pollId) && mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS) {
             sessionStorage.removeItem('mt5ConnectInFlight');
             sessionStorage.removeItem('mt5PollAccountId');
             if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
@@ -2333,7 +2393,12 @@ document.addEventListener('DOMContentLoaded', function () {
           return;
         }
         const stBoot = String((data.account && data.account.status) || data.status || '').toLowerCase();
-        if (data.connected === true && stBoot === 'connected' && data.loginVerified === true) {
+        if (
+          data.connected === true &&
+          stBoot === 'connected' &&
+          data.loginVerified === true &&
+          mt5CanFinishConnectSuccess(data)
+        ) {
           if (mt5ConnectInFlightNow()) {
             if (typeof window.finishMt5ConnectSuccess === 'function') {
               window.finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account || null);

@@ -54,6 +54,7 @@ const {
   releaseUserPackagePortSlot,
   forceStopPackagePortSlot,
   tryFastConnectConfirm,
+  verifyLoginFromCommand,
   extractJournalEvidence,
   hasLoginCommandInProgress
 } = require('../lib/mt5LoginCommandVerify');
@@ -713,9 +714,36 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   };
 }
 
-function deriveConnectProgress(statusFinal, cmdSt, previewUrl, connected) {
+/** ยืนยัน Login จริง (journal/คำสั่ง) — ไม่ใช่แค่ status=connected ในฐานข้อมูล */
+async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
+  const st = String(statusFinal || '').toLowerCase();
+  if (st !== 'connected') return false;
+
+  const accountId = Number(account?.id || 0);
+  const vpsId = Number(account?.vps_id || 0);
+  const login = String(account?.mt5_login || '').trim();
+  const portNo = Number(account?.assigned_port_no || account?.port_slot || 0);
+  if (!accountId || !vpsId || !login) return false;
+
+  const cmdSt = String(cmdMeta?.commandStatus || '').toLowerCase();
+  if (['pending', 'processing', 'picked', 'running'].includes(cmdSt)) return false;
+  if (await hasLoginCommandInProgress(accountId, vpsId).catch(() => false)) return false;
+
+  const msg = String(account?.last_login_message || account?.last_error || '');
+  if (messageIndicatesLoginFailed(msg, login)) return false;
+
+  const verified = await verifyLoginFromCommand({
+    accountId,
+    vpsId,
+    mt5Login: login,
+    portNo
+  }).catch(() => ({ ok: false }));
+  return verified.ok === true;
+}
+
+function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified) {
   const progressTotal = 4;
-  if (connected || statusFinal === 'connected') {
+  if (loginVerified) {
     return {
       progressStep: progressTotal,
       progressTotal,
@@ -1284,7 +1312,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
 
-    if (['connecting', 'starting', 'checking'].includes(statusFinal)) {
+    if (['connecting', 'starting', 'checking'].includes(statusFinal) && staleMs >= 8000) {
       const fastEarly = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
       if (fastEarly.resolved) {
         statusFinal = fastEarly.status || statusFinal;
@@ -1338,18 +1366,6 @@ async function handleMt5ConnectStatusProduction(req, res) {
       (msgBlob.includes(loginInMsg) || /window verified|เชื่อมต่อสำเร็จ/i.test(msgBlob)) &&
       !messageIndicatesLoginFailed(msgBlob, loginInMsg);
 
-    if (['connecting', 'starting', 'checking'].includes(statusFinal) && windowHintOk) {
-      await promoteAccountConnected({
-        accountId: a.id,
-        portId: a.port_id,
-        mt5Login: a.mt5_login,
-        message: MT5_SUCCESS_MSG
-      }).catch(() => {});
-      statusFinal = 'connected';
-      a.status = 'connected';
-      a.last_login_message = MT5_SUCCESS_MSG;
-    }
-
     if (
       ['connecting', 'starting', 'checking', 'connected'].includes(statusFinal) &&
       (statusFinal !== 'connected' || messageIndicatesLoginFailed(msgBlob, loginInMsg))
@@ -1392,12 +1408,20 @@ async function handleMt5ConnectStatusProduction(req, res) {
         ? `กำลังเปิด MT5 และ Login... (${elapsedSec} วินาที)`
         : (a.last_login_message || `กำลังเปิด MT5 และตรวจสอบ Login (${elapsedSec} วินาที)...`);
     }
-    const loginVerified = statusFinal === 'connected';
     const previewPath = previewPublicPath(a.id);
     const previewUrl = previewPath ? `${previewPath}?t=${Date.now()}` : '';
     const cmdMeta = await resolveLoginCommandMeta(a.id, a.vps_id);
     const agentMeta = await resolveVpsAgentOnline(a.vps_id);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
+    const loginVerified = await resolvePollLoginVerified(a, statusFinal, cmdMeta);
+    if (statusFinal === 'connected' && !loginVerified) {
+      statusFinal = ['checking', 'starting', 'connecting'].includes(
+        String(a.status || '').toLowerCase()
+      )
+        ? String(a.status || '').toLowerCase()
+        : 'checking';
+      a.status = statusFinal;
+    }
     const progress = deriveConnectProgress(
       statusFinal,
       cmdSt,
