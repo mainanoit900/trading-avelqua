@@ -226,6 +226,9 @@ document.addEventListener('DOMContentLoaded', function () {
         <button type="submit" id="mt5ConnectBtn" class="mt5-btn primary" <%= packageExpired ? 'disabled' : '' %>>
   <%= packageExpired ? 'แพ็คเกจหมดอายุ' : 'เชื่อมต่อ' %>
 </button>
+        <button type="button" id="mt5ConnectAllBtn" class="mt5-btn warning" style="margin-top:10px" <%= packageExpired ? 'disabled' : '' %> title="Login ทุกช่องแพ็กเกจที่มีบัญชีและรหัสผ่านบันทึกไว้แล้ว">
+          เชื่อมต่อทุก PORT (<%= totalPorts %> ช่อง)
+        </button>
         <button type="button" id="mt5CancelConnectBtn" class="mt5-btn" style="margin-top:10px;display:none" title="หยุดรอ Login และปล่อย PORT ว่าง">
           ยกเลิก (หยุดรอ Login)
         </button>
@@ -566,6 +569,61 @@ document.addEventListener('DOMContentLoaded', function () {
     const form = document.getElementById('mt5ConnectForm');
     if (form) form.submit();
   };
+
+  (function mt5ConnectAllPortsBtn() {
+    const allBtn = document.getElementById('mt5ConnectAllBtn');
+    if (!allBtn) return;
+    allBtn.addEventListener('click', async function () {
+      if (allBtn.disabled) return;
+      const pop =
+        typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
+      if (
+        !confirm(
+          'เชื่อมต่อทุก PORT แพ็กเกจที่มีบัญชีและรหัสผ่านบันทึกไว้แล้ว?\n\nระบบจะคิว Login ทีละช่องบน VPS (ช่องละ ~30–120 วิ)'
+        )
+      ) {
+        return;
+      }
+      allBtn.disabled = true;
+      const prev = allBtn.textContent;
+      allBtn.textContent = 'กำลังส่งคำสั่งทุก PORT...';
+      try {
+        const res = await fetch('/app/mt5/connect-all-ports?_=' + Date.now(), {
+          method: 'POST',
+          headers: {
+            Accept: 'application/json',
+            'X-Requested-With': 'XMLHttpRequest'
+          },
+          credentials: 'same-origin'
+        });
+        const json = await res.json().catch(function () {
+          return { ok: false, message: 'ตอบกลับไม่ถูกต้อง' };
+        });
+        if (!json.ok) {
+          pop('error', json.message || 'ไม่มีช่องที่ส่งคำสั่งได้');
+          return;
+        }
+        pop('success', json.message || 'ส่งคำสั่งแล้ว');
+        if (typeof refreshMt5PortCards === 'function') {
+          refreshMt5PortCards().catch(function () {});
+        }
+        const first = (json.results || []).find(function (r) {
+          return r.ok && r.accountId;
+        });
+        if (first && typeof window.setMt5PollAccountId === 'function') {
+          window.setMt5PollAccountId(first.accountId);
+        }
+        if (first && typeof window.startMt5ConnectPolling === 'function') {
+          window.startMt5ConnectPolling();
+        }
+      } catch (e) {
+        pop('error', (e && e.message) || 'เชื่อมต่อทุก PORT ไม่สำเร็จ');
+      } finally {
+        allBtn.disabled = false;
+        allBtn.textContent = prev;
+      }
+    });
+  })();
 
   (function mt5HandleConnectRedirect() {
     const err = urlParams.get('connect_error');

@@ -95,7 +95,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v44"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v45"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -528,15 +528,24 @@ def payload_get(payload: Optional[Dict[str, Any]], *names: str, default: str = "
     return default
 
 
+def _count_mt5_terminals() -> int:
+    try:
+        return len(list(iter_terminal_processes()))
+    except Exception:
+        return 0
+
+
 def journal_timeout_sec(payload: Optional[Dict[str, Any]]) -> int:
-    """รอ Journal อย่างน้อย 60 วิ — MT5 บน VPS มักใช้ 30–90 วิ กว่าจะ authorized on"""
+    """รอ Journal — ช้าขึ้นเมื่อมี MT5 หลายตัวบน VPS (หลาย PORT พร้อมกัน)"""
     env_default = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "150"))
+    cap = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_MAX_SEC", "240"))
     raw = payload_get(payload, "journalTimeoutSec", "journal_timeout_sec", default=str(env_default))
     try:
         n = int(raw)
     except Exception:
         n = env_default
-    return max(90, min(n, 150))
+    extra = min(60, max(0, _count_mt5_terminals() - 1) * 12)
+    return max(120, min(n + extra, cap))
 
 
 def normalize_port(port: Any) -> int:
@@ -2769,7 +2778,8 @@ def wait_mt5_login_hybrid(
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
     server = resolve_mt5_server(payload, login)
     log(f"MT5 LOGIN VERIFY login={login} server={server}")
-    wait_cap = max(90, min(int(timeout_sec or 120), 150))
+    cap = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_MAX_SEC", "240"))
+    wait_cap = max(90, min(int(timeout_sec or 120), cap))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
@@ -3197,6 +3207,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     - exact PORT isolation
     - ยืนยันล็อกอินสำเร็จเฉพาะจาก Journal: เลข login + "authorized on" เท่านั้น
     """
+    try:
+        qdelay = int(payload_get(payload, "loginQueueDelaySec", "login_queue_delay_sec", default="0") or 0)
+    except Exception:
+        qdelay = 0
+    if qdelay > 0:
+        log(f"LOGIN QUEUE DELAY {qdelay}s (multi-port)")
+        time.sleep(min(qdelay, 180))
+
     port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
@@ -3507,6 +3525,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             time.sleep(0.9)
             automate_mt5_login_server_form(login, password, server)
         return proc
+
+    other_mt5 = _count_mt5_terminals()
+    if other_mt5 > 0:
+        stagger = min(8.0, 1.5 + other_mt5 * 0.8)
+        log(f"MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
+        time.sleep(stagger)
 
     journal_since = time.time()
     proc = launch_mt5("initial")
