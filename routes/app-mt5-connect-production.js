@@ -28,7 +28,10 @@ const {
   MT5_FAIL_USER_MSG,
   MT5_LOGIN_TIMEOUT_MSG
 } = require('../lib/mt5Server');
-const { messageIndicatesLoginFailed } = require('../lib/mt5JournalVerify');
+const {
+  messageIndicatesLoginFailed,
+  resolveLoginFailUserMessage
+} = require('../lib/mt5JournalVerify');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
@@ -42,7 +45,8 @@ const {
   findRecentLoginCommand,
   releaseUserPackagePortSlot,
   forceStopPackagePortSlot,
-  tryFastConnectConfirm
+  tryFastConnectConfirm,
+  extractJournalEvidence
 } = require('../lib/mt5LoginCommandVerify');
 const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
 const {
@@ -675,6 +679,18 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   const res = cmd.result && typeof cmd.result === 'object' ? cmd.result : {};
   let commandMessage = String(cmd.error || res.message || res.error || '').trim();
   if (!commandMessage && st === 'failed') commandMessage = 'คำสั่ง login_mt5 ล้มเหลว';
+  const loginHint = String(
+    cmd.payload?.mt5Login || cmd.payload?.login || res.login || ''
+  ).trim();
+  const resolvedCmd = resolveLoginFailUserMessage({
+    login: loginHint,
+    evidence: extractJournalEvidence(res.journalEvidence, res.journal_evidence, res.message, commandMessage),
+    rawMessage: commandMessage,
+    cmdError: commandMessage
+  });
+  if (['failed', 'error', 'cancelled'].includes(st)) {
+    commandMessage = resolvedCmd.message || commandMessage;
+  }
   return {
     commandId: cmd.id,
     commandStatus: st,
@@ -1295,7 +1311,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let userMessage = statusFinal === 'connected'
       ? MT5_SUCCESS_MSG
       : statusFinal === 'failed'
-        ? (/ทันเวลา|timeout/i.test(failedMsg)
+        ? (/ทันเวลา|timeout|cancelled:\s*journal|journal\s+login\s+failed/i.test(failedMsg)
             ? MT5_LOGIN_TIMEOUT_MSG
             : failedMsg || MT5_FAIL_USER_MSG)
         : (a.last_login_message || a.last_error || statusFinal);

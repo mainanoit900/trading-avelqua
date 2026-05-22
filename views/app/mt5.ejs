@@ -1368,6 +1368,12 @@ document.addEventListener('DOMContentLoaded', function () {
         ? accErr
         : 'เชื่อมต่อไม่สำเร็จ — กรุณาเลือก PORT ว่างแล้วกดเชื่อมต่อใหม่';
     }
+    if (/^cancelled:\s*journal|journal\s+login\s+failed/i.test(m)) {
+      return 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่อีกครั้ง';
+    }
+    if (/authorization\s+failed|invalid\s+account|invalid\s+password|user\s+ผิด/i.test(m)) {
+      return 'User ผิด';
+    }
     return m;
   }
 
