@@ -33,6 +33,38 @@ const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
+/** ฟอร์ม HTML POST ต้อง redirect กลับ /app/mt5 — ไม่ส่ง JSON ตรงให้เบราว์เซอร์ */
+function wantsJsonConnectResponse(req) {
+  if (String(req.get('X-Requested-With') || '').toLowerCase() === 'xmlhttprequest') return true;
+  const accept = String(req.get('Accept') || '').toLowerCase();
+  if (accept.includes('application/json')) return true;
+  if (req.is && req.is('application/json')) return true;
+  return false;
+}
+
+function respondConnectQueued(res, req, data) {
+  if (wantsJsonConnectResponse(req)) {
+    return res.json(data);
+  }
+  const q = new URLSearchParams({
+    connect_queued: '1',
+    connect_account: String(data.accountId || ''),
+    port_slot: String(data.portSlot || '')
+  });
+  if (data.commandId) q.set('command_id', String(data.commandId));
+  return res.redirect(302, `/app/mt5?${q.toString()}`);
+}
+
+function respondConnectFailed(res, req, message) {
+  if (wantsJsonConnectResponse(req)) {
+    return res.json({ ok: false, status: 'failed', message });
+  }
+  const q = new URLSearchParams({
+    connect_error: String(message || 'เชื่อมต่อไม่สำเร็จ').slice(0, 500)
+  });
+  return res.redirect(302, `/app/mt5?${q.toString()}`);
+}
+
 const router = express.Router();
 const redis = new Redis(process.env.REDIS_URL || undefined);
 
@@ -831,7 +863,7 @@ async function handleMt5ConnectProduction(req, res) {
       ? `${reservedPort.node_name} / ${reservedPort.port_name || 'PORT-' + portLabel}`
       : `PORT ${portLabel}`;
 
-    return res.json({
+    return respondConnectQueued(res, req, {
       ok: true,
       status: 'queued',
       accountId,
@@ -844,7 +876,7 @@ async function handleMt5ConnectProduction(req, res) {
     });
   } catch (e) {
     if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
-    return res.json({ ok: false, status: 'failed', message: e.message });
+    return respondConnectFailed(res, req, e.message);
   } finally {
     if (loginLockKey) await redis.del(loginLockKey).catch(() => {});
     if (lockKey) await redis.del(lockKey).catch(() => {});
