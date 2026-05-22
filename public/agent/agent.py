@@ -1977,7 +1977,7 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
         except Exception:
             pass
 
-    # Fallback: tasklist — ห้ามใช้บรรทัด Services/Unknown (ไม่ใช่หน้าต่าง MT5 จริง)
+    # Fallback: tasklist /v can see window title even when PowerShell returns empty.
     if not titles:
         try:
             out = subprocess.check_output(
@@ -1988,13 +1988,8 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
             ).decode(errors="ignore")
             for line in out.splitlines():
                 low = line.lower()
-                if "terminal64.exe" not in low:
-                    continue
-                if " services " in low or "\\system" in low or "unknown" in low and "#" not in line:
-                    continue
-                if root and root not in low and pid_set:
-                    continue
-                titles.append(line.strip())
+                if "terminal64.exe" in low and (root in low or not pid_set):
+                    titles.append(line.strip())
         except Exception:
             pass
     _MT5_TITLE_CACHE[cache_key] = (now, titles)
@@ -2004,15 +1999,9 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
 def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bool, str]:
     login = str(payload_get(payload, "mt5Login", "login", default="") or "").strip()
     server = str(payload_get(payload, "serverName", default="") or "").strip().lower()
-    procs = mt5_port_processes(port, payload)
-    if not procs:
-        return False, "no terminal64 in port folder"
     titles = mt5_window_titles(port, payload)
     joined = " | ".join(titles)
     low = joined.lower()
-
-    if " services " in low or joined.strip().lower().startswith("terminal64.exe"):
-        return False, joined
 
     if login and (
         login in joined
@@ -3362,53 +3351,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         port,
         process_id=proc_pid,
     )
-
-    skip_verify = payload_get(
-        payload, "skipLoginVerify", "skip_login_verify", "reopenOnly", "reopen_only"
-    ) in (True, "true", "1", 1, "yes")
-    if skip_verify:
-        send_connect_result(
-            payload,
-            "checking",
-            "เคย Login สำเร็จแล้ว — กำลังเปิด MT5 โดยไม่ตรวจรหัสซ้ำ",
-            port,
-            process_id=proc_pid,
-        )
-        for _wait in range(40):
-            time.sleep(0.5)
-            procs_skip = mt5_port_processes(port, payload)
-            if not procs_skip:
-                continue
-            ok_w, title_w = mt5_login_verified_by_window(port, payload)
-            sock_ok, _sock = mt5_socket_established(port, payload)
-            if ok_w and sock_ok and procs_skip:
-                enforce_login_no_trading(port_dir, port, payload, login, password, server)
-                titles = title_w or " | ".join(mt5_window_titles(port, payload))
-                preview_skip = capture_mt5_window_base64(port, payload)
-                send_connect_result(
-                    payload,
-                    "connected",
-                    "เชื่อมต่อสำเร็จ — MT5 เปิดแล้ว (เคยยืนยันรหัสแล้ว)",
-                    port,
-                    process_id=proc_pid,
-                    window_title=titles,
-                    preview_b64=preview_skip,
-                    window_verified=True,
-                )
-                log(f"LOGIN SKIP-VERIFY OK PORT={port} LOGIN={login} wait={_wait}")
-                return _login_cmd_result_payload(
-                    login,
-                    server,
-                    port,
-                    bot,
-                    config_file,
-                    terminal,
-                    fastReuse=True,
-                    keepMt5Open=True,
-                    process_id=proc_pid,
-                    window_title=titles,
-                )
-        log(f"LOGIN SKIP-VERIFY fallback full journal PORT={port} LOGIN={login}")
 
     journal_timeout = _journal_timeout_sec()
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")

@@ -35,11 +35,7 @@ const {
   cancelJournalVerifyForAccount,
   cancelPendingLoginForAccount,
   cancelJournalVerifyWrongPort,
-  queueJournalReadVerify,
-  accountCanSkipLoginVerify,
-  mt5LiveForAccount,
-  autoClearPortSlotBeforeLogin,
-  waitForVpsPortAgentCommandsIdle
+  queueJournalReadVerify
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
@@ -147,7 +143,6 @@ async function ensureRuntimeColumns() {
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_error TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_login_message TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_journal_evidence TEXT`).catch(() => {});
-  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS login_verified BOOLEAN DEFAULT FALSE`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_balance NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_equity NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
@@ -670,48 +665,6 @@ async function getNextUserSlot(userId, totalPorts) {
   return 0;
 }
 
-/** MT5 รันอยู่แล้ว = สำเร็จทันที; มีคำสั่งค้าง = รอ poll; ไม่ใช่ = ส่ง login_mt5 ต่อ */
-async function respondIfMt5LiveOrLoginQueued(req, res, accountRow, portSlot) {
-  const accountId = Number(accountRow?.id || 0);
-  if (!accountId) return false;
-
-  const activeCmd = await findActiveLoginCommandForAccount(accountId);
-  if (activeCmd) {
-    respondConnect(req, res, {
-      ok: true,
-      status: 'queued',
-      accountId,
-      commandId: activeCmd,
-      portSlot: portSlot || Number(accountRow.port_slot || 0) || null,
-      message: 'กำลังเปิด MT5 อยู่แล้ว กรุณารอสักครู่',
-      progressStep: 1,
-      progressStepLabel: LOGIN_PROGRESS_LABELS[1],
-      progressTotal: 4,
-      commandStatus: 'pending',
-      connectStep: '② Agent กำลังเปิด MT5...'
-    });
-    return true;
-  }
-
-  const live = await mt5LiveForAccount(accountRow);
-  if (!live) return false;
-
-  const slot = portSlot || Number(accountRow.port_slot || 0) || null;
-  respondConnect(req, res, {
-    ok: true,
-    status: 'connected',
-    loginVerified: true,
-    connected: true,
-    accountId,
-    portSlot: slot,
-    message: slot
-      ? `PORT ${slot} — MT5 เปิดอยู่แล้ว ไปขั้นตอน 3 เปิด BOT`
-      : 'MT5 เปิดอยู่แล้ว — ไปขั้นตอน 3 เปิด BOT',
-    account: accountRow
-  });
-  return true;
-}
-
 function respondConnect(req, res, body, statusCode = 200) {
   const useJson =
     prefersJsonResponse(req) ||
@@ -910,10 +863,20 @@ async function handleMt5ConnectProduction(req, res) {
           400
         );
       }
-      if (await respondIfMt5LiveOrLoginQueued(req, res, connectedRow, wantSlot)) {
-        return;
+      const needsReopen = await connectedNeedsReopenLogin(connectedRow);
+      if (!needsReopen) {
+        return respondConnect(req, res, {
+          ok: true,
+          status: 'connected',
+          loginVerified: true,
+          connected: true,
+          accountId: connectedRow.id,
+          portSlot: connSlot || null,
+          message: `PORT ${connSlot} เชื่อมต่ออยู่แล้ว — ไปขั้นตอน 3 เปิด BOT`,
+          account: connectedRow
+        });
       }
-      /* DB connected แต่ MT5 ปิด — ส่ง login_mt5 ด้านล่าง (ข้ามตรวจรหัสถ้าเคยยืนยันแล้ว) */
+      /* MT5 ปิดบน VPS — ส่ง login_mt5 ใหม่ด้านล่าง */
     }
 
     // ป้องกันผู้ใช้กดเชื่อมต่อซ้ำแล้วรีสตาร์ท flow เดิมจนคำสั่งถูก cancel วน
@@ -999,9 +962,6 @@ async function handleMt5ConnectProduction(req, res) {
     };
 
     if (requestedSlot > 0) {
-      await autoClearPortSlotBeforeLogin(userId, requestedSlot, mt5Login, serverName).catch(
-        () => ({})
-      );
       const slotGate = await isUserPortSlotFreeForLogin(
         userId,
         requestedSlot,
@@ -1020,8 +980,17 @@ async function handleMt5ConnectProduction(req, res) {
           [slotGate.accountId]
         ).catch(() => ({ rows: [] }));
         const occ = occRow.rows?.[0];
-        if (occ && (await respondIfMt5LiveOrLoginQueued(req, res, occ, requestedSlot))) {
-          return;
+        const needsReopen = occ ? await connectedNeedsReopenLogin(occ) : false;
+        if (!needsReopen) {
+          return respondConnect(req, res, {
+            ok: true,
+            status: 'connected',
+            loginVerified: true,
+            connected: true,
+            accountId: slotGate.accountId,
+            portSlot: requestedSlot,
+            message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้ — ไปขั้นตอน 3 เปิด BOT'
+          });
         }
       }
       if (slotGate.inProgress && slotGate.accountId) {
@@ -1051,7 +1020,6 @@ async function handleMt5ConnectProduction(req, res) {
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (totalPorts === 1) {
-      await autoClearPortSlotBeforeLogin(userId, 1, mt5Login, serverName).catch(() => ({}));
       const slotGate = await isUserPortSlotFreeForLogin(userId, 1, totalPorts, mt5Login);
       if (!slotGate.ok) throw new Error(slotGate.message);
       portSlot = 1;
@@ -1064,9 +1032,6 @@ async function handleMt5ConnectProduction(req, res) {
         portSlot = await getNextUserSlot(userId, totalPorts);
       }
       if (!portSlot) portSlot = await getNextUserSlot(userId, totalPorts);
-      if (portSlot) {
-        await autoClearPortSlotBeforeLogin(userId, portSlot, mt5Login, serverName).catch(() => ({}));
-      }
       reservedPort = {
         port_id: retryPort.port_id,
         vps_id: retryPort.vps_id,
@@ -1087,7 +1052,6 @@ async function handleMt5ConnectProduction(req, res) {
         );
       }
       await assertLoginNotOnOtherPort(portSlot);
-      await autoClearPortSlotBeforeLogin(userId, portSlot, mt5Login, serverName).catch(() => ({}));
       const reserve = await reserveBestPort(userId, portSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
@@ -1140,7 +1104,7 @@ async function handleMt5ConnectProduction(req, res) {
         account_name=$9,
         status='connecting',
         last_error=NULL,
-        last_login_message='เคลียร์ PORT แล้ว — กำลังเปิด MT5 และ Login...',
+        last_login_message='กำลังเปิด MT5 และ Login...',
         last_journal_evidence=NULL,
         connect_started_at=NOW(),
         updated_at=NOW()
@@ -1273,12 +1237,6 @@ async function handleMt5ConnectProduction(req, res) {
     connectStatusSyncAt.delete(accountId);
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
-    await waitForVpsPortAgentCommandsIdle(
-      reservedPort.vps_id,
-      portSlot,
-      ['stop_mt5', 'kill_mt5', 'force_stop_mt5'],
-      8000
-    ).catch(() => false);
     await cancelPendingStopsBeforeLogin(reservedPort.vps_id, portSlot, {
       cancelAllPending: false
     }).catch(() => ({ cancelled: 0 }));
@@ -1303,21 +1261,6 @@ async function handleMt5ConnectProduction(req, res) {
       ).catch(() => {});
     }
 
-    const accSkipRow = await query(
-      `
-      SELECT id, mt5_login, mt5_password, login_verified, last_journal_evidence,
-             status, vps_id, port_slot, assigned_port_no
-      FROM vps_system.mt5_accounts
-      WHERE id=$1
-      LIMIT 1
-    `,
-      [accountId]
-    ).catch(() => ({ rows: [] }));
-    const skipLoginVerify = await accountCanSkipLoginVerify(
-      accSkipRow.rows?.[0] || { id: accountId, mt5_login: mt5Login, mt5_password: mt5Password },
-      mt5Password
-    ).catch(() => false);
-
     const payload = buildMt5LoginPayload({
       accountId,
       userId,
@@ -1325,8 +1268,7 @@ async function handleMt5ConnectProduction(req, res) {
       portSlot,
       mt5Login,
       mt5Password,
-      serverName,
-      skipLoginVerify
+      serverName
     });
 
     const cmdIns = await insertPendingAgentCommand({
@@ -1387,12 +1329,7 @@ async function handleMt5ConnectProduction(req, res) {
       portNo: allocPortNo,
       portSlot,
       folderPath: reservedPort.folder_path || null,
-      message: skipLoginVerify
-        ? `กำลังเปิด MT5 — PORT ${portSlot} · ${pickName} (เคย Login สำเร็จ — เปิด MT5 โดยไม่ตรวจรหัสซ้ำ)`
-        : `กำลังเปิด MT5 — PORT ${portSlot} · โฟลเดอร์ VPS ${pickName} (${serverName})`,
-      connectStep: skipLoginVerify
-        ? '① ส่งคำสั่งเปิด MT5 — เคยยืนยันรหัสแล้ว'
-        : '① ส่งคำสั่งแล้ว — ② รอ Agent รับงานจากคิว',
+      message: `กำลังเปิด MT5 — PORT ${portSlot} · โฟลเดอร์ VPS ${pickName} (${serverName})`,
       progressStep: 1,
       progressStepLabel: LOGIN_PROGRESS_LABELS[1],
       progressTotal: 4,

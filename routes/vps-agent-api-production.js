@@ -1180,13 +1180,7 @@ router.post('/connect-result', async (req, res) => {
         previewB64
       }).catch(() => {});
 
-      const portRunning = loginForJournal && portNo
-        ? await verifyPortRunningLogin(node.id, portNo, loginForJournal).catch(() => ({
-            ok: false
-          }))
-        : { ok: false };
-
-      if (loginVerified && (portRunning.ok || metricsOnConnect.ok)) {
+      if (loginVerified && (connBalEarly > 0 || connEqEarly > 0 || metricsOnConnect.ok)) {
         let connBal = connBalEarly;
         let connEq = connEqEarly;
         await promoteAccountConnected({
