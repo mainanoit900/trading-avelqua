@@ -30,6 +30,16 @@ const {
 } = require('../lib/adminVpsPortPicker');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
+const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
+const {
+  findLoginCommandInProgress,
+  findRecentLoginCommand,
+  releaseUserPackagePortSlot
+} = require('../lib/mt5LoginCommandVerify');
+const {
+  listAllFolderPortsForConnect,
+  pickFolderPortForSlot
+} = require('../lib/mt5VpsFolderPorts');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -568,6 +578,29 @@ async function isUserPortSlotAvailable(userId, slot, totalPorts) {
   return !(r.rows || []).length;
 }
 
+/** เลือก PORT แพ็กเกจว่าง + โฟลเดอร์ VPS ตรง slot (เหมือน /admin/vps/ports) */
+async function pickBestPackageSlotForConnect(userId, totalPorts, preferredSlot = 0) {
+  const pref = num(preferredSlot);
+  const { nodes, folderPorts } = await listAllFolderPortsForConnect().catch(() => ({
+    nodes: [],
+    folderPorts: []
+  }));
+
+  async function slotOk(slot) {
+    if (slot < 1 || slot > totalPorts) return false;
+    if (!(await isUserPortSlotAvailable(userId, slot, totalPorts))) return false;
+    const folder = pickFolderPortForSlot(folderPorts, slot, nodes);
+    if (folder && folder.available === false && folder.running) return false;
+    return true;
+  }
+
+  if (pref > 0 && (await slotOk(pref))) return pref;
+  for (let i = 1; i <= totalPorts; i++) {
+    if (await slotOk(i)) return i;
+  }
+  return getNextUserSlot(userId, totalPorts);
+}
+
 async function getNextUserSlot(userId, totalPorts) {
   const used = await query(
     `
@@ -587,6 +620,141 @@ async function getNextUserSlot(userId, totalPorts) {
   return 0;
 }
 
+async function resolveVpsAgentOnline(vpsId) {
+  const vid = num(vpsId);
+  if (!vid) return { agentOnline: null, agentMessage: '' };
+  const r = await query(
+    `
+    SELECT
+      COALESCE(agent_enabled, TRUE) AS agent_enabled,
+      GREATEST(
+        COALESCE(last_seen_at, 'epoch'::timestamptz),
+        COALESCE(last_heartbeat, 'epoch'::timestamptz),
+        COALESCE(updated_at, 'epoch'::timestamptz)
+      ) AS last_seen
+    FROM vps_system.vps_nodes
+    WHERE id = $1
+    LIMIT 1
+  `,
+    [vid]
+  ).catch(() => ({ rows: [] }));
+  const row = r.rows?.[0];
+  if (!row) return { agentOnline: false, agentMessage: 'ไม่พบ VPS — ตรวจ /admin/vps' };
+  if (row.agent_enabled === false) {
+    return { agentOnline: false, agentMessage: 'Agent ปิดอยู่บน VPS นี้' };
+  }
+  const lastMs = row.last_seen ? new Date(row.last_seen).getTime() : 0;
+  const ageSec = lastMs ? Math.floor((Date.now() - lastMs) / 1000) : null;
+  const online = ageSec != null && ageSec <= AGENT_LAST_SEEN_MAX_SEC;
+  return {
+    agentOnline: online,
+    agentMessage: online
+      ? 'Agent ทำงาน'
+      : `Agent ไม่ตอบสนอง${ageSec != null ? ' (' + ageSec + ' วิ)' : ''} — ตรวจ /admin/vps`
+  };
+}
+
+async function resolveLoginCommandMeta(accountId, vpsId) {
+  const aid = num(accountId);
+  const vid = num(vpsId);
+  if (!aid || !vid) return {};
+  const inProg = await findLoginCommandInProgress(aid, vid);
+  const recent = inProg ? null : await findRecentLoginCommand(aid, vid);
+  const cmd = inProg || recent;
+  if (!cmd) return {};
+  const st = String(cmd.status || '').toLowerCase();
+  const res = cmd.result && typeof cmd.result === 'object' ? cmd.result : {};
+  let commandMessage = String(cmd.error || res.message || res.error || '').trim();
+  if (!commandMessage && st === 'failed') commandMessage = 'คำสั่ง login_mt5 ล้มเหลว';
+  return {
+    commandId: cmd.id,
+    commandStatus: st,
+    commandMessage
+  };
+}
+
+function deriveConnectProgress(statusFinal, cmdSt, previewUrl, connected) {
+  const progressTotal = 4;
+  if (connected || statusFinal === 'connected') {
+    return {
+      progressStep: progressTotal,
+      progressTotal,
+      progressStepLabel: 'เชื่อมต่อสำเร็จ',
+      connectStep: '④ Login สำเร็จ — พร้อมขั้นตอน 3 เปิด BOT'
+    };
+  }
+  if (statusFinal === 'failed') {
+    return {
+      progressStep: 3,
+      progressTotal,
+      progressStepLabel: 'Login ไม่สำเร็จ',
+      connectStep: '④ Login ไม่สำเร็จ'
+    };
+  }
+  if (statusFinal === 'checking') {
+    return {
+      progressStep: 3,
+      progressTotal,
+      progressStepLabel: 'ตรวจ Journal',
+      connectStep: '④ กำลังตรวจ Login จาก Journal MT5...'
+    };
+  }
+  if (statusFinal === 'starting' || previewUrl) {
+    return {
+      progressStep: 2,
+      progressTotal,
+      progressStepLabel: 'เปิด MT5',
+      connectStep: '③ เปิด MT5 บน VPS...'
+    };
+  }
+  if (cmdSt === 'running') {
+    return {
+      progressStep: 2,
+      progressTotal,
+      progressStepLabel: 'Login MT5',
+      connectStep: '③ Agent กำลัง Login MT5...'
+    };
+  }
+  if (['processing', 'picked'].includes(cmdSt)) {
+    return {
+      progressStep: 1,
+      progressTotal,
+      progressStepLabel: 'Agent รับงาน',
+      connectStep: '② Agent รับคำสั่งแล้ว'
+    };
+  }
+  if (cmdSt === 'pending') {
+    return {
+      progressStep: 1,
+      progressTotal,
+      progressStepLabel: 'รอ Agent',
+      connectStep: '② รอ Agent รับคำสั่ง login_mt5...'
+    };
+  }
+  if (['failed', 'error', 'cancelled'].includes(cmdSt)) {
+    return {
+      progressStep: 3,
+      progressTotal,
+      progressStepLabel: 'คำสั่งล้มเหลว',
+      connectStep: 'Login ไม่สำเร็จ (คำสั่ง VPS)'
+    };
+  }
+  if (statusFinal === 'connecting') {
+    return {
+      progressStep: 0,
+      progressTotal,
+      progressStepLabel: 'ส่งคำสั่ง',
+      connectStep: '① ส่งคำสั่ง login_mt5 แล้ว — รอ VPS'
+    };
+  }
+  return {
+    progressStep: 0,
+    progressTotal,
+    progressStepLabel: 'ส่งคำสั่ง',
+    connectStep: '① กำลังเชื่อมต่อ...'
+  };
+}
+
 async function handleMt5ConnectProduction(req, res) {
   let lockKey = null;
   let loginLockKey = null;
@@ -596,11 +764,15 @@ async function handleMt5ConnectProduction(req, res) {
     await ensureRuntimeColumns();
 
     const userId = req.user.id;
-    const mt5Login = clean(req.body.mt5_login || req.body.mt5Login);
+    const loginRaw = clean(req.body.mt5_login || req.body.mt5Login);
+    const fmt = validateMt5LoginFormat(loginRaw);
+    if (!fmt.ok) {
+      return respondConnectFailed(res, req, fmt.message || 'User ผิด');
+    }
+    const mt5Login = fmt.normalized;
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
     const serverName = normalizeLockedServer(clean(req.body.server_name || req.body.serverName));
 
-    if (!mt5Login) throw new Error('กรุณากรอก Login MT5');
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
     lockKey = userLockKey(userId);
@@ -683,14 +855,11 @@ async function handleMt5ConnectProduction(req, res) {
       if (exist?.port_slot) {
         portSlot = Number(exist.port_slot);
       } else {
-        portSlot = await getNextUserSlot(userId, totalPorts);
-        if (
-          uiPreferredSlot > 0 &&
-          uiPreferredSlot <= totalPorts &&
-          (await isUserPortSlotAvailable(userId, uiPreferredSlot, totalPorts))
-        ) {
-          portSlot = uiPreferredSlot;
-        }
+        portSlot = await pickBestPackageSlotForConnect(
+          userId,
+          totalPorts,
+          uiPreferredSlot > 0 ? uiPreferredSlot : 0
+        );
       }
 
       if (!portSlot) {
@@ -872,6 +1041,11 @@ async function handleMt5ConnectProduction(req, res) {
       portId: reservedPort.port_id,
       portNo: allocPortNo,
       portSlot,
+      connectStep: '① ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+      commandStatus: 'pending',
+      progressStep: 0,
+      progressStepLabel: 'ส่งคำสั่ง',
+      progressTotal: 4,
       message: `กำลังเปิด MT5 — แพ็กเกจ PORT ${portSlot} / ${pickName} (${serverName})`
     });
   } catch (e) {
@@ -1046,6 +1220,22 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const loginVerified = statusFinal === 'connected';
     const previewPath = previewPublicPath(a.id);
     const previewUrl = previewPath ? `${previewPath}?t=${Date.now()}` : '';
+    const cmdMeta = await resolveLoginCommandMeta(a.id, a.vps_id);
+    const agentMeta = await resolveVpsAgentOnline(a.vps_id);
+    const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
+    const progress = deriveConnectProgress(
+      statusFinal,
+      cmdSt,
+      previewUrl,
+      loginVerified
+    );
+    let connectStep = progress.connectStep;
+    if (inProgress && !cmdMeta.commandId && elapsedSec >= 8) {
+      connectStep = '① ส่งคำสั่งแล้ว — ยังไม่เห็นคำสั่งในคิว VPS';
+    }
+    if (inProgress && agentMeta.agentOnline === false && elapsedSec >= 20) {
+      connectStep = '② VPS Agent ไม่ตอบสนอง — ตรวจ /admin/vps';
+    }
     return res.json({
       ok: true,
       account: { ...a, status: statusFinal },
@@ -1059,7 +1249,17 @@ async function handleMt5ConnectStatusProduction(req, res) {
       message: userMessage,
       windowTitle: windowTitleFromMessage(a.last_login_message),
       previewUrl,
-      elapsedSec
+      elapsedSec,
+      maxWaitSec: 120,
+      connectStep,
+      progressStep: progress.progressStep,
+      progressStepLabel: progress.progressStepLabel,
+      progressTotal: progress.progressTotal,
+      commandId: cmdMeta.commandId || null,
+      commandStatus: cmdMeta.commandStatus || '',
+      commandMessage: cmdMeta.commandMessage || '',
+      agentOnline: agentMeta.agentOnline,
+      agentMessage: agentMeta.agentMessage || ''
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
@@ -1071,5 +1271,54 @@ router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction)
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
+
+router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const accountId = num(req.body.accountId || req.body.account_id);
+    const portSlot = num(req.body.portSlot || req.body.port_slot);
+    const message = clean(req.body.message) || MT5_FAIL_USER_MSG;
+
+    if (accountId) {
+      const accR = await query(
+        `
+        SELECT a.id, a.port_id, a.vps_id, a.assigned_port_no, a.port_slot,
+               COALESCE(p.folder_path, '') AS port_folder
+        FROM vps_system.mt5_accounts a
+        LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+        WHERE a.id = $1 AND a.user_id = $2
+        LIMIT 1
+      `,
+        [accountId, userId]
+      );
+      const acc = accR.rows?.[0];
+      if (acc) {
+        const { failAccountFromJournal } = require('../lib/mt5LoginCommandVerify');
+        await failAccountFromJournal(Number(acc.id), Number(acc.port_id || 0), message, {
+          vpsId: acc.vps_id,
+          portNo: acc.assigned_port_no || acc.port_slot,
+          folderPath: acc.port_folder,
+          reason: 'connect_fail_cleanup',
+          killMt5: true,
+          clearPackagePort: true,
+          journalVerdict: 'failed',
+          forceFailed: true
+        }).catch(() => {});
+      }
+    }
+
+    const slot = portSlot || 0;
+    if (slot > 0) {
+      await releaseUserPackagePortSlot(userId, slot, {
+        message,
+        reason: 'connect_fail_cleanup_ui'
+      }).catch(() => {});
+    }
+
+    return res.json({ ok: true, message: 'เคลียร์ PORT แล้ว' });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+});
 
 module.exports = router;

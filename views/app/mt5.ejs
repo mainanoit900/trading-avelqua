@@ -1022,11 +1022,11 @@ document.addEventListener('DOMContentLoaded', function () {
       return 'กรุณากรอก Login MT5';
     }
     if (!/^\d+$/.test(login)) {
-      return 'User หรือ รหัส ไม่ถูกต้อง';
+      return 'User ผิด';
     }
     const kind = mt5ClassifyLogin(login);
     if (!kind.ok) {
-      return 'User หรือ รหัส ไม่ถูกต้อง — บัญชีจริงขึ้นต้น 2 (9 หลัก) · ทดลองขึ้นต้น 8 (8 หลัก)';
+      return 'User ผิด — บัญชีจริงขึ้นต้น 2 (9 หลัก) · ทดลองขึ้นต้น 8 (8 หลัก)';
     }
     if (!pw || pw.length < 4) {
       return 'กรุณากรอกรหัสผ่าน MT5';
@@ -1135,6 +1135,48 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   mt5LoadSavedLogin();
+
+  (function mt5BindLoginInstantCheck() {
+    const el = document.getElementById('mt5LoginInput');
+    const hint = document.getElementById('mt5LoginFormatHint');
+    const hintDefault =
+      'เว็บตรวจรูปแบบเร็ว (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — รหัสผ่านยืนยันจาก MT5 · ไม่ผ่าน = ปิด MT5 + ปล่อย PORT ว่าง';
+    if (!el) return;
+    function refreshLoginHint() {
+      const login = String(el.value || '').trim().replace(/\s/g, '');
+      if (!hint) return;
+      if (!login) {
+        hint.style.color = '#94a3b8';
+        hint.innerHTML = hintDefault;
+        return;
+      }
+      if (!/^\d+$/.test(login) || !mt5ClassifyLogin(login).ok) {
+        hint.style.color = '#f87171';
+        hint.innerHTML =
+          '<b>User ผิด</b> — บัญชีจริงขึ้นต้น 2 (9 หลัก) · ทดลองขึ้นต้น 8 (8 หลัก)';
+        return;
+      }
+      hint.style.color = '#86efac';
+      hint.innerHTML =
+        login.charAt(0) === '2'
+          ? 'บัญชีจริง (9 หลัก) — รหัสผ่านตรวจจาก Journal MT5'
+          : 'บัญชีทดลอง (8 หลัก) — รหัสผ่านตรวจจาก Journal MT5';
+    }
+    el.addEventListener('input', refreshLoginHint);
+    el.addEventListener('blur', function () {
+      refreshLoginHint();
+      const login = String(el.value || '').trim().replace(/\s/g, '');
+      if (login.length >= 8 && (!/^\d+$/.test(login) || !mt5ClassifyLogin(login).ok)) {
+        if (typeof window.showMt5ConnectModal === 'function') {
+          window.showMt5ConnectModal('error', 'User ผิด', {
+            dedupeKey: 'login-fmt:' + login,
+            forceShow: true
+          });
+        }
+      }
+    });
+    refreshLoginHint();
+  })();
 
   function mt5ConnectTargetSlot() {
     return (
