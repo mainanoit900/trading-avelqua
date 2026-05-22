@@ -2636,6 +2636,28 @@ def _connect_on_snapshot_success(
     snap = account_snapshot(port, payload)
     if not _snap_positive(snap):
         return False, ""
+    ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
+    joined_s = str(joined or "")
+    if ok_w or (login_s in joined_s):
+        try:
+            pw = str(payload_get(payload, "mt5Password", "password") or "")
+            srv = resolve_mt5_server(payload)
+            enforce_login_no_trading(port_dir, port, payload, login_s, pw, srv)
+        except Exception:
+            pass
+        send_connect_result(
+            payload,
+            "connected",
+            "เชื่อมต่อสำเร็จ — เห็นบัญชีและยอดเงินบน MT5",
+            port,
+            process_id=proc_pid,
+            journal_evidence=joined_s,
+            window_title=joined_s,
+            preview_b64=preview_b64,
+            window_verified=bool(ok_w),
+        )
+        bal = snap.get("balance")
+        return True, f"snapshot+window balance={bal}"
     pw = str(payload_get(payload, "mt5Password", "password") or "")
     srv = resolve_mt5_server(payload)
     api_ok, api_detail = mt5_login_verify_api(port_dir, login_s, pw, srv)
@@ -2656,22 +2678,6 @@ def _connect_on_snapshot_success(
             window_verified=True,
         )
         return True, f"snapshot+api; {api_detail}"
-    ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
-    joined_s = str(joined or "")
-    if ok_w or (login_s in joined_s):
-        send_connect_result(
-            payload,
-            "connected",
-            "เชื่อมต่อสำเร็จ — เห็นบัญชีและยอดเงินบน MT5",
-            port,
-            process_id=proc_pid,
-            journal_evidence=joined_s,
-            window_title=joined_s,
-            preview_b64=preview_b64,
-            window_verified=bool(ok_w),
-        )
-        bal = snap.get("balance")
-        return True, f"snapshot+window balance={bal}"
     return False, ""
 
 
@@ -2815,7 +2821,7 @@ def wait_mt5_login_hybrid(
             if api_ok:
                 return True, f"api verified; {api_detail}", api_detail
 
-        if elapsed >= 12 and now - last_snap_at >= 2.0:
+        if elapsed >= 6 and now - last_snap_at >= 2.0:
             last_snap_at = now
             snap_ok, snap_detail = _connect_on_snapshot_success(
                 payload, port, port_dir, login, proc_pid, joined, preview_b64
@@ -3305,6 +3311,29 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     journal_since = time.time()
     proc = launch_mt5("initial")
     proc_pid = proc.pid if proc else None
+    for launch_try in range(2):
+        time.sleep(2.0 if launch_try else 1.2)
+        if mt5_port_processes(port, payload) or mt5_running_for_port_dir(port_dir):
+            if not proc_pid and mt5_port_processes(port, payload):
+                proc_pid = mt5_port_processes(port, payload)[0].pid
+            break
+        log(f"MT5 LAUNCH VERIFY FAIL try={launch_try + 1} PORT={port} — relaunch")
+        try:
+            kill_mt5_by_folder(port_dir)
+            time.sleep(1)
+        except Exception as e:
+            log(f"MT5 LAUNCH KILL ERROR: {e}")
+        proc = launch_mt5(f"retry-{launch_try + 1}")
+        proc_pid = proc.pid if proc else proc_pid
+    if not (mt5_port_processes(port, payload) or mt5_running_for_port_dir(port_dir)):
+        remove_mt5_login_ini(port_dir)
+        send_connect_result(
+            payload,
+            "failed",
+            "ไม่สามารถเปิดโปรแกรม MT5 บน VPS ได้ — ตรวจ terminal64.exe ในโฟลเดอร์ PORT",
+            port,
+        )
+        raise RuntimeError("MT5 terminal failed to start on VPS")
     send_connect_result(
         payload,
         "starting",

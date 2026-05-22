@@ -514,7 +514,7 @@ async function findRetryPortForLogin(userId, mt5Login, serverName) {
     WHERE a.user_id = $1
       AND a.mt5_login = $2
       AND COALESCE(a.server_name, a.mt5_server, '') = $3
-      AND LOWER(COALESCE(a.status, '')) IN ('failed', 'deleted', 'connecting', 'starting', 'checking')
+      AND LOWER(COALESCE(a.status, '')) IN ('failed', 'deleted', 'connecting', 'starting', 'checking', 'ready')
     ORDER BY a.updated_at DESC
     LIMIT 1
   `,
@@ -648,6 +648,46 @@ function respondConnect(req, res, body, statusCode = 200) {
   return res.redirect(302, '/app/mt5?connect_error=' + errMsg);
 }
 
+/** ล้างบัญชี ready/failed ค้าง (เช่น journal timeout) ก่อน Login ใหม่ */
+async function archiveStaleLoginAccounts(userId, mt5Login, serverName) {
+  await query(
+    `
+    UPDATE vps_system.mt5_accounts
+    SET
+      status = 'deleted',
+      port_slot = NULL,
+      last_error = COALESCE(NULLIF(TRIM(last_error), ''), 'ยกเลิก — เตรียม Login ใหม่'),
+      updated_at = NOW()
+    WHERE user_id = $1
+      AND mt5_login = $2
+      AND COALESCE(server_name, mt5_server, '') = $3
+      AND LOWER(COALESCE(status, '')) IN ('ready', 'failed')
+      AND (
+        port_slot IS NULL
+        OR updated_at < NOW() - INTERVAL '30 minutes'
+      )
+  `,
+    [userId, mt5Login, serverName]
+  );
+}
+
+async function findActiveLoginCommandForAccount(accountId) {
+  const r = await query(
+    `
+    SELECT id
+    FROM vps_system.vps_agent_commands
+    WHERE command_type IN ('login_mt5', 'connect_mt5')
+      AND (payload->>'accountId')::text = $1::text
+      AND LOWER(COALESCE(status, '')) IN ('pending', 'processing', 'picked', 'running')
+      AND created_at > NOW() - INTERVAL '15 minutes'
+    ORDER BY id DESC
+    LIMIT 1
+  `,
+    [accountId]
+  ).catch(() => ({ rows: [] }));
+  return r.rows?.[0]?.id || null;
+}
+
 async function handleMt5ConnectProduction(req, res) {
   let lockKey = null;
   let loginLockKey = null;
@@ -707,6 +747,8 @@ async function handleMt5ConnectProduction(req, res) {
     const usedPorts = Number(usedCountRes.rows?.[0]?.c || 0);
 
     const requestedSlotEarly = num(req.body.port_slot || req.body.portSlot);
+
+    await archiveStaleLoginAccounts(userId, mt5Login, serverName).catch(() => {});
 
     const duplicate = await findMt5LoginInUse(mt5Login, serverName, userId);
     if (duplicate) {
@@ -842,6 +884,14 @@ async function handleMt5ConnectProduction(req, res) {
           message: 'กำลังเชื่อมต่อบัญชีนี้อยู่แล้ว กรุณารอสักครู่'
         });
       }
+      await query(
+        `
+        UPDATE vps_system.mt5_accounts
+        SET status='deleted', last_error='ยกเลิก — ไม่มีคำสั่ง login ค้าง', updated_at=NOW()
+        WHERE id=$1
+      `,
+        [pendingAcc.id]
+      ).catch(() => {});
     }
 
     await cancelPendingLoginCommands({ mt5Login });
@@ -877,13 +927,25 @@ async function handleMt5ConnectProduction(req, res) {
         });
       }
       if (slotGate.inProgress && slotGate.accountId) {
-        return respondConnect(req, res, {
-          ok: true,
-          status: 'queued',
-          accountId: slotGate.accountId,
-          portSlot: requestedSlot,
-          message: 'กำลังเชื่อมต่อบน PORT นี้อยู่แล้ว กรุณารอสักครู่'
-        });
+        const activeOnSlot = await findActiveLoginCommandForAccount(slotGate.accountId);
+        if (activeOnSlot) {
+          return respondConnect(req, res, {
+            ok: true,
+            status: 'queued',
+            accountId: slotGate.accountId,
+            commandId: activeOnSlot,
+            portSlot: requestedSlot,
+            message: 'กำลังเชื่อมต่อบน PORT นี้อยู่แล้ว กรุณารอสักครู่'
+          });
+        }
+        await query(
+          `
+          UPDATE vps_system.mt5_accounts
+          SET status='deleted', last_error='ยกเลิก — ไม่มีคำสั่ง login ค้าง', updated_at=NOW()
+          WHERE id=$1
+        `,
+          [slotGate.accountId]
+        ).catch(() => {});
       }
       portSlot = requestedSlot;
       await assertLoginNotOnOtherPort(portSlot);
