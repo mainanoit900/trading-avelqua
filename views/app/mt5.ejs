@@ -451,6 +451,9 @@ document.addEventListener('DOMContentLoaded', function () {
       return false;
     }
     let connectSlot = String((document.getElementById('mt5SelectedPortSlot') || {}).value || '').trim();
+    if (!connectSlot) {
+      connectSlot = String(urlParams.get('port_slot') || '').trim();
+    }
     if (!connectSlot) connectSlot = mt5FirstEmptyPortSlotFromDom();
     const loginVal = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
     const ports = (window.__mt5PortsState && window.__mt5PortsState.ports) || [];
@@ -473,6 +476,17 @@ document.addEventListener('DOMContentLoaded', function () {
           lblFix.textContent =
             'Login ' + loginVal + ' อยู่ที่ PORT ' + connectSlot + ' — สลับมาเปิด MT5 ที่นี่';
         }
+      }
+    }
+    const connectCard = document.querySelector('.port-item[data-port-slot="' + connectSlot + '"]');
+    const reopenLogin =
+      connectCard && connectCard.classList.contains('connected') && loginVal &&
+      mt5PortCardLogin(connectSlot) === loginVal;
+    if (reopenLogin) {
+      const lblRe = document.getElementById('mt5LoginPortLabel');
+      if (lblRe) {
+        lblRe.textContent =
+          'PORT ' + connectSlot + ' · เปิด MT5 ใหม่ (Login ' + loginVal + ')';
       }
     }
     const portPickErr = mt5ValidatePortForConnect(connectSlot);
@@ -1048,18 +1062,38 @@ document.addEventListener('DOMContentLoaded', function () {
     return '';
   }
 
+  function mt5PortCardLogin(slot) {
+    const card = document.querySelector('.port-item[data-port-slot="' + slot + '"]');
+    if (!card) return '';
+    const fromAttr = String(card.getAttribute('data-mt5-login') || '').trim();
+    if (fromAttr) return fromAttr;
+    const ports = (window.__mt5PortsState && window.__mt5PortsState.ports) || [];
+    const p = ports.find(function (x) {
+      return String(x.slot) === String(slot);
+    });
+    return p ? String(p.mt5_login || p.login || '').trim() : '';
+  }
+
   function mt5ValidatePortForConnect(slot) {
     if (!slot) {
-      return 'กรุณาคลิกเลือก PORT ว่าง (ขั้นตอน 1) ก่อนกดเชื่อมต่อ';
+      return 'กรุณาคลิกเลือก PORT (ขั้นตอน 1) ก่อนกดเชื่อมต่อ';
     }
     const card = document.querySelector('.port-item[data-port-slot="' + slot + '"]');
     if (!card) return 'ไม่พบ PORT ' + slot;
+    const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
+    const cardLogin = mt5PortCardLogin(slot);
     if (card.classList.contains('connected')) {
+      if (login && cardLogin && login === cardLogin) {
+        return '';
+      }
       return (
-        'PORT ' + slot + ' มีบัญชีเชื่อมต่อแล้ว — คลิก PORT ว่างเพื่อ Login บัญชีใหม่ หรือคลิก PORT นี้ไปขั้นตอน 3'
+        'PORT ' + slot + ' มีบัญชีเชื่อมต่อแล้ว — กรอก Login เดิม + รหัสผ่านเพื่อเปิด MT5 ใหม่ หรือคลิก PORT ว่างสำหรับบัญชีใหม่'
       );
     }
     if (card.classList.contains('checking')) {
+      if (login && cardLogin && login === cardLogin) {
+        return '';
+      }
       return 'PORT ' + slot + ' กำลังเชื่อมต่ออยู่ — รอให้เสร็จหรือเลือก PORT ว่างอื่น';
     }
     const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
@@ -1104,9 +1138,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function mt5ConnectTargetSlot() {
     return (
-      sessionStorage.getItem('mt5ConnectTargetSlot') ||
-      (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+      String((document.getElementById('mt5SelectedPortSlot') || {}).value || '').trim() ||
       urlParams.get('port_slot') ||
+      sessionStorage.getItem('mt5ConnectTargetSlot') ||
       ''
     );
   }
@@ -2019,8 +2053,21 @@ function mt5SelectPortSlot(slot, opts) {
   if (!n || !mt5SelectedPortSlot) return;
   mt5SelectedPortSlot.value = String(n);
   try { localStorage.setItem('mt5ActivePortSlot', String(n)); } catch (_) {}
+  try {
+    sessionStorage.setItem('mt5ConnectTargetSlot', String(n));
+  } catch (_) {}
   const lbl = document.getElementById('mt5LoginPortLabel');
-  if (lbl) lbl.textContent = 'PORT แพ็กเกจ ' + n;
+  const cardPick = document.querySelector('.port-item[data-port-slot="' + n + '"]');
+  const cardLogin = cardPick ? String(cardPick.getAttribute('data-mt5-login') || '').trim() : '';
+  if (lbl) {
+    lbl.textContent = cardLogin
+      ? 'PORT แพ็กเกจ ' + n + ' · Login ' + cardLogin
+      : 'PORT แพ็กเกจ ' + n;
+  }
+  if (cardLogin) {
+    const loginIn = document.getElementById('mt5LoginInput');
+    if (loginIn && !String(loginIn.value || '').trim()) loginIn.value = cardLogin;
+  }
   if (typeof window.mt5UpdateFolderPortHint === 'function') {
     window.mt5UpdateFolderPortHint(String(n));
   }
@@ -2419,6 +2466,14 @@ mt5BindPortSlotPicks();
 try {
   const urlSlot = new URLSearchParams(window.location.search).get('port_slot');
   const savedSlot = urlSlot || localStorage.getItem('mt5ActivePortSlot');
+  if (urlSlot) {
+    try {
+      const stale = sessionStorage.getItem('mt5ConnectTargetSlot');
+      if (stale && String(stale) !== String(urlSlot)) {
+        sessionStorage.removeItem('mt5ConnectTargetSlot');
+      }
+    } catch (_) {}
+  }
   if (savedSlot) {
     mt5SelectPortSlot(savedSlot, { navigate: false });
   } else {
