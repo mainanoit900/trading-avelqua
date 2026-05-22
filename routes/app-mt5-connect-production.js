@@ -706,12 +706,21 @@ async function handleMt5ConnectProduction(req, res) {
     ).catch(() => ({ rows: [{ c: 0 }] }));
     const usedPorts = Number(usedCountRes.rows?.[0]?.c || 0);
 
+    const requestedSlotEarly = num(req.body.port_slot || req.body.portSlot);
+
     const duplicate = await findMt5LoginInUse(mt5Login, serverName, userId);
     if (duplicate) {
-      throw new Error(mt5LoginInUseMessage(duplicate));
+      if (
+        requestedSlotEarly > 0 &&
+        Number(duplicate.port_slot || 0) === requestedSlotEarly &&
+        String(duplicate.status || '').toLowerCase() === 'connected'
+      ) {
+        /* กดเชื่อมต่อซ้ำบน PORT เดิมที่ connected แล้ว — ด้านล่างจะตอบสำเร็จ */
+      } else {
+        throw new Error(mt5LoginInUseMessage(duplicate));
+      }
     }
 
-    const requestedSlotEarly = num(req.body.port_slot || req.body.portSlot);
     if (requestedSlotEarly > 0) {
       const otherPort = await findMt5LoginOnOtherUserPort(
         userId,
@@ -724,10 +733,10 @@ async function handleMt5ConnectProduction(req, res) {
       }
     }
 
-    // ถ้าบัญชีนี้ connected อยู่แล้ว (ผู้ใช้กดเชื่อมต่อซ้ำ) ให้ตอบสำเร็จทันที
+    // สำเร็จทันทีเฉพาะเมื่อ connected อยู่ที่ PORT ที่ขอเท่านั้น (ห้ามยก PORT อื่นมาเป็นสำเร็จโดยไม่ส่ง login_mt5)
     const alreadyConnected = await query(
       `
-      SELECT id, port_slot
+      SELECT id, port_slot, last_balance, last_equity
       FROM vps_system.mt5_accounts
       WHERE user_id=$1
         AND mt5_login=$2
@@ -740,12 +749,33 @@ async function handleMt5ConnectProduction(req, res) {
     ).catch(() => ({ rows: [] }));
     if (alreadyConnected.rows?.[0]) {
       const connectedRow = alreadyConnected.rows[0];
+      const connSlot = Number(connectedRow.port_slot || 0);
+      const wantSlot = requestedSlotEarly > 0 ? requestedSlotEarly : connSlot;
+      if (connSlot && wantSlot && connSlot !== wantSlot) {
+        return respondConnect(
+          req,
+          res,
+          {
+            ok: false,
+            status: 'failed',
+            message: mt5LoginOnOtherPortMessage({
+              port_slot: connSlot,
+              status: 'connected',
+              mt5_login: mt5Login
+            })
+          },
+          400
+        );
+      }
       return respondConnect(req, res, {
         ok: true,
         status: 'connected',
+        loginVerified: true,
+        connected: true,
         accountId: connectedRow.id,
-        portSlot: Number(connectedRow.port_slot || 0) || null,
-        message: 'บัญชีนี้เชื่อมต่ออยู่แล้ว'
+        portSlot: connSlot || null,
+        message: `PORT ${connSlot} เชื่อมต่ออยู่แล้ว — ไปขั้นตอน 3 เปิด BOT`,
+        account: connectedRow
       });
     }
 
@@ -766,6 +796,20 @@ async function handleMt5ConnectProduction(req, res) {
 
     if (inProgressAccount.rows?.[0]) {
       const pendingAcc = inProgressAccount.rows[0];
+      const pendingSlot = Number(pendingAcc.port_slot || 0);
+      const wantSlotNow = requestedSlotEarly > 0 ? requestedSlotEarly : pendingSlot;
+      if (pendingSlot && wantSlotNow && pendingSlot !== wantSlotNow) {
+        return respondConnect(
+          req,
+          res,
+          {
+            ok: false,
+            status: 'failed',
+            message: mt5LoginOnOtherPortMessage(pendingAcc)
+          },
+          400
+        );
+      }
       const activeCmd = await query(
         `
         SELECT id, status
@@ -806,6 +850,11 @@ async function handleMt5ConnectProduction(req, res) {
     const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
     let portSlot;
 
+    const assertLoginNotOnOtherPort = async (slot) => {
+      const other = await findMt5LoginOnOtherUserPort(userId, mt5Login, serverName, slot);
+      if (other) throw new Error(mt5LoginOnOtherPortMessage(other));
+    };
+
     if (requestedSlot > 0) {
       const slotGate = await isUserPortSlotFreeForLogin(
         userId,
@@ -820,9 +869,11 @@ async function handleMt5ConnectProduction(req, res) {
         return respondConnect(req, res, {
           ok: true,
           status: 'connected',
+          loginVerified: true,
+          connected: true,
           accountId: slotGate.accountId,
           portSlot: requestedSlot,
-          message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้'
+          message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้ — ไปขั้นตอน 3 เปิด BOT'
         });
       }
       if (slotGate.inProgress && slotGate.accountId) {
@@ -835,6 +886,7 @@ async function handleMt5ConnectProduction(req, res) {
         });
       }
       portSlot = requestedSlot;
+      await assertLoginNotOnOtherPort(portSlot);
       const reserve = await reserveBestPort(userId, requestedSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
@@ -870,6 +922,7 @@ async function handleMt5ConnectProduction(req, res) {
           `ไม่มี PORT ว่างในแพ็กเกจ (สูงสุด ${totalPorts} ช่อง) — ลบพอร์ตที่ไม่ใช้หรือเพิ่มพอร์ตก่อน`
         );
       }
+      await assertLoginNotOnOtherPort(portSlot);
       const reserve = await reserveBestPort(userId, portSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
@@ -1080,11 +1133,15 @@ async function handleMt5ConnectProduction(req, res) {
       portSlot
     });
 
+    if (!cmdIns?.id) {
+      throw new Error('ส่งคำสั่ง login_mt5 ไป VPS ไม่สำเร็จ — ลองใหม่หรือตรวจ Agent บน VPS');
+    }
+
     return respondConnect(req, res, {
       ok: true,
       status: 'queued',
       accountId,
-      commandId: cmd.rows?.[0]?.id || cmdIns?.id || null,
+      commandId: cmdIns.id,
       vpsId: reservedPort.vps_id,
       portId: reservedPort.port_id,
       portNo: allocPortNo,

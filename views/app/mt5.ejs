@@ -2227,6 +2227,28 @@ if (false && mt5ConnectForm) {
       data.port_slot = connectSlot;
       sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
 
+      const loginVal = String(data.mt5_login || '').trim();
+      const portsSt = window.__mt5PortsState && window.__mt5PortsState.ports;
+      if (loginVal && portsSt && portsSt.length) {
+        const busy = portsSt.find(function (p) {
+          if (String(p.slot) === String(connectSlot)) return false;
+          const lg = String(p.login || '').trim();
+          if (!lg || lg !== loginVal) return false;
+          return p.cssClass === 'connected' || p.cssClass === 'checking';
+        });
+        if (busy) {
+          throw new Error(
+            'Login ' +
+              loginVal +
+              ' ใช้อยู่ที่ PORT ' +
+              busy.slot +
+              ' แล้ว — คลิก PORT ' +
+              busy.slot +
+              ' ไปขั้นตอน 3 หรือใช้เลข Login อื่นที่ PORT ว่าง'
+          );
+        }
+      }
+
       const connectCtrl = new AbortController();
       window.__mt5ConnectAbort = connectCtrl;
       if (typeof window.mt5SetCancelConnectVisible === 'function') {
@@ -2275,7 +2297,24 @@ if (false && mt5ConnectForm) {
         return false;
       }
 
-      if (json.ok === true && (json.status === 'queued' || json.status === 'pending' || json.status === 'upgrading' || json.accountId)) {
+      if (json.ok === true && json.status === 'connected' && !json.loginVerified) {
+        throw new Error(
+          json.message ||
+            'บัญชีนี้เชื่อมต่ออยู่ที่ PORT อื่นแล้ว — ไม่ส่งคำสั่งเปิด MT5 ซ้ำ (1 Login ต่อ 1 PORT)'
+        );
+      }
+
+      if (
+        json.ok === true &&
+        (json.status === 'queued' ||
+          json.status === 'pending' ||
+          json.status === 'upgrading' ||
+          json.status === 'connecting' ||
+          json.status === 'checking')
+      ) {
+        if (!json.commandId && !json.accountId) {
+          throw new Error(json.message || 'ไม่ได้ส่งคำสั่งไป VPS — กรุณาลองใหม่');
+        }
         if (json.accountId) {
           try {
             localStorage.removeItem(mt5SuccessModalStorageKey(json.accountId));
