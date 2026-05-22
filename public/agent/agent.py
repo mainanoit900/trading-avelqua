@@ -82,13 +82,15 @@ LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "90"))
 JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
-LOCKED_MT5_SERVER = "MohicansMarkets-Live"
+MT5_LIVE_SERVER = "MohicansMarkets-Live"
+MT5_DEMO_SERVER = "MohicansMarkets-Demo"
+LOCKED_MT5_SERVER = MT5_LIVE_SERVER
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v31"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v32"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1938,9 +1940,20 @@ def _journal_only_terminal_startup(text: str, login: str) -> bool:
     return "launched with" in low or "successfully initialized from start config" in low
 
 
+def resolve_mt5_server(payload: Dict[str, Any], login: Optional[str] = None) -> str:
+    """จริง 2·9หลัก → Live, ทดลอง 8·8หลัก → Demo (ตรงกับเว็บ)"""
+    login_s = str(login or payload_get(payload, "mt5Login", "login") or "").strip()
+    server = str(payload_get(payload, "serverName", "server") or "").strip()
+    if server in (MT5_LIVE_SERVER, MT5_DEMO_SERVER):
+        return server
+    if len(login_s) == 8 and login_s.isdigit() and login_s.startswith("8"):
+        return MT5_DEMO_SERVER
+    return MT5_LIVE_SERVER
+
+
 def automate_mt5_open_account_wizard(
     company: str = LOCKED_MT5_COMPANY,
-    server: str = LOCKED_MT5_SERVER,
+    server: str = MT5_LIVE_SERVER,
 ) -> bool:
     """กด wizard Open an Account ให้เลือก Mohicans Markets Ltd + Server MohicansMarkets-Live"""
     company_esc = company.replace("'", "''")
@@ -1991,6 +2004,7 @@ def check_mt5_journal_login_result(
     timeout_sec: int = 60,
     since_ts: float = 0.0,
     progress_callback: Any = None,
+    server: str = MT5_LIVE_SERVER,
 ) -> Tuple[bool, str, str]:
     """
     อ่าน Journal (.log) เท่านั้น — ไม่ถือ process / socket / หน้าต่างเป็นสำเร็จ
@@ -2023,12 +2037,12 @@ def check_mt5_journal_login_result(
         uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         newest = uniq[0]
         chunk = _read_log_tail(newest)
-        outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
+        outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
         if outcome is False:
-            log(f"MT5 JOURNAL FAIL login={login} file={newest.name} server={LOCKED_MT5_SERVER}")
+            log(f"MT5 JOURNAL FAIL login={login} file={newest.name} server={server}")
             return False, JOURNAL_FAIL_MSG, chunk
         if outcome is True:
-            log(f"MT5 JOURNAL OK login={login} file={newest.name}")
+            log(f"MT5 JOURNAL OK login={login} file={newest.name} server={server}")
             return True, JOURNAL_OK_MSG, chunk
 
         time.sleep(JOURNAL_POLL_INTERVAL_SEC)
@@ -2036,7 +2050,7 @@ def check_mt5_journal_login_result(
     uniq = _collect_journal_log_files(port_dir, since_ts)
     if uniq:
         tail = _read_log_tail(uniq[0])
-        late = _journal_outcome_for_login(tail, login, failed_words, LOCKED_MT5_SERVER)
+        late = _journal_outcome_for_login(tail, login, failed_words, server)
         if late is False:
             log(f"MT5 JOURNAL FAIL (late) login={login} file={uniq[0].name}")
             return False, JOURNAL_FAIL_MSG, tail
@@ -2044,7 +2058,9 @@ def check_mt5_journal_login_result(
     return False, JOURNAL_TIMEOUT_MSG, ""
 
 
-def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[Optional[bool], str]:
+def _quick_journal_probe(
+    port_dir: Path, login: str, since_ts: float, server: str = MT5_LIVE_SERVER
+) -> Tuple[Optional[bool], str]:
     """อ่าน journal ครั้งเดียว — True/False/None(ยังไม่รู้)"""
     login = str(login).strip()
     if not login:
@@ -2054,7 +2070,7 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
     if not uniq:
         return None, ""
     chunk = _read_log_tail(uniq[0])
-    outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
+    outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
     if outcome is True:
         return True, chunk
     if outcome is False:
@@ -2072,6 +2088,8 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
+    server = resolve_mt5_server(payload, login)
+    log(f"MT5 LOGIN VERIFY login={login} server={server}")
     wait_cap = max(90, min(int(timeout_sec or 120), 150))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
@@ -2095,7 +2113,7 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
+        j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
         if j_out is False:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
@@ -2122,7 +2140,7 @@ def wait_mt5_login_hybrid(
                 stuck_msg = (
                     "MT5 ค้างหน้า Open Account — ปิด MT5 แล้วเชื่อมต่อใหม่ "
                     "หรือตรวจ Login/รหัสผ่านให้ตรง Server "
-                    f"{LOCKED_MT5_SERVER}"
+                    f"{server}"
                 )
                 cleanup_mt5_after_login_fail(port, payload, port_dir)
                 send_connect_result(
@@ -2166,7 +2184,7 @@ def wait_mt5_login_hybrid(
                     payload,
                     login,
                     str(payload_get(payload, "mt5Password", "password") or ""),
-                    LOCKED_MT5_SERVER,
+                    server,
                 )
             except Exception:
                 pass
@@ -2184,7 +2202,7 @@ def wait_mt5_login_hybrid(
 
         if window_ok_streak >= 2 and j_out is True:
             try:
-                enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
+                enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), server)
             except Exception:
                 pass
             send_connect_result(
@@ -2232,7 +2250,7 @@ def wait_mt5_login_hybrid(
         time.sleep(0.14)
 
     chunk = ""
-    j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
+    j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
     if j_out is True:
         return True, JOURNAL_OK_MSG, j_chunk
     if j_out is False:
@@ -2249,7 +2267,7 @@ def wait_mt5_login_hybrid(
 
     remain = max(8, int(deadline - time.time()))
     extra_ok, extra_msg, extra_chunk = check_mt5_journal_login_result(
-        port_dir, login, timeout_sec=remain, since_ts=journal_since
+        port_dir, login, timeout_sec=remain, since_ts=journal_since, server=server
     )
     if extra_ok:
         return True, extra_msg, extra_chunk
@@ -2257,7 +2275,7 @@ def wait_mt5_login_hybrid(
     journal_files = _collect_journal_log_files(port_dir, journal_since)
     probe_tail = _read_log_tail(journal_files[0]) if journal_files else ""
     late_fail = _journal_outcome_for_login(
-        probe_tail or chunk or extra_chunk, login, _journal_failed_words(), LOCKED_MT5_SERVER
+        probe_tail or chunk or extra_chunk, login, _journal_failed_words(), server
     )
     if late_fail is False:
         cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2273,7 +2291,7 @@ def wait_mt5_login_hybrid(
     if _journal_only_terminal_startup(probe_tail or chunk, login):
         fail_no_broker = (
             "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อโบรกเกอร์ — ตรวจ Login/รหัสผ่าน "
-            f"และ Server {LOCKED_MT5_SERVER}"
+            f"และ Server {server}"
         )
         cleanup_mt5_after_login_fail(port, payload, port_dir)
         send_connect_result(
@@ -2300,7 +2318,7 @@ def wait_mt5_login_hybrid(
                 payload,
                 login,
                 str(payload_get(payload, "mt5Password", "password") or ""),
-                LOCKED_MT5_SERVER,
+                server,
             )
         except Exception:
             pass
@@ -2327,7 +2345,7 @@ def wait_mt5_login_hybrid(
                     payload,
                     login,
                     str(payload_get(payload, "mt5Password", "password") or ""),
-                    LOCKED_MT5_SERVER,
+                    server,
                 )
             except Exception:
                 pass
@@ -2346,7 +2364,7 @@ def wait_mt5_login_hybrid(
     fail_hint = ""
     if _journal_only_terminal_startup(tail_evidence, login):
         fail_hint = (
-            f"MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อโบรกเกอร์ — ตรวจ Login/รหัสผ่าน และ Server {LOCKED_MT5_SERVER}"
+            f"MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อโบรกเกอร์ — ตรวจ Login/รหัสผ่าน และ Server {server}"
         )
     send_connect_result(
         payload,
@@ -2369,7 +2387,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
-    server = LOCKED_MT5_SERVER
+    server = resolve_mt5_server(payload, login)
+    log(f"START MT5 login={login} server={server}")
     bot = payload_get(payload, "botCode", default="LOGIN_ONLY")
     if not port:
         raise RuntimeError("payload.port is required")
@@ -2393,7 +2412,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
     if ok_fast and mt5_running_for_port_dir(port_dir):
-        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180)
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180, server)
         if j_fast is False:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
@@ -2558,11 +2577,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
     time.sleep(2.5)
-    automate_mt5_open_account_wizard()
+    automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
     time.sleep(1.0)
 
     journal_timeout = journal_timeout_sec(payload)
-    log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
+    log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} SERVER={server} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
         port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
@@ -2600,7 +2619,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     journal_final = journal_chunk or ""
     if "window verified" not in (msg or "").lower():
-        j_final, j_chunk_final = _quick_journal_probe(port_dir, login, journal_since)
+        j_final, j_chunk_final = _quick_journal_probe(port_dir, login, journal_since, server)
         if j_final is False:
             fail_final = JOURNAL_FAIL_MSG
             try:

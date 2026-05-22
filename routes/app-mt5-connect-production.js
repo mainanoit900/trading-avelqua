@@ -22,7 +22,7 @@ const {
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const {
-  normalizeLockedServer,
+  resolveServerForLogin,
   MT5_LOCKED_SERVER,
   MT5_SUCCESS_MSG,
   MT5_FAIL_USER_MSG,
@@ -796,7 +796,7 @@ async function handleMt5ConnectProduction(req, res) {
     }
     const mt5Login = fmt.normalized;
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
-    const serverName = normalizeLockedServer(clean(req.body.server_name || req.body.serverName));
+    const serverName = resolveServerForLogin(mt5Login);
 
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 

@@ -508,7 +508,12 @@ async function findFreePortCore(db) {
   return { success: false };
 }
 
-const FIXED_SERVER = 'MohicansMarkets-Live';
+const {
+  MT5_LIVE_SERVER,
+  MT5_DEMO_SERVER,
+  resolveServerForLogin
+} = require('../lib/mt5Server');
+const FIXED_SERVER = MT5_LIVE_SERVER;
 const FIXED_BROKER = 'mhmarkets';
 
 function num(v, d = 0) {
@@ -2094,6 +2099,7 @@ router.get('/mt5', async (req, res) => {
     ...flashData,
     error: flashData.error || '',
     fixedServer: FIXED_SERVER,
+    mt5DemoServer: MT5_DEMO_SERVER,
     fixedBroker: FIXED_BROKER,
     ...summary,
     packageDaysLeft,
@@ -2166,10 +2172,11 @@ console.log('[MT5 CONNECT START]', {
     if (!mt5Login) throw new Error('กรุณากรอกเลข Login MT5');
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
-    await expireStaleConnectingForLogin(userId, mt5Login, FIXED_SERVER);
+    const connectServer = resolveServerForLogin(mt5Login);
+    await expireStaleConnectingForLogin(userId, mt5Login, connectServer);
 
     const { findMt5LoginInUse, mt5LoginInUseMessage } = require('../lib/mt5LoginDuplicate');
-    const dupLogin = await findMt5LoginInUse(mt5Login, FIXED_SERVER, userId);
+    const dupLogin = await findMt5LoginInUse(mt5Login, connectServer, userId);
     if (dupLogin) {
       throw new Error(mt5LoginInUseMessage(dupLogin));
     }
@@ -2291,7 +2298,7 @@ console.log('[MT5 CONNECT START]', {
       portSlot,
       mt5Login,
       mt5Password,
-      FIXED_SERVER,
+      connectServer,
       `PORT ${portSlot}`,
       allocPortNo
     ]);
@@ -2312,7 +2319,7 @@ console.log('[MT5 CONNECT START]', {
       portSlot,
       mt5Login,
       mt5Password,
-      serverName: FIXED_SERVER
+      serverName: connectServer
     });
     const payloadJson = JSON.stringify(loginPayload);
 
@@ -2358,7 +2365,7 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
     return res.json({
       ok: true,
       status: 'queued',
-      message: `ส่งคำสั่งเปิด MT5 แล้ว — ${pickLabel} (${FIXED_SERVER}) กำลังล็อกอิน...`,
+      message: `ส่งคำสั่งเปิด MT5 แล้ว — ${pickLabel} (${connectServer}) กำลังล็อกอิน...`,
       accountId,
       commandId: cmdId || null,
       vpsName: reservedPort.node_name || '',
