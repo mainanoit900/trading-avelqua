@@ -444,9 +444,15 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     const formErr = mt5ValidateLoginForm();
     if (formErr) {
+      const isUserWrong = /^User ผิด/i.test(formErr);
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
-        formErr
+        isUserWrong ? 'User ผิด' : formErr,
+        {
+          title: isUserWrong ? 'User ผิด' : 'เชื่อมต่อไม่สำเร็จ',
+          dedupeKey: 'login-submit:' + formErr,
+          forceShow: true
+        }
       );
       return false;
     }
@@ -544,10 +550,13 @@ document.addEventListener('DOMContentLoaded', function () {
     const err = urlParams.get('connect_error');
     if (err) {
       try {
+        const errMsg = decodeURIComponent(err.replace(/\+/g, ' '));
+        const isUserWrong = /^User ผิด/i.test(errMsg);
         if (typeof window.showMt5ConnectModal === 'function') {
-          window.showMt5ConnectModal('error', decodeURIComponent(err.replace(/\+/g, ' ')), {
+          window.showMt5ConnectModal('error', isUserWrong ? 'User ผิด — บัญชีจริงขึ้นต้น 2 (9 หลัก) · ทดลองขึ้นต้น 8 (8 หลัก)' : errMsg, {
+            title: isUserWrong ? 'User ผิด' : 'เชื่อมต่อไม่สำเร็จ',
             forceShow: true,
-            dedupeKey: 'url-connect-error'
+            dedupeKey: 'url-connect-error:' + errMsg.slice(0, 40)
           });
         } else {
           alert(decodeURIComponent(err.replace(/\+/g, ' ')));
@@ -1096,7 +1105,6 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       return 'PORT ' + slot + ' กำลังเชื่อมต่ออยู่ — รอให้เสร็จหรือเลือก PORT ว่างอื่น';
     }
-    const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
     const dupOther = mt5FindLoginOnOtherPort(login, slot);
     if (dupOther) return dupOther;
     return '';
@@ -1162,18 +1170,29 @@ document.addEventListener('DOMContentLoaded', function () {
           ? 'บัญชีจริง (9 หลัก) — รหัสผ่านตรวจจาก Journal MT5'
           : 'บัญชีทดลอง (8 หลัก) — รหัสผ่านตรวจจาก Journal MT5';
     }
-    el.addEventListener('input', refreshLoginHint);
-    el.addEventListener('blur', function () {
-      refreshLoginHint();
-      const login = String(el.value || '').trim().replace(/\s/g, '');
-      if (login.length >= 8 && (!/^\d+$/.test(login) || !mt5ClassifyLogin(login).ok)) {
+    function maybePopupUserWrong(login) {
+      const s = String(login || '').trim().replace(/\s/g, '');
+      if (!s || s.length < 8) return;
+      if (!/^\d+$/.test(s) || !mt5ClassifyLogin(s).ok) {
         if (typeof window.showMt5ConnectModal === 'function') {
-          window.showMt5ConnectModal('error', 'User ผิด', {
-            dedupeKey: 'login-fmt:' + login,
+          window.showMt5ConnectModal('error', 'User ผิด — บัญชีจริงขึ้นต้น 2 (9 หลัก) · ทดลองขึ้นต้น 8 (8 หลัก)', {
+            title: 'User ผิด',
+            dedupeKey: 'login-fmt:' + s,
             forceShow: true
           });
+        } else {
+          alert('User ผิด');
         }
       }
+    }
+    el.addEventListener('input', function () {
+      refreshLoginHint();
+      const login = String(el.value || '').trim().replace(/\s/g, '');
+      if (login.length === 8 || login.length === 9) maybePopupUserWrong(login);
+    });
+    el.addEventListener('blur', function () {
+      refreshLoginHint();
+      maybePopupUserWrong(el.value);
     });
     refreshLoginHint();
   })();
