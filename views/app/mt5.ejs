@@ -117,7 +117,7 @@ document.addEventListener('DOMContentLoaded', function () {
     <div class="mt5-card">
       <div class="mt5-card-head">
         <h2>1) PORT แพ็กเกจ</h2>
-        <span>ช่องเปิด BOT ตามแพ็กเกจ (<%= totalPorts %> ช่อง) · 1 ช่อง = 1 Login · ไม่ซ้ำข้ามช่อง</span>
+        <span>ช่องเปิด BOT (<%= totalPorts %> ช่อง) · <b>1 PORT = 1 Login = 1 FolderPort</b> — ห้ามซ้ำ ห้ามข้ามช่อง</span>
       </div>
       <div class="port-list" id="mt5PortList">
         <% if (totalPorts <= 0) { %>
@@ -185,7 +185,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       <div class="mt5-login-port-pill" id="mt5LoginPortPill">
         ดู/จัดการ: <b id="mt5LoginPortLabel">คลิก PORT ด้านบน</b>
-        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">ไม่เลือก PORT = ระบบหา <b>PORT แพ็กเกจว่าง</b> อัตโนมัติ แล้วเปิด <b>FolderPort ว่าง</b> บน VPS (/admin/vps/ports) — แต่ละ PORT ใช้ Login คนละบัญชี</small>
+        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">คลิก <b>PORT</b> ก่อนเชื่อมต่อ — ระบบเปิดเฉพาะ <b>FolderPort ของ PORT นั้น</b> (เช่น PORT 2 → P02) · Login ซ้ำข้ามช่องจะถูกปฏิเสธ</small>
       </div>
 
       <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="event.preventDefault(); window.mt5PrepareConnectSubmit(event); return false;">
@@ -226,9 +226,6 @@ document.addEventListener('DOMContentLoaded', function () {
         <button type="submit" id="mt5ConnectBtn" class="mt5-btn primary" <%= packageExpired ? 'disabled' : '' %>>
   <%= packageExpired ? 'แพ็คเกจหมดอายุ' : 'เชื่อมต่อ' %>
 </button>
-        <button type="button" id="mt5ConnectAllBtn" class="mt5-btn warning" style="margin-top:10px" <%= packageExpired ? 'disabled' : '' %> title="Login ทุกช่องแพ็กเกจที่มีบัญชีและรหัสผ่านบันทึกไว้แล้ว">
-          เชื่อมต่อทุก PORT (<%= totalPorts %> ช่อง)
-        </button>
         <button type="button" id="mt5CancelConnectBtn" class="mt5-btn" style="margin-top:10px;display:none" title="หยุดรอ Login และปล่อย PORT ว่าง">
           ยกเลิก (หยุดรอ Login)
         </button>
@@ -478,16 +475,19 @@ document.addEventListener('DOMContentLoaded', function () {
         );
       });
       if (owner && String(owner.slot) !== String(connectSlot)) {
+        const fp = 'FolderPort P' + String(owner.slot).padStart(2, '0');
         (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
           'error',
-          'Login ' +
+          'User นี้ (' +
             loginVal +
-            ' อยู่ที่ PORT ' +
+            ') ใช้งานอยู่ที่ PORT ' +
             owner.slot +
+            ' · ' +
+            fp +
             ' แล้ว — คลิก PORT ' +
             owner.slot +
-            ' (ห้ามใช้เลขเดียวกันที่ PORT อื่น)',
-          { forceShow: true }
+            ' เท่านั้น (1 PORT = 1 Login = 1 FolderPort ห้ามข้ามช่อง)',
+          { forceShow: true, title: 'User นี้ใช้งานอยู่' }
         );
         return false;
       }
@@ -671,61 +671,6 @@ document.addEventListener('DOMContentLoaded', function () {
       return false;
     }
   };
-
-  (function mt5ConnectAllPortsBtn() {
-    const allBtn = document.getElementById('mt5ConnectAllBtn');
-    if (!allBtn) return;
-    allBtn.addEventListener('click', async function () {
-      if (allBtn.disabled) return;
-      const pop =
-        typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
-      if (
-        !confirm(
-          'เชื่อมต่อทุก PORT แพ็กเกจที่มีบัญชีและรหัสผ่านบันทึกไว้แล้ว?\n\nAgent เปิดทีละช่องบน VPS (ช่องละประมาณ 30–90 วิ)'
-        )
-      ) {
-        return;
-      }
-      allBtn.disabled = true;
-      const prev = allBtn.textContent;
-      allBtn.textContent = 'กำลังส่งคำสั่งทุก PORT...';
-      try {
-        const res = await fetch('/app/mt5/connect-all-ports?_=' + Date.now(), {
-          method: 'POST',
-          headers: {
-            Accept: 'application/json',
-            'X-Requested-With': 'XMLHttpRequest'
-          },
-          credentials: 'same-origin'
-        });
-        const json = await res.json().catch(function () {
-          return { ok: false, message: 'ตอบกลับไม่ถูกต้อง' };
-        });
-        if (!json.ok) {
-          pop('error', json.message || 'ไม่มีช่องที่ส่งคำสั่งได้');
-          return;
-        }
-        pop('success', json.message || 'ส่งคำสั่งแล้ว');
-        if (typeof refreshMt5PortCards === 'function') {
-          refreshMt5PortCards().catch(function () {});
-        }
-        const first = (json.results || []).find(function (r) {
-          return r.ok && r.accountId;
-        });
-        if (first && typeof window.setMt5PollAccountId === 'function') {
-          window.setMt5PollAccountId(first.accountId);
-        }
-        if (first && typeof window.startMt5ConnectPolling === 'function') {
-          window.startMt5ConnectPolling();
-        }
-      } catch (e) {
-        pop('error', (e && e.message) || 'เชื่อมต่อทุก PORT ไม่สำเร็จ');
-      } finally {
-        allBtn.disabled = false;
-        allBtn.textContent = prev;
-      }
-    });
-  })();
 
   (function mt5HandleConnectRedirect() {
     const err = urlParams.get('connect_error');
@@ -1334,19 +1279,30 @@ document.addEventListener('DOMContentLoaded', function () {
       const otherSlot = c.getAttribute('data-port-slot');
       const otherLogin = String(c.getAttribute('data-mt5-login') || '').trim();
       if (!otherLogin || otherLogin !== loginStr || otherSlot === slotStr) continue;
+      const fp = 'FolderPort P' + String(otherSlot).padStart(2, '0');
       if (c.classList.contains('connected')) {
         return (
-          'Login ' +
+          'User นี้ (' +
           loginStr +
-          ' อยู่ที่ PORT ' +
+          ') ใช้งานอยู่ที่ PORT ' +
           otherSlot +
+          ' · ' +
+          fp +
           ' แล้ว — คลิก PORT ' +
           otherSlot +
-          ' ไปขั้นตอน 3 (ห้ามใช้เลขเดียวกันข้าม PORT)'
+          ' เท่านั้น (1 PORT = 1 Login = 1 FolderPort ห้ามข้ามช่อง)'
         );
       }
       if (c.classList.contains('checking')) {
-        return 'Login ' + loginStr + ' กำลังเชื่อมต่อที่ PORT ' + otherSlot + ' อยู่ — รอให้เสร็จหรือใช้เลขอื่น';
+        return (
+          'User นี้ (' +
+          loginStr +
+          ') กำลังเชื่อมต่อที่ PORT ' +
+          otherSlot +
+          ' · ' +
+          fp +
+          ' — รอให้เสร็จหรือใช้เลข Login อื่น'
+        );
       }
     }
     return '';
