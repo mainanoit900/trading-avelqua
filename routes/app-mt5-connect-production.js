@@ -189,6 +189,7 @@ async function getUserPackagePortLimit(userId) {
     SELECT
       us.id AS subscription_id,
       us.package_id,
+      us.start_at,
       COALESCE(
         NULLIF(us.ports_max, 0),
         NULLIF(us.ports_min, 0),
@@ -213,7 +214,11 @@ async function getUserPackagePortLimit(userId) {
   if (!row) return 0;
   const group = String(row.package_group || '').toUpperCase();
   const cap = packagePortCapForGroup(group, row.max_ports);
-  const groupUpper = group;
+  const subId = Number(row.subscription_id || 0) || null;
+  const periodStart = row.start_at ? new Date(row.start_at) : null;
+  const periodStartIso =
+    periodStart && !Number.isNaN(periodStart.getTime()) ? periodStart.toISOString() : null;
+
   const extras = await query(
     `
     SELECT qty, port_type, package_group,
@@ -222,15 +227,21 @@ async function getUserPackagePortLimit(userId) {
     WHERE user_id=$1
       AND is_active=TRUE
       AND (
-        (port_type='temporary' AND (expires_at IS NULL OR expires_at > NOW()))
-        OR (port_type='permanent' AND (
-          $2 = ''
-          OR UPPER(COALESCE(package_group,'')) = $2
-          OR TRIM(COALESCE(package_group,'')) = ''
-        ))
+        (
+          LOWER(TRIM(COALESCE(port_type, ''))) = 'temporary'
+          AND (expires_at IS NULL OR expires_at > NOW())
+          AND $3::bigint IS NOT NULL
+          AND subscription_id = $3
+          AND ($4::timestamptz IS NULL OR created_at >= $4::timestamptz)
+        )
+        OR (
+          LOWER(TRIM(COALESCE(port_type, ''))) = 'permanent'
+          AND $2 <> ''
+          AND UPPER(TRIM(COALESCE(package_group, ''))) = $2
+        )
       )
   `,
-    [userId, groupUpper]
+    [userId, group, subId, periodStartIso]
   ).catch(() => ({ rows: [] }));
 
   return computePortEntitlement(cap, extras.rows || [], group).totalPorts;
@@ -853,9 +864,15 @@ async function handleMt5ConnectProduction(req, res) {
         mt5Login
       });
     } else {
-      throw new Error(
-        `กรุณาเลือก PORT 1–${totalPorts} ก่อนกดเชื่อมต่อ (แต่ละ PORT ใช้ Login คนละบัญชี ไม่ซ้ำกัน)`
-      );
+      portSlot = await getNextUserSlot(userId, totalPorts);
+      if (!portSlot) {
+        throw new Error(
+          `ไม่มี PORT ว่างในแพ็กเกจ (สูงสุด ${totalPorts} ช่อง) — ลบพอร์ตที่ไม่ใช้หรือเพิ่มพอร์ตก่อน`
+        );
+      }
+      const reserve = await reserveBestPort(userId, portSlot);
+      if (!reserve.ok) throw new Error(reserve.message);
+      reservedPort = reserve.port;
     }
 
     const otherOnFolder = await findFolderPortUsedByOtherUser(
@@ -1741,10 +1758,12 @@ async function handleMt5ConnectFailCleanup(req, res) {
     }
 
     const rawMsg = String(req.body?.message || '').trim();
+    const cancelled = /ยกเลิก|user_cancel_connect/i.test(rawMsg);
     const authFail =
-      req.body.authFail === true ||
-      req.body.authFail === 'true' ||
-      /ไม่ถูกต้อง|User หรือ|authorization failed|invalid account/i.test(rawMsg);
+      !cancelled &&
+      (req.body.authFail === true ||
+        req.body.authFail === 'true' ||
+        req.body.authFail !== false && req.body.authFail !== 'false');
 
     const out = authFail
       ? await releaseUserPackagePortSlot(userId, portSlot, {

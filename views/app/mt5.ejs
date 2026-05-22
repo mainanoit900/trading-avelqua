@@ -171,7 +171,8 @@ document.addEventListener('DOMContentLoaded', function () {
           </div>
         </div>
         <div class="mt5-buy-note">
-          ซื้อแพ็กเกจได้ <%= includedPorts || 1 %> PORT · ชั่วคราวเพิ่มได้สูงสุด <%= maxExtraPurchases || packageMaxPorts %> · ถาวรผูกระดับ <b><%= (pkg.package_group || 'BASIC') %></b>
+          แพ็กเกจละ <b><%= includedPorts || 1 %> PORT</b> · ซื้อเพิ่มชั่วคราวได้สูงสุด <b><%= maxExtraPurchases || 0 %></b> ช่อง (รวมไม่เกิน <%= packageMaxPorts || 0 %> ตามระดับ) ·
+          <b>ถาวร</b> ผูกระดับ <b><%= (pkg.package_group || 'BASIC') %></b> — ย้ายแพ็กเกจต้องซื้อถาวรใหม่ (ยกเว้นที่ซื้อถาวรระดับนี้ไว้แล้ว)
         </div>
       </div>
     </div>
@@ -184,7 +185,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       <div class="mt5-login-port-pill" id="mt5LoginPortPill">
         ดู/จัดการ: <b id="mt5LoginPortLabel">คลิก PORT ด้านบน</b>
-        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">เลือก <b>PORT แพ็กเกจว่าง</b> → ระบบเปิด <b>FolderPort</b> คู่กันบน VPS (PORT 2 = FolderPort P02)</small>
+        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">ไม่เลือก PORT = ระบบหา <b>PORT แพ็กเกจว่าง</b> อัตโนมัติ แล้วเปิด <b>FolderPort ว่าง</b> บน VPS (/admin/vps/ports) — แต่ละ PORT ใช้ Login คนละบัญชี</small>
       </div>
 
       <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="return window.mt5PrepareConnectSubmit(event)">
@@ -206,7 +207,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         <label>MT5 Login</label>
         <input name="mt5_login" id="mt5LoginInput" placeholder="จริง: 201200244 · ทดลอง: 89610453" inputmode="numeric" pattern="[0-9]*" maxlength="9" autocomplete="username" required>
-        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">บัญชีจริง: ขึ้นต้น <b>2</b> · 9 หลัก · ทดลอง: ขึ้นต้น <b>8</b> · 8 หลัก — นอกนี้ถือว่า Login ผิด (ไม่เปิด MT5)</small>
+        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">เว็บตรวจรูปแบบเร็ว (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — รหัสผ่านยืนยันจาก MT5 · ไม่ผ่าน = ปิด MT5 + ปล่อย PORT ว่าง</small>
 
         <label>Password</label>
         <input name="mt5_password" id="mt5PasswordInput" type="password" placeholder="รหัสผ่าน MT5" autocomplete="current-password" required>
@@ -1052,7 +1053,7 @@ document.addEventListener('DOMContentLoaded', function () {
       (document.getElementById('mt5SelectedPortSlot') || {}).value ||
       '';
     const msg = String(failMessage || '').trim();
-    const authFail = !/ทันเวลา|timeout|ไม่สามารถยืนยัน/i.test(msg);
+    const authFail = !/ยกเลิก|cancel/i.test(msg);
     const body = {
       accountId: accountInfo && accountInfo.id ? Number(accountInfo.id) : 0,
       portSlot: slot ? Number(slot) : 0,
@@ -1151,6 +1152,10 @@ document.addEventListener('DOMContentLoaded', function () {
       const bal = accountInfo.last_balance != null ? Number(accountInfo.last_balance) : null;
       if (eq > 0 && typeof applyEquityUiState === 'function') {
         applyEquityUiState(eq, bal > 0 ? bal : null);
+      }
+      window.__mt5EquityWaitOnce = true;
+      if (typeof pollAccountEquity === 'function') {
+        pollAccountEquity();
       }
     }
     refreshMt5PortCards()
@@ -3129,8 +3134,8 @@ function deletePortCountdown(e, form) {
     updateMt5Stats(bal, eq, profitVal);
     if (capitalHint) {
       capitalHint.textContent = eq
-        ? ('ทุนจาก MT5: ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก ~20 วิ')
-        : 'เลือก PORT — ระบบอัปเดตทุนจาก MT5 ทุก ~20 วิ (ขั้นต่ำ $100)';
+        ? ('ทุนจาก MT5: ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก 20 วิ')
+        : 'เลือก PORT — อัปเดตทุนจาก MT5 ทุก 20 วิ (ขั้นต่ำ $100)';
     }
     if (eq && capitalInput && (!capitalInput.dataset.userCapitalEdited || capitalInput.dataset.userCapitalEdited !== '1')) {
       capitalInput.value = eq >= 100 ? eq : 100;
@@ -3403,7 +3408,7 @@ function deletePortCountdown(e, form) {
     opt.textContent = 'PORT ' + portSlot + ' / Login ' + login + suffix;
   }
 
-  const MT5_EQUITY_POLL_MS = 30 * 60 * 1000;
+  const MT5_EQUITY_POLL_MS = 20 * 1000;
   let mt5EquityVpsTick = 0;
   let mt5EquityVpsBusy = false;
 
