@@ -1140,11 +1140,11 @@ async function handleMt5ConnectProduction(req, res) {
         WHERE user_id=$1
           AND mt5_login=$6
           AND COALESCE(server_name, mt5_server, '')=$8
-          AND (
-            port_slot IS NULL
-            OR port_slot=$4
+          AND NOT (
+            LOWER(TRIM(COALESCE(status, ''))) = 'connected'
+            AND port_slot IS NOT NULL
+            AND port_slot <> $4
           )
-          AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('connected', 'deleted', 'expired')
         RETURNING id
       `,
         [
@@ -1201,8 +1201,13 @@ async function handleMt5ConnectProduction(req, res) {
           UPDATE vps_system.mt5_accounts
           SET ${accountSetSql}
           WHERE user_id=$1
-            AND port_slot=$4
-            AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
+            AND mt5_login=$6
+            AND COALESCE(server_name, mt5_server, '')=$8
+            AND NOT (
+              LOWER(TRIM(COALESCE(status, ''))) = 'connected'
+              AND port_slot IS NOT NULL
+              AND port_slot <> $4
+            )
           RETURNING id
         `,
           [
@@ -1220,7 +1225,13 @@ async function handleMt5ConnectProduction(req, res) {
       });
     }
 
-    const accountId = acc.rows[0].id;
+    if (!acc.rows?.[0]?.id) {
+      throw new Error(
+        'ไม่สามารถเตรียมบัญชี MT5 สำหรับ PORT นี้ได้ — กรุณา Ctrl+F5 แล้วลองใหม่'
+      );
+    }
+
+    const accountId = Number(acc.rows[0].id);
     await cancelJournalVerifyForAccount(reservedPort.vps_id, accountId).catch(() => {});
     await cancelJournalVerifyWrongPort(reservedPort.vps_id, accountId, allocPortNo).catch(() => {});
     connectStatusSyncAt.delete(accountId);
