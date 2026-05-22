@@ -567,10 +567,10 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (typeof window.mt5UpdateConnectProgress === 'function') {
         window.mt5UpdateConnectProgress({
-          connectStep: '① ส่งคำสั่งแล้ว — ② รอ Agent รับงาน',
+          connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
           commandStatus: 'pending',
-          progressStep: 1,
-          progressStepLabel: 'Agent รับงาน',
+          progressStep: 0,
+          progressStepLabel: 'ส่งคำสั่ง',
           progressTotal: 4,
           elapsedSec: 0,
           account: { id: accId, status: 'connecting' }
@@ -1831,12 +1831,16 @@ document.addEventListener('DOMContentLoaded', function () {
     if (stuckPreview && !mt5PollAccountId) stuckPreview.style.display = 'none';
   }
 
-  if (sessionStorage.getItem('mt5ConnectInFlight') === '1' && !mt5PollAccountId && !serverPendingAccountId) {
+  if (
+    sessionStorage.getItem('mt5ConnectInFlight') === '1' &&
+    !mt5PollAccountId &&
+    !serverPendingAccountId &&
+    urlParams.get('connect_queued') !== '1' &&
+    urlParams.get('connect_account') === null
+  ) {
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-    const stuckPreview = document.getElementById('mt5LoginPreview');
-    if (stuckPreview) stuckPreview.style.display = 'none';
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
       window.mt5SetCancelConnectVisible(false);
     }
