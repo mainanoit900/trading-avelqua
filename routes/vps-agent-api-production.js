@@ -681,7 +681,9 @@ router.get('/queue', async (req, res) => {
 
     if (shouldRunQueueMaintenance(node.id)) {
       const { pruneMetricsCommandBacklog } = require('../lib/agentDeploy');
+      const { expireStuckProcessingCommands } = require('../lib/agentDeploy');
       await expireStuckMaintenanceCommands(node.id).catch(() => {});
+      await expireStuckProcessingCommands(node.id, 90).catch(() => ({}));
       await expireStuckLoginCommands(node.id, 150).catch(() => ({ expired: 0 }));
       const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
       await expireStalePendingAgentCommands(node.id, 900).catch(() => ({}));
@@ -742,13 +744,30 @@ router.get('/queue', async (req, res) => {
 
       await query(`
         UPDATE vps_system.vps_agent_commands
-        SET status='pending', locked_at=NULL, started_at=NULL, updated_at=NOW()
+        SET status = CASE
+              WHEN command_type IN ('stop_mt5_bot', 'run_mt5_bot', 'run_mt5', 'run_bot', 'stop_mt5', 'force_stop_mt5')
+                THEN 'failed'
+              ELSE 'pending'
+            END,
+            error = CASE
+              WHEN command_type IN ('stop_mt5_bot', 'run_mt5_bot', 'run_mt5', 'run_bot', 'stop_mt5', 'force_stop_mt5')
+                THEN COALESCE(error, 'auto-failed: null port_id stuck')
+              ELSE error
+            END,
+            finished_at = CASE
+              WHEN command_type IN ('stop_mt5_bot', 'run_mt5_bot', 'run_mt5', 'run_bot', 'stop_mt5', 'force_stop_mt5')
+                THEN NOW()
+              ELSE finished_at
+            END,
+            locked_at=NULL,
+            started_at=NULL,
+            updated_at=NOW()
         WHERE status IN ('processing', 'picked')
           AND (node_id=$1 OR vps_id=$1)
           AND port_id IS NULL
           AND finished_at IS NULL
           AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
-              < NOW() - INTERVAL '5 minutes'
+              < NOW() - INTERVAL '2 minutes'
       `, [node.id]).catch(() => {});
     }
 

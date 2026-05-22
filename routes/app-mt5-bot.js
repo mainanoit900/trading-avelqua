@@ -30,7 +30,11 @@ function getUser(req) {
   return req.user || req.session?.user || null;
 }
 const { query, getClient, repairVpsAgentCommandSequences } = require('../config/database');
-const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
+const {
+  insertPendingAgentCommand,
+  cancelAgentCommandsForAccount
+} = require('../lib/vpsAgentCommandQueue');
+const { cancelPendingEquitySnapshots } = require('../lib/mt5EquitySync');
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
 const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
 const {
@@ -1889,6 +1893,20 @@ router.get('/mt5', async (req, res) => {
       AND updated_at < NOW() - INTERVAL '5 minutes'
   `, [userId]).catch(() => {});
 
+  await query(
+    `
+    UPDATE vps_system.bot_instances bi
+    SET status='stopped', ea_status='stopped', stopped_at=NOW(), updated_at=NOW()
+    FROM vps_system.mt5_accounts ma
+    WHERE bi.mt5_account_id = ma.id
+      AND bi.user_id = $1
+      AND ma.user_id = $1
+      AND bi.status IN ('running','pending','starting','restarting')
+      AND LOWER(TRIM(COALESCE(ma.status, ''))) IN ('deleted', 'expired')
+  `,
+    [userId]
+  ).catch(() => {});
+
   const summary = await getPortSummaryReadOnly(userId);
 
   const accounts = await safeQuery(`
@@ -2530,16 +2548,29 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       num(oldPort.port_slot);
     const folderPath = oldPort.folder_path || null;
 
+    await query(
+      `
+      UPDATE vps_system.bot_instances
+      SET status='stopped', ea_status='stopped', stopped_at=NOW(), updated_at=NOW()
+      WHERE mt5_account_id=$1
+        AND user_id=$2
+        AND status IN ('running','pending','starting','restarting')
+    `,
+      [id, userId]
+    ).catch(() => {});
+
+    await cancelAgentCommandsForAccount(id, stopNodeId).catch(() => 0);
+    if (stopNodeId) {
+      await cancelPendingEquitySnapshots(stopNodeId, { accountId: id }).catch(() => 0);
+    }
+
     // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
     if (stopNodeId && stopPortNo) {
-      await query(`
-        INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, port_id, command_type, payload, status, created_at)
-        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
-      `, [
-        stopNodeId,
-        oldPort.port_id || null,
-        JSON.stringify({
+      await insertPendingAgentCommand({
+        vpsId: stopNodeId,
+        portId: oldPort.port_id || null,
+        commandType: 'stop_mt5',
+        payload: {
           port: stopPortNo,
           portSlot: oldPort.port_slot,
           assignedPortNo: oldPort.assigned_port_no,
@@ -2547,8 +2578,8 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
           folder_path: folderPath,
           vpsFolderPath: folderPath,
           reason: 'user_delete_port'
-        })
-      ]).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
+        }
+      }).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
       if (oldPort.port_id) {
         await query(`
           UPDATE vps_system.vps_ports

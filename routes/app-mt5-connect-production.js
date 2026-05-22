@@ -49,7 +49,12 @@ const {
   MT5_LOGIN_TIMEOUT_MSG
 } = require('../lib/mt5Server');
 const { resolveLoginFailUserMessage } = require('../lib/mt5JournalVerify');
-const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
+const {
+  expireStuckMaintenanceCommands,
+  deferMaintenanceForLogin,
+  expireStuckProcessingCommands
+} = require('../lib/agentDeploy');
+const { cancelPendingEquitySnapshots } = require('../lib/mt5EquitySync');
 const {
   reserveAdminPortForLogin,
   buildMt5LoginPayload,
@@ -1190,7 +1195,9 @@ async function handleMt5ConnectProduction(req, res) {
     await cancelPendingStopsBeforeLogin(reservedPort.vps_id, portSlot, {
       cancelAllPending: false
     }).catch(() => ({ cancelled: 0 }));
+    await cancelPendingEquitySnapshots(reservedPort.vps_id).catch(() => 0);
     await expireStalePendingAgentCommands(reservedPort.vps_id, 90).catch(() => ({}));
+    await expireStuckProcessingCommands(reservedPort.vps_id, 60).catch(() => ({}));
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
     await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
 
