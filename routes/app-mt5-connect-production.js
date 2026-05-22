@@ -32,6 +32,7 @@ const {
   forceStopPackagePortSlot,
   releaseFolderForLoginRetry,
   cancelJournalVerifyForAccount,
+  cancelPendingLoginForAccount,
   cancelJournalVerifyWrongPort,
   queueJournalReadVerify
 } = require('../lib/mt5LoginCommandVerify');
@@ -1621,6 +1622,74 @@ async function handleMt5ConnectStatusProduction(req, res) {
   }
 }
 
+async function handleMt5CancelConnect(req, res) {
+  try {
+    const userId = Number(req.user?.id || 0);
+    if (!userId) return res.status(401).json({ ok: false, message: 'กรุณาเข้าสู่ระบบใหม่' });
+
+    let portSlot = Number(req.body?.portSlot || req.body?.port_slot || 0);
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0);
+
+    if (!portSlot && accountId) {
+      const slotRow = await query(
+        `
+        SELECT COALESCE(port_slot, assigned_port_no, windows_port_no, 0) AS slot
+        FROM vps_system.mt5_accounts
+        WHERE id=$1 AND user_id=$2
+        LIMIT 1
+      `,
+        [accountId, userId]
+      ).catch(() => ({ rows: [] }));
+      portSlot = Number(slotRow.rows?.[0]?.slot || 0);
+    }
+
+    if (!portSlot) {
+      return res.json({ ok: false, message: 'กรุณาเลือก PORT ก่อน' });
+    }
+
+    const accRows = await query(
+      `
+      SELECT a.id, a.port_id, a.vps_id, a.mt5_login, LOWER(TRIM(COALESCE(a.status, ''))) AS st
+      FROM vps_system.mt5_accounts a
+      WHERE a.user_id=$1
+        AND LOWER(TRIM(COALESCE(a.status, ''))) NOT IN ('deleted', 'expired')
+        AND (
+          a.port_slot = $2
+          OR a.assigned_port_no = $2
+          OR a.windows_port_no = $2
+          OR ($3::bigint > 0 AND a.id = $3)
+        )
+      ORDER BY a.updated_at DESC
+      LIMIT 8
+    `,
+      [userId, portSlot, accountId || 0]
+    ).catch(() => ({ rows: [] }));
+
+    for (const row of accRows.rows || []) {
+      const st = String(row.st || '');
+      if (st === 'connected') continue;
+      const aid = Number(row.id || 0);
+      const vid = Number(row.vps_id || 0);
+      if (!aid) continue;
+      await cancelJournalVerifyForAccount(vid, aid).catch(() => {});
+      await cancelPendingLoginForAccount(aid, vid).catch(() => {});
+      await cancelPendingLoginCommands({
+        accountId: aid,
+        portId: Number(row.port_id || 0) || null,
+        mt5Login: String(row.mt5_login || '').trim() || null
+      });
+    }
+
+    const out = await releaseFolderForLoginRetry(userId, portSlot, {
+      message: 'ยกเลิกแล้ว — PORT ว่าง กดเชื่อมต่อใหม่ได้',
+      reason: 'user_cancel_connect'
+    });
+    return res.json({ ok: true, cancelled: true, portSlot, ...out });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+}
+
 async function handleMt5ForceStopPort(req, res) {
   try {
     const userId = Number(req.user?.id || 0);
@@ -1691,6 +1760,7 @@ async function handleMt5ConnectFailCleanup(req, res) {
 router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction);
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
 router.post('/mt5/connect-fail-cleanup', requireLogin, handleMt5ConnectFailCleanup);
+router.post('/mt5/cancel-connect', requireLogin, handleMt5CancelConnect);
 router.post('/mt5/force-stop-port', requireLogin, handleMt5ForceStopPort);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);

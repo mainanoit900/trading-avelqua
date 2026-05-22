@@ -192,7 +192,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   <div id="mt5LoginPreview" class="mt5-login-preview" style="display:none;margin:12px 0;padding:12px;background:#0b1220;border:1px solid #1e3a5f;border-radius:12px">
     <div style="font-size:13px;color:#93c5fd;margin-bottom:8px">
-      <b>สถานะ Login MT5</b> — ไล่ 4 ขั้น (มักจบ 15–35 วิ) แล้วไป <b>ขั้นตอน 3</b> เลือกบอทจากรายการเว็บ → เปิด BOT (EA)
+      <b>สถานะ Login</b> — รอ Agent เปิด MT5 (ปกติ 15–35 วิ) · ค้างนานกด <b>ยกเลิก</b>
     </div>
     <div id="mt5ConnectSteps" class="mt5-connect-steps"></div>
     <div id="mt5ConnectDiag" class="mt5-connect-diag" style="font-size:12px;color:#94a3b8;margin:8px 0;line-height:1.5"></div>
@@ -224,6 +224,9 @@ document.addEventListener('DOMContentLoaded', function () {
         <button type="submit" id="mt5ConnectBtn" class="mt5-btn primary" <%= packageExpired ? 'disabled' : '' %>>
   <%= packageExpired ? 'แพ็คเกจหมดอายุ' : 'เชื่อมต่อ' %>
 </button>
+        <button type="button" id="mt5CancelConnectBtn" class="mt5-btn" style="margin-top:10px;display:none" title="หยุดรอ Login และปล่อย PORT ว่าง">
+          ยกเลิก (หยุดรอ Login)
+        </button>
         <button type="button" id="mt5ForceStopPortBtnStatic" class="mt5-btn" style="margin-top:10px;display:none" title="ปิด terminal64 บน FolderPort ที่เลือก">
           ปิด MT5 บน VPS (PORT ที่เลือก)
         </button>
@@ -486,6 +489,9 @@ document.addEventListener('DOMContentLoaded', function () {
       btn.disabled = true;
       btn.innerHTML = 'กำลังส่งคำสั่งไปเซิร์ฟเวอร์...';
     }
+    if (typeof window.mt5SetCancelConnectVisible === 'function') {
+      window.mt5SetCancelConnectVisible(true);
+    }
     return true;
   };
 
@@ -610,20 +616,25 @@ document.addEventListener('DOMContentLoaded', function () {
     if (type === 'error') {
       document.querySelectorAll('.mt5-alert.success, #mt5SuccessAlert').forEach(el => el.remove());
     }
-    const modalId = type === 'success' ? 'mt5SuccessModal' : 'mt5ErrorModal';
+    const isInfo = type === 'info';
+    const modalId = type === 'success' ? 'mt5SuccessModal' : isInfo ? 'mt5InfoModal' : 'mt5ErrorModal';
     const existing = document.getElementById(modalId);
     if (existing) existing.remove();
     const isSuccess = type === 'success';
     const msg = String(message || '');
     const runBotErr = opts.runBot || /run bot|bot|เลือก bot|lot|ระดับเทรด|port นี้กำลังรัน/i.test(msg);
-    const title = opts.title || (isSuccess ? 'เชื่อมต่อสำเร็จ' : (runBotErr ? 'ไม่สามารถรัน BOT ได้' : 'เชื่อมต่อไม่สำเร็จ'));
+    const title =
+      opts.title ||
+      (isSuccess ? 'เชื่อมต่อสำเร็จ' : isInfo ? 'แจ้งเตือน' : runBotErr ? 'ไม่สามารถรัน BOT ได้' : 'เชื่อมต่อไม่สำเร็จ');
+    const cardCls = isSuccess ? 'success' : isInfo ? 'info' : 'error';
+    const icon = isSuccess ? '✅' : isInfo ? 'ℹ️' : '⚠️';
     const modal = document.createElement('div');
     modal.id = modalId;
     modal.className = 'mt5-lux-modal';
     modal.innerHTML = `
       <div class="mt5-lux-backdrop"></div>
-      <div class="mt5-lux-card ${isSuccess ? 'success' : 'error'}">
-        <div class="mt5-lux-icon">${isSuccess ? '✅' : '⚠️'}</div>
+      <div class="mt5-lux-card ${cardCls}">
+        <div class="mt5-lux-icon">${icon}</div>
         <h3>${title}</h3>
         <p>${msg || (isSuccess ? 'เชื่อมต่อสำเร็จ' : 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด')}</p>
         <button type="button" onclick="document.getElementById('${modalId}')?.remove()">ตกลง</button>
@@ -1295,9 +1306,20 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   };
 
+  window.mt5SetCancelConnectVisible = function (show) {
+    var c = document.getElementById('mt5CancelConnectBtn');
+    if (!c) return;
+    c.style.display = show ? 'inline-block' : 'none';
+    c.disabled = false;
+    c.textContent = c.dataset.label || 'ยกเลิก (หยุดรอ Login)';
+  };
+
   window.mt5UnlockConnectBtn = function () {
     if (typeof window.mt5ClearConnectSession === 'function') {
       window.mt5ClearConnectSession();
+    }
+    if (typeof window.mt5SetCancelConnectVisible === 'function') {
+      window.mt5SetCancelConnectVisible(false);
     }
     var b = document.getElementById('mt5ConnectBtn');
     if (!b) return;
@@ -1305,6 +1327,94 @@ document.addEventListener('DOMContentLoaded', function () {
     b.innerHTML = b.dataset.originalText || 'เชื่อมต่อ';
     b.style.opacity = '';
     b.style.pointerEvents = '';
+  };
+
+  window.mt5CancelConnectInProgress = async function () {
+    if (window.__mt5CancelRunning) return;
+    window.__mt5CancelRunning = true;
+    const slot =
+      sessionStorage.getItem('mt5ConnectTargetSlot') ||
+      (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+      new URLSearchParams(window.location.search).get('port_slot') ||
+      '';
+    if (!slot) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'กรุณาเลือก PORT ก่อน'
+      );
+      window.__mt5CancelRunning = false;
+      return;
+    }
+    if (window.__mt5ConnectAbort) {
+      try {
+        window.__mt5ConnectAbort.abort();
+      } catch (_) {}
+      window.__mt5ConnectAbort = null;
+    }
+    mt5Checking = false;
+    if (window.mt5Checker) {
+      clearInterval(window.mt5Checker);
+      window.mt5Checker = null;
+    }
+    if (typeof syncMt5PollAccountId === 'function') syncMt5PollAccountId();
+    const accountId = mt5PollAccountId || sessionStorage.getItem('mt5PollAccountId') || '';
+    sessionStorage.removeItem('mt5PollAccountId');
+    sessionStorage.removeItem('mt5ConnectInFlight');
+    const cancelBtn = document.getElementById('mt5CancelConnectBtn');
+    const prevCancel = cancelBtn ? cancelBtn.textContent : '';
+    if (cancelBtn) {
+      cancelBtn.disabled = true;
+      cancelBtn.textContent = 'กำลังยกเลิก...';
+    }
+    try {
+      const res = await fetch('/app/mt5/cancel-connect', {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: {
+          Accept: 'application/json',
+          'Content-Type': 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        body: JSON.stringify({
+          port_slot: Number(slot),
+          accountId: accountId ? Number(accountId) : 0
+        })
+      });
+      const data = await res.json().catch(function () {
+        return { ok: false, message: 'อ่านผลไม่ได้' };
+      });
+      if (!res.ok || data.ok === false) {
+        (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+          'error',
+          data.message || 'ยกเลิกไม่สำเร็จ'
+        );
+        return;
+      }
+      const previewBox = document.getElementById('mt5LoginPreview');
+      if (previewBox) previewBox.style.display = 'none';
+      const diagEl = document.getElementById('mt5ConnectDiag');
+      if (diagEl) diagEl.innerHTML = '';
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'info',
+        data.message || 'ยกเลิกแล้ว — PORT ว่าง กดเชื่อมต่อใหม่ได้'
+      );
+      if (typeof refreshMt5PortCards === 'function') {
+        await refreshMt5PortCards().catch(function () {});
+      }
+    } catch (e) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'ยกเลิกไม่สำเร็จ: ' + (e.message || e)
+      );
+    } finally {
+      sessionStorage.removeItem('mt5ConnectTargetSlot');
+      if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+      if (cancelBtn) {
+        cancelBtn.disabled = false;
+        cancelBtn.textContent = prevCancel || 'ยกเลิก (หยุดรอ Login)';
+      }
+      window.__mt5CancelRunning = false;
+    }
   };
 
   async function checkMt5Connected() {
@@ -1504,6 +1614,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (window.mt5Checker) clearInterval(window.mt5Checker);
     syncMt5PollAccountId();
     mt5Checking = true;
+    if (typeof window.mt5SetCancelConnectVisible === 'function') {
+      window.mt5SetCancelConnectVisible(true);
+    }
     window.__mt5SuccessShown = false;
     window.__mt5FinishSuccessRunning = false;
     sessionStorage.removeItem('mt5ConnectedShownId');
@@ -1518,6 +1631,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (pendingBtn) {
       pendingBtn.disabled = true;
       pendingBtn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
+    }
+    if (typeof window.mt5SetCancelConnectVisible === 'function') {
+      window.mt5SetCancelConnectVisible(true);
     }
     if (typeof window.mt5UpdateConnectProgress === 'function') {
       window.mt5UpdateConnectProgress({ message: 'กำลังตรวจสอบ Login ที่ค้างอยู่...', elapsedSec: 0 });
@@ -1674,6 +1790,14 @@ function mt5SelectPortSlot(slot, opts) {
 }
 window.mt5SelectPortSlot = mt5SelectPortSlot;
 
+document.addEventListener('click', function (e) {
+  if (!e.target.closest('#mt5CancelConnectBtn')) return;
+  e.preventDefault();
+  if (typeof window.mt5CancelConnectInProgress === 'function') {
+    window.mt5CancelConnectInProgress();
+  }
+});
+
 async function mt5ForceStopPortOnVps() {
   const slot =
     (document.getElementById('mt5SelectedPortSlot') || {}).value ||
@@ -1705,13 +1829,27 @@ async function mt5ForceStopPortOnVps() {
       return { ok: false, message: 'อ่านผลไม่ได้' };
     });
     if (!res.ok || data.ok === false) {
-      alert(data.message || 'ปิด MT5 ไม่สำเร็จ');
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        data.message || 'ปิด MT5 ไม่สำเร็จ'
+      );
       return;
     }
-    alert(data.message || 'ส่งคำสั่งปิด MT5 แล้ว — รอ 5–15 วินาที แล้วกดเชื่อมต่อ');
-    window.location.reload();
+    sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5PollAccountId');
+    if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+    (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+      'info',
+      data.message || 'ส่งคำสั่งปิด MT5 แล้ว — รอ 5–15 วินาที แล้วกดเชื่อมต่อ'
+    );
+    if (typeof refreshMt5PortCards === 'function') {
+      await refreshMt5PortCards().catch(function () {});
+    }
   } catch (e) {
-    alert('ปิด MT5 ไม่สำเร็จ: ' + (e.message || e));
+    (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+      'error',
+      'ปิด MT5 ไม่สำเร็จ: ' + (e.message || e)
+    );
   } finally {
     if (btn) {
       btn.disabled = false;
@@ -2085,6 +2223,10 @@ if (false && mt5ConnectForm) {
       sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
 
       const connectCtrl = new AbortController();
+      window.__mt5ConnectAbort = connectCtrl;
+      if (typeof window.mt5SetCancelConnectVisible === 'function') {
+        window.mt5SetCancelConnectVisible(true);
+      }
       const connectTimer = setTimeout(function () {
         connectCtrl.abort();
       }, 20000);
@@ -2100,6 +2242,7 @@ if (false && mt5ConnectForm) {
         signal: connectCtrl.signal
       });
       clearTimeout(connectTimer);
+      window.__mt5ConnectAbort = null;
 
       const raw = await res.text();
       let json;
@@ -2613,6 +2756,9 @@ setInterval(loadMt5LiveDashboard, 8000);
 .mt5-lux-card{position:relative;width:min(460px,92vw);border-radius:28px;padding:32px;background:linear-gradient(145deg,#111827,#020617);box-shadow:0 30px 100px rgba(0,0,0,.65);color:#fff;text-align:center;animation:mt5LuxPop .22s ease-out}
 .mt5-lux-card.success{border:1px solid rgba(34,197,94,.5);box-shadow:0 30px 100px rgba(0,0,0,.65),0 0 48px rgba(34,197,94,.18)}
 .mt5-lux-card.error{border:1px solid rgba(248,113,113,.45);box-shadow:0 30px 100px rgba(0,0,0,.65),0 0 48px rgba(248,113,113,.18)}
+.mt5-lux-card.info{border:1px solid rgba(56,189,248,.45);box-shadow:0 30px 100px rgba(0,0,0,.65),0 0 48px rgba(56,189,248,.15)}
+.mt5-lux-card.info p{color:#bae6fd}
+.mt5-lux-card.info button{background:linear-gradient(135deg,#0ea5e9,#6366f1);box-shadow:0 12px 28px rgba(14,165,233,.35)}
 .mt5-lux-icon{width:68px;height:68px;margin:0 auto 16px;border-radius:22px;display:flex;align-items:center;justify-content:center;font-size:36px;background:rgba(255,255,255,.08)}
 .mt5-lux-card h3{margin:0 0 10px;font-size:24px;font-weight:900}
 .mt5-lux-card p{margin:0 0 24px;font-size:16px;line-height:1.6;color:#dbeafe}
