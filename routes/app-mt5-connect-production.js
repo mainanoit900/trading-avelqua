@@ -37,7 +37,8 @@ const {
   cancelJournalVerifyWrongPort,
   queueJournalReadVerify,
   accountCanSkipLoginVerify,
-  mt5LiveForAccount
+  mt5LiveForAccount,
+  autoClearPortSlotBeforeLogin
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
@@ -997,6 +998,9 @@ async function handleMt5ConnectProduction(req, res) {
     };
 
     if (requestedSlot > 0) {
+      await autoClearPortSlotBeforeLogin(userId, requestedSlot, mt5Login, serverName).catch(
+        () => ({})
+      );
       const slotGate = await isUserPortSlotFreeForLogin(
         userId,
         requestedSlot,
@@ -1046,6 +1050,7 @@ async function handleMt5ConnectProduction(req, res) {
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (totalPorts === 1) {
+      await autoClearPortSlotBeforeLogin(userId, 1, mt5Login, serverName).catch(() => ({}));
       const slotGate = await isUserPortSlotFreeForLogin(userId, 1, totalPorts, mt5Login);
       if (!slotGate.ok) throw new Error(slotGate.message);
       portSlot = 1;
@@ -1058,6 +1063,9 @@ async function handleMt5ConnectProduction(req, res) {
         portSlot = await getNextUserSlot(userId, totalPorts);
       }
       if (!portSlot) portSlot = await getNextUserSlot(userId, totalPorts);
+      if (portSlot) {
+        await autoClearPortSlotBeforeLogin(userId, portSlot, mt5Login, serverName).catch(() => ({}));
+      }
       reservedPort = {
         port_id: retryPort.port_id,
         vps_id: retryPort.vps_id,
@@ -1078,6 +1086,7 @@ async function handleMt5ConnectProduction(req, res) {
         );
       }
       await assertLoginNotOnOtherPort(portSlot);
+      await autoClearPortSlotBeforeLogin(userId, portSlot, mt5Login, serverName).catch(() => ({}));
       const reserve = await reserveBestPort(userId, portSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
@@ -1130,7 +1139,7 @@ async function handleMt5ConnectProduction(req, res) {
         account_name=$9,
         status='connecting',
         last_error=NULL,
-        last_login_message='กำลังเปิด MT5 และ Login...',
+        last_login_message='เคลียร์ PORT แล้ว — กำลังเปิด MT5 และ Login...',
         last_journal_evidence=NULL,
         connect_started_at=NOW(),
         updated_at=NOW()
