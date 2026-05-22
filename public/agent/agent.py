@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v30"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v31"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1628,6 +1628,10 @@ def mt5_has_login_failure_text(text: str) -> bool:
     return bool(failed_rx.search(text))
 
 
+def mt5_title_has_open_account_wizard(title_joined: str) -> bool:
+    return "open an account" in str(title_joined or "").lower()
+
+
 def mt5_title_suggests_auth_failure(title_joined: str) -> bool:
     """Window title hints at failed login (do not treat TCP ESTABLISHED as proof of login)."""
     if not title_joined:
@@ -2072,29 +2076,24 @@ def wait_mt5_login_hybrid(
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
-    last_wizard_at = 0.0
     last_gate_at = 0.0
     last_title = ""
     window_ok_streak = 0
     wait_start = time.time()
     preview_b64 = ""
+    wizard_stuck_since = 0.0
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
         now = time.time()
 
-        if now - last_gate_at >= 1.5:
+        if now - last_gate_at >= 4.0:
             try:
                 write_avelqua_trading_gate(port_dir, False, payload)
                 patch_mt5_experts_config(port_dir, False)
             except Exception:
                 pass
             last_gate_at = now
-
-        wizard_iv = 2.0 if elapsed < 35 else 4.0
-        if now - last_wizard_at >= wizard_iv:
-            automate_mt5_open_account_wizard()
-            last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
         if j_out is False:
@@ -2115,6 +2114,28 @@ def wait_mt5_login_hybrid(
         joined = " | ".join(titles)
         if joined and joined != last_title:
             last_title = joined
+
+        if mt5_title_has_open_account_wizard(joined):
+            if not wizard_stuck_since:
+                wizard_stuck_since = now
+            elif now - wizard_stuck_since >= 40:
+                stuck_msg = (
+                    "MT5 ค้างหน้า Open Account — ปิด MT5 แล้วเชื่อมต่อใหม่ "
+                    "หรือตรวจ Login/รหัสผ่านให้ตรง Server "
+                    f"{LOCKED_MT5_SERVER}"
+                )
+                cleanup_mt5_after_login_fail(port, payload, port_dir)
+                send_connect_result(
+                    payload,
+                    "failed",
+                    stuck_msg,
+                    port,
+                    process_id=proc_pid,
+                    window_title=joined,
+                )
+                return False, stuck_msg, joined
+        else:
+            wizard_stuck_since = 0.0
 
         if mt5_title_suggests_auth_failure(joined):
             cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2538,6 +2559,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     time.sleep(2.5)
     automate_mt5_open_account_wizard()
+    time.sleep(1.0)
 
     journal_timeout = journal_timeout_sec(payload)
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
