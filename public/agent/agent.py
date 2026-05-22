@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-utf8-journal-v24"
+AGENT_BUILD_ID = "2026-05-22-login-cli-v25"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -671,13 +671,10 @@ def clear_mt5_logs(port_dir: Path) -> None:
 
 
 def clear_mt5_login_cache(port_dir: Path) -> None:
-    """ลบ cache บัญชีที่ MT5 จำไว้ — บังคับใช้ Login/Password จาก INI ล่าสุดเท่านั้น"""
+    """ลบเฉพาะ cache บัญชี — เก็บ servers.dat/common.ini ไว้ให้ MT5 รู้ชื่อ Server"""
     for rel in (
         "config/accounts.dat",
-        "config/servers.dat",
         "config/account.ini",
-        "config/common.ini",
-        "config/settings.ini",
     ):
         p = port_dir / rel
         if p.is_file():
@@ -710,18 +707,21 @@ def write_mt5_login_ini(
 Login={login}
 Password={password}
 Server={server}
+KeepPrivate=0
+SavePassword=1
 AutoConfiguration=false
+CertInstall=0
 
 [Experts]
 AllowLiveTrading={trade_flag}
 AllowDllImport=true
 Enabled={trade_flag}
 """
-    config_file.write_text(ini, encoding="ascii", errors="ignore")
+    config_file.write_text(ini, encoding="utf-8", errors="ignore")
     for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
         if alias.resolve() != config_file.resolve():
             try:
-                alias.write_text(ini, encoding="ascii", errors="ignore")
+                alias.write_text(ini, encoding="utf-8", errors="ignore")
             except Exception:
                 pass
     log(
@@ -1810,7 +1810,38 @@ def _journal_outcome_for_login(
             return False
         if ok_rx.search(line):
             return True
+        if "authorized" in low and "failed" not in low:
+            return True
+        if "previous successful authorization" in low:
+            return True
     return None
+
+
+def _journal_has_broker_login_attempt(text: str, login: str) -> bool:
+    login = str(login or "").strip()
+    if not login or not text:
+        return False
+    low = text.lower()
+    if login.lower() not in low:
+        return False
+    markers = (
+        "authorization on",
+        "authorized on",
+        "authorization failed",
+        "login failed",
+        "invalid account",
+        "not authorized",
+    )
+    return any(m in low for m in markers)
+
+
+def _journal_only_terminal_startup(text: str, login: str) -> bool:
+    if not text or not str(text).strip():
+        return True
+    if _journal_has_broker_login_attempt(text, login):
+        return False
+    low = text.lower()
+    return "launched with" in low or "successfully initialized from start config" in low
 
 
 def automate_mt5_open_account_wizard(
@@ -1940,7 +1971,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    wait_cap = max(18, min(int(timeout_sec or 30), 60))
+    wait_cap = max(20, min(int(timeout_sec or 60), 75))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
@@ -2077,6 +2108,24 @@ def wait_mt5_login_hybrid(
     )
     if extra_ok:
         return True, extra_msg, extra_chunk
+
+    journal_files = _collect_journal_log_files(port_dir, journal_since)
+    probe_tail = _read_log_tail(journal_files[0]) if journal_files else ""
+    if _journal_only_terminal_startup(probe_tail or chunk, login):
+        fail_no_broker = (
+            "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อโบรกเกอร์ — ตรวจ Login/รหัสผ่าน "
+            f"และ Server {LOCKED_MT5_SERVER}"
+        )
+        cleanup_mt5_after_login_fail(port, payload, port_dir)
+        send_connect_result(
+            payload,
+            "failed",
+            fail_no_broker,
+            port,
+            process_id=proc_pid,
+            journal_evidence=(probe_tail or chunk)[-2000:],
+        )
+        return False, fail_no_broker, probe_tail or chunk
 
     if window_ok_streak >= 2 and j_out is not False:
         titles = mt5_window_titles(port, payload)
@@ -2260,7 +2309,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         clear_mt5_login_cache(port_dir)
         # ไม่ลบ log ก่อนเปิด MT5 — เก็บบรรทัด authorized on ให้ตรวจได้
         cfg = mt5_startup_ini_path(port_dir)
-        args = [str(terminal), "/portable", f"/config:{cfg}"]
+        args = [
+            str(terminal),
+            "/portable",
+            f"/login:{login}",
+            f"/config:{cfg}",
+        ]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
         return _popen_hidden(args, cwd=str(port_dir))
 
@@ -2275,7 +2329,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "45"))
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "60"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
@@ -3421,7 +3475,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, False, {"command_type": ctype}, err_unknown)
 
     except Exception as e:
-        log(f"COMMAND ERROR ID={cmd_id}: {e}")
+        log(f"COMMAND ERROR ID={cmd_id}: {_safe_console_text(str(e))}")
         if ctype in ("connect_mt5", "login_mt5"):
             try:
                 send_connect_result(payload, "failed", str(e))
