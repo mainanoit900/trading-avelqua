@@ -40,7 +40,8 @@ const {
   expireStuckLoginCommands,
   cancelJournalVerifyForVps,
   journalSinceMsForVerify,
-  processInboundConnectJournal
+  processInboundConnectJournal,
+  verifyPortLoginWithFallback
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -1071,9 +1072,85 @@ router.post('/connect-result', async (req, res) => {
         return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
       }
 
+      const connBalEarly = positiveMoney(req.body.balance);
+      const connEqEarly = positiveMoney(req.body.equity);
+      const msgLowEarly = String(message || '').toLowerCase();
+
+      await patchAccountMt5Preview(accountId, {
+        message: message || MT5_SUCCESS_MSG,
+        windowTitle,
+        previewB64
+      }).catch(() => {});
+
+      if (loginVerified && connBalEarly > 0) {
+        let connBal = connBalEarly;
+        let connEq = connEqEarly;
+        await promoteAccountConnected({
+          accountId,
+          portId,
+          mt5Login: loginForJournal || mt5Login,
+          message: message || MT5_SUCCESS_MSG,
+          balance: connBal,
+          equity: connEq
+        });
+        await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+        if (portId) {
+          await query(`
+            UPDATE vps_system.vps_ports
+            SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
+                locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
+            WHERE id=$1
+          `, [portId, pid, mt5Login || loginForJournal]).catch(() => {});
+        }
+        return res.json({ ok: true, connected: true, fastPath: 'agent_balance_snapshot' });
+      }
+
+      if (
+        loginVerified &&
+        windowVerified &&
+        loginForJournal
+      ) {
+        const portRun = await verifyPortLoginWithFallback(node.id, portNo, loginForJournal, {
+          requireLoginMatch: false
+        }).catch(() => ({ ok: false }));
+        if (portRun.ok) {
+          await promoteAccountConnected({
+            accountId,
+            portId,
+            mt5Login: loginForJournal,
+            message: message || MT5_SUCCESS_MSG,
+            balance: connBalEarly,
+            equity: connEqEarly
+          });
+          await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+          return res.json({ ok: true, connected: true, fastPath: 'agent_window_verified' });
+        }
+      }
+
+      if (
+        loginVerified &&
+        (msgLowEarly.includes('api verified') || msgLowEarly.includes('ยืนยันบัญชีจาก mt5'))
+      ) {
+        const portRunApi = await verifyPortLoginWithFallback(node.id, portNo, loginForJournal, {
+          requireLoginMatch: false
+        }).catch(() => ({ ok: false }));
+        if (portRunApi.ok || connBalEarly > 0) {
+          await promoteAccountConnected({
+            accountId,
+            portId,
+            mt5Login: loginForJournal || mt5Login,
+            message: message || MT5_SUCCESS_MSG,
+            balance: connBalEarly,
+            equity: connEqEarly
+          });
+          await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+          return res.json({ ok: true, connected: true, fastPath: 'agent_api_verified' });
+        }
+      }
+
       const promoteConnectedFromCallback = async (fastPath) => {
-        let connBal = positiveMoney(req.body.balance);
-        let connEq = positiveMoney(req.body.equity);
+        let connBal = connBalEarly || positiveMoney(req.body.balance);
+        let connEq = connEqEarly || positiveMoney(req.body.equity);
         if (!connBal && !connEq && windowTitle) {
           const { parseMetricsFromLogText } = require('../lib/mt5EquitySync');
           const fromTitle = parseMetricsFromLogText(windowTitle);
