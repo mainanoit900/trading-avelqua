@@ -488,6 +488,18 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
       window.mt5SetCancelConnectVisible(true);
     }
+    const previewBox = document.getElementById('mt5LoginPreview');
+    if (previewBox) previewBox.style.display = 'block';
+    if (typeof window.mt5UpdateConnectProgress === 'function') {
+      window.mt5UpdateConnectProgress({
+        connectStep: '① กำลังส่งคำสั่ง login_mt5 ไปเซิร์ฟเวอร์...',
+        commandStatus: '',
+        progressStep: 0,
+        progressStepLabel: 'ส่งคำสั่ง',
+        progressTotal: 4,
+        elapsedSec: 0
+      });
+    }
     return true;
   };
 
@@ -527,11 +539,18 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       const previewBox = document.getElementById('mt5LoginPreview');
       if (previewBox) previewBox.style.display = 'block';
+      if (typeof window.mt5SetCancelConnectVisible === 'function') {
+        window.mt5SetCancelConnectVisible(true);
+      }
       if (typeof window.mt5UpdateConnectProgress === 'function') {
         window.mt5UpdateConnectProgress({
-          connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+          connectStep: '① ส่งคำสั่งแล้ว — ② รอ Agent รับงาน',
           commandStatus: 'pending',
-          elapsedSec: 0
+          progressStep: 1,
+          progressStepLabel: 'Agent รับงาน',
+          progressTotal: 4,
+          elapsedSec: 0,
+          account: { id: accId, status: 'connecting' }
         });
       }
       if (typeof window.startMt5ConnectPolling === 'function') {
@@ -1143,6 +1162,18 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!mt5ConnectInFlightNow()) {
       return;
     }
+    if (typeof window.mt5UpdateConnectProgress === 'function') {
+      window.mt5UpdateConnectProgress({
+        connected: true,
+        status: 'connected',
+        account: accountInfo || { status: 'connected' },
+        progressStep: 4,
+        progressStepLabel: 'เชื่อมต่อสำเร็จ',
+        progressTotal: 4,
+        connectStep: '④ ตรวจ Login สำเร็จ — เชื่อมต่อแล้ว',
+        message: message || 'เชื่อมต่อสำเร็จ'
+      });
+    }
     window.__mt5FinishSuccessRunning = true;
     const base = message || 'เชื่อมต่อสำเร็จ';
     const msg = base + ' — ยังไม่เปิด BOT กรุณาไปขั้นตอน 3) ตั้งค่า BOT แล้วกด ▶ เปิด BOT (ปิด Algo Trading จนกว่าจะเปิด BOT)';
@@ -1260,7 +1291,7 @@ document.addEventListener('DOMContentLoaded', function () {
       } else if (st === 'starting' || !!d.previewUrl) {
         activeIdx = 2;
       } else if (['processing', 'picked', 'running'].includes(cmd)) {
-        activeIdx = 2;
+        activeIdx = 1;
       } else if (['success', 'done'].includes(cmd)) {
         activeIdx = 3;
       } else if (cmd === 'pending') {
@@ -1628,7 +1659,7 @@ document.addEventListener('DOMContentLoaded', function () {
           );
           return;
         }
-        if (sec >= 12 && !cmdSt && !data.account?.id && !data.pending) {
+        if (sec >= 25 && !cmdSt && !data.commandId && !data.pending) {
           if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
           showMt5ConnectModal(
             'error',

@@ -398,15 +398,15 @@ const LOGIN_PROGRESS_LABELS = [
   'เชื่อมต่อสำเร็จ'
 ];
 
-/** ขั้นที่ 0–4 สำหรับ UI 4 สเตป */
+/** ขั้นที่ 0–4 สำหรับ UI: ①ส่งคำสั่ง ②Agent ③เปิดMT5 ④ตรวจLogin */
 function resolveLoginProgressStep(accountStatus, commandStatus) {
   const st = String(accountStatus || '').toLowerCase();
   const cmd = String(commandStatus || '').toLowerCase();
   if (st === 'connected') return 4;
   if (st === 'checking') return 3;
   if (st === 'starting') return 2;
-  if (['processing', 'picked', 'running'].includes(cmd)) return 2;
   if (['success', 'done'].includes(cmd)) return 3;
+  if (['processing', 'picked', 'running'].includes(cmd)) return 1;
   if (cmd === 'pending') return 1;
   if (st === 'connecting') return cmd ? 1 : 0;
   return 0;
@@ -474,15 +474,15 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
   } else if (commandStatus === 'pending' && commandAgeSec != null && commandAgeSec >= 45) {
     connectStep = 'คำสั่ง login ค้างนาน — รอ Agent หรือ restart AvelquaPythonAgent';
   } else if (st === 'checking') {
-    connectStep = 'ตรวจ Login — อ่าน Journal';
+    connectStep = '④ ตรวจ Login — อ่าน Journal / ยอดเงิน';
   } else if (st === 'starting') {
-    connectStep = 'เปิด MT5 — รอหน้าต่างโปรแกรม';
+    connectStep = '③ เปิด MT5 — รอหน้าต่างโปรแกรม';
   } else if (['processing', 'picked', 'running'].includes(commandStatus)) {
-    connectStep = 'Agent รับงานแล้ว — กำลังดำเนินการ';
+    connectStep = '② Agent รับงานแล้ว — กำลังดำเนินการ';
   } else if (commandStatus === 'pending') {
-    connectStep = 'ส่งคำสั่งแล้ว — รอ Agent รับงาน';
+    connectStep = '① ส่งคำสั่งแล้ว — ② รอ Agent รับงาน';
   } else if (st === 'connecting') {
-    connectStep = 'ส่งคำสั่งไป VPS';
+    connectStep = '① ส่งคำสั่งไป VPS';
   }
 
   const waitSec = Math.max(
@@ -1334,7 +1334,7 @@ async function handleMt5ConnectProduction(req, res) {
       progressStepLabel: LOGIN_PROGRESS_LABELS[1],
       progressTotal: 4,
       commandStatus: 'pending',
-      connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน (ขั้นที่ 2/4)',
+      connectStep: '① ส่งคำสั่งแล้ว — ② รอ Agent รับงานจากคิว',
       aiConnect: connectAdvice
     });
   } catch (e) {
@@ -1680,7 +1680,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const activeLogin = a.vps_id
         ? await findLoginCommandInProgress(a.id, a.vps_id).catch(() => null)
         : null;
-      if (!activeLogin && elapsedSec >= 12 && !['success', 'done'].includes(recentSt)) {
+      if (!activeLogin && elapsedSec >= 25 && !['success', 'done'].includes(recentSt)) {
         return res.json({
           ok: true,
           account: a,
