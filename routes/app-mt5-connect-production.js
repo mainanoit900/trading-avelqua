@@ -1330,7 +1330,24 @@ async function handleMt5ConnectStatusProduction(req, res) {
           ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
           : null;
         const cmdSt = String(cmd?.status || '').toLowerCase();
-        if (['pending', 'processing', 'picked', 'running'].includes(cmdSt)) {
+        if (['failed', 'error', 'cancelled'].includes(cmdSt)) {
+          const cmdFailed = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
+          if (cmdFailed.failed) {
+            const failSlot = Number(a.port_slot || a.assigned_port_no || 0);
+            if (failSlot) {
+              await releaseUserPackagePortSlot(userId, failSlot, {
+                message: cmdFailed.message || MT5_FAIL_USER_MSG,
+                reason: 'login_cmd_failed',
+                folderPath: a.folder_path
+              }).catch(() => {});
+            }
+            status = 'failed';
+            a.status = 'failed';
+            a.port_slot = null;
+            a.last_error = cmdFailed.message || MT5_FAIL_USER_MSG;
+            a.last_login_message = a.last_error;
+          }
+        } else if (['pending', 'processing', 'picked', 'running'].includes(cmdSt)) {
           /* Agent ยังทำ login อยู่ — อย่า timeout/kill MT5 */
         } else if (staleMs <= staleLimitMs + 60 * 1000) {
           /* รอเพิ่มอีกนาทีถ้ายังไม่มีคำสั่งค้าง */
@@ -1339,7 +1356,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
             ? await checkVpsAgentLiveness(a.vps_id).catch(() => ({ ok: false }))
             : { ok: false };
           const staleMsg = agentLive.ok
-            ? 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่'
+            ? MT5_FAIL_USER_MSG
             : (agentLive.message ||
                 'VPS Agent ไม่ตอบสนอง — คำสั่ง login ไม่ถูกดำเนินการ กรุณารอแล้วลองใหม่');
           await failAccountFromJournal(a.id, a.port_id, staleMsg, {
@@ -1348,9 +1365,14 @@ async function handleMt5ConnectStatusProduction(req, res) {
             folderPath: a.folder_path,
             reason: 'connect_poll_timeout',
             agentOffline: !agentLive.ok,
-            killMt5: false
+            killMt5: true,
+            clearPackagePort: true,
+            forceFailed: true,
+            journalVerdict: agentLive.ok ? 'failed' : null
           }).catch(() => {});
           status = 'failed';
+          a.status = 'failed';
+          a.port_slot = null;
           a.last_error = staleMsg;
           a.last_login_message = staleMsg;
         }
@@ -1362,51 +1384,44 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let resolved = { resolved: false };
     if (shouldSyncJournal) {
+      const recentCmdNow = a.vps_id
+        ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
+        : null;
+      const cmdStNow = String(recentCmdNow?.status || '').toLowerCase();
+      const cmdAlreadyFailed = ['failed', 'error', 'cancelled'].includes(cmdStNow);
       const failProbeMinSec = Number(process.env.MT5_LOGIN_FAIL_PROBE_SEC || 25);
       const cmdFailed =
-        elapsedSec >= failProbeMinSec
+        cmdAlreadyFailed || elapsedSec >= failProbeMinSec
           ? await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }))
           : { failed: false };
       if (cmdFailed.failed) {
         const failSlot = Number(a.port_slot || a.assigned_port_no || 0);
-        if (failSlot && cmdFailed.authFail === true) {
+        if (failSlot) {
           await releaseUserPackagePortSlot(userId, failSlot, {
-            message: cmdFailed.message,
+            message: cmdFailed.message || MT5_FAIL_USER_MSG,
             reason: 'login_cmd_failed',
             folderPath: a.folder_path
-          }).catch(() => {});
-        } else if (!cmdFailed.authFail && failSlot) {
-          await releaseFolderForLoginRetry(userId, failSlot, {
-            message: cmdFailed.message,
-            folderPath: a.folder_path
-          }).catch(() => {});
-        } else if (!cmdFailed.authFail) {
-          await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
-            vpsId: a.vps_id,
-            portNo: a.assigned_port_no || a.port_slot,
-            folderPath: a.folder_path,
-            reason: 'login_journal_timeout',
-            killMt5: true,
-            clearPackagePort: false
           }).catch(() => {});
         } else {
-          await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
+          await failAccountFromJournal(a.id, a.port_id, cmdFailed.message || MT5_FAIL_USER_MSG, {
             vpsId: a.vps_id,
             portNo: a.assigned_port_no || a.port_slot,
             folderPath: a.folder_path,
             reason: 'login_cmd_failed',
             killMt5: true,
-            clearPackagePort: true
+            clearPackagePort: true,
+            forceFailed: true,
+            journalVerdict: 'failed'
           }).catch(() => {});
         }
         return res.json({
           ok: true,
-          account: { ...a, status: 'deleted', port_slot: null },
+          account: { ...a, status: 'failed', port_slot: null },
           connected: false,
           failed: true,
           checking: false,
           pending: false,
-          status: 'deleted',
+          status: 'failed',
           loginVerified: false,
           message: cmdFailed.message || MT5_FAIL_USER_MSG,
           windowTitle: windowTitleFromMessage(a.last_login_message),

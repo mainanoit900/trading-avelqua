@@ -1512,17 +1512,25 @@ router.post('/connect-result', async (req, res) => {
         evidence,
         rawMessage: agentMsg
       });
-      const failMsg = failResolved.message;
-      const authFail = failResolved.authFail === true;
+      const timeoutOnly =
+        failResolved.journalVerdict === 'timeout' &&
+        failResolved.authFail !== true &&
+        /ทันเวลา|timeout|ไม่สามารถยืนยัน/i.test(String(agentMsg || failResolved.message || ''));
+      const authFail =
+        failResolved.authFail === true ||
+        journalVerdictFail === 'failed' ||
+        !timeoutOnly;
+      const failMsg = authFail ? MT5_FAIL_USER_MSG : failResolved.message;
 
       await failAccountFromJournal(accountId, failPortId, failMsg, {
         vpsId: node.id,
         portNo: failSlot || portNo,
         folderPath: failFolder,
         reason: authFail ? 'agent_reported_failed' : 'login_journal_timeout',
-        journalVerdict: journalVerdictFail || failResolved.journalVerdict || null,
+        journalVerdict: journalVerdictFail || (authFail ? 'failed' : failResolved.journalVerdict) || null,
         killMt5: true,
-        clearPackagePort: authFail
+        clearPackagePort: true,
+        forceFailed: authFail
       }).catch(() => {});
 
       await query(`
