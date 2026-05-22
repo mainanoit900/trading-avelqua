@@ -90,7 +90,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v34"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v35"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1977,13 +1977,27 @@ def _journal_dirs_for_port(port_dir: Path) -> List[Path]:
     ]
 
 
+def _journal_mirror_log_paths(port_dir: Path) -> List[Path]:
+    """Mirror ท้าย Journal ใน Common/Files — อ่านก่อน Logs/*.log (เร็วกว่า)"""
+    out: List[Path] = []
+    for rel in (
+        "Terminal/Common/Files/avelqua_journal_latest.log",
+        "terminal/Common/Files/avelqua_journal_latest.log",
+        "MQL5/Files/avelqua_journal_latest.log",
+    ):
+        p = port_dir / Path(rel.replace("/", os.sep))
+        if p.is_file():
+            out.append(p)
+    return out
+
+
 def _collect_journal_log_files(port_dir: Path, since_ts: float = 0.0) -> List[Path]:
     """
-    รวมไฟล์ journal — ไฟล์วันนี้ (YYYYMMDD.log) อ่านเสมอ
+    รวมไฟล์ journal — mirror ก่อน แล้วไฟล์วันนี้ (YYYYMMDD.log)
     เพราะ mtime มักเป็นต้นวัน แต่มีบรรทัด authorized ใหม่ท้ายไฟล์
     """
     today_name = datetime.now().strftime("%Y%m%d")
-    log_files: List[Path] = []
+    log_files: List[Path] = list(_journal_mirror_log_paths(port_dir))
     for d in _journal_dirs_for_port(port_dir):
         if not d.exists():
             continue
@@ -1999,8 +2013,9 @@ def _collect_journal_log_files(port_dir: Path, since_ts: float = 0.0) -> List[Pa
     uniq: List[Path] = []
     for f in log_files:
         try:
+            is_mirror = "avelqua_journal_latest" in f.name.lower()
             is_today = f.name.lower() == f"{today_name}.log".lower()
-            if since_ts and not is_today and f.stat().st_mtime < since_ts - 10:
+            if since_ts and not is_today and not is_mirror and f.stat().st_mtime < since_ts - 10:
                 continue
         except Exception:
             pass
@@ -2239,7 +2254,7 @@ def check_mt5_journal_login_result(
 def _quick_journal_probe(
     port_dir: Path, login: str, since_ts: float, server: str = MT5_LIVE_SERVER
 ) -> Tuple[Optional[bool], str]:
-    """อ่าน journal ครั้งเดียว — True/False/None(ยังไม่รู้)"""
+    """อ่าน journal ครั้งเดียว — mirror ก่อน Logs/*.log"""
     login = str(login).strip()
     if not login:
         return None, ""
@@ -2247,6 +2262,15 @@ def _quick_journal_probe(
     uniq = _collect_journal_log_files(port_dir, since_ts)
     if not uniq:
         return None, ""
+    for cand in uniq[:4]:
+        chunk = _read_log_tail(cand, max_bytes=131072)
+        if not chunk.strip():
+            continue
+        outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
+        if outcome is True:
+            return True, chunk
+        if outcome is False:
+            return False, chunk
     chunk = _read_log_tail(uniq[0])
     outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
     if outcome is True:
@@ -2283,11 +2307,12 @@ def wait_mt5_login_hybrid(
         elapsed = int(time.time() - wait_start)
         now = time.time()
 
-        if now - last_gate_at >= 10.0:
+        if now - last_gate_at >= (3.0 if elapsed < 45 else 8.0):
             try:
                 write_avelqua_trading_gate(port_dir, False, payload)
-                patch_mt5_experts_config(port_dir, False)
-                sync_avelqua_data_exports(port_dir)
+                if elapsed < 20:
+                    patch_mt5_experts_config(port_dir, False)
+                sync_avelqua_data_exports(port_dir, force=elapsed < 60)
             except Exception:
                 pass
             last_gate_at = now
@@ -2756,13 +2781,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_connect_result(
         payload,
         "starting",
-        "กำลังเปิดหน้าจอ MT5 บน VPS — รอ Journal ประมาณ 30–120 วินาที",
+        f"กำลังเปิด MT5 บน {server} — รอ Journal ประมาณ 30–90 วินาที",
         port,
         process_id=proc_pid,
     )
     time.sleep(2.5)
     automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
     time.sleep(1.0)
+    sync_avelqua_data_exports(port_dir, force=True)
 
     journal_timeout = journal_timeout_sec(payload)
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} SERVER={server} timeout_sec={journal_timeout}")

@@ -180,7 +180,7 @@ document.addEventListener('DOMContentLoaded', function () {
     <div class="mt5-card">
       <div class="mt5-card-head">
         <h2>2) Login MT5 (FolderPort)</h2>
-        <span><%= fixedServer %> — เปิด MT5 บนโฟลเดอร์ VPS (FolderPort) · ยังไม่รัน BOT</span>
+        <span><b id="mt5ConnectServerLabel"><%= fixedServer %></b> — เปิด MT5 บนโฟลเดอร์ VPS (FolderPort) · ยังไม่รัน BOT</span>
       </div>
 
       <div class="mt5-login-port-pill" id="mt5LoginPortPill">
@@ -1132,8 +1132,10 @@ document.addEventListener('DOMContentLoaded', function () {
     const srv = mt5ResolveServerForLogin(login);
     const disp = document.getElementById('mt5ServerDisplay');
     const hid = document.getElementById('mt5ServerHidden');
+    const headLbl = document.getElementById('mt5ConnectServerLabel');
     if (disp) disp.value = srv;
     if (hid) hid.value = srv;
+    if (headLbl) headLbl.textContent = srv;
   }
 
   function mt5ClassifyLogin(login) {
