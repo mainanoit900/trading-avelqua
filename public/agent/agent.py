@@ -94,7 +94,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v38"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v39"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1559,6 +1559,10 @@ def mt5_login_verify_api(
             return False, f"init fail {mt5.last_error()}"
         ai = mt5.account_info()
         ai_login = int(getattr(ai, "login", 0) or 0) if ai is not None else 0
+        if ai_login == login_int and ai is not None:
+            eq = float(getattr(ai, "equity", 0) or 0)
+            mt5.shutdown()
+            return True, f"api session ok equity={eq:.2f}"
         if ai_login != login_int:
             logged = mt5.login(login_int, password=password, server=srv)
             if not logged:
@@ -1612,7 +1616,7 @@ def _try_socket_metrics_login_confirm(
     elapsed_sec: int,
 ) -> Tuple[bool, Dict[str, Any], str]:
     """ยืนยันเมื่อมี socket โบรกเกอร์ + ยอดเงินจริง (journal ช้า/อยู่ AppData)"""
-    if elapsed_sec < 18 or j_out is False:
+    if elapsed_sec < 8 or j_out is False:
         return False, {}, ""
     sock_ok, sock_hint = mt5_socket_established(port, payload)
     if not sock_ok:
@@ -2674,6 +2678,9 @@ def wait_mt5_login_hybrid(
     preview_b64 = ""
     wizard_stuck_since = 0.0
     last_api_at = 0.0
+    last_form_at = 0.0
+    last_broad_journal_at = 0.0
+    password = str(payload_get(payload, "mt5Password", "password") or "")
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
     if journal_since < wait_start - 120:
@@ -2713,6 +2720,16 @@ def wait_mt5_login_hybrid(
             last_gate_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
+        if j_out is None and elapsed >= 25 and now - last_broad_journal_at >= 12.0:
+            last_broad_journal_at = now
+            j_broad, chunk_broad = _quick_journal_probe(port_dir, login, 0.0, server)
+            if j_broad is True:
+                return True, JOURNAL_OK_MSG, chunk_broad
+            if j_broad is False:
+                j_out, j_chunk = False, chunk_broad
+            elif chunk_broad:
+                j_chunk = chunk_broad
+
         if j_out is False:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
@@ -2772,6 +2789,13 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
+        if not ok_w and password and elapsed >= 10 and now - last_form_at >= 18.0:
+            last_form_at = now
+            try:
+                automate_mt5_login_server_form(login, password, server)
+            except Exception as e:
+                log(f"LOGIN FORM RETRY: {e}")
+
         fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
             port, payload, login, joined, window_ok_streak, j_out
         )
@@ -2779,19 +2803,14 @@ def wait_mt5_login_hybrid(
             fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
                 port, payload, login, joined, window_ok_streak, j_out, elapsed
             )
-        if (
-            not fast_ok
-            and ok_w
-            and window_ok_streak >= 2
-            and elapsed >= 12
-            and now - last_api_at >= 8.0
-        ):
+        if not fast_ok and elapsed >= 15 and now - last_api_at >= 10.0:
             last_api_at = now
             api_hit, api_msg = _connect_on_api_verify(
                 payload, port, port_dir, login, proc_pid, joined, preview_b64
             )
             if api_hit:
                 return True, f"api verified; {api_msg}", joined
+            log(f"LOGIN API RETRY login={login} detail={api_msg[:120]}")
 
         if fast_ok:
             try:
@@ -2866,8 +2885,14 @@ def wait_mt5_login_hybrid(
 
         time.sleep(0.14)
 
+    api_final, api_final_msg = _connect_on_api_verify(
+        payload, port, port_dir, login, proc_pid, last_title, preview_b64
+    )
+    if api_final:
+        return True, f"api verified; {api_final_msg}", last_title
+
     chunk = ""
-    j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
+    j_out, j_chunk = _quick_journal_probe(port_dir, login, 0.0, server)
     if j_out is True:
         return True, JOURNAL_OK_MSG, j_chunk
     if j_out is False:
