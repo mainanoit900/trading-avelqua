@@ -874,12 +874,18 @@ async function handleMt5ConnectProduction(req, res) {
     let portSlot = 0;
 
     if (retryPort) {
-      portSlot = Number(retryPort.port_slot) || 0;
-      if (!portSlot || !(await isUserPortSlotAvailable(userId, portSlot, totalPorts))) {
-        portSlot = await getNextUserSlot(userId, totalPorts);
-      }
-      if (!portSlot) {
-        throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
+      portSlot = uiPreferredSlot;
+      if (retryPort.port_slot && Number(retryPort.port_slot) !== uiPreferredSlot) {
+        throw new Error(
+          mt5LoginOnOtherPortMessage(
+            {
+              port_slot: retryPort.port_slot,
+              status: 'connected',
+              mt5_login: mt5Login
+            },
+            uiPreferredSlot
+          )
+        );
       }
       reservedPort = {
         port_id: retryPort.port_id,
@@ -910,13 +916,7 @@ async function handleMt5ConnectProduction(req, res) {
       ).catch(() => ({ rows: [] }));
 
       const exist = existRes.rows?.[0];
-      if (uiPreferredSlot > 0) {
-        portSlot = uiPreferredSlot;
-      } else if (exist?.port_slot) {
-        portSlot = Number(exist.port_slot);
-      } else {
-        portSlot = await pickBestPackageSlotForConnect(userId, totalPorts, 0);
-      }
+      portSlot = uiPreferredSlot;
 
       if (!portSlot) {
         throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
