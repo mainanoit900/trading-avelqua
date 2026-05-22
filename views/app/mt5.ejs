@@ -38,9 +38,10 @@ document.addEventListener('DOMContentLoaded', function () {
 @keyframes mt5EqPulse{50%{opacity:.5}}
 @keyframes mt5EqFlash{0%{color:#fef08a}100%{color:#86efac}}
 .mt5-connect-steps{display:flex;flex-wrap:wrap;gap:6px;margin:0 0 10px}
-.mt5-connect-step{font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px;border:1px solid #334155;color:#64748b;background:#0f172a}
+.mt5-connect-step{font-size:11px;font-weight:700;padding:5px 10px;border-radius:999px;border:1px solid #334155;color:#64748b;background:#0f172a;transition:none}
 .mt5-connect-step.active{border-color:#38bdf8;color:#e0f2fe;background:rgba(56,189,248,.12)}
 .mt5-connect-step.done{border-color:#22c55e;color:#bbf7d0;background:rgba(34,197,94,.1)}
+.mt5-preview-placeholder{transition:none}
 .mt5-connect-diag b{color:#e2e8f0}
 .mt5-connect-diag .warn{color:#fbbf24}
 .mt5-connect-diag .err{color:#f87171}
@@ -197,7 +198,10 @@ document.addEventListener('DOMContentLoaded', function () {
       <span style="color:#64748b"> · ปกติ 30–90 วิ · ค้างนานกด <b>ยกเลิก</b></span>
     </div>
     <div id="mt5ConnectSteps" class="mt5-connect-steps"></div>
-    <div id="mt5ConnectDiag" class="mt5-connect-diag" style="font-size:12px;color:#94a3b8;margin:8px 0;line-height:1.5"></div>
+    <div id="mt5ConnectDiag" class="mt5-connect-diag" style="font-size:12px;color:#94a3b8;margin:8px 0;line-height:1.5">
+      <div id="mt5ConnectDiagBody"></div>
+      <div id="mt5ConnectElapsed" style="margin-top:4px"></div>
+    </div>
     <div id="mt5PreviewPlaceholder" class="mt5-preview-placeholder" style="display:none;padding:20px;text-align:center;color:#64748b;font-size:13px;border:1px dashed #334155;border-radius:8px">
       รอภาพหน้าจอ MT5 จาก VPS Agent...
     </div>
@@ -1692,29 +1696,66 @@ document.addEventListener('DOMContentLoaded', function () {
     }
   }
 
+  function mt5EnsureConnectStepNodes() {
+    const stepsEl = document.getElementById('mt5ConnectSteps');
+    if (!stepsEl || stepsEl.dataset.built === '1') return;
+    const labels = ['① ส่งคำสั่ง', '② Agent รับงาน', '③ เปิด MT5', '④ ตรวจ Login'];
+    stepsEl.innerHTML = labels
+      .map(function (label, i) {
+        return '<span class="mt5-connect-step" data-step-i="' + i + '">' + label + '</span>';
+      })
+      .join('');
+    stepsEl.dataset.built = '1';
+  }
+
+  function mt5RenderConnectElapsed(sec, maxW) {
+    const el = document.getElementById('mt5ConnectElapsed');
+    if (!el || sec === '' || sec == null) return;
+    const n = Number(sec);
+    const waitLine =
+      n >= 60 && maxW > 0
+        ? 'รอมาแล้ว: ' + n + ' / ~' + maxW + ' วินาที'
+        : 'รอมาแล้ว: ' + n + ' วินาที';
+    if (el.textContent !== waitLine) el.textContent = waitLine;
+  }
+
+  window.mt5TickConnectElapsed = function () {
+    if (!window.__mt5ConnectTickStarted) return;
+    const sec = Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000);
+    const maxW = Number(window.__mt5ConnectMaxWaitSec || 0) || 120;
+    mt5RenderConnectElapsed(sec, maxW);
+    const titleEl = document.getElementById('mt5PreviewTitle');
+    if (titleEl && titleEl.dataset.mode === 'wait') {
+      const t = 'รอหน้าต่าง MT5... (' + sec + ' วินาที)';
+      if (titleEl.textContent !== t) titleEl.textContent = t;
+    }
+  };
+
   window.mt5UpdateConnectProgress = function (data) {
     const box = document.getElementById('mt5LoginPreview');
     const stepsEl = document.getElementById('mt5ConnectSteps');
-    const diagEl = document.getElementById('mt5ConnectDiag');
+    const diagBody = document.getElementById('mt5ConnectDiagBody');
     const ph = document.getElementById('mt5PreviewPlaceholder');
     const img = document.getElementById('mt5PreviewImg');
     const titleEl = document.getElementById('mt5PreviewTitle');
     if (!box) return;
     box.style.display = 'block';
+    mt5EnsureConnectStepNodes();
     const d = data || {};
     let sec = d.elapsedSec != null ? d.elapsedSec : '';
     if (window.__mt5ConnectTickStarted && (sec === '' || Number(sec) === 0)) {
       sec = Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000);
     }
+    if (d.maxWaitSec != null) window.__mt5ConnectMaxWaitSec = Number(d.maxWaitSec);
     const st = String((d.account && d.account.status) || d.status || '').toLowerCase();
     const cmd = String(d.commandStatus || '').toLowerCase();
     const agentOk = d.agentOnline === true;
     const agentBad = d.agentOnline === false;
     const stepLabels = [
-      { key: 'queue', label: '① ส่งคำสั่ง' },
-      { key: 'agent', label: '② Agent รับงาน' },
-      { key: 'mt5', label: '③ เปิด MT5' },
-      { key: 'verify', label: '④ ตรวจ Login' }
+      { label: '① ส่งคำสั่ง' },
+      { label: '② Agent รับงาน' },
+      { label: '③ เปิด MT5' },
+      { label: '④ ตรวจ Login' }
     ];
     const progressTotal = Number(d.progressTotal || 4) || 4;
     let activeIdx =
@@ -1722,16 +1763,14 @@ document.addEventListener('DOMContentLoaded', function () {
         ? Math.max(0, Math.min(progressTotal, Number(d.progressStep)))
         : 0;
     if (d.progressStep == null) {
-      if (st === 'connected' || d.connected === true) {
+      if (d.loginVerified === true || (st === 'connected' && d.connected === true)) {
         activeIdx = progressTotal;
-      } else if (st === 'checking') {
+      } else if (st === 'checking' || ['success', 'done'].includes(cmd)) {
         activeIdx = 3;
       } else if (st === 'starting' || !!d.previewUrl) {
         activeIdx = 2;
       } else if (['processing', 'picked', 'running'].includes(cmd)) {
         activeIdx = 2;
-      } else if (['success', 'done'].includes(cmd)) {
-        activeIdx = 3;
       } else if (cmd === 'pending') {
         activeIdx = 1;
       } else if (st === 'connecting') {
@@ -1753,21 +1792,22 @@ document.addEventListener('DOMContentLoaded', function () {
     const stepNowEl = document.getElementById('mt5ConnectStepNow');
     if (stepNowEl) {
       const showNum = activeIdx >= progressTotal ? progressTotal : activeIdx + 1;
-      stepNowEl.textContent =
+      const stepNowText =
         activeIdx >= progressTotal
           ? 'เสร็จสมบูรณ์ (' + progressTotal + '/' + progressTotal + ')'
           : 'ขั้นที่ ' + showNum + '/' + progressTotal + ': ' + stepNowLabel;
+      if (stepNowEl.textContent !== stepNowText) stepNowEl.textContent = stepNowText;
     }
     if (stepsEl) {
-      stepsEl.innerHTML = stepLabels
-        .map(function (s, i) {
-          const cls =
-            i < activeIdx ? 'done' : i === activeIdx ? 'active' : '';
-          return '<span class="mt5-connect-step ' + cls + '">' + s.label + '</span>';
-        })
-        .join('');
+      stepsEl.querySelectorAll('.mt5-connect-step[data-step-i]').forEach(function (node) {
+        const i = Number(node.getAttribute('data-step-i'));
+        const cls =
+          i < activeIdx ? 'done' : i === activeIdx ? 'active' : '';
+        const want = 'mt5-connect-step' + (cls ? ' ' + cls : '');
+        if (node.className !== want) node.className = want;
+      });
     }
-    if (diagEl) {
+    if (diagBody) {
       const lines = [];
       if (d.connectStep) lines.push('<b>ขั้นตอน:</b> ' + mt5Esc(d.connectStep));
       if (d.agentMessage) {
@@ -1790,23 +1830,25 @@ document.addEventListener('DOMContentLoaded', function () {
       } else if (activeIdx === 0 && sec !== '' && Number(sec) >= 8) {
         lines.push('<span class="warn">ยังไม่เห็นคำสั่งในคิว VPS — กดเชื่อมต่อใหม่หรือ Ctrl+F5</span>');
       }
-      if (sec !== '') {
-        const maxW = d.maxWaitSec != null ? Number(d.maxWaitSec) : 120;
-        const waitLine =
-          sec >= 60 && maxW > 0
-            ? '<b>รอมาแล้ว:</b> ' + sec + ' / ~' + maxW + ' วินาที'
-            : '<b>รอมาแล้ว:</b> ' + sec + ' วินาที';
-        lines.push(waitLine);
-      }
       if (d.waitHint) lines.push('<span class="warn">' + mt5Esc(d.waitHint) + '</span>');
-      diagEl.innerHTML = lines.join('<br>') || 'กำลังเชื่อมต่อ...';
+      const bodyHtml = lines.join('<br>') || 'กำลังเชื่อมต่อ...';
+      if (window.__mt5ConnectDiagBodyHtml !== bodyHtml) {
+        window.__mt5ConnectDiagBodyHtml = bodyHtml;
+        diagBody.innerHTML = bodyHtml;
+      }
     }
+    const maxW = d.maxWaitSec != null ? Number(d.maxWaitSec) : Number(window.__mt5ConnectMaxWaitSec || 120);
+    mt5RenderConnectElapsed(sec, maxW);
     if (d.previewUrl && img) {
-      img.src = d.previewUrl;
-      img.style.display = 'block';
+      const base = String(d.previewUrl).split('?')[0];
+      if (img.dataset.srcBase !== base) {
+        img.dataset.srcBase = base;
+        img.src = d.previewUrl;
+      }
+      if (img.style.display !== 'block') img.style.display = 'block';
       if (ph) ph.style.display = 'none';
     } else if (ph && (!img || img.style.display === 'none')) {
-      ph.style.display = 'block';
+      if (ph.style.display !== 'block') ph.style.display = 'block';
       const phMsgs = [
         'ขั้น 1/4: ส่งคำสั่ง login_mt5 ไปเซิร์ฟเวอร์...',
         agentBad
@@ -1815,16 +1857,32 @@ document.addEventListener('DOMContentLoaded', function () {
         'ขั้น 3/4: Agent กำลังเปิด MT5 — รอภาพหน้าจอจาก VPS...',
         'ขั้น 4/4: ตรวจ Login / Journal / ยอดเงินบัญชี...'
       ];
-      ph.textContent = phMsgs[Math.min(activeIdx, phMsgs.length - 1)] || phMsgs[0];
+      const phIdx = Math.min(activeIdx, phMsgs.length - 1);
+      const phText = phMsgs[phIdx] || phMsgs[0];
+      if (ph.textContent !== phText) ph.textContent = phText;
     }
     if (titleEl) {
-      titleEl.textContent = d.windowTitle
-        ? 'Title bar: ' + d.windowTitle
-        : d.message
-          ? mt5Esc(String(d.message).replace(/ — .*$/, ''))
-          : sec !== ''
-            ? 'รอหน้าต่าง MT5... (' + sec + ' วินาที)'
-            : '';
+      const inFlight = sessionStorage.getItem('mt5ConnectInFlight') === '1';
+      const showSuccess =
+        d.loginVerified === true && !inFlight && /เชื่อมต่อสำเร็จ/i.test(String(d.message || ''));
+      if (d.windowTitle) {
+        titleEl.dataset.mode = 'title';
+        const t = 'Title bar: ' + d.windowTitle;
+        if (titleEl.textContent !== t) titleEl.textContent = t;
+      } else if (showSuccess) {
+        titleEl.dataset.mode = 'ok';
+        const t = mt5Esc(String(d.message || '').replace(/ — .*$/, ''));
+        if (titleEl.textContent !== t) titleEl.textContent = t;
+      } else if (d.connectStep) {
+        titleEl.dataset.mode = 'step';
+        const t = mt5Esc(String(d.connectStep));
+        if (titleEl.textContent !== t) titleEl.textContent = t;
+      } else {
+        titleEl.dataset.mode = 'wait';
+        const t =
+          sec !== '' ? 'รอหน้าต่าง MT5... (' + sec + ' วินาที)' : 'รอหน้าต่าง MT5...';
+        if (titleEl.textContent !== t) titleEl.textContent = t;
+      }
     }
   };
 
@@ -2270,12 +2328,11 @@ document.addEventListener('DOMContentLoaded', function () {
     window.__mt5FinishSuccessRunning = false;
     sessionStorage.removeItem('mt5ConnectedShownId');
     mt5ClearConnectModalDedupe(mt5PollAccountId || '');
-    window.mt5Checker = setInterval(checkMt5Connected, 500);
+    window.mt5Checker = setInterval(checkMt5Connected, 1200);
     window.mt5ElapsedTicker = setInterval(function () {
       if (!mt5Checking || !window.__mt5ConnectTickStarted) return;
-      const localSec = Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000);
-      if (typeof window.mt5UpdateConnectProgress === 'function') {
-        window.mt5UpdateConnectProgress({ elapsedSec: localSec });
+      if (typeof window.mt5TickConnectElapsed === 'function') {
+        window.mt5TickConnectElapsed();
       }
     }, 1000);
     checkMt5Connected();

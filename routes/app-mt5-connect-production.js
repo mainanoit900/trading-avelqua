@@ -1292,7 +1292,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
       : { rows: [] };
     const staleLimitMs = connectPollStaleLimitMs();
 
-    if (['connecting', 'starting', 'checking'].includes(status) && staleMs > staleLimitMs) {
+    const dbStatusEarly = String(a.status || '').toLowerCase();
+    const needsStaleWatch = ['connecting', 'starting', 'checking'].includes(dbStatusEarly);
+    if (needsStaleWatch && staleMs > staleLimitMs) {
       const loginStillBusy = await hasLoginCommandInProgress(a.id, a.vps_id).catch(() => false);
       if (!loginStillBusy) {
         const staleMsg = 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่';
@@ -1390,26 +1392,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
       statusFinal = String(a.status || statusFinal).toLowerCase();
     }
 
-    const inProgress = statusFinal === 'connecting' || statusFinal === 'checking' || statusFinal === 'starting';
     const failedMsg = a.last_error || a.last_login_message || '';
     const elapsedSec = Math.max(0, Math.floor(staleMs / 1000));
-    let userMessage = statusFinal === 'connected'
-      ? MT5_SUCCESS_MSG
-      : statusFinal === 'failed'
-        ? (/ทันเวลา|timeout|cancelled:\s*journal|journal\s+login\s+failed/i.test(failedMsg)
-            ? MT5_LOGIN_TIMEOUT_MSG
-            : failedMsg || MT5_FAIL_USER_MSG)
-        : (a.last_login_message || a.last_error || statusFinal);
-    if (inProgress) {
-      const upgradeHint = /อัปเดต Agent|รอ 2.?3 นาที|Restart-Service/i.test(
-        String(a.last_login_message || '')
-      );
-      userMessage = upgradeHint
-        ? `กำลังเปิด MT5 และ Login... (${elapsedSec} วินาที)`
-        : (a.last_login_message || `กำลังเปิด MT5 และตรวจสอบ Login (${elapsedSec} วินาที)...`);
-    }
     const previewPath = previewPublicPath(a.id);
-    const previewUrl = previewPath ? `${previewPath}?t=${Date.now()}` : '';
     const cmdMeta = await resolveLoginCommandMeta(a.id, a.vps_id);
     const agentMeta = await resolveVpsAgentOnline(a.vps_id);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
@@ -1421,6 +1406,55 @@ async function handleMt5ConnectStatusProduction(req, res) {
         ? String(a.status || '').toLowerCase()
         : 'checking';
       a.status = statusFinal;
+    }
+    const inProgress = ['connecting', 'checking', 'starting'].includes(statusFinal);
+    let userMessage;
+    if (loginVerified) {
+      userMessage = MT5_SUCCESS_MSG;
+    } else if (statusFinal === 'failed') {
+      userMessage = /ทันเวลา|timeout|cancelled:\s*journal|journal\s+login\s+failed/i.test(failedMsg)
+        ? MT5_LOGIN_TIMEOUT_MSG
+        : failedMsg || MT5_FAIL_USER_MSG;
+    } else if (inProgress) {
+      const upgradeHint = /อัปเดต Agent|รอ 2.?3 นาที|Restart-Service/i.test(
+        String(a.last_login_message || '')
+      );
+      if (['success', 'done'].includes(cmdSt)) {
+        userMessage = `กำลังตรวจ Login จาก Journal MT5 (${elapsedSec} วินาที)...`;
+      } else if (upgradeHint) {
+        userMessage = `กำลังเปิด MT5 และ Login... (${elapsedSec} วินาที)`;
+      } else {
+        userMessage =
+          a.last_login_message || `กำลังเปิด MT5 และตรวจสอบ Login (${elapsedSec} วินาที)...`;
+      }
+    } else {
+      userMessage = a.last_login_message || a.last_error || statusFinal;
+    }
+    const previewBust = Math.floor(Date.now() / 15000);
+    const previewUrl = previewPath ? `${previewPath}?t=${previewBust}` : '';
+    const maxWaitSec = Math.floor(connectPollStaleLimitMs() / 1000);
+    const dbStatusLate = String(a.status || '').toLowerCase();
+    if (
+      !loginVerified &&
+      (inProgress || dbStatusLate === 'connected') &&
+      elapsedSec >= maxWaitSec &&
+      (['success', 'done'].includes(cmdSt) || dbStatusLate === 'connected')
+    ) {
+      const busy = await hasLoginCommandInProgress(a.id, a.vps_id).catch(() => false);
+      if (!busy) {
+        await failAccountFromJournal(a.id, a.port_id, MT5_LOGIN_TIMEOUT_MSG, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no,
+          folderPath: a.folder_path,
+          reason: 'journal_verify_poll_timeout',
+          killMt5: false
+        }).catch(() => {});
+        statusFinal = 'failed';
+        a.status = 'failed';
+        a.last_error = MT5_LOGIN_TIMEOUT_MSG;
+        a.last_login_message = MT5_LOGIN_TIMEOUT_MSG;
+        userMessage = MT5_LOGIN_TIMEOUT_MSG;
+      }
     }
     const progress = deriveConnectProgress(
       statusFinal,
@@ -1449,7 +1483,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       windowTitle: windowTitleFromMessage(a.last_login_message),
       previewUrl,
       elapsedSec,
-      maxWaitSec: Math.floor(connectPollStaleLimitMs() / 1000),
+      maxWaitSec,
       connectStep,
       progressStep: progress.progressStep,
       progressStepLabel: progress.progressStepLabel,
