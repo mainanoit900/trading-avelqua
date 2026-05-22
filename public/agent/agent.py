@@ -95,7 +95,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v41"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v42"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1478,16 +1478,76 @@ def ensure_equity_pulse_indicator(port_dir: Path) -> None:
         log(f"DEPLOY AvelquaEquityPulse ERROR: {e}")
 
 
-def account_snapshot_mt5_api(
-    port_dir: Path, payload: Optional[Dict[str, Any]] = None
-) -> Dict[str, Any]:
-    """ดึง Balance/Equity ผ่าน MetaTrader5 package (terminal ที่รันอยู่)"""
+_MT5_API_SKIP_UNTIL: Dict[str, float] = {}
+_MT5_API_SKIP_LOGGED: Dict[str, float] = {}
+
+
+def _mt5_api_cache_key(port_dir: Path) -> str:
+    return str(port_dir).lower()
+
+
+def _mt5_api_should_skip(port_dir: Path) -> bool:
+    return time.time() < _MT5_API_SKIP_UNTIL.get(_mt5_api_cache_key(port_dir), 0.0)
+
+
+def _mt5_api_mark_skip(port_dir: Path, sec: float = 180.0) -> None:
+    _MT5_API_SKIP_UNTIL[_mt5_api_cache_key(port_dir)] = time.time() + sec
+    key = _mt5_api_cache_key(port_dir)
+    if time.time() - _MT5_API_SKIP_LOGGED.get(key, 0.0) > 90:
+        _MT5_API_SKIP_LOGGED[key] = time.time()
+        log(
+            "MT5 Python API skip (terminal busy / Authorization -6) — "
+            "ใช้ journal, หน้าต่าง MT5, ไฟล์ equity แทน"
+        )
+
+
+def _mt5_api_init_error_is_busy(err: Any) -> bool:
+    s = str(err or "").lower()
+    return "-6" in s or "authorization failed" in s or "authorization" in s and "fail" in s
+
+
+def _mt5_initialize_for_port(port_dir: Path) -> Tuple[bool, str]:
+    """initialize MetaTrader5 — ไม่เรียก login() ถ้า terminal64 รันอยู่ (กัน -6)"""
+    if _mt5_api_should_skip(port_dir):
+        return False, "api_skip_cached"
     try:
         import MetaTrader5 as mt5  # type: ignore
     except Exception:
-        return {}
+        return False, "MetaTrader5 package not installed"
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
+        return False, "terminal64.exe not found"
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            err = mt5.last_error()
+            if _mt5_api_init_error_is_busy(err):
+                _mt5_api_mark_skip(port_dir)
+                return False, "api_attach_busy"
+            return False, f"init fail {err}"
+        return True, "ok"
+    except Exception as e:
+        if _mt5_api_init_error_is_busy(e):
+            _mt5_api_mark_skip(port_dir)
+            return False, "api_attach_busy"
+        return False, str(e)
+
+
+def account_snapshot_mt5_api(
+    port_dir: Path, payload: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """ดึง Balance/Equity ผ่าน MetaTrader5 package — ข้ามเมื่อ terminal เปิดอยู่แล้วแต่ attach ไม่ได้ (-6)"""
+    if _mt5_api_should_skip(port_dir) or mt5_running_for_port_dir(port_dir):
+        return {}
+    ok_init, _ = _mt5_initialize_for_port(port_dir)
+    if not ok_init:
+        return {}
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
         return {}
     login_hint = 0
     try:
@@ -1495,19 +1555,7 @@ def account_snapshot_mt5_api(
     except Exception:
         login_hint = 0
     try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        if not mt5.initialize(path=str(terminal)):
-            return {}
         ai = mt5.account_info()
-        if ai is None and login_hint:
-            try:
-                mt5.login(login_hint)
-                ai = mt5.account_info()
-            except Exception:
-                ai = None
         mt5.shutdown()
         if ai is None:
             return {}
@@ -1535,42 +1583,44 @@ def mt5_login_verify_api(
     password: str,
     server: str = MT5_LIVE_SERVER,
 ) -> Tuple[bool, str]:
-    """ยืนยัน login ผ่าน MT5 API — ใช้เมื่อ journal ช้าแต่ terminal login แล้ว"""
+    """ยืนยัน login ผ่าน MT5 API — ไม่ login() ซ้ำเมื่อ GUI terminal รันอยู่"""
     login = str(login).strip()
     if not login:
         return False, ""
-    try:
-        import MetaTrader5 as mt5  # type: ignore
-    except Exception:
-        return False, "MetaTrader5 package not installed"
-    terminal = port_dir / "terminal64.exe"
-    if not terminal.exists():
-        return False, "terminal64.exe not found"
+    if _mt5_api_should_skip(port_dir):
+        return False, "api_skip_cached"
     try:
         login_int = int(login)
     except Exception:
         return False, "invalid login"
-    srv = str(server or MT5_LIVE_SERVER).strip()
+    gui_running = mt5_running_for_port_dir(port_dir)
+    ok_init, init_msg = _mt5_initialize_for_port(port_dir)
+    if not ok_init:
+        return False, init_msg
     try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        if not mt5.initialize(path=str(terminal)):
-            return False, f"init fail {mt5.last_error()}"
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
+        return False, "MetaTrader5 package not installed"
+    try:
         ai = mt5.account_info()
         ai_login = int(getattr(ai, "login", 0) or 0) if ai is not None else 0
         if ai_login == login_int and ai is not None:
             eq = float(getattr(ai, "equity", 0) or 0)
             mt5.shutdown()
             return True, f"api session ok equity={eq:.2f}"
-        if ai_login != login_int:
-            logged = mt5.login(login_int, password=password, server=srv)
-            if not logged:
-                err = mt5.last_error()
-                mt5.shutdown()
-                return False, f"login fail {err}"
-            ai = mt5.account_info()
+        if gui_running:
+            mt5.shutdown()
+            return False, "api_gui_running"
+        srv = str(server or MT5_LIVE_SERVER).strip()
+        logged = mt5.login(login_int, password=password, server=srv)
+        if not logged:
+            err = mt5.last_error()
+            mt5.shutdown()
+            if _mt5_api_init_error_is_busy(err):
+                _mt5_api_mark_skip(port_dir)
+                return False, "api_attach_busy"
+            return False, f"login fail {err}"
+        ai = mt5.account_info()
         mt5.shutdown()
         if ai is None:
             return False, "account_info empty"
@@ -1582,6 +1632,9 @@ def mt5_login_verify_api(
             mt5.shutdown()
         except Exception:
             pass
+        if _mt5_api_init_error_is_busy(e):
+            _mt5_api_mark_skip(port_dir)
+            return False, "api_attach_busy"
         return False, str(e)
 
 
@@ -1716,14 +1769,14 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             return _snap_merge_profit(snap)
 
         if mt5_open:
-            api_snap = account_snapshot_mt5_api(port_dir, payload)
-            if _snap_positive(api_snap):
-                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
-                return _snap_merge_profit(snap)
-
             uia_snap = account_snapshot_uia(port, payload)
             if _snap_positive(uia_snap):
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
+                return _snap_merge_profit(snap)
+
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
+            if _snap_positive(api_snap):
+                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
                 return _snap_merge_profit(snap)
 
         if not mt5_open:
@@ -2714,6 +2767,7 @@ def wait_mt5_login_hybrid(
     last_broad_journal_at = 0.0
     last_wizard_at = 0.0
     early_sent: List[bool] = [False]
+    api_skip_logged = False
     password = str(payload_get(payload, "mt5Password", "password") or "")
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
@@ -2849,7 +2903,13 @@ def wait_mt5_login_hybrid(
             fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
                 port, payload, login, joined, window_ok_streak, j_out, elapsed
             )
-        if not fast_ok and ok_w and window_ok_streak >= 1 and now - last_api_at >= 1.0:
+        if (
+            not fast_ok
+            and not _mt5_api_should_skip(port_dir)
+            and ok_w
+            and window_ok_streak >= 1
+            and now - last_api_at >= 1.0
+        ):
             last_api_at = now
             api_hit, api_msg = _connect_on_api_verify(
                 payload, port, port_dir, login, proc_pid, joined, preview_b64
@@ -2857,18 +2917,31 @@ def wait_mt5_login_hybrid(
             if api_hit:
                 return True, f"api verified; {api_msg}", joined
 
-        if not fast_ok and elapsed >= 12 and now - last_api_at >= 10.0:
+        if (
+            not fast_ok
+            and not _mt5_api_should_skip(port_dir)
+            and elapsed >= 12
+            and now - last_api_at >= 10.0
+        ):
             last_api_at = now
             api_hit, api_msg = _connect_on_api_verify(
                 payload, port, port_dir, login, proc_pid, joined, preview_b64
             )
             if api_hit:
                 return True, f"api verified; {api_msg}", joined
-            if api_msg:
-                log(f"LOGIN API RETRY login={login} detail={str(api_msg)[:120]}")
+            if api_msg and "api_attach" in str(api_msg) and not api_skip_logged:
+                api_skip_logged = True
+                log(f"LOGIN API skipped (terminal busy) login={login}")
 
         if not fast_ok and elapsed >= 18:
-            snap_loop = account_snapshot(port, payload)
+            snap_loop: Dict[str, Any] = {"balance": None, "equity": None}
+            fs = account_snapshot_equity_file(port_dir, max_age_sec=120)
+            if _snap_positive(fs):
+                snap_loop.update(fs)
+            elif ok_w:
+                uia = account_snapshot_uia(port, payload)
+                if _snap_positive(uia):
+                    snap_loop.update(uia)
             if _snap_positive(snap_loop) and (ok_w or elapsed >= 25):
                 return _send_fast_connected(
                     payload,
