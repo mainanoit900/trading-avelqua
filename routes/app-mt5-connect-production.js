@@ -852,6 +852,12 @@ async function handleMt5ConnectProduction(req, res) {
       req.body.port_slot || req.body.portSlot || req.body.ui_port_hint || req.body.uiPortHint
     );
 
+    if (!uiPreferredSlot) {
+      throw new Error(
+        'กรุณาคลิกเลือก PORT (ขั้นตอน 1) ก่อนเชื่อมต่อ — 1 PORT = 1 Login = 1 FolderPort ห้ามข้ามช่อง'
+      );
+    }
+
     if (uiPreferredSlot > 0) {
       const onOtherSlot = await findMt5LoginOnOtherUserPort(
         userId,
@@ -918,8 +924,12 @@ async function handleMt5ConnectProduction(req, res) {
       const exist = existRes.rows?.[0];
       portSlot = uiPreferredSlot;
 
-      if (!portSlot) {
-        throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
+      if (!portSlot || portSlot > totalPorts) {
+        throw new Error(
+          portSlot > totalPorts
+            ? `PORT ${portSlot} เกินแพ็กเกจ (${totalPorts} ช่อง)`
+            : `PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`
+        );
       }
 
       if (exist?.id && exist.port_slot && Number(exist.port_slot) !== portSlot) {
