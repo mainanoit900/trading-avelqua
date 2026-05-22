@@ -40,8 +40,10 @@ const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
 const {
   findLoginCommandInProgress,
   findRecentLoginCommand,
-  releaseUserPackagePortSlot
+  releaseUserPackagePortSlot,
+  forceStopPackagePortSlot
 } = require('../lib/mt5LoginCommandVerify');
+const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
 const {
   listAllFolderPortsForConnect,
   pickFolderPortForSlot
@@ -1338,6 +1340,67 @@ router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction)
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
+
+router.post('/mt5/force-stop-port', requireLogin, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const portSlot = num(req.body.port_slot || req.body.portSlot);
+    if (!portSlot) {
+      return res.json({ ok: false, message: 'กรุณาเลือก PORT ก่อน' });
+    }
+    const result = await forceStopPackagePortSlot(userId, portSlot, {
+      reason: 'ui_force_stop_port'
+    });
+    return res.json({
+      ok: result.ok !== false,
+      message: result.message || 'ส่งคำสั่งปิด MT5 บน VPS แล้ว — รอ 5–15 วินาที',
+      portSlot: result.portSlot || portSlot
+    });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message || 'ปิด MT5 ไม่สำเร็จ' });
+  }
+});
+
+router.post('/mt5/cancel-connect', requireLogin, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const portSlot = num(req.body.port_slot || req.body.portSlot);
+    const accountId = num(req.body.accountId || req.body.account_id);
+    const cancelMsg = 'ยกเลิกแล้ว — PORT ว่าง กดเชื่อมต่อใหม่ได้';
+
+    if (accountId) {
+      const accR = await query(
+        `
+        SELECT a.id, a.vps_id, a.port_slot, a.assigned_port_no
+        FROM vps_system.mt5_accounts a
+        WHERE a.id = $1 AND a.user_id = $2
+        LIMIT 1
+      `,
+        [accountId, userId]
+      );
+      const acc = accR.rows?.[0];
+      if (acc) {
+        await cancelAgentCommandsForAccount(accountId, acc.vps_id).catch(() => 0);
+      }
+    }
+
+    if (portSlot > 0) {
+      await releaseUserPackagePortSlot(userId, portSlot, {
+        message: cancelMsg,
+        reason: 'ui_cancel_connect'
+      }).catch(() => {});
+      await forceStopPackagePortSlot(userId, portSlot, {
+        reason: 'ui_cancel_connect'
+      }).catch(() => {});
+    } else {
+      return res.json({ ok: false, message: 'กรุณาเลือก PORT ก่อน' });
+    }
+
+    return res.json({ ok: true, message: cancelMsg, portSlot });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message || 'ยกเลิกไม่สำเร็จ' });
+  }
+});
 
 router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
   try {
