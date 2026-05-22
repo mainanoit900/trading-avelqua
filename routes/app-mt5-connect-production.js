@@ -50,6 +50,7 @@ const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
 const {
   findLoginCommandInProgress,
+  findLoginCommandForAttempt,
   findRecentLoginCommand,
   releaseUserPackagePortSlot,
   forceStopPackagePortSlot,
@@ -688,7 +689,7 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   const vid = num(vpsId);
   if (!aid || !vid) return {};
   const inProg = await findLoginCommandInProgress(aid, vid);
-  const recent = inProg ? null : await findRecentLoginCommand(aid, vid);
+  const recent = inProg ? null : await findLoginCommandForAttempt(aid, vid);
   const cmd = inProg || recent;
   if (!cmd) return {};
   const st = String(cmd.status || '').toLowerCase();
@@ -741,8 +742,16 @@ async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   return verified.ok === true;
 }
 
-function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified) {
+function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified, hasLoginCmd = true) {
   const progressTotal = 4;
+  if (!hasLoginCmd && ['connecting', 'starting', 'checking'].includes(statusFinal)) {
+    return {
+      progressStep: 0,
+      progressTotal,
+      progressStepLabel: 'ส่งคำสั่ง',
+      connectStep: '① กำลังส่งคำสั่ง login_mt5 ไป VPS...'
+    };
+  }
   if (loginVerified) {
     return {
       progressStep: progressTotal,
@@ -1018,8 +1027,9 @@ async function handleMt5ConnectProduction(req, res) {
         server_name=$8,
         account_name=$9,
         status='connecting',
+        connect_started_at=NOW(),
         last_error=NULL,
-        last_login_message='กำลังเปิด MT5 และ Login...',
+        last_login_message='① ส่งคำสั่ง login_mt5 ไป VPS...',
         updated_at=NOW()
       WHERE user_id=$1
         AND mt5_login=$6
@@ -1047,9 +1057,9 @@ async function handleMt5ConnectProduction(req, res) {
         INSERT INTO vps_system.mt5_accounts
         (user_id, vps_id, port_id, port_slot, assigned_port_no, windows_port_no,
          mt5_login, mt5_password, broker, server_name, mt5_server, account_name, status,
-         last_error, last_login_message, updated_at)
+         last_error, last_login_message, connect_started_at, updated_at)
         VALUES
-        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'กำลังเปิด MT5 และ Login...',NOW())
+        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'① ส่งคำสั่ง login_mt5 ไป VPS...',NOW(),NOW())
         RETURNING id
       `, [
         userId,
@@ -1077,8 +1087,9 @@ async function handleMt5ConnectProduction(req, res) {
             server_name=$8,
             account_name=$9,
             status='connecting',
+            connect_started_at=NOW(),
             last_error=NULL,
-            last_login_message='กำลังเปิด MT5 และ Login...',
+            last_login_message='① ส่งคำสั่ง login_mt5 ไป VPS...',
             updated_at=NOW()
           WHERE user_id=$1
             AND mt5_login=$6
@@ -1114,8 +1125,9 @@ async function handleMt5ConnectProduction(req, res) {
           server_name=$8,
           account_name=$9,
           status='connecting',
+          connect_started_at=NOW(),
           last_error=NULL,
-          last_login_message='กำลังเปิด MT5 และ Login...',
+          last_login_message='① ส่งคำสั่ง login_mt5 ไป VPS...',
           updated_at=NOW()
         WHERE user_id=$1
           AND mt5_login=$6
@@ -1142,6 +1154,8 @@ async function handleMt5ConnectProduction(req, res) {
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
     await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
+    const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
+    await expireStalePendingAgentCommands(reservedPort.vps_id, 90).catch(() => {});
 
     if (reservedPort.admin_node_id && allocPortNo) {
       await setAdminAllocationStatus(
@@ -1160,17 +1174,22 @@ async function handleMt5ConnectProduction(req, res) {
     });
     const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, accountId);
 
-    const payload = buildMt5LoginPayload({
-      accountId,
-      userId,
-      reservedPort,
-      portSlot,
-      mt5Login,
-      mt5Password,
-      serverName,
-      journalTimeoutSec,
-      loginQueueDelaySec: queueDelay
-    });
+    const connectStartedAt = new Date().toISOString();
+    const payload = {
+      ...buildMt5LoginPayload({
+        accountId,
+        userId,
+        reservedPort,
+        portSlot,
+        mt5Login,
+        mt5Password,
+        serverName,
+        journalTimeoutSec,
+        loginQueueDelaySec: queueDelay
+      }),
+      connectStartedAt,
+      forceLogin: true
+    };
 
     const queued = await insertPendingAgentCommand({
       vpsId: reservedPort.vps_id,
@@ -1503,11 +1522,13 @@ async function handleMt5ConnectStatusProduction(req, res) {
         userMessage = MT5_LOGIN_TIMEOUT_MSG;
       }
     }
+    const hasLoginCmd = !!cmdMeta.commandId;
     const progress = deriveConnectProgress(
       statusFinal,
       cmdSt,
       previewUrl,
-      loginVerified
+      loginVerified,
+      hasLoginCmd
     );
     let connectStep = progress.connectStep;
     const loginMsg = String(a.last_login_message || '').trim();
@@ -1523,9 +1544,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
         connectStep = '④ รอเลข Login บนหน้าต่าง MT5 — ตรวจรหัสผ่านและ Server';
       }
     }
-    const statusDetail = loginMsg
-      ? loginMsg.replace(/\s*\(\s*\d+\s*วิ(?:นาที)?\s*\)/g, '').trim()
-      : '';
+    const statusDetail =
+      loginVerified || /^เชื่อมต่อสำเร็จ$/i.test(loginMsg)
+        ? ''
+        : loginMsg
+          ? loginMsg.replace(/\s*\(\s*\d+\s*วิ(?:นาที)?\s*\)/g, '').trim()
+          : '';
     return res.json({
       ok: true,
       account: { ...a, status: statusFinal },

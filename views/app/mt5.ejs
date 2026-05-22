@@ -568,10 +568,14 @@ document.addEventListener('DOMContentLoaded', function () {
       window.mt5SelectPortSlot(connectSlot, { navigate: false, skipScroll: true });
     }
     mt5SaveLoginIfRemembered();
+    if (typeof window.mt5StopConnectPolling === 'function') window.mt5StopConnectPolling();
+    mt5PollAccountId = '';
+    sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.setItem('mt5ConnectInFlight', '1');
     sessionStorage.setItem('mt5ConnectStartedAt', String(Date.now()));
     window.__mt5ConnectProgressMax = 0;
     window.__mt5ConnectDiagBodyHtml = '';
+    window.__mt5ConnectTickStarted = Date.now();
     mt5ClearConnectModalDedupe();
     sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
     const btn = document.getElementById('mt5ConnectBtn');
@@ -1566,6 +1570,7 @@ document.addEventListener('DOMContentLoaded', function () {
       window.mt5ElapsedTicker = null;
     }
   }
+  window.mt5StopConnectPolling = mt5StopConnectPolling;
 
   async function finishMt5ConnectFail(message, accountInfo) {
     mt5StopConnectPolling();
@@ -1776,8 +1781,11 @@ document.addEventListener('DOMContentLoaded', function () {
       d.progressStep != null && !Number.isNaN(Number(d.progressStep))
         ? Math.max(0, Math.min(progressTotal, Number(d.progressStep)))
         : 0;
+    const hasCmd = !!(d.commandId || cmd);
     if (d.progressStep == null) {
-      if (d.loginVerified === true || (st === 'connected' && d.connected === true)) {
+      if (!hasCmd && (st === 'connecting' || st === 'starting' || st === 'checking')) {
+        activeIdx = 0;
+      } else if (d.loginVerified === true || (st === 'connected' && d.connected === true)) {
         activeIdx = progressTotal;
       } else if (st === 'checking' || ['success', 'done'].includes(cmd)) {
         activeIdx = 3;
