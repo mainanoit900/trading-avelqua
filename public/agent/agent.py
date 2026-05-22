@@ -91,10 +91,11 @@ MT5_DEMO_SERVER = "MohicansMarkets-Demo"
 LOCKED_MT5_SERVER = MT5_LIVE_SERVER
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
+EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v40"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v41"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2622,6 +2623,37 @@ def _quick_journal_probe(
     return None, chunk
 
 
+def _early_connect_enabled() -> bool:
+    return os.getenv("AVELQUA_EARLY_CONNECT", "true").lower() not in ("0", "false", "no")
+
+
+def _send_early_connect_if_journal_ok(
+    payload: Dict[str, Any],
+    port: Any,
+    proc_pid: Any,
+    login: str,
+    journal_chunk: str,
+    early_sent: List[bool],
+    window_title: str = "",
+) -> bool:
+    """จาก backup 2026-05-19: ส่ง connected ทันทีเมื่อ journal authorized"""
+    if early_sent[0] or not _early_connect_enabled() or not journal_chunk:
+        return early_sent[0]
+    early_sent[0] = True
+    send_connect_result(
+        payload,
+        "connected",
+        EARLY_CONNECT_MSG,
+        port,
+        process_id=proc_pid,
+        journal_evidence=journal_chunk,
+        window_title=window_title or "",
+        window_verified=False,
+    )
+    log(f"EARLY CONNECT SENT PORT={port} LOGIN={login}")
+    return True
+
+
 def _connect_on_api_verify(
     payload: Dict[str, Any],
     port: Any,
@@ -2680,6 +2712,8 @@ def wait_mt5_login_hybrid(
     last_api_at = 0.0
     last_form_at = 0.0
     last_broad_journal_at = 0.0
+    last_wizard_at = 0.0
+    early_sent: List[bool] = [False]
     password = str(payload_get(payload, "mt5Password", "password") or "")
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
@@ -2719,6 +2753,15 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
+        if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
+            try:
+                automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+                if password:
+                    automate_mt5_login_server_form(login, password, server)
+            except Exception as e:
+                log(f"LOGIN WIZARD/FORM burst: {e}")
+            last_wizard_at = now
+
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
         if j_out is None and elapsed >= 25 and now - last_broad_journal_at >= 12.0:
             last_broad_journal_at = now
@@ -2742,7 +2785,10 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
         if j_out is True:
-            return True, "window verified; journal ok", j_chunk
+            _send_early_connect_if_journal_ok(
+                payload, port, proc_pid, login, j_chunk, early_sent, last_title
+            )
+            return True, "journal ok (early web confirm)", j_chunk
 
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)
@@ -2803,14 +2849,23 @@ def wait_mt5_login_hybrid(
             fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
                 port, payload, login, joined, window_ok_streak, j_out, elapsed
             )
-        if not fast_ok and elapsed >= 15 and now - last_api_at >= 10.0:
+        if not fast_ok and ok_w and window_ok_streak >= 1 and now - last_api_at >= 1.0:
             last_api_at = now
             api_hit, api_msg = _connect_on_api_verify(
                 payload, port, port_dir, login, proc_pid, joined, preview_b64
             )
             if api_hit:
                 return True, f"api verified; {api_msg}", joined
-            log(f"LOGIN API RETRY login={login} detail={api_msg[:120]}")
+
+        if not fast_ok and elapsed >= 12 and now - last_api_at >= 10.0:
+            last_api_at = now
+            api_hit, api_msg = _connect_on_api_verify(
+                payload, port, port_dir, login, proc_pid, joined, preview_b64
+            )
+            if api_hit:
+                return True, f"api verified; {api_msg}", joined
+            if api_msg:
+                log(f"LOGIN API RETRY login={login} detail={str(api_msg)[:120]}")
 
         if not fast_ok and elapsed >= 18:
             snap_loop = account_snapshot(port, payload)
@@ -3074,6 +3129,85 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     config_file = write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
+
+    procs_existing = mt5_port_processes(port, payload)
+    mt5_already_open = bool(procs_existing) or mt5_running_for_port_dir(port_dir)
+    ok_fast_open, title_fast_open = mt5_login_verified_by_window(port, payload)
+    if mt5_already_open:
+        sock_ok_open, sock_info_open = mt5_socket_established(port, payload)
+        journal_since_open = time.time() - 600
+        j_open, j_chunk_open = _quick_journal_probe(port_dir, login, journal_since_open, server)
+        if not sock_ok_open and j_open is not True:
+            log(
+                f"MT5 OPEN BUT OFFLINE PORT={port} login={login} socket={sock_info_open} — relaunch"
+            )
+            try:
+                kill_mt5_by_folder(port_dir)
+                time.sleep(2)
+            except Exception as e:
+                log(f"OFFLINE RELAUNCH kill error: {e}")
+            mt5_already_open = False
+            procs_existing = []
+        elif j_open is True or (ok_fast_open and sock_ok_open):
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            proc_pid_open = procs_existing[0].pid if procs_existing else None
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่ ยังไม่เปิด BOT",
+                port,
+                process_id=proc_pid_open,
+                journal_evidence=j_chunk_open,
+                window_title=title_fast_open,
+                window_verified=ok_fast_open,
+            )
+            log(f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login}")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "keepMt5Open": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
+    if mt5_already_open and procs_existing:
+        proc_pid_open = procs_existing[0].pid
+        log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid_open}")
+        ok_open, msg_open, chunk_open = wait_mt5_login_hybrid(
+            port,
+            payload,
+            port_dir,
+            login,
+            time.time() - 120,
+            proc_pid_open,
+            min(45, journal_timeout_sec(payload)),
+        )
+        if ok_open:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            send_connect_result(
+                payload,
+                "connected",
+                msg_open or JOURNAL_OK_MSG,
+                port,
+                process_id=proc_pid_open,
+                journal_evidence=chunk_open,
+                window_verified=True,
+            )
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "keepMt5Open": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+            }
 
     reuse_sess, reuse_title, reuse_pid = _existing_mt5_session_for_login(port, payload, login)
     if reuse_sess:
