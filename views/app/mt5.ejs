@@ -1478,6 +1478,27 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       const stWait = String(data.account.status || data.status || '').toLowerCase();
+      const targetSlot = mt5ConnectTargetSlot();
+      const accSlot = data.account && data.account.port_slot != null ? String(data.account.port_slot) : '';
+      if (
+        inFlight &&
+        targetSlot &&
+        accSlot &&
+        targetSlot !== accSlot &&
+        (stWait === 'connected' || (data.connected === true && data.loginVerified === true))
+      ) {
+        await finishMt5ConnectFail(
+          'Login ' +
+            (data.account.mt5_login || '') +
+            ' เชื่อมต่ออยู่ที่ PORT ' +
+            accSlot +
+            ' แล้ว — คลิก PORT ' +
+            accSlot +
+            ' ไปขั้นตอน 3 เปิด BOT (ห้ามใช้เลขเดียวกันที่ PORT อื่น)',
+          data.account
+        );
+        return;
+      }
       const cmdStFail = String(data.commandStatus || '').toLowerCase();
       if (['failed', 'error', 'cancelled'].includes(cmdStFail)) {
         await finishMt5ConnectFail(
@@ -1605,6 +1626,28 @@ document.addEventListener('DOMContentLoaded', function () {
         stWait === 'connected' &&
         (!data.loginVerified || !data.connected)
       ) {
+        const secGhost = data.elapsedSec != null ? Number(data.elapsedSec) : 0;
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          window.mt5UpdateConnectProgress(data);
+        }
+        if (data.mt5Offline && data.account && inFlight && secGhost >= 3) {
+          finishMt5ConnectSuccess(
+            data.message || 'เชื่อมต่อสำเร็จ — ไปขั้นตอน 3 เปิด BOT',
+            data.account
+          );
+          return;
+        }
+        if (inFlight && secGhost >= 20 && !data.commandStatus) {
+          if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+          showMt5ConnectModal(
+            'error',
+            data.message || 'ยังไม่ได้ส่งคำสั่ง Login — กรุณา Ctrl+F5 แล้วกดเชื่อมต่อใหม่'
+          );
+          sessionStorage.removeItem('mt5ConnectInFlight');
+          mt5Checking = false;
+          if (window.mt5Checker) clearInterval(window.mt5Checker);
+          window.mt5Checker = null;
+        }
         return;
       }
     } catch (e) {} finally {
@@ -1653,8 +1696,67 @@ document.addEventListener('DOMContentLoaded', function () {
 
   if (sessionStorage.getItem('mt5ConnectInFlight') === '1' && !mt5PollAccountId && !serverPendingAccountId) {
     sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+    const stuckPreview = document.getElementById('mt5LoginPreview');
+    if (stuckPreview) stuckPreview.style.display = 'none';
+    if (typeof window.mt5SetCancelConnectVisible === 'function') {
+      window.mt5SetCancelConnectVisible(false);
+    }
   }
+
+  (function mt5UnstickIfTargetPortAlreadyConnected() {
+    if (sessionStorage.getItem('mt5ConnectInFlight') !== '1') return;
+    const target = mt5ConnectTargetSlot();
+    if (!target) return;
+    fetch('/app/mt5/ports-state', { credentials: 'same-origin', headers: { Accept: 'application/json' } })
+      .then(function (r) {
+        return r.json();
+      })
+      .then(function (pd) {
+        if (!pd || !pd.ok) return;
+        const port = (pd.ports || []).find(function (p) {
+          return String(p.slot) === String(target);
+        });
+        if (port && port.cssClass === 'connected') {
+          const acc = (pd.connectedAccounts || []).find(function (a) {
+            return String(a.port_slot) === String(target);
+          });
+          if (acc) {
+            sessionStorage.removeItem('mt5ConnectInFlight');
+            sessionStorage.removeItem('mt5PollAccountId');
+            if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+            if (typeof window.finishMt5ConnectSuccess === 'function') {
+              window.finishMt5ConnectSuccess('PORT ' + target + ' เชื่อมต่ออยู่แล้ว', acc);
+            }
+            return;
+          }
+        }
+        const other = (pd.connectedAccounts || []).find(function (a) {
+          const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
+          return login && String(a.mt5_login || '').trim() === login && String(a.port_slot) !== String(target);
+        });
+        if (other) {
+          sessionStorage.removeItem('mt5ConnectInFlight');
+          sessionStorage.removeItem('mt5PollAccountId');
+          mt5Checking = false;
+          if (window.mt5Checker) clearInterval(window.mt5Checker);
+          window.mt5Checker = null;
+          if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+          const preview = document.getElementById('mt5LoginPreview');
+          if (preview) preview.style.display = 'none';
+          showMt5ConnectModal(
+            'error',
+            'Login ' +
+              other.mt5_login +
+              ' อยู่ที่ PORT ' +
+              other.port_slot +
+              ' แล้ว — ไปขั้นตอน 3 เปิด BOT'
+          );
+        }
+      })
+      .catch(function () {});
+  })();
 
   if (mt5PollAccountId && !urlParams.has('connected') && urlParams.get('failed') !== '1') {
     fetch('/app/mt5/connect-status?accountId=' + encodeURIComponent(mt5PollAccountId), {

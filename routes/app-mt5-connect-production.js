@@ -1417,12 +1417,57 @@ async function handleMt5ConnectStatusProduction(req, res) {
           ).catch(() => ({ ok: false }))
         : { ok: false };
       if (!runLive.ok) {
+        const recentCmd = a.vps_id
+          ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
+          : null;
+        const cmdSt = String(recentCmd?.status || '').toLowerCase();
+        const cmdOk = cmdSt === 'success';
+        const finishedAt = recentCmd?.finished_at ? new Date(recentCmd.finished_at).getTime() : 0;
+        const cmdFresh = cmdOk && finishedAt && Date.now() - finishedAt < 45 * 60 * 1000;
+
+        if (cmdFresh) {
+          const offlineMsg =
+            a.last_login_message ||
+            'เชื่อมต่อสำเร็จแล้ว — MT5 อาจปิดชั่วคราว ไปขั้นตอน 3 กดเปิด BOT ได้';
+          const previewPathConn = previewPublicPath(a.id);
+          return res.json({
+            ok: true,
+            account: { ...a, status: 'connected', last_login_message: offlineMsg },
+            connected: true,
+            failed: false,
+            checking: false,
+            pending: false,
+            status: 'connected',
+            loginVerified: true,
+            mt5Offline: true,
+            message: offlineMsg,
+            windowTitle: windowTitleFromMessage(a.last_login_message),
+            previewUrl: previewPathConn ? `${previewPathConn}?t=${Date.now()}` : '',
+            elapsedSec: 0
+          });
+        }
+
         const inProg = a.vps_id
           ? await findLoginCommandInProgress(a.id, a.vps_id).catch(() => null)
           : null;
-        const reopenMsg = inProg
-          ? 'กำลังเปิด MT5 บน VPS...'
-          : 'MT5 ยังไม่เปิดบน VPS — กรุณากรอกรหัสแล้วกดเชื่อมต่อใหม่';
+        if (!inProg) {
+          const reopenMsg =
+            'MT5 ยังไม่เปิดบน VPS — กรุณากรอกรหัสแล้วกดเชื่อมต่อใหม่';
+          return res.json({
+            ok: true,
+            account: { ...a, status: 'connected', last_login_message: reopenMsg },
+            connected: true,
+            failed: false,
+            checking: false,
+            pending: false,
+            status: 'connected',
+            loginVerified: true,
+            mt5Offline: true,
+            message: reopenMsg,
+            elapsedSec: 0
+          });
+        }
+        const reopenMsg = 'กำลังเปิด MT5 บน VPS...';
         await query(
           `
           UPDATE vps_system.mt5_accounts
@@ -1437,7 +1482,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
           connected: false,
           failed: false,
           checking: true,
-          pending: Boolean(inProg),
+          pending: true,
           status: 'checking',
           loginVerified: false,
           mt5NotRunning: true,
