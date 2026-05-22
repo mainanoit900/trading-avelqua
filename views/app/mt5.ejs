@@ -561,7 +561,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const slotInput = document.getElementById('mt5SelectedPortSlot');
     if (slotInput) slotInput.value = String(connectSlot);
     if (typeof window.mt5SelectPortSlot === 'function') {
-      window.mt5SelectPortSlot(connectSlot, { navigate: false });
+      window.mt5SelectPortSlot(connectSlot, { navigate: false, skipScroll: true });
     }
     mt5SaveLoginIfRemembered();
     sessionStorage.setItem('mt5ConnectInFlight', '1');
@@ -1228,6 +1228,7 @@ document.addEventListener('DOMContentLoaded', function () {
       } else if (runPanel && (data.connectedAccounts || []).length > 0) {
         runPanel.innerHTML = renderMt5RunFormHtml(data.connectedAccounts, data.bots || []);
         if (typeof window.mt5BindRunForm === 'function') window.mt5BindRunForm();
+        if (typeof window.mt5BindNumberInputWheel === 'function') window.mt5BindNumberInputWheel();
       }
     } catch (_) {}
   }
@@ -1409,7 +1410,7 @@ document.addEventListener('DOMContentLoaded', function () {
       slot = mt5FirstEmptyPortSlotFromDom();
     }
     if (slot && typeof window.mt5SelectPortSlot === 'function') {
-      window.mt5SelectPortSlot(slot, { navigate: false });
+      window.mt5SelectPortSlot(slot, { navigate: false, skipScroll: true });
     }
     if (slot && typeof mt5UpdateFolderPortHint === 'function') {
       mt5UpdateFolderPortHint(slot);
@@ -1585,7 +1586,7 @@ document.addEventListener('DOMContentLoaded', function () {
       await refreshMt5PortCards().catch(function () {});
       const empty = mt5FirstEmptyPortSlotFromDom();
       if (empty && typeof window.mt5SelectPortSlot === 'function') {
-        window.mt5SelectPortSlot(empty, { navigate: false });
+        window.mt5SelectPortSlot(empty, { navigate: false, skipScroll: true });
       }
       setTimeout(function () {
         refreshMt5PortCards().catch(function () {});
@@ -1997,8 +1998,9 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (data.account && data.account.port_slot != null && inFlight) {
         const pollSlot = String(data.account.port_slot);
-        if (pollSlot && typeof window.mt5SelectPortSlot === 'function') {
-          window.mt5SelectPortSlot(pollSlot, { navigate: false });
+        const curSlot = String((document.getElementById('mt5SelectedPortSlot') || {}).value || '');
+        if (pollSlot && pollSlot !== curSlot && typeof window.mt5SelectPortSlot === 'function') {
+          window.mt5SelectPortSlot(pollSlot, { navigate: false, skipScroll: true });
         }
       }
       if (!data.account || data.staleAccount === true) {
@@ -2485,20 +2487,32 @@ document.addEventListener('DOMContentLoaded', function () {
 const mt5ConnectForm = document.getElementById('mt5ConnectForm');
 const mt5SelectedPortSlot = document.getElementById('mt5SelectedPortSlot');
 
+function mt5ScrollElIfNeeded(el, scrollOpts) {
+  if (!el) return;
+  const r = el.getBoundingClientRect();
+  const pad = 72;
+  const inView = r.top >= pad && r.bottom <= window.innerHeight - pad;
+  if (inView) return;
+  el.scrollIntoView(scrollOpts || { behavior: 'smooth', block: 'nearest' });
+}
+
 function mt5ScrollToBotSection() {
-  const el = document.getElementById('mt5BotSection');
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  mt5ScrollElIfNeeded(document.getElementById('mt5BotSection'), {
+    behavior: 'smooth',
+    block: 'start'
+  });
 }
 
 function mt5ScrollToLoginSection() {
   const el = document.getElementById('mt5LoginPortPill') || document.getElementById('mt5ConnectForm');
-  if (el) el.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+  mt5ScrollElIfNeeded(el, { behavior: 'smooth', block: 'nearest' });
 }
 
 function mt5SelectPortSlot(slot, opts) {
   const o = opts || {};
   const n = Number(slot || 0);
   if (!n || !mt5SelectedPortSlot) return;
+  const prevSlot = String(mt5SelectedPortSlot.value || '');
   mt5SelectedPortSlot.value = String(n);
   try { localStorage.setItem('mt5ActivePortSlot', String(n)); } catch (_) {}
   try {
@@ -2542,10 +2556,15 @@ function mt5SelectPortSlot(slot, opts) {
     window.location.href = '/app/mt5?port_slot=' + encodeURIComponent(n);
     return;
   }
-  if (isConnected) {
-    mt5ScrollToBotSection();
-  } else {
-    mt5ScrollToLoginSection();
+  const connectBusy = sessionStorage.getItem('mt5ConnectInFlight') === '1';
+  const allowScroll = o.scroll === true && !o.skipScroll && !connectBusy;
+  const slotChanged = prevSlot !== String(n);
+  if (allowScroll && (slotChanged || o.forceScroll)) {
+    if (isConnected) {
+      mt5ScrollToBotSection();
+    } else if (!isChecking) {
+      mt5ScrollToLoginSection();
+    }
   }
 }
 window.mt5SelectPortSlot = mt5SelectPortSlot;
@@ -2914,7 +2933,7 @@ function mt5BindPortSlotPicks() {
     const slot = card.getAttribute('data-port-slot');
     const goNav =
       card.classList.contains('connected') || card.classList.contains('checking');
-    mt5SelectPortSlot(slot, { navigate: goNav });
+    mt5SelectPortSlot(slot, { navigate: goNav, scroll: !goNav });
   });
   list.addEventListener('keydown', function (e) {
     const hit = e.target.closest('.port-slot-pick-hit[data-port-slot]');
@@ -2924,11 +2943,48 @@ function mt5BindPortSlotPicks() {
     const goNav =
       card &&
       (card.classList.contains('connected') || card.classList.contains('checking'));
-    mt5SelectPortSlot(hit.getAttribute('data-port-slot'), { navigate: !!goNav });
+    mt5SelectPortSlot(hit.getAttribute('data-port-slot'), { navigate: !!goNav, scroll: !goNav });
   });
 }
 window.mt5BindPortSlotPicks = mt5BindPortSlotPicks;
 mt5BindPortSlotPicks();
+
+(function mt5BindNumberInputWheel() {
+  function bindWheel(el) {
+    if (!el || el.dataset.mt5WheelBound === '1') return;
+    el.dataset.mt5WheelBound = '1';
+    el.addEventListener(
+      'wheel',
+      function (ev) {
+        if (document.activeElement !== el) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+      },
+      { passive: false }
+    );
+  }
+  document.querySelectorAll('.mt5-page input[type="number"]').forEach(bindWheel);
+  document.addEventListener('focusin', function (ev) {
+    const t = ev.target;
+    if (t && t.matches && t.matches('.mt5-page input[type="number"]')) bindWheel(t);
+  });
+})();
+window.mt5BindNumberInputWheel = function () {
+  document.querySelectorAll('.mt5-page input[type="number"]').forEach(function (el) {
+    if (el.dataset.mt5WheelBound === '1') return;
+    el.dataset.mt5WheelBound = '1';
+    el.addEventListener(
+      'wheel',
+      function (ev) {
+        if (document.activeElement !== el) return;
+        ev.preventDefault();
+        ev.stopPropagation();
+      },
+      { passive: false }
+    );
+  });
+};
+
 try {
   const urlSlot = new URLSearchParams(window.location.search).get('port_slot');
   const savedSlot = urlSlot || localStorage.getItem('mt5ActivePortSlot');
@@ -2941,10 +2997,10 @@ try {
     } catch (_) {}
   }
   if (savedSlot) {
-    mt5SelectPortSlot(savedSlot, { navigate: false });
+    mt5SelectPortSlot(savedSlot, { navigate: false, skipScroll: true });
   } else {
     const empty = mt5FirstEmptyPortSlotFromDom();
-    if (empty) mt5SelectPortSlot(empty, { navigate: false });
+    if (empty) mt5SelectPortSlot(empty, { navigate: false, skipScroll: true });
   }
 } catch (_) {}
 
@@ -3582,6 +3638,8 @@ setInterval(loadMt5LiveDashboard, 8000);
 <style>
 html.mt5-page-scroll,
 html.mt5-page-scroll body{overflow-y:auto!important;height:auto!important;overscroll-behavior-y:auto}
+.mt5-page input[type="number"]:focus{scroll-margin:24px}
+.mt5-login-preview{scroll-margin:12px}
 .portal-shell.premium>.content-shell{overflow:visible;min-height:0}
 .mt5-page{overflow:visible}
 .mt5-lux-modal{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;pointer-events:auto}
