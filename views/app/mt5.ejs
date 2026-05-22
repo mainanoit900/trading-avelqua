@@ -467,12 +467,6 @@ document.addEventListener('DOMContentLoaded', function () {
       );
       return false;
     }
-    const portRow = (window.__mt5PortsState && window.__mt5PortsState.ports || []).find(function (p) {
-      return String(p.slot) === String(connectSlot);
-    });
-    if (portRow && !portRow.accountId) {
-      mt5CleanupAfterLoginFail({ port_slot: connectSlot });
-    }
     if (window.__mt5PortsState && (window.__mt5PortsState.vpsOnlineCount || 0) < 1) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',

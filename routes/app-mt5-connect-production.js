@@ -1079,19 +1079,28 @@ async function handleMt5ConnectProduction(req, res) {
     }
     reservedPort.folder_path = folderPathForPackageSlot(reservedPort, portSlot);
 
-    // ไม่พึ่ง ON CONFLICT เพราะฐานข้อมูลเดิมบางชุดอาจยังไม่มี unique constraint ครบ
-    // ใช้วิธี UPDATE ก่อน ถ้าไม่มีค่อย INSERT เพื่อไม่ให้ deploy แล้วล้ม
-    let acc = await query(`
-      UPDATE vps_system.mt5_accounts
-      SET
+    // หนึ่ง PORT แพ็กเกจ = หนึ่งแถว (port_slot) — ห้ามย้ายบัญชี connected จาก PORT อื่นมาทับ
+    const otherPortLive = await findMt5LoginOnOtherUserPort(
+      userId,
+      mt5Login,
+      serverName,
+      portSlot
+    );
+    if (otherPortLive) {
+      throw new Error(mt5LoginOnOtherPortMessage(otherPortLive));
+    }
+
+    const accountSetSql = `
         vps_id=$2,
         port_id=$3,
         port_slot=$4,
         assigned_port_no=$5,
         windows_port_no=$5,
+        mt5_login=$6,
         mt5_password=$7,
         broker='MH Markets',
         server_name=$8,
+        mt5_server=$8,
         account_name=$9,
         status='connecting',
         last_error=NULL,
@@ -1099,21 +1108,58 @@ async function handleMt5ConnectProduction(req, res) {
         last_journal_evidence=NULL,
         connect_started_at=NOW(),
         updated_at=NOW()
+    `;
+
+    let acc = await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET ${accountSetSql}
       WHERE user_id=$1
-        AND mt5_login=$6
-        AND COALESCE(server_name, mt5_server, '')=$8
+        AND port_slot=$4
+        AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
       RETURNING id
-    `, [
-      userId,
-      reservedPort.vps_id,
-      reservedPort.port_id,
-      portSlot,
-      allocPortNo,
-      mt5Login,
-      mt5Password,
-      serverName,
-      `PORT ${portSlot}`
-    ]);
+    `,
+      [
+        userId,
+        reservedPort.vps_id,
+        reservedPort.port_id,
+        portSlot,
+        allocPortNo,
+        mt5Login,
+        mt5Password,
+        serverName,
+        `PORT ${portSlot}`
+      ]
+    );
+
+    if (!acc.rows?.[0]) {
+      acc = await query(
+        `
+        UPDATE vps_system.mt5_accounts
+        SET ${accountSetSql}
+        WHERE user_id=$1
+          AND mt5_login=$6
+          AND COALESCE(server_name, mt5_server, '')=$8
+          AND (
+            port_slot IS NULL
+            OR port_slot=$4
+          )
+          AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('connected', 'deleted', 'expired')
+        RETURNING id
+      `,
+        [
+          userId,
+          reservedPort.vps_id,
+          reservedPort.port_id,
+          portSlot,
+          allocPortNo,
+          mt5Login,
+          mt5Password,
+          serverName,
+          `PORT ${portSlot}`
+        ]
+      );
+    }
 
     const keepId = acc.rows?.[0]?.id || null;
     await releaseStaleVpsPortAccounts(
@@ -1150,39 +1196,27 @@ async function handleMt5ConnectProduction(req, res) {
           allocPortNo,
           null
         );
-        return query(`
+        return query(
+          `
           UPDATE vps_system.mt5_accounts
-          SET
-            vps_id=$2,
-            port_id=$3,
-            port_slot=$4,
-            assigned_port_no=$5,
-            windows_port_no=$5,
-            mt5_password=$7,
-            broker='MH Markets',
-            server_name=$8,
-            account_name=$9,
-            status='connecting',
-            last_error=NULL,
-            last_login_message='กำลังเปิด MT5 และ Login...',
-            last_journal_evidence=NULL,
-            connect_started_at=NOW(),
-            updated_at=NOW()
+          SET ${accountSetSql}
           WHERE user_id=$1
-            AND mt5_login=$6
-            AND COALESCE(server_name, mt5_server, '')=$8
+            AND port_slot=$4
+            AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
           RETURNING id
-        `, [
-          userId,
-          reservedPort.vps_id,
-          reservedPort.port_id,
-          portSlot,
-          allocPortNo,
-          mt5Login,
-          mt5Password,
-          serverName,
-          `PORT ${portSlot}`
-        ]);
+        `,
+          [
+            userId,
+            reservedPort.vps_id,
+            reservedPort.port_id,
+            portSlot,
+            allocPortNo,
+            mt5Login,
+            mt5Password,
+            serverName,
+            `PORT ${portSlot}`
+          ]
+        );
       });
     }
 
