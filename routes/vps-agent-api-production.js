@@ -1012,7 +1012,7 @@ router.post('/connect-result', async (req, res) => {
           ? new Date(ageRow2.rows[0].connect_started_at).getTime()
           : 0;
         const ageSec2 = started2 ? Math.floor((Date.now() - started2) / 1000) : 0;
-        if (ageSec2 >= 14) {
+        if (ageSec2 >= 8) {
           const portRunChk = await verifyPortLoginWithFallback(node.id, portNo, loginHint, {
             requireLoginMatch: false
           }).catch(() => ({ ok: false }));
@@ -1212,6 +1212,20 @@ router.post('/connect-result', async (req, res) => {
         `, [accountId, node.id, portId || null, portNo || null, mt5Login || loginForJournal, message || MT5_SUCCESS_MSG]).catch(() => {});
         return res.json({ ok: true, connected: true, fastPath });
       };
+
+      const authFailOnly =
+        journalVerdict === 'failed' ||
+        messageIndicatesLoginFailed(journalEvidence || message, loginForJournal, sinceMsConn);
+
+      if (loginVerified && !authFailOnly) {
+        return promoteConnectedFromCallback(
+          windowVerified
+            ? 'agent_trusted_window'
+            : journalVerdict === 'success'
+              ? 'journal_login_verified'
+              : 'agent_trusted_callback'
+        );
+      }
 
       if (loginVerified && journalVerdict === 'success') {
         return promoteConnectedFromCallback(windowVerified ? 'window_verified' : 'journal_login_verified');
