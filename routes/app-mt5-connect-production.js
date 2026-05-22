@@ -1357,7 +1357,14 @@ router.post('/mt5/force-stop-port', requireLogin, async (req, res) => {
       portSlot: result.portSlot || portSlot
     });
   } catch (e) {
-    return res.json({ ok: false, message: e.message || 'ปิด MT5 ไม่สำเร็จ' });
+    const msg = String(e?.message || e || '');
+    if (/queueForceStopMt5|releaseUserPortCompletely|is not a function/i.test(msg)) {
+      return res.json({
+        ok: false,
+        message: 'ระบบปิด MT5 ชั่วคราวไม่พร้อม — กด Ctrl+F5 แล้วลองอีกครั้ง'
+      });
+    }
+    return res.json({ ok: false, message: msg || 'ปิด MT5 ไม่สำเร็จ' });
   }
 });
 
