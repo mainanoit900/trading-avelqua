@@ -951,15 +951,19 @@ document.addEventListener('DOMContentLoaded', function () {
     return true;
   }
 
-  async function mt5CleanupAfterLoginFail(accountInfo) {
+  async function mt5CleanupAfterLoginFail(accountInfo, failMessage) {
     const slot =
       mt5ConnectTargetSlot() ||
       (accountInfo && accountInfo.port_slot) ||
       (document.getElementById('mt5SelectedPortSlot') || {}).value ||
       '';
+    const msg = String(failMessage || '').trim();
+    const authFail = !/ทันเวลา|timeout|ไม่สามารถยืนยัน/i.test(msg);
     const body = {
       accountId: accountInfo && accountInfo.id ? Number(accountInfo.id) : 0,
-      portSlot: slot ? Number(slot) : 0
+      portSlot: slot ? Number(slot) : 0,
+      authFail: authFail,
+      message: msg
     };
     try {
       await fetch('/app/mt5/connect-fail-cleanup', {
@@ -982,7 +986,7 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStorage.removeItem('mt5ConnectTargetSlot');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     const failMsg = message || 'User หรือ รหัส ไม่ถูกต้อง';
-    await mt5CleanupAfterLoginFail(accountInfo);
+    await mt5CleanupAfterLoginFail(accountInfo, failMsg);
     const failKey = mt5OutcomeStorageKey(
       'fail',
       (accountInfo && accountInfo.id) || 'port',

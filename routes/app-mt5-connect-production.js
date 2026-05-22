@@ -26,6 +26,7 @@ const {
   failAccountFromJournal,
   ensureLoginFailPortReleased,
   releaseUserPackagePortSlot,
+  releaseFolderForLoginRetry,
   cancelJournalVerifyForAccount,
   cancelJournalVerifyWrongPort,
   queueJournalReadVerify
@@ -1101,6 +1102,11 @@ async function handleMt5ConnectStatusProduction(req, res) {
           reason: 'login_cmd_failed',
           folderPath: a.folder_path
         }).catch(() => {});
+      } else if (!cmdProbeEarly.authFail && earlySlot) {
+        await releaseFolderForLoginRetry(userId, earlySlot, {
+          message: cmdProbeEarly.message,
+          folderPath: a.folder_path
+        }).catch(() => {});
       } else if (!cmdProbeEarly.authFail) {
         await failAccountFromJournal(a.id, a.port_id, cmdProbeEarly.message, {
           vpsId: a.vps_id,
@@ -1478,6 +1484,11 @@ async function handleMt5ConnectStatusProduction(req, res) {
             reason: 'login_cmd_failed',
             folderPath: a.folder_path
           }).catch(() => {});
+        } else if (!cmdFailed.authFail && failSlot) {
+          await releaseFolderForLoginRetry(userId, failSlot, {
+            message: cmdFailed.message,
+            folderPath: a.folder_path
+          }).catch(() => {});
         } else if (!cmdFailed.authFail) {
           await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
             vpsId: a.vps_id,
@@ -1711,11 +1722,22 @@ async function handleMt5ConnectFailCleanup(req, res) {
       return res.json({ ok: false, message: 'ไม่พบ PORT แพ็กเกจที่ต้องเคลียร์' });
     }
 
-    const out = await releaseUserPackagePortSlot(userId, portSlot, {
-      message: MT5_FAIL_USER_MSG,
-      reason: 'ui_login_fail_cleanup'
-    });
-    return res.json({ ok: true, cleaned: true, ...out });
+    const rawMsg = String(req.body?.message || '').trim();
+    const authFail =
+      req.body.authFail === true ||
+      req.body.authFail === 'true' ||
+      /ไม่ถูกต้อง|User หรือ|authorization failed|invalid account/i.test(rawMsg);
+
+    const out = authFail
+      ? await releaseUserPackagePortSlot(userId, portSlot, {
+          message: MT5_FAIL_USER_MSG,
+          reason: 'ui_login_fail_cleanup'
+        })
+      : await releaseFolderForLoginRetry(userId, portSlot, {
+          message: rawMsg || MT5_LOGIN_TIMEOUT_MSG,
+          reason: 'ui_login_timeout_cleanup'
+        });
+    return res.json({ ok: true, cleaned: true, authFail, ...out });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
   }
