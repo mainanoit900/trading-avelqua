@@ -76,9 +76,9 @@ def _journal_timeout_sec() -> int:
             os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "30"),
         )
     )
-    return max(25, min(45, raw))
+    return max(35, min(90, raw))
 MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.2"))
-JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "4"))
+JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "25"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
@@ -2527,7 +2527,7 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
 
 
 def _early_connect_enabled() -> bool:
-    return os.getenv("AVELQUA_EARLY_CONNECT", "false").lower() in ("1", "true", "yes")
+    return os.getenv("AVELQUA_EARLY_CONNECT", "true").lower() not in ("0", "false", "no")
 
 
 def _send_early_connect_if_journal_ok(
@@ -2826,8 +2826,42 @@ def wait_mt5_login_hybrid(
         return False, JOURNAL_FAIL_MSG, j_chunk
 
     ok_w_end, joined_end = mt5_login_verified_by_window(port, payload)
+    joined_final = joined_end or last_title
+    if ok_w_end:
+        api_ok, api_detail = _connect_on_api_verify(
+            payload, port, port_dir, login, proc_pid, joined_final
+        )
+        if api_ok:
+            return True, f"api verified (final); {api_detail}", api_detail
+        j_relaxed, j_rel_chunk = _quick_journal_probe(port_dir, login, journal_since - 900)
+        if j_relaxed is True:
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อสำเร็จ — ยืนยันจากหน้าต่าง MT5",
+                port,
+                process_id=proc_pid,
+                journal_evidence=j_rel_chunk or joined_final,
+                window_title=joined_final,
+                window_verified=True,
+            )
+            return True, "window verified (post-wait)", j_rel_chunk or joined_final
+        sock_ok, _sock = mt5_socket_established(port, payload)
+        if sock_ok:
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อสำเร็จ — MT5 login (socket verified)",
+                port,
+                process_id=proc_pid,
+                journal_evidence=joined_final,
+                window_title=joined_final,
+                window_verified=True,
+            )
+            return True, "window+socket verified (post-wait)", joined_final
+
     api_ok, api_detail = _connect_on_api_verify(
-        payload, port, port_dir, login, proc_pid, joined_end or last_title
+        payload, port, port_dir, login, proc_pid, joined_final
     )
     if api_ok:
         return True, f"api verified (final); {api_detail}", api_detail
@@ -3148,7 +3182,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         msg_low = (msg or "").lower()
         early_confirmed = "early" in msg_low
         api_confirmed = "api verified" in msg_low
-        if not sock_after and not early_confirmed and not api_confirmed:
+        window_confirmed = "window verified" in msg_low or "socket verified" in msg_low
+        if not sock_after and not early_confirmed and not api_confirmed and not window_confirmed:
             log(f"LOGIN JOURNAL OK BUT NO SOCKET — treat as fail: {sock_detail}")
             ok = False
             msg = "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อ Server — กรุณาลองใหม่"

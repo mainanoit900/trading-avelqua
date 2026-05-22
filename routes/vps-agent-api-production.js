@@ -13,6 +13,7 @@ const {
   parseMt5JournalOutcome,
   messageIndicatesLoginFailed,
   resolveLoginFailUserMessage,
+  windowTitleConfirmsLogin,
   MT5_SUCCESS_MSG,
   MT5_EARLY_SUCCESS_MSG,
   MT5_FAIL_USER_MSG
@@ -975,6 +976,32 @@ router.post('/connect-result', async (req, res) => {
         });
       }
 
+      if (
+        loginHint &&
+        windowTitle &&
+        windowTitleConfirmsLogin(windowTitle, loginHint) &&
+        (!journalBlob || parseJournalRelaxed(journalBlob, loginHint, sinceMs) !== 'failed')
+      ) {
+        const ageRow = await query(
+          `SELECT connect_started_at FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+          [accountId]
+        ).catch(() => ({ rows: [] }));
+        const started = ageRow.rows?.[0]?.connect_started_at
+          ? new Date(ageRow.rows[0].connect_started_at).getTime()
+          : 0;
+        const ageSec = started ? Math.floor((Date.now() - started) / 1000) : 0;
+        if (ageSec >= 18) {
+          await promoteAccountConnected({
+            accountId,
+            portId,
+            mt5Login: loginHint,
+            message: MT5_SUCCESS_MSG
+          });
+          await finishPendingLoginCommands(accountId, node.id).catch(() => {});
+          return res.json({ ok: true, connected: true, fastPath: 'window_title_checking' });
+        }
+      }
+
       await patchAccountMt5Preview(accountId, {
         status,
         message: message || (status === 'starting' ? 'กำลังเปิดหน้าจอ MT5...' : 'กำลังตรวจ Login MT5...'),
@@ -1085,6 +1112,17 @@ router.post('/connect-result', async (req, res) => {
 
       if (loginVerified && journalVerdict === 'success') {
         return promoteConnectedFromCallback(windowVerified ? 'window_verified' : 'journal_login_verified');
+      }
+
+      if (
+        loginVerified &&
+        windowVerified &&
+        loginForJournal &&
+        windowTitle &&
+        windowTitleConfirmsLogin(windowTitle, loginForJournal) &&
+        journalVerdict !== 'failed'
+      ) {
+        return promoteConnectedFromCallback('window_title_verified');
       }
 
       const msgLowConn = String(message || '').toLowerCase();

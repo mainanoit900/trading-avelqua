@@ -1072,6 +1072,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
              a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
              a.connect_started_at, a.last_balance, a.last_equity,
+             COALESCE(a.mt5_window_title, '') AS mt5_window_title,
              p.folder_path
       FROM vps_system.mt5_accounts a
       LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
