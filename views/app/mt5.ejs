@@ -208,7 +208,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         <label>MT5 Login</label>
         <input name="mt5_login" id="mt5LoginInput" placeholder="จริง: 201200244 · ทดลอง: 89610453" inputmode="numeric" pattern="[0-9]*" maxlength="9" autocomplete="username" required>
-        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">เว็บตรวจรูปแบบทันที (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — ยอดเงินอัปเดตจาก MT5 บน VPS ทุก 15 วิ (ไม่ใช่ค่าเก่าใน DB)</small>
+        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">เว็บตรวจรูปแบบทันที (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — หลัง Login ดึง Equity จาก VPS ทันที แล้วอัปเดตทุก 20 วิ</small>
 
         <label>Password</label>
         <input name="mt5_password" id="mt5PasswordInput" type="password" placeholder="รหัสผ่าน MT5" autocomplete="current-password" required>
@@ -1481,11 +1481,10 @@ document.addEventListener('DOMContentLoaded', function () {
       forceShow: true
     });
     if (accId) {
-      window.__mt5EquityWaitOnce = true;
-      if (typeof updatePortLockEquity === 'function') {
-        updatePortLockEquity(null, null, true);
-      }
-      if (typeof pollAccountEquity === 'function') {
+      if (typeof fetchPostLoginEquityOnce === 'function') {
+        fetchPostLoginEquityOnce(accId);
+      } else if (typeof pollAccountEquity === 'function') {
+        window.__mt5EquityWaitOnce = true;
         pollAccountEquity();
       }
     }
@@ -3744,7 +3743,7 @@ function deletePortCountdown(e, form) {
     updateMt5Stats(bal, eq, profitVal);
     if (capitalHint) {
       capitalHint.textContent = eq
-        ? ('ทุนจาก MT5 (VPS ล่าสุด): ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก 15 วิ')
+        ? ('ทุนจาก MT5 (VPS ล่าสุด): ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก 20 วิ')
         : 'เลือก PORT — กำลังดึงยอดจาก MT5 บน VPS... (ขั้นต่ำ $100)';
     }
     if (eq && capitalInput && (!capitalInput.dataset.userCapitalEdited || capitalInput.dataset.userCapitalEdited !== '1')) {
@@ -3995,8 +3994,9 @@ function deletePortCountdown(e, form) {
     opt.textContent = 'PORT ' + portSlot + ' / Login ' + login + suffix;
   }
 
-  const MT5_EQUITY_POLL_MS = 15 * 1000;
+  const MT5_EQUITY_POLL_MS = 20 * 1000;
   let mt5EquityVpsBusy = false;
+  let mt5EquityPollTimer = null;
 
   (function applyInitialPortLockEquity() {
     const el = document.getElementById('mt5PortLockEquity');
@@ -4031,6 +4031,24 @@ function deletePortCountdown(e, form) {
     }
   }
 
+  async function fetchPostLoginEquityOnce(accountId) {
+    const accId = accountId || getMt5AccountId();
+    if (!accId) return;
+    if (mt5EquityVpsBusy) return;
+    mt5EquityVpsBusy = true;
+    updatePortLockEquity(null, null, true);
+    const capitalHint = document.getElementById('mt5CapitalHint');
+    if (capitalHint) capitalHint.textContent = 'Login สำเร็จ — กำลังดึง Equity ล่าสุดจาก MT5 บน VPS...';
+    try {
+      const snap = await refreshAccountSnapshot(accId, true, true);
+      if (snap && (snap.hasEquity || snap.hasBalance)) {
+        applyEquitySnap(snap);
+      }
+    } finally {
+      mt5EquityVpsBusy = false;
+    }
+  }
+
   function pollAccountEquity() {
     const accId = getMt5AccountId();
     if (!accId) return;
@@ -4061,8 +4079,15 @@ function deletePortCountdown(e, form) {
       });
   }
 
-  pollAccountEquity();
-  setInterval(pollAccountEquity, MT5_EQUITY_POLL_MS);
+  function startMt5EquityPolling() {
+    if (mt5EquityPollTimer) clearInterval(mt5EquityPollTimer);
+    const accId = getMt5AccountId();
+    if (!accId) return;
+    pollAccountEquity();
+    mt5EquityPollTimer = setInterval(pollAccountEquity, MT5_EQUITY_POLL_MS);
+  }
+
+  startMt5EquityPolling();
 
   function drawEquityChart(canvas, series) {
     if (!canvas || !series || !series.length) return;

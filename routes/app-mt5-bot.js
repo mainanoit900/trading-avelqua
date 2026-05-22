@@ -3008,20 +3008,26 @@ router.get('/mt5/account-snapshot', requireLogin, async (req, res) => {
     const needsSync = connected && !equityNum;
 
     let fetchMeta = null;
-    const shouldVpsSync = connected && ctx.vpsId && (needsSync || forceRefresh);
+    const shouldVpsSync = connected && ctx.vpsId && (needsSync || forceRefresh || waitSync);
     if (shouldVpsSync) {
-      fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
-        waitMs: waitSync ? 12000 : forceRefresh ? 8000 : 0,
-        skipJournal: true,
-        light: true,
-        forceFresh: !!forceRefresh,
-        purpose: forceRefresh ? 'equity_live_poll' : 'equity_sync'
-      });
-      if (needsSync && !fetchMeta?.ok && waitSync) {
+      const { fetchPostLoginEquityOnce } = require('../lib/mt5EquitySync');
+      if (waitSync) {
+        fetchMeta = await fetchPostLoginEquityOnce(accountId, userId, ctx, { waitMs: 15000 });
+      } else {
         fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
-          waitMs: 8000,
+          waitMs: forceRefresh ? 10000 : 0,
+          skipJournal: true,
+          light: true,
+          forceFresh: !!forceRefresh,
+          purpose: forceRefresh ? 'equity_live_poll' : 'equity_sync'
+        });
+      }
+      if ((needsSync || waitSync) && !fetchMeta?.ok && waitSync) {
+        fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
+          waitMs: 10000,
           skipJournal: false,
           light: true,
+          forceFresh: true,
           purpose: 'equity_journal_retry'
         });
       }
