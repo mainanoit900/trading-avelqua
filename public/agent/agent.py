@@ -90,7 +90,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v33"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v34"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -809,7 +809,10 @@ MT5_PORT_INI_REL_PATHS = (
     "config/terminal.ini",
     "config/trade.ini",
     "config/history.ini",
+    "config/experts.ini",
+    "config/journal.ini",
     "MQL5/config/common.ini",
+    "MQL5/config/experts.ini",
 )
 
 MT5_PORT_DATA_DIRS = (
@@ -862,6 +865,27 @@ def _seed_mt5_ini_templates(port_dir: Path) -> None:
             "[History]\n"
             "Storage=bases\n"
             "ExportToCommonFiles=1\n"
+        ),
+        "config/experts.ini": (
+            "[Experts]\n"
+            "AllowLiveTrading=false\n"
+            "AllowDllImport=true\n"
+            "AllowAutomatedTrading=0\n"
+            "Enabled=0\n"
+        ),
+        "config/journal.ini": (
+            "[Journal]\n"
+            "LogPath=Logs\n"
+            "AltLogPath=logs\n"
+            "Mql5LogPath=MQL5/Logs\n"
+            "ExportToCommonFiles=1\n"
+            "CommonFilesMirror=Terminal/Common/Files/avelqua_journal_latest.log\n"
+        ),
+        "MQL5/config/experts.ini": (
+            "[Experts]\n"
+            "AllowLiveTrading=false\n"
+            "AllowDllImport=true\n"
+            "Enabled=0\n"
         ),
     }
     for rel, body in seeds.items():
@@ -921,6 +945,26 @@ def sync_avelqua_data_exports(port_dir: Path, force: bool = False) -> None:
                 json.dumps(meta, ensure_ascii=False, indent=2),
                 encoding="utf-8",
             )
+            experts_ini = port_dir / "config" / "experts.ini"
+            if experts_ini.is_file():
+                try:
+                    (files_dir / "avelqua_experts.ini").write_text(
+                        experts_ini.read_text(encoding="utf-8", errors="ignore")[:8192],
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                except Exception:
+                    pass
+            journal_ini = port_dir / "config" / "journal.ini"
+            if journal_ini.is_file():
+                try:
+                    (files_dir / "avelqua_journal.ini").write_text(
+                        journal_ini.read_text(encoding="utf-8", errors="ignore")[:4096],
+                        encoding="utf-8",
+                        errors="ignore",
+                    )
+                except Exception:
+                    pass
         except Exception as e:
             log(f"SYNC DATA EXPORT ERROR {files_dir}: {e}")
 
