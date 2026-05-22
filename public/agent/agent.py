@@ -80,6 +80,10 @@ STOP_FLAG = AGENT_DIR / "agent.disabled"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
+PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "20"))
+PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", "120"))
+PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
+PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "90"))
 JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 MT5_LIVE_SERVER = "MohicansMarkets-Live"
@@ -90,7 +94,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v37"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v38"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -369,55 +373,127 @@ def extract_port_no(path_text):
     return 0
 
 
+_LAST_PORT_HEALTH = 0.0
+_LAST_PORT_HEALTH_TITLE = 0.0
+_PORT_LOGIN_CACHE: Dict[int, str] = {}
+_PORT_FOLDER_CACHE: List[Tuple[int, Path, str]] = []
+_PORT_FOLDER_CACHE_AT = 0.0
+
+
+def _list_mt5_port_folders(mt5_root: Path) -> List[Tuple[int, Path, str]]:
+    global _PORT_FOLDER_CACHE, _PORT_FOLDER_CACHE_AT
+    now = time.time()
+    if _PORT_FOLDER_CACHE and now - _PORT_FOLDER_CACHE_AT < PORT_FOLDER_CACHE_SEC:
+        return _PORT_FOLDER_CACHE
+    folders: List[Tuple[int, Path, str]] = []
+    for folder in sorted(mt5_root.glob("*PORT*")):
+        port_no = extract_port_no(str(folder))
+        if not port_no:
+            continue
+        folder_norm = str(folder).lower().replace("/", "\\")
+        folders.append((port_no, folder, folder_norm))
+    _PORT_FOLDER_CACHE = folders
+    _PORT_FOLDER_CACHE_AT = now
+    return folders
+
+
+def _scan_running_mt5_ports(
+    port_folders: List[Tuple[int, Path, str]],
+) -> Dict[int, Dict[str, Any]]:
+    running_map: Dict[int, Dict[str, Any]] = {}
+    if not port_folders or not psutil:
+        return running_map
+    try:
+        for proc in psutil.process_iter(["pid", "name", "exe"]):
+            try:
+                name = (proc.info.get("name") or "").lower()
+                if name != "terminal64.exe":
+                    continue
+                exe = proc.info.get("exe") or ""
+                if not exe:
+                    continue
+                exe_norm = exe.lower().replace("/", "\\")
+                for port_no, folder, folder_norm in port_folders:
+                    if port_no in running_map:
+                        continue
+                    if folder_norm in exe_norm:
+                        running_map[port_no] = {
+                            "process_id": proc.pid,
+                            "exe_path": exe,
+                            "folder_path": str(folder),
+                        }
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return running_map
+
+
+def _read_mt5_login_from_title(process_id: int) -> str:
+    try:
+        ps = (
+            f"(Get-Process -Id {process_id} -ErrorAction SilentlyContinue)"
+            ".MainWindowTitle"
+        )
+        title = (_run_powershell(ps, timeout=3) or "").strip()
+        m = re.match(r"^(\d{4,})\s*[-–]", title)
+        if m:
+            return m.group(1)
+    except Exception:
+        pass
+    return ""
+
+
 def send_port_health():
-    ports = []
+    global _LAST_PORT_HEALTH, _LAST_PORT_HEALTH_TITLE, _PORT_LOGIN_CACHE
+
+    now = time.time()
+    if now - _LAST_PORT_HEALTH < PORT_HEALTH_INTERVAL_SEC:
+        return
+    _LAST_PORT_HEALTH = now
 
     try:
         mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
+        port_folders = _list_mt5_port_folders(mt5_root)
+        running_map = _scan_running_mt5_ports(port_folders)
 
-        running_map = {}
+        read_titles = PORT_HEALTH_READ_TITLE and (
+            now - _LAST_PORT_HEALTH_TITLE >= PORT_HEALTH_TITLE_INTERVAL_SEC
+        )
+        if read_titles:
+            _LAST_PORT_HEALTH_TITLE = now
 
-        for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
-            try:
-                name = (p.info.get("name") or "").lower()
-                exe = (p.info.get("exe") or "")
-
-                if name != "terminal64.exe":
-                    continue
-
-                exe_norm = exe.lower().replace("/", "\\")
-
-                for folder in mt5_root.glob("*PORT*"):
-                    folder_norm = str(folder).lower().replace("/", "\\")
-
-                    if folder_norm in exe_norm:
-                        port_no = extract_port_no(str(folder))
-
-                        running_map[port_no] = {
-                            "process_id": p.pid,
-                            "exe_path": exe,
-                            "folder_path": str(folder)
-                        }
-
-            except Exception:
-                pass
-
-        for folder in sorted(mt5_root.glob("*PORT*")):
-            port_no = extract_port_no(str(folder))
-
-            if not port_no:
-                continue
-
+        ports: List[Dict[str, Any]] = []
+        for port_no, folder, _folder_norm in port_folders:
             run = running_map.get(port_no)
+            mt5_login: Optional[str] = None
+            if run:
+                if read_titles and run.get("process_id"):
+                    login = _read_mt5_login_from_title(int(run["process_id"]))
+                    if login:
+                        _PORT_LOGIN_CACHE[port_no] = login
+                        mt5_login = login
+                elif port_no in _PORT_LOGIN_CACHE:
+                    mt5_login = _PORT_LOGIN_CACHE[port_no]
+            else:
+                _PORT_LOGIN_CACHE.pop(port_no, None)
 
-            mt5_login = ""
-            if run and run.get("process_id"):
+            balance = None
+            equity = None
+            if run:
                 try:
-                    ps = f"(Get-Process -Id {run['process_id']} -ErrorAction SilentlyContinue).MainWindowTitle"
-                    title = (_run_powershell(ps, timeout=4) or "").strip()
-                    m = re.match(r"^(\d{4,})\s*[-–]", title)
-                    if m:
-                        mt5_login = m.group(1)
+                    pl = {
+                        "vpsFolderPath": str(folder),
+                        "folder_path": str(folder),
+                        "mt5Login": mt5_login or _PORT_LOGIN_CACHE.get(port_no),
+                    }
+                    file_snap = account_snapshot_equity_file(folder, max_age_sec=120)
+                    balance = file_snap.get("balance")
+                    equity = file_snap.get("equity")
+                    if not _snap_positive(file_snap):
+                        snap = account_snapshot(port_no, pl)
+                        balance = snap.get("balance")
+                        equity = snap.get("equity")
                 except Exception:
                     pass
 
@@ -428,16 +504,15 @@ def send_port_health():
                 "running": bool(run),
                 "is_running": bool(run),
                 "process_id": run.get("process_id") if run else None,
-                "mt5_login": mt5_login or None,
+                "mt5_login": mt5_login,
                 "exe_path": run.get("exe_path") if run else "",
                 "status": "running" if run else "free",
+                "balance": balance,
+                "equity": equity,
             })
 
-        post_json("/port-health", {
-            "ports": ports
-        })
-
-        log(f"PORT HEALTH SENT count={len(ports)}")
+        post_json("/port-health", {"ports": ports})
+        log(f"PORT HEALTH SENT count={len(ports)} titles={read_titles}")
 
     except Exception as e:
         log(f"PORT HEALTH ERROR {e}")
@@ -1402,7 +1477,10 @@ def ensure_equity_pulse_indicator(port_dir: Path) -> None:
         log(f"DEPLOY AvelquaEquityPulse ERROR: {e}")
 
 
-def account_snapshot_mt5_api(port_dir: Path) -> Dict[str, Any]:
+def account_snapshot_mt5_api(
+    port_dir: Path, payload: Optional[Dict[str, Any]] = None
+) -> Dict[str, Any]:
+    """ดึง Balance/Equity ผ่าน MetaTrader5 package (terminal ที่รันอยู่)"""
     try:
         import MetaTrader5 as mt5  # type: ignore
     except Exception:
@@ -1410,18 +1488,37 @@ def account_snapshot_mt5_api(port_dir: Path) -> Dict[str, Any]:
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {}
+    login_hint = 0
     try:
+        login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
+    except Exception:
+        login_hint = 0
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
         if not mt5.initialize(path=str(terminal)):
             return {}
         ai = mt5.account_info()
+        if ai is None and login_hint:
+            try:
+                mt5.login(login_hint)
+                ai = mt5.account_info()
+            except Exception:
+                ai = None
         mt5.shutdown()
         if ai is None:
             return {}
-        return {
+        if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
+            return {}
+        out = {
             "balance": float(ai.balance),
             "equity": float(ai.equity),
             "currency": str(ai.currency or ""),
         }
+        log(f"MT5 API SNAPSHOT path={port_dir.name} BALANCE={out['balance']} EQUITY={out['equity']}")
+        return out
     except Exception as e:
         log(f"MT5 API SNAPSHOT ERROR: {e}")
         try:
@@ -1429,6 +1526,58 @@ def account_snapshot_mt5_api(port_dir: Path) -> Dict[str, Any]:
         except Exception:
             pass
         return {}
+
+
+def mt5_login_verify_api(
+    port_dir: Path,
+    login: str,
+    password: str,
+    server: str = MT5_LIVE_SERVER,
+) -> Tuple[bool, str]:
+    """ยืนยัน login ผ่าน MT5 API — ใช้เมื่อ journal ช้าแต่ terminal login แล้ว"""
+    login = str(login).strip()
+    if not login:
+        return False, ""
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
+        return False, "MetaTrader5 package not installed"
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return False, "terminal64.exe not found"
+    try:
+        login_int = int(login)
+    except Exception:
+        return False, "invalid login"
+    srv = str(server or MT5_LIVE_SERVER).strip()
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            return False, f"init fail {mt5.last_error()}"
+        ai = mt5.account_info()
+        ai_login = int(getattr(ai, "login", 0) or 0) if ai is not None else 0
+        if ai_login != login_int:
+            logged = mt5.login(login_int, password=password, server=srv)
+            if not logged:
+                err = mt5.last_error()
+                mt5.shutdown()
+                return False, f"login fail {err}"
+            ai = mt5.account_info()
+        mt5.shutdown()
+        if ai is None:
+            return False, "account_info empty"
+        if int(getattr(ai, "login", 0) or 0) != login_int:
+            return False, "account mismatch"
+        return True, f"api verified equity={float(getattr(ai, 'equity', 0) or 0):.2f}"
+    except Exception as e:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        return False, str(e)
 
 
 def _snap_positive(snap: Dict[str, Any]) -> bool:
@@ -1556,25 +1705,28 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
         ensure_equity_pulse_indicator(port_dir)
         mt5_open = mt5_running_for_port_dir(port_dir)
 
+        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=120 if mt5_open else 0)
+        if _snap_positive(file_snap):
+            snap.update({k: v for k, v in file_snap.items() if v is not None and v != ""})
+            return _snap_merge_profit(snap)
+
         if mt5_open:
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
+            if _snap_positive(api_snap):
+                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                return _snap_merge_profit(snap)
+
             uia_snap = account_snapshot_uia(port, payload)
             if _snap_positive(uia_snap):
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
                 return _snap_merge_profit(snap)
 
-        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=25 if mt5_open else 0)
-        if _snap_positive(file_snap):
-            snap.update({k: v for k, v in file_snap.items() if v is not None and v != ""})
-            return _snap_merge_profit(snap)
-
         if not mt5_open:
-            api_snap = account_snapshot_mt5_api(port_dir)
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
             if _snap_positive(api_snap):
                 snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
-                log(f"MT5 SNAPSHOT API PORT={port} BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}")
                 return _snap_merge_profit(snap)
 
-        if not mt5_open:
             uia_snap = account_snapshot_uia(port, payload)
             if _snap_positive(uia_snap):
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
@@ -2260,6 +2412,75 @@ def resolve_mt5_server(payload: Dict[str, Any], login: Optional[str] = None) -> 
     return MT5_LIVE_SERVER
 
 
+def automate_mt5_login_server_form(
+    login: str,
+    password: str,
+    server: str = MT5_LIVE_SERVER,
+) -> bool:
+    """กรอกฟอร์ม Login MT5 (login / password / server) — จากสำเนา equity-dashboard"""
+    login_esc = str(login or "").replace("+", "{+}").replace("{", "{{").replace("}", "}}")
+    server_esc = (
+        str(server or MT5_LIVE_SERVER)
+        .replace("+", "{+}")
+        .replace("{", "{{")
+        .replace("}", "}}")
+    )
+    pw_esc = (
+        str(password or "")
+        .replace("+", "{+}")
+        .replace("^", "{^}")
+        .replace("%", "{%}")
+        .replace("~", "{~}")
+        .replace("(", "{(}")
+        .replace(")", "{)}")
+        .replace("{", "{{")
+        .replace("}", "}}")
+    )
+    ps = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$ErrorActionPreference = "SilentlyContinue"
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.MainWindowHandle -ne 0 }} |
+  Sort-Object MainWindowTitle -Descending |
+  Select-Object -First 1
+if (-not $p) {{ exit 0 }}
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}}
+"@
+[W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+[W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait("{login_esc}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
+Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait("{pw_esc}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
+Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 80
+[System.Windows.Forms.SendKeys]::SendWait("{server_esc}")
+Start-Sleep -Milliseconds 350
+[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+exit 0
+"""
+    try:
+        _run_powershell(ps, timeout=14)
+        log(f"MT5 LOGIN FORM server={server} login={login}")
+        return True
+    except Exception as e:
+        log(f"MT5 LOGIN FORM ERROR: {e}")
+        return False
+
+
 def automate_mt5_open_account_wizard(
     company: str = LOCKED_MT5_COMPANY,
     server: str = MT5_LIVE_SERVER,
@@ -2397,6 +2618,39 @@ def _quick_journal_probe(
     return None, chunk
 
 
+def _connect_on_api_verify(
+    payload: Dict[str, Any],
+    port: Any,
+    port_dir: Path,
+    login: str,
+    proc_pid: Any,
+    joined: str,
+    preview_b64: str = "",
+) -> Tuple[bool, str]:
+    pw = str(payload_get(payload, "mt5Password", "password") or "")
+    srv = resolve_mt5_server(payload, login)
+    api_ok, api_detail = mt5_login_verify_api(port_dir, login, pw, srv)
+    if not api_ok:
+        return False, api_detail
+    try:
+        enforce_login_no_trading(port_dir, port, payload, login, pw, srv)
+    except Exception:
+        pass
+    j_out, j_chunk = _quick_journal_probe(port_dir, login, time.time() - 120, srv)
+    send_connect_result(
+        payload,
+        "connected",
+        "เชื่อมต่อสำเร็จ — ยืนยันบัญชีจาก MT5 แล้ว",
+        port,
+        process_id=proc_pid,
+        journal_evidence=j_chunk or joined,
+        window_title=joined,
+        preview_b64=preview_b64,
+        window_verified=True,
+    )
+    return True, api_detail
+
+
 def wait_mt5_login_hybrid(
     port: Any,
     payload: Dict[str, Any],
@@ -2419,6 +2673,7 @@ def wait_mt5_login_hybrid(
     wait_start = time.time()
     preview_b64 = ""
     wizard_stuck_since = 0.0
+    last_api_at = 0.0
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
     if journal_since < wait_start - 120:
@@ -2524,6 +2779,20 @@ def wait_mt5_login_hybrid(
             fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
                 port, payload, login, joined, window_ok_streak, j_out, elapsed
             )
+        if (
+            not fast_ok
+            and ok_w
+            and window_ok_streak >= 2
+            and elapsed >= 12
+            and now - last_api_at >= 8.0
+        ):
+            last_api_at = now
+            api_hit, api_msg = _connect_on_api_verify(
+                payload, port, port_dir, login, proc_pid, joined, preview_b64
+            )
+            if api_hit:
+                return True, f"api verified; {api_msg}", joined
+
         if fast_ok:
             try:
                 enforce_login_no_trading(
@@ -2945,6 +3214,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
+        procs = mt5_port_processes(port, payload)
+        if procs or mt5_running_for_port_dir(port_dir):
+            pid = procs[0].pid if procs else None
+            log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
+            return procs[0] if procs else None
         try:
             stop_mt5_port_only(port, payload)
         except Exception as e:
@@ -2954,12 +3228,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
         clear_mt5_login_cache(port_dir)
-        # ไม่ลบ log ก่อนเปิด MT5 — เก็บบรรทัด authorized on ให้ตรวจได้
-        # เปิดแบบ v8 ที่เคยใช้ได้: ใช้ startUp.ini เท่านั้น (ไม่ใส่ /login: ซ้ำกับ ini)
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
-        log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
-        return _popen_hidden(args, cwd=str(port_dir))
+        log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
+        proc = _popen_hidden(args, cwd=str(port_dir))
+        if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
+            time.sleep(0.9)
+            automate_mt5_login_server_form(login, password, server)
+        return proc
 
     journal_since = time.time()
     proc = launch_mt5("initial")
@@ -2973,6 +3249,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     time.sleep(2.5)
     automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+    time.sleep(0.8)
+    automate_mt5_login_server_form(login, password, server)
     time.sleep(1.0)
     sync_avelqua_data_exports(port_dir, force=True)
 
