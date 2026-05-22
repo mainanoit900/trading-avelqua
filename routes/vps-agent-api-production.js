@@ -41,7 +41,8 @@ const {
   cancelJournalVerifyForVps,
   journalSinceMsForVerify,
   processInboundConnectJournal,
-  verifyPortLoginWithFallback
+  verifyPortLoginWithFallback,
+  verifyPortRunningLogin
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -1227,16 +1228,6 @@ router.post('/connect-result', async (req, res) => {
         journalVerdict === 'failed' ||
         messageIndicatesLoginFailed(journalEvidence || message, loginForJournal, sinceMsConn);
 
-      if (loginVerified && !authFailOnly) {
-        return promoteConnectedFromCallback(
-          windowVerified
-            ? 'agent_trusted_window'
-            : journalVerdict === 'success'
-              ? 'journal_login_verified'
-              : 'agent_trusted_callback'
-        );
-      }
-
       if (loginVerified && journalVerdict === 'success') {
         return promoteConnectedFromCallback(windowVerified ? 'window_verified' : 'journal_login_verified');
       }
@@ -1249,6 +1240,21 @@ router.post('/connect-result', async (req, res) => {
         windowTitleConfirmsLogin(windowTitle, loginForJournal) &&
         journalVerdict !== 'failed'
       ) {
+        const portRunTitle = await verifyPortRunningLogin(node.id, portNo, loginForJournal).catch(
+          () => ({ ok: false })
+        );
+        if (!portRunTitle.ok) {
+          await query(
+            `
+            UPDATE vps_system.mt5_accounts
+            SET status='checking', last_error=NULL,
+                last_login_message='กำลังเปิด MT5 บน VPS...', updated_at=NOW()
+            WHERE id=$1
+          `,
+            [accountId]
+          ).catch(() => {});
+          return res.json({ ok: true, pending: true, reason: 'MT5_NOT_RUNNING' });
+        }
         return promoteConnectedFromCallback('window_title_verified');
       }
 

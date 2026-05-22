@@ -89,6 +89,46 @@ MT5_LOGIN_LIVE_RE = re.compile(r"^2\d{8}$")  # บัญชีจริง 9 ห
 MT5_LOGIN_DEMO_RE = re.compile(r"^8\d{7}$")  # ทดลอง 8 หลัก ขึ้นต้น 8
 
 
+def _login_cmd_result_payload(
+    login: str,
+    server: str,
+    port: Any,
+    bot: str,
+    config_file: Any,
+    terminal: Any,
+    *,
+    status: str = "connected",
+    journal_evidence: str = "",
+    process_id: Any = None,
+    **extra: Any,
+) -> Dict[str, Any]:
+    """ผล login_mt5 ที่ส่งกลับเซิร์ฟเวอร์ — ต้องมี journal/loginVerified ไม่ใช่แค่ status=connected"""
+    je = str(journal_evidence or "")[:8000]
+    jv = False
+    if je and login:
+        try:
+            jv = _journal_outcome_for_login(je, str(login), 0) is True
+        except Exception:
+            jv = "authorized on" in je.lower() and str(login) in je
+    out: Dict[str, Any] = {
+        "action": "login_mt5",
+        "status": status,
+        "login": str(login),
+        "loginVerified": status == "connected",
+        "journalVerified": jv,
+        "journalEvidence": je,
+        "loginOnly": True,
+        "port": port,
+        "server": server,
+        "bot": bot,
+        "config": str(config_file),
+        "terminal": str(terminal),
+        "process_id": process_id,
+    }
+    out.update(extra)
+    return out
+
+
 def validate_mt5_login_format(login: str) -> Tuple[bool, str, str]:
     """ตรวจรูปแบบเลขบัญชีก่อนเปิด MT5 / อ่าน Journal — ผิดรูปแบบ = User ผิดทันที"""
     s = str(login or "").strip().replace(" ", "")
@@ -2991,19 +3031,18 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 window_title=title_fast,
             )
             log(f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} journal=ok socket=ok")
-            return {
-                "action": "login_mt5",
-                "status": "connected",
-                "loginOnly": True,
-                "fastReuse": True,
-                "keepMt5Open": True,
-                "port": port,
-                "login": login,
-                "server": server,
-                "bot": bot,
-                "config": str(config_file),
-                "terminal": str(terminal),
-            }
+            return _login_cmd_result_payload(
+                login,
+                server,
+                port,
+                bot,
+                config_file,
+                terminal,
+                fastReuse=True,
+                keepMt5Open=True,
+                process_id=proc_pid,
+                journal_evidence=j_chunk_fast,
+            )
     if mt5_already_open:
         journal_since_open = time.time() - 600
         j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, journal_since_open)
@@ -3034,19 +3073,18 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} "
                 f"journal={j_fast} window={ok_fast} socket={sock_ok}"
             )
-            return {
-                "action": "login_mt5",
-                "status": "connected",
-                "loginOnly": True,
-                "fastReuse": True,
-                "keepMt5Open": True,
-                "port": port,
-                "login": login,
-                "server": server,
-                "bot": bot,
-                "config": str(config_file),
-                "terminal": str(terminal),
-            }
+            return _login_cmd_result_payload(
+                login,
+                server,
+                port,
+                bot,
+                config_file,
+                terminal,
+                fastReuse=True,
+                keepMt5Open=True,
+                process_id=proc_pid,
+                journal_evidence=j_chunk_fast,
+            )
         proc_pid = procs_existing[0].pid if procs_existing else None
         log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid} (no kill/relaunch)")
         journal_since = time.time()
@@ -3066,19 +3104,18 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 journal_evidence=journal_chunk,
                 window_title=titles,
             )
-            return {
-                "action": "login_mt5",
-                "status": "connected",
-                "loginOnly": True,
-                "fastReuse": True,
-                "keepMt5Open": True,
-                "port": port,
-                "login": login,
-                "server": server,
-                "bot": bot,
-                "config": str(config_file),
-                "terminal": str(terminal),
-            }
+            return _login_cmd_result_payload(
+                login,
+                server,
+                port,
+                bot,
+                config_file,
+                terminal,
+                fastReuse=True,
+                keepMt5Open=True,
+                process_id=proc_pid,
+                journal_evidence=journal_chunk,
+            )
         send_connect_result(
             payload,
             "failed",
@@ -3272,21 +3309,17 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         pass
     log(f"LOGIN OK PORT={port} LOGIN={login} (login_only, no auto trade)")
-    return {
-        "action": "login_mt5",
-        "status": "connected",
-        "loginOnly": True,
-        "port": port,
-        "login": login,
-        "server": server,
-        "bot": bot,
-        "config": str(config_file),
-        "terminal": str(terminal),
-        "journalEvidence": journal_final,
-        "journalVerified": bool(journal_final),
-        "loginVerified": True,
-        "windowVerified": True,
-    }
+    return _login_cmd_result_payload(
+        login,
+        server,
+        port,
+        bot,
+        config_file,
+        terminal,
+        process_id=proc_pid,
+        journal_evidence=journal_final,
+        windowVerified=True,
+    )
 
 def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
     folder = Path(payload_get(payload, "folder_path", default=str(AGENT_DIR)))

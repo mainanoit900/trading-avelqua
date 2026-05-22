@@ -16,6 +16,8 @@ const {
   resolveStuckLoginAccount,
   reconcileConnectedAccountLive,
   tryRecoverLoginFromPortHealth,
+  verifyPortRunningLogin,
+  findLoginCommandInProgress,
   findRecentLoginCommand,
   verifyLoginFromCommand,
   isAccountLoginJournalVerified,
@@ -1269,6 +1271,42 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     if (statusEarly === 'connected') {
+      const runLive = a.vps_id
+        ? await verifyPortRunningLogin(
+            a.vps_id,
+            a.assigned_port_no || a.port_slot,
+            a.mt5_login
+          ).catch(() => ({ ok: false }))
+        : { ok: false };
+      if (!runLive.ok) {
+        const inProg = a.vps_id
+          ? await findLoginCommandInProgress(a.id, a.vps_id).catch(() => null)
+          : null;
+        const reopenMsg = inProg
+          ? 'กำลังเปิด MT5 บน VPS...'
+          : 'MT5 ยังไม่เปิดบน VPS — กรุณากรอกรหัสแล้วกดเชื่อมต่อใหม่';
+        await query(
+          `
+          UPDATE vps_system.mt5_accounts
+          SET status='checking', last_error=NULL, last_login_message=$2, updated_at=NOW()
+          WHERE id=$1
+        `,
+          [a.id, reopenMsg]
+        ).catch(() => {});
+        return res.json({
+          ok: true,
+          account: { ...a, status: 'checking', last_login_message: reopenMsg },
+          connected: false,
+          failed: false,
+          checking: true,
+          pending: Boolean(inProg),
+          status: 'checking',
+          loginVerified: false,
+          mt5NotRunning: true,
+          message: reopenMsg,
+          elapsedSec: 0
+        });
+      }
       const previewPathConn = previewPublicPath(a.id);
       return res.json({
         ok: true,
