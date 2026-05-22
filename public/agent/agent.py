@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v29"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v30"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -458,7 +458,7 @@ def journal_timeout_sec(payload: Optional[Dict[str, Any]]) -> int:
         n = int(raw)
     except Exception:
         n = env_default
-    return max(60, min(n, 120))
+    return max(90, min(n, 150))
 
 
 def normalize_port(port: Any) -> int:
@@ -2068,7 +2068,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    wait_cap = max(45, min(int(timeout_sec or 90), 120))
+    wait_cap = max(90, min(int(timeout_sec or 120), 150))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
@@ -2407,7 +2407,32 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "config": str(config_file),
                 "terminal": str(terminal),
             }
-        log(f"LOGIN FAST REUSE skipped — journal not confirmed for {login}")
+        snap_reuse = account_snapshot(port, payload)
+        if _snap_positive(snap_reuse) and mt5_login_verified_by_window(port, payload)[0]:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อสำเร็จ (ยอดเงินจาก MT5) — ยังไม่เปิด BOT",
+                port,
+                window_title=title_fast,
+                window_verified=True,
+                journal_evidence=j_chunk_fast or title_fast,
+            )
+            log(f"LOGIN FAST REUSE PORT={port} LOGIN={login} (balance snapshot)")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
+        log(f"LOGIN FAST REUSE skipped — journal/balance not confirmed for {login}")
 
     # ====================================
     # BLOCK SAME LOGIN ON ANOTHER PORT (not this port_dir)
@@ -2534,17 +2559,22 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             log(f"stop_mt5_port_only after failed login: {e}")
         remove_mt5_login_ini(port_dir)
         clear_mt5_login_cache(port_dir)
+        fail_user = msg or JOURNAL_TIMEOUT_MSG
         send_connect_result(
             payload,
             "failed",
-            msg,
+            fail_user,
             port,
             process_id=None,
             journal_evidence=journal_chunk,
             window_title=titles,
             preview_b64=preview_final,
         )
-        raise RuntimeError(msg)
+        if fail_user == JOURNAL_FAIL_MSG or "authorization" in fail_user.lower():
+            raise RuntimeError("MT5_LOGIN_AUTH_FAILED")
+        if fail_user == JOURNAL_TIMEOUT_MSG or "ทันเวลา" in fail_user:
+            raise RuntimeError("MT5_JOURNAL_TIMEOUT")
+        raise RuntimeError("MT5_LOGIN_FAILED")
 
     journal_final = journal_chunk or ""
     if "window verified" not in (msg or "").lower():
