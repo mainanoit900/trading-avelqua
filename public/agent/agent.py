@@ -90,7 +90,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v35"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v36"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1453,6 +1453,31 @@ def _classify_mt5_login(login: str) -> str:
     return "invalid"
 
 
+def _try_socket_metrics_login_confirm(
+    port: Any,
+    payload: Dict[str, Any],
+    login: str,
+    joined: str,
+    window_ok_streak: int,
+    j_out: Optional[bool],
+    elapsed_sec: int,
+) -> Tuple[bool, Dict[str, Any], str]:
+    """ยืนยันเมื่อมี socket โบรกเกอร์ + ยอดเงินจริง (journal ช้า/อยู่ AppData)"""
+    if elapsed_sec < 18 or j_out is False:
+        return False, {}, ""
+    sock_ok, sock_hint = mt5_socket_established(port, payload)
+    if not sock_ok:
+        return False, {}, ""
+    snap = account_snapshot(port, payload)
+    if not _snap_positive(snap):
+        return False, {}, ""
+    ok_w, _ = mt5_login_verified_by_window(port, payload)
+    if not ok_w and login and login not in str(joined or ""):
+        return False, {}, ""
+    log(f"LOGIN SOCKET+METRICS OK login={login} hint={sock_hint[:120]}")
+    return True, snap, sock_hint or "socket+metrics"
+
+
 def _try_fast_login_confirm(
     port: Any,
     payload: Dict[str, Any],
@@ -1977,6 +2002,74 @@ def _journal_dirs_for_port(port_dir: Path) -> List[Path]:
     ]
 
 
+def _collect_appdata_journal_logs(max_age_sec: float = 360) -> List[Path]:
+    """Portable MT5 บางครั้งเขียน log ใต้ AppData\\MetaQuotes\\Terminal\\<id>\\logs"""
+    out: List[Path] = []
+    cutoff = time.time() - max(60, float(max_age_sec or 360))
+    for base in (os.getenv("APPDATA"), os.getenv("LOCALAPPDATA")):
+        if not base:
+            continue
+        root = Path(base) / "MetaQuotes" / "Terminal"
+        if not root.is_dir():
+            continue
+        try:
+            for term_dir in root.iterdir():
+                if not term_dir.is_dir():
+                    continue
+                logs_dir = term_dir / "logs"
+                if not logs_dir.is_dir():
+                    continue
+                for f in logs_dir.glob("*.log"):
+                    try:
+                        if f.stat().st_mtime >= cutoff:
+                            out.append(f)
+                    except Exception:
+                        pass
+        except Exception:
+            pass
+    out.sort(key=lambda p: p.stat().st_mtime if p.exists() else 0, reverse=True)
+    return out[:6]
+
+
+def _journal_outcome_flex(
+    text: str,
+    login: str,
+    server: str,
+    failed_words: Optional[List[str]] = None,
+) -> Tuple[Optional[bool], str]:
+    """ลองทั้ง Demo/Live + authorized on ที่มีเลข login (journal อาจใช้ชื่อ server ต่างกันเล็กน้อย)"""
+    login = str(login or "").strip()
+    if not login or not str(text or "").strip():
+        return None, server
+    words = failed_words or _journal_failed_words()
+    servers: List[str] = []
+    for s in (server, MT5_DEMO_SERVER, MT5_LIVE_SERVER):
+        if s and s not in servers:
+            servers.append(s)
+    for srv in servers:
+        outcome = _journal_outcome_for_login(text, login, words, srv)
+        if outcome is not None:
+            return outcome, srv
+    login_esc = re.escape(login)
+    ok_loose = re.compile(
+        rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorized on\b",
+        re.I,
+    )
+    fail_loose = re.compile(
+        rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorization on\b.*\bfailed\b",
+        re.I,
+    )
+    for line in reversed(text.splitlines()):
+        low = line.lower()
+        if login.lower() not in low:
+            continue
+        if fail_loose.search(line) or any(w in low for w in words if "failed" in w or "invalid" in w):
+            return False, server
+        if ok_loose.search(line) and "failed" not in low:
+            return True, server
+    return None, server
+
+
 def _journal_mirror_log_paths(port_dir: Path) -> List[Path]:
     """Mirror ท้าย Journal ใน Common/Files — อ่านก่อน Logs/*.log (เร็วกว่า)"""
     out: List[Path] = []
@@ -1998,6 +2091,7 @@ def _collect_journal_log_files(port_dir: Path, since_ts: float = 0.0) -> List[Pa
     """
     today_name = datetime.now().strftime("%Y%m%d")
     log_files: List[Path] = list(_journal_mirror_log_paths(port_dir))
+    log_files.extend(_collect_appdata_journal_logs(600))
     for d in _journal_dirs_for_port(port_dir):
         if not d.exists():
             continue
@@ -2148,7 +2242,7 @@ def automate_mt5_open_account_wizard(
     company: str = LOCKED_MT5_COMPANY,
     server: str = MT5_LIVE_SERVER,
 ) -> bool:
-    """กด wizard Open an Account ให้เลือก Mohicans Markets Ltd + Server MohicansMarkets-Live"""
+    """กด wizard Open an Account ให้เลือก Mohicans Markets Ltd + Server ตาม payload"""
     company_esc = company.replace("'", "''")
     server_esc = server.replace("+", "{+}")
     ps = f"""
@@ -2230,12 +2324,12 @@ def check_mt5_journal_login_result(
         uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         newest = uniq[0]
         chunk = _read_log_tail(newest)
-        outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
+        outcome, hit_srv = _journal_outcome_flex(chunk, login, server, failed_words)
         if outcome is False:
-            log(f"MT5 JOURNAL FAIL login={login} file={newest.name} server={server}")
+            log(f"MT5 JOURNAL FAIL login={login} file={newest.name} server={hit_srv}")
             return False, JOURNAL_FAIL_MSG, chunk
         if outcome is True:
-            log(f"MT5 JOURNAL OK login={login} file={newest.name} server={server}")
+            log(f"MT5 JOURNAL OK login={login} file={newest.name} server={hit_srv}")
             return True, JOURNAL_OK_MSG, chunk
 
         time.sleep(JOURNAL_POLL_INTERVAL_SEC)
@@ -2243,11 +2337,12 @@ def check_mt5_journal_login_result(
     uniq = _collect_journal_log_files(port_dir, since_ts)
     if uniq:
         tail = _read_log_tail(uniq[0])
-        late = _journal_outcome_for_login(tail, login, failed_words, server)
+        late, hit_srv = _journal_outcome_flex(tail, login, server, failed_words)
         if late is False:
-            log(f"MT5 JOURNAL FAIL (late) login={login} file={uniq[0].name}")
+            log(f"MT5 JOURNAL FAIL (late) login={login} file={uniq[0].name} server={hit_srv}")
             return False, JOURNAL_FAIL_MSG, tail
-    log(f"MT5 JOURNAL TIMEOUT login={login} port_dir={port_dir}")
+    sample = _read_log_tail(uniq[0], max_bytes=800) if uniq else ""
+    log(f"MT5 JOURNAL TIMEOUT login={login} port_dir={port_dir} sample={sample[-400:]}")
     return False, JOURNAL_TIMEOUT_MSG, ""
 
 
@@ -2262,17 +2357,17 @@ def _quick_journal_probe(
     uniq = _collect_journal_log_files(port_dir, since_ts)
     if not uniq:
         return None, ""
-    for cand in uniq[:4]:
+    for cand in uniq[:6]:
         chunk = _read_log_tail(cand, max_bytes=131072)
         if not chunk.strip():
             continue
-        outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
+        outcome, _srv = _journal_outcome_flex(chunk, login, server, failed_words)
         if outcome is True:
             return True, chunk
         if outcome is False:
             return False, chunk
     chunk = _read_log_tail(uniq[0])
-    outcome = _journal_outcome_for_login(chunk, login, failed_words, server)
+    outcome, _srv = _journal_outcome_flex(chunk, login, server, failed_words)
     if outcome is True:
         return True, chunk
     if outcome is False:
@@ -2380,6 +2475,10 @@ def wait_mt5_login_hybrid(
         fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
             port, payload, login, joined, window_ok_streak, j_out
         )
+        if not fast_ok:
+            fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
+                port, payload, login, joined, window_ok_streak, j_out, elapsed
+            )
         if fast_ok:
             try:
                 enforce_login_no_trading(
@@ -2478,8 +2577,8 @@ def wait_mt5_login_hybrid(
 
     journal_files = _collect_journal_log_files(port_dir, journal_since)
     probe_tail = _read_log_tail(journal_files[0]) if journal_files else ""
-    late_fail = _journal_outcome_for_login(
-        probe_tail or chunk or extra_chunk, login, _journal_failed_words(), server
+    late_fail, _late_srv = _journal_outcome_flex(
+        probe_tail or chunk or extra_chunk, login, server, _journal_failed_words()
     )
     if late_fail is False:
         cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2514,6 +2613,10 @@ def wait_mt5_login_hybrid(
     fast_end, fast_snap_end, _ = _try_fast_login_confirm(
         port, payload, login, joined_end, max(window_ok_streak, 1), j_out
     )
+    if not fast_end:
+        fast_end, fast_snap_end, _ = _try_socket_metrics_login_confirm(
+            port, payload, login, joined_end, max(window_ok_streak, 1), j_out, int(time.time() - wait_start)
+        )
     if fast_end and j_out is not False:
         try:
             enforce_login_no_trading(
