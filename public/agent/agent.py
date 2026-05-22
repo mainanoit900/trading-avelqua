@@ -94,7 +94,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v39"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v40"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -467,12 +467,12 @@ def send_port_health():
         for port_no, folder, _folder_norm in port_folders:
             run = running_map.get(port_no)
             mt5_login: Optional[str] = None
-            if run:
-                if read_titles and run.get("process_id"):
-                    login = _read_mt5_login_from_title(int(run["process_id"]))
-                    if login:
-                        _PORT_LOGIN_CACHE[port_no] = login
-                        mt5_login = login
+            if run and run.get("process_id"):
+                # อ่าน title ทุกรอบ heartbeat — server ใช้ mt5_login ยืนยัน (ไม่พึ่ง journal อย่างเดียว)
+                login_t = _read_mt5_login_from_title(int(run["process_id"]))
+                if login_t:
+                    _PORT_LOGIN_CACHE[port_no] = login_t
+                    mt5_login = login_t
                 elif port_no in _PORT_LOGIN_CACHE:
                     mt5_login = _PORT_LOGIN_CACHE[port_no]
             else:
@@ -2811,6 +2811,20 @@ def wait_mt5_login_hybrid(
             if api_hit:
                 return True, f"api verified; {api_msg}", joined
             log(f"LOGIN API RETRY login={login} detail={api_msg[:120]}")
+
+        if not fast_ok and elapsed >= 18:
+            snap_loop = account_snapshot(port, payload)
+            if _snap_positive(snap_loop) and (ok_w or elapsed >= 25):
+                return _send_fast_connected(
+                    payload,
+                    port,
+                    proc_pid,
+                    login,
+                    joined,
+                    snap_loop,
+                    j_chunk or joined,
+                    "equity_snapshot",
+                )
 
         if fast_ok:
             try:
