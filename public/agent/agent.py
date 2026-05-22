@@ -90,7 +90,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v32"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v33"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -803,6 +803,128 @@ def write_avelqua_trading_gate(port_dir: Path, enabled: bool, payload: Optional[
             log(f"TRADING GATE WRITE ERROR {files_dir}: {e}")
 
 
+MT5_PORT_INI_REL_PATHS = (
+    "config/common.ini",
+    "config/settings.ini",
+    "config/terminal.ini",
+    "config/trade.ini",
+    "config/history.ini",
+    "MQL5/config/common.ini",
+)
+
+MT5_PORT_DATA_DIRS = (
+    "config",
+    "Logs",
+    "logs",
+    "bases",
+    "MQL5/Files",
+    "MQL5/Logs",
+    "MQL5/logs",
+    "MQL5/Experts",
+    "MQL5/Indicators",
+    "Terminal/Common/Files",
+    "terminal/Common/Files",
+)
+
+_LAST_EXPERTS_PATCH_LOG: Dict[str, float] = {}
+_LAST_DATA_EXPORT_AT: Dict[str, float] = {}
+
+
+def ensure_mt5_port_layout(port_dir: Path) -> None:
+    """สร้างโฟลเดอร์มาตรฐาน portable — Journal, Experts, Common/Files เหมือน Terminal จริง"""
+    for rel in MT5_PORT_DATA_DIRS:
+        try:
+            (port_dir / Path(rel.replace("/", os.sep))).mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            log(f"ENSURE MT5 DIR ERROR {rel}: {e}")
+
+
+def _seed_mt5_ini_templates(port_dir: Path) -> None:
+    """สร้างไฟล์ config เริ่มต้นถ้ายังไม่มี (ไม่ทับของเดิม)"""
+    seeds = {
+        "config/terminal.ini": (
+            "[Terminal]\n"
+            "DataPath=.\n"
+            "[Experts]\n"
+            "AllowLiveTrading=false\n"
+            "AllowDllImport=true\n"
+            "Enabled=0\n"
+        ),
+        "config/trade.ini": (
+            "[Trade]\n"
+            "AllowLiveTrading=false\n"
+            "[Experts]\n"
+            "AllowLiveTrading=false\n"
+            "AllowDllImport=true\n"
+            "Enabled=0\n"
+        ),
+        "config/history.ini": (
+            "[History]\n"
+            "Storage=bases\n"
+            "ExportToCommonFiles=1\n"
+        ),
+    }
+    for rel, body in seeds.items():
+        p = port_dir / Path(rel.replace("/", os.sep))
+        if p.is_file():
+            continue
+        try:
+            p.parent.mkdir(parents=True, exist_ok=True)
+            p.write_text(body, encoding="ascii", errors="ignore")
+            log(f"SEED MT5 INI {p}")
+        except Exception as e:
+            log(f"SEED MT5 INI ERROR {p}: {e}")
+
+
+def sync_avelqua_data_exports(port_dir: Path, force: bool = False) -> None:
+    """
+    คัดลอก Journal + meta ไป Terminal/Common/Files
+    ให้ backend อ่านผ่าน port_read_file / equity sync (เหมือน MetaQuotes\\Terminal\\Common\\Files)
+    """
+    key = str(port_dir).lower()
+    now = time.time()
+    if not force and now - _LAST_DATA_EXPORT_AT.get(key, 0) < 8.0:
+        return
+    _LAST_DATA_EXPORT_AT[key] = now
+
+    ensure_mt5_port_layout(port_dir)
+    for files_dir in avelqua_gate_target_dirs(port_dir):
+        try:
+            files_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            pass
+
+    journal_files = _collect_journal_log_files(port_dir, 0.0)
+    journal_tail = ""
+    journal_path = ""
+    if journal_files:
+        journal_path = str(journal_files[0])
+        journal_tail = _read_log_tail(journal_files[0], max_bytes=98304)
+
+    meta = {
+        "portDir": str(port_dir),
+        "updatedAt": datetime.now().isoformat(timespec="seconds"),
+        "journalFile": journal_path,
+        "journalDirs": [str(d) for d in _journal_dirs_for_port(port_dir) if d.exists()],
+        "configIni": list(MT5_PORT_INI_REL_PATHS),
+        "commonFilesDirs": [str(p) for p in avelqua_gate_target_dirs(port_dir)],
+        "historyStorage": str(port_dir / "bases"),
+    }
+
+    for files_dir in avelqua_gate_target_dirs(port_dir):
+        try:
+            if journal_tail:
+                (files_dir / "avelqua_journal_latest.log").write_text(
+                    journal_tail, encoding="utf-8", errors="ignore"
+                )
+            (files_dir / "avelqua_port_meta.json").write_text(
+                json.dumps(meta, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+        except Exception as e:
+            log(f"SYNC DATA EXPORT ERROR {files_dir}: {e}")
+
+
 def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
     """อัปเดต [Experts] ใน common.ini / settings.ini ของ MT5 portable"""
     if not path.parent.exists():
@@ -871,10 +993,17 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
 
 
 def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> None:
-    for rel in ("config/common.ini", "config/settings.ini", "MQL5/config/common.ini"):
+    ensure_mt5_port_layout(port_dir)
+    _seed_mt5_ini_templates(port_dir)
+    port_key = str(port_dir).lower()
+    now = time.time()
+    for rel in MT5_PORT_INI_REL_PATHS:
         p = port_dir / Path(rel.replace("/", os.sep))
         if _patch_ini_experts_section(p, enabled):
-            log(f"PATCH EXPERTS enabled={enabled} file={p}")
+            log_key = f"{port_key}:{rel}:{enabled}"
+            if now - _LAST_EXPERTS_PATCH_LOG.get(log_key, 0) >= 90.0:
+                _LAST_EXPERTS_PATCH_LOG[log_key] = now
+                log(f"PATCH EXPERTS enabled={enabled} file={p}")
 
 
 def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
@@ -926,6 +1055,7 @@ def enforce_login_no_trading(
     """หลัง Login สำเร็จ — ห้ามเทรดจนกว่าผู้ใช้กด Run BOT บนเว็บ"""
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
+    sync_avelqua_data_exports(port_dir, force=True)
     try:
         quarantine_chart_profiles_with_ea(port_dir)
     except Exception as e:
@@ -1051,6 +1181,8 @@ def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[s
     candidates = [
         port_dir / "MQL5" / "Files" / "avelqua_account.txt",
         port_dir / "MQL5" / "Files" / "avelqua_account.json",
+        port_dir / "Terminal" / "Common" / "Files" / "avelqua_account.txt",
+        port_dir / "Terminal" / "Common" / "Files" / "avelqua_account.json",
     ]
     for p in candidates:
         if not p.exists():
@@ -1796,6 +1928,8 @@ def _journal_dirs_for_port(port_dir: Path) -> List[Path]:
         Path(port_dir) / "logs",
         Path(port_dir) / "MQL5" / "Logs",
         Path(port_dir) / "MQL5" / "logs",
+        Path(port_dir) / "Terminal" / "Common" / "Files",
+        Path(port_dir) / "terminal" / "Common" / "Files",
     ]
 
 
@@ -2105,10 +2239,11 @@ def wait_mt5_login_hybrid(
         elapsed = int(time.time() - wait_start)
         now = time.time()
 
-        if now - last_gate_at >= 4.0:
+        if now - last_gate_at >= 10.0:
             try:
                 write_avelqua_trading_gate(port_dir, False, payload)
                 patch_mt5_experts_config(port_dir, False)
+                sync_avelqua_data_exports(port_dir)
             except Exception:
                 pass
             last_gate_at = now
@@ -2405,6 +2540,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     log(f"USING PORT DIR={port_dir}")
     log(f"MT5 TERMINAL={terminal}")
+
+    ensure_mt5_port_layout(port_dir)
+    _seed_mt5_ini_templates(port_dir)
+    patch_mt5_experts_config(port_dir, False)
+    sync_avelqua_data_exports(port_dir, force=True)
 
     config_file = write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
     write_avelqua_trading_gate(port_dir, False, payload)
