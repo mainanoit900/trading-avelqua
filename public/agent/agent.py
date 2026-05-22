@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v28"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v29"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1262,6 +1262,79 @@ def _snap_positive(snap: Dict[str, Any]) -> bool:
         return False
 
 
+MT5_LOGIN_LIVE_RX = re.compile(r"^2\d{8}$")
+MT5_LOGIN_DEMO_RX = re.compile(r"^8\d{7}$")
+
+
+def _classify_mt5_login(login: str) -> str:
+    s = str(login or "").strip()
+    if MT5_LOGIN_LIVE_RX.match(s):
+        return "live"
+    if MT5_LOGIN_DEMO_RX.match(s):
+        return "demo"
+    return "invalid"
+
+
+def _try_fast_login_confirm(
+    port: Any,
+    payload: Dict[str, Any],
+    login: str,
+    joined: str,
+    window_ok_streak: int,
+    j_out: Optional[bool],
+) -> Tuple[bool, Dict[str, Any], str]:
+    """
+    ยืนยันเร็ว (ไม่รอ Journal ครบ):
+    1) หน้าต่าง MT5 แสดงเลข login + ยอด balance/equity > 0
+    2) บัญชีจริง/ทดลองรูปแบบถูก + title ไม่ใช่หน้า login ผิด + เห็น login บนหน้าต่าง 2 ครั้งติด
+    """
+    if j_out is False:
+        return False, {}, joined or ""
+    ok_w, wmsg = mt5_login_verified_by_window(port, payload)
+    if not ok_w or window_ok_streak < 1:
+        return False, {}, wmsg or joined or ""
+    if joined and mt5_title_suggests_auth_failure(joined):
+        return False, {}, joined
+
+    snap = account_snapshot(port, payload)
+    if _snap_positive(snap):
+        return True, snap, joined or wmsg
+
+    kind = _classify_mt5_login(login)
+    if kind in ("live", "demo") and window_ok_streak >= 2 and login and login in (joined or ""):
+        return True, snap, joined or wmsg
+
+    return False, snap, joined or wmsg
+
+
+def _send_fast_connected(
+    payload: Dict[str, Any],
+    port: Any,
+    proc_pid: Any,
+    login: str,
+    joined: str,
+    snap: Dict[str, Any],
+    journal_chunk: str,
+    via: str,
+) -> Tuple[bool, str, str]:
+    msg = "เชื่อมต่อสำเร็จ — ยืนยันจากหน้าต่าง MT5" + (
+        f" (ยอด {snap.get('balance')})" if snap.get("balance") is not None else ""
+    )
+    send_connect_result(
+        payload,
+        "connected",
+        msg + " — ยังไม่เปิด BOT",
+        port,
+        process_id=proc_pid,
+        journal_evidence=journal_chunk or joined,
+        window_title=joined,
+        preview_b64=capture_mt5_window_base64(port, payload),
+        window_verified=True,
+    )
+    log(f"LOGIN FAST OK via={via} login={login} balance={snap.get('balance')} equity={snap.get('equity')}")
+    return True, f"fast verify ({via})", journal_chunk or joined
+
+
 def _snap_merge_profit(snap: Dict[str, Any]) -> Dict[str, Any]:
     try:
         b = snap.get("balance")
@@ -1995,7 +2068,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    wait_cap = max(60, min(int(timeout_sec or 150), 150))
+    wait_cap = max(45, min(int(timeout_sec or 90), 120))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
@@ -2061,7 +2134,33 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        # สำเร็จเฉพาะเมื่อ Journal ยืนยัน authorized on (ห้ามยอมแค่เห็นเลขบนหน้าต่าง)
+        fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
+            port, payload, login, joined, window_ok_streak, j_out
+        )
+        if fast_ok:
+            try:
+                enforce_login_no_trading(
+                    port_dir,
+                    port,
+                    payload,
+                    login,
+                    str(payload_get(payload, "mt5Password", "password") or ""),
+                    LOCKED_MT5_SERVER,
+                )
+            except Exception:
+                pass
+            via = "balance_snapshot" if _snap_positive(fast_snap) else "window_title"
+            return _send_fast_connected(
+                payload,
+                port,
+                proc_pid,
+                login,
+                joined,
+                fast_snap,
+                j_chunk or joined,
+                via,
+            )
+
         if window_ok_streak >= 2 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
@@ -2167,6 +2266,35 @@ def wait_mt5_login_hybrid(
         return False, fail_no_broker, probe_tail or chunk
 
     tail_evidence = probe_tail or chunk or extra_chunk
+    titles_end = mt5_window_titles(port, payload)
+    joined_end = " | ".join(titles_end)
+    fast_end, fast_snap_end, _ = _try_fast_login_confirm(
+        port, payload, login, joined_end, max(window_ok_streak, 1), j_out
+    )
+    if fast_end and j_out is not False:
+        try:
+            enforce_login_no_trading(
+                port_dir,
+                port,
+                payload,
+                login,
+                str(payload_get(payload, "mt5Password", "password") or ""),
+                LOCKED_MT5_SERVER,
+            )
+        except Exception:
+            pass
+        via_end = "balance_snapshot" if _snap_positive(fast_snap_end) else "window_title"
+        return _send_fast_connected(
+            payload,
+            port,
+            proc_pid,
+            login,
+            joined_end,
+            fast_snap_end,
+            tail_evidence,
+            via_end,
+        )
+
     if window_ok_streak >= 1 and j_out is not False:
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)

@@ -41,7 +41,8 @@ const {
   findLoginCommandInProgress,
   findRecentLoginCommand,
   releaseUserPackagePortSlot,
-  forceStopPackagePortSlot
+  forceStopPackagePortSlot,
+  tryFastConnectConfirm
 } = require('../lib/mt5LoginCommandVerify');
 const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
 const {
@@ -1197,6 +1198,26 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
+
+    if (['connecting', 'starting', 'checking'].includes(statusFinal)) {
+      const fastEarly = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
+      if (fastEarly.resolved) {
+        statusFinal = fastEarly.status || statusFinal;
+        if (fastEarly.message) {
+          a.last_login_message = fastEarly.message;
+          a.last_error = statusFinal === 'failed' ? fastEarly.message : null;
+        }
+        if (statusFinal === 'connected') {
+          a.status = 'connected';
+          a.last_error = null;
+          a.last_login_message = fastEarly.message || MT5_SUCCESS_MSG;
+        } else if (statusFinal === 'failed') {
+          a.status = 'failed';
+          a.last_error = fastEarly.message || a.last_error;
+        }
+      }
+    }
+
     const shouldSyncJournal =
       ['connecting', 'starting', 'checking'].includes(statusFinal) && !windowHint;
 

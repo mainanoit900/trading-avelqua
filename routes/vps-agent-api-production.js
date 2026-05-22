@@ -866,6 +866,10 @@ router.post('/connect-result', async (req, res) => {
         return res.json({ ok: true, connected: true, fastPath: 'window_verified' });
       }
 
+      const bodyBal = Number(req.body.balance || 0);
+      const bodyEq = Number(req.body.equity || 0);
+      const hasBodyMoney = bodyBal > 0 || bodyEq > 0;
+
       if (
         windowVerified &&
         loginVerified &&
@@ -876,7 +880,7 @@ router.post('/connect-result', async (req, res) => {
           requireLoginMatch: true
         }).catch(() => ({ ok: false }));
         const winOk = windowTitleConfirmsLogin(windowTitle, loginForJournal);
-        if (metricsOk.ok || winOk) {
+        if (metricsOk.ok || winOk || hasBodyMoney) {
           await patchAccountMt5Preview(accountId, {
             message: message || MT5_SUCCESS_MSG,
             windowTitle,
