@@ -272,7 +272,12 @@ async function clearExpiredLocks() {
   `).catch(() => {});
 }
 
-const { findMt5LoginInUse, mt5LoginInUseMessage } = require('../lib/mt5LoginDuplicate');
+const {
+  findMt5LoginInUse,
+  findMt5LoginOnOtherUserPort,
+  mt5LoginInUseMessage,
+  mt5LoginOnOtherPortMessage
+} = require('../lib/mt5LoginDuplicate');
 
 /** จอง Folder PORT ตามช่องแพ็กเกจ (PORT 1 → VPS-WIN-01-PORT-01) */
 async function reservePortForPackageSlot(userId, portSlot) {
@@ -843,16 +848,28 @@ async function handleMt5ConnectProduction(req, res) {
     ).catch(() => ({ rows: [{ c: 0 }] }));
     const usedPorts = Number(usedCountRes.rows?.[0]?.c || 0);
 
+    const uiPreferredSlot = num(
+      req.body.port_slot || req.body.portSlot || req.body.ui_port_hint || req.body.uiPortHint
+    );
+
     const duplicate = await findMt5LoginInUse(mt5Login, serverName, userId);
     if (duplicate) {
       throw new Error(mt5LoginInUseMessage(duplicate));
     }
 
-    await cancelPendingLoginCommands({ mt5Login });
+    if (uiPreferredSlot > 0) {
+      const onOtherSlot = await findMt5LoginOnOtherUserPort(
+        userId,
+        mt5Login,
+        serverName,
+        uiPreferredSlot
+      );
+      if (onOtherSlot) {
+        throw new Error(mt5LoginOnOtherPortMessage(onOtherSlot));
+      }
+    }
 
-    const uiPreferredSlot = num(
-      req.body.port_slot || req.body.portSlot || req.body.ui_port_hint || req.body.uiPortHint
-    );
+    await cancelPendingLoginCommands({ mt5Login });
     const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
     let portSlot = 0;
 
@@ -893,18 +910,26 @@ async function handleMt5ConnectProduction(req, res) {
       ).catch(() => ({ rows: [] }));
 
       const exist = existRes.rows?.[0];
-      if (exist?.port_slot) {
+      if (uiPreferredSlot > 0) {
+        portSlot = uiPreferredSlot;
+      } else if (exist?.port_slot) {
         portSlot = Number(exist.port_slot);
       } else {
-        portSlot = await pickBestPackageSlotForConnect(
-          userId,
-          totalPorts,
-          uiPreferredSlot > 0 ? uiPreferredSlot : 0
-        );
+        portSlot = await pickBestPackageSlotForConnect(userId, totalPorts, 0);
       }
 
       if (!portSlot) {
         throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
+      }
+
+      if (exist?.id && exist.port_slot && Number(exist.port_slot) !== portSlot) {
+        throw new Error(
+          mt5LoginOnOtherPortMessage({
+            port_slot: exist.port_slot,
+            status: exist.status || 'connected',
+            mt5_login: mt5Login
+          })
+        );
       }
 
       if (exist?.port_id && exist?.vps_id && exist?.folder_path) {
@@ -959,6 +984,7 @@ async function handleMt5ConnectProduction(req, res) {
         AND mt5_login=$6
         AND COALESCE(server_name, mt5_server, '')=$8
         AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
+        AND (port_slot IS NULL OR port_slot = $4)
       RETURNING id
     `, [
       userId,
@@ -1468,9 +1494,25 @@ async function handleMt5ConnectAllPorts(req, res) {
       }
       const serverName = resolveServerForLogin(fmt.normalized);
 
-      const dup = await findMt5LoginInUse(fmt.normalized, serverName, userId);
+      const dup = await findMt5LoginInUse(fmt.normalized, serverName, userId, acc.id);
       if (dup) {
         results.push({ portSlot: slot, skipped: true, reason: 'login_in_use', login: fmt.normalized });
+        continue;
+      }
+      const onOtherSlot = await findMt5LoginOnOtherUserPort(
+        userId,
+        fmt.normalized,
+        serverName,
+        slot
+      );
+      if (onOtherSlot && Number(onOtherSlot.id) !== Number(acc.id)) {
+        results.push({
+          portSlot: slot,
+          skipped: true,
+          reason: 'login_on_other_port',
+          login: fmt.normalized,
+          otherPort: onOtherSlot.port_slot
+        });
         continue;
       }
 
