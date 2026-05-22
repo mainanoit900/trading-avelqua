@@ -90,7 +90,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v36"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v37"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2227,6 +2227,28 @@ def _journal_only_terminal_startup(text: str, login: str) -> bool:
     return "launched with" in low or "successfully initialized from start config" in low
 
 
+def _existing_mt5_session_for_login(
+    port: Any, payload: Dict[str, Any], login: str
+) -> Tuple[bool, str, Optional[int]]:
+    """MT5 เปิดและล็อกอินอยู่แล้ว (เช่น login มือบน VPS) — อย่า kill/relaunch"""
+    port_dir = resolve_mt5_port_dir(port, payload)
+    if not mt5_running_for_port_dir(port_dir):
+        return False, "", None
+    joined = " | ".join(mt5_window_titles(port, payload))
+    ok_w, _ = mt5_login_verified_by_window(port, payload)
+    if not ok_w or login not in str(joined or ""):
+        return False, joined, None
+    proc_pid: Optional[int] = None
+    try:
+        for p in mt5_port_processes(port, payload):
+            proc_pid = int(p.pid)
+            break
+    except Exception:
+        proc_pid = None
+    log(f"MT5 SESSION REUSE login={login} pid={proc_pid} title={(joined or '')[:80]}")
+    return True, joined, proc_pid
+
+
 def resolve_mt5_server(payload: Dict[str, Any], login: Optional[str] = None) -> str:
     """จริง 2·9หลัก → Live, ทดลอง 8·8หลัก → Demo (ตรงกับเว็บ)"""
     login_s = str(login or payload_get(payload, "mt5Login", "login") or "").strip()
@@ -2397,6 +2419,29 @@ def wait_mt5_login_hybrid(
     wait_start = time.time()
     preview_b64 = ""
     wizard_stuck_since = 0.0
+
+    # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
+    if journal_since < wait_start - 120:
+        ok_pre, pre_title = mt5_login_verified_by_window(port, payload)
+        if ok_pre:
+            j_pre, j_chunk_pre = _quick_journal_probe(port_dir, login, journal_since, server)
+            if j_pre is True:
+                return True, JOURNAL_OK_MSG, j_chunk_pre
+            if j_pre is not False:
+                fast_pre, snap_pre, _ = _try_fast_login_confirm(
+                    port, payload, login, pre_title or "", 3, j_pre
+                )
+                if fast_pre:
+                    return _send_fast_connected(
+                        payload,
+                        port,
+                        proc_pid,
+                        login,
+                        pre_title or "",
+                        snap_pre,
+                        j_chunk_pre or pre_title,
+                        "session_reuse",
+                    )
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
@@ -2722,6 +2767,49 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
 
+    reuse_sess, reuse_title, reuse_pid = _existing_mt5_session_for_login(port, payload, login)
+    if reuse_sess:
+        sync_avelqua_data_exports(port_dir, force=True)
+        journal_since = time.time() - 900
+        send_connect_result(
+            payload,
+            "checking",
+            f"ใช้ MT5 ที่เปิดอยู่แล้ว (Login {login}) — กำลังยืนยัน...",
+            port,
+            process_id=reuse_pid,
+            window_title=reuse_title,
+            window_verified=True,
+        )
+        ok_reuse, msg_reuse, chunk_reuse = wait_mt5_login_hybrid(
+            port, payload, port_dir, login, journal_since, reuse_pid, journal_timeout_sec(payload)
+        )
+        if ok_reuse:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            send_connect_result(
+                payload,
+                "connected",
+                msg_reuse or JOURNAL_OK_MSG,
+                port,
+                process_id=reuse_pid,
+                journal_evidence=chunk_reuse,
+                window_title=reuse_title,
+                window_verified=True,
+            )
+            log(f"LOGIN OK REUSE SESSION PORT={port} LOGIN={login}")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "sessionReuse": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
+        log(f"LOGIN REUSE SESSION verify failed login={login} msg={msg_reuse}")
+
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
     if ok_fast and mt5_running_for_port_dir(port_dir):
         j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180, server)
@@ -2865,16 +2953,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
-        quarantine_chart_profiles_with_ea(port_dir)
         clear_mt5_login_cache(port_dir)
         # ไม่ลบ log ก่อนเปิด MT5 — เก็บบรรทัด authorized on ให้ตรวจได้
+        # เปิดแบบ v8 ที่เคยใช้ได้: ใช้ startUp.ini เท่านั้น (ไม่ใส่ /login: ซ้ำกับ ini)
         cfg = mt5_startup_ini_path(port_dir)
-        args = [
-            str(terminal),
-            "/portable",
-            f"/login:{login}",
-            f"/config:{cfg}",
-        ]
+        args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
         return _popen_hidden(args, cwd=str(port_dir))
 
