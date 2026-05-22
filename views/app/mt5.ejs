@@ -1,6 +1,6 @@
 <%- include('../partials/app-shell') %>
 
-<div class="mt5-page">
+<div class="mt5-page" id="mt5PageTop">
   <% /* if (error) { %><div class="mt5-alert danger"><%- error %></div><% } */ %>
   <% if (success && !error) { %>
   <div class="mt5-alert success" id="mt5SuccessAlert"><%- success %></div>
@@ -412,6 +412,9 @@ document.addEventListener('DOMContentLoaded', function () {
 
 <script>
 (function () {
+  try {
+    document.documentElement.classList.add('mt5-page-scroll');
+  } catch (_) {}
   let mt5Checking = false;
   const serverPendingAccountId = '<%= typeof pendingConnectAccountId !== "undefined" && pendingConnectAccountId ? pendingConnectAccountId : "" %>';
   const serverHasPendingConnect = !!serverPendingAccountId;
@@ -745,6 +748,25 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   window.showMt5ConnectModal = showMt5ConnectModal;
+
+  function mt5UnlockPageScroll() {
+    try {
+      document.documentElement.classList.add('mt5-page-scroll');
+      document.documentElement.style.overflow = '';
+      document.documentElement.style.height = '';
+      document.body.style.overflow = '';
+      document.body.style.height = '';
+      document.body.classList.remove('scoin-modal-open', 'modal-open', 'overflow-hidden');
+    } catch (_) {}
+    document
+      .querySelectorAll(
+        '.mt5-lux-modal, .mt5-error-modal, .mt5-success-modal, #mt5ErrorModal, #mt5SuccessModal, #mt5InfoModal'
+      )
+      .forEach(function (el) {
+        el.remove();
+      });
+  }
+  window.mt5UnlockPageScroll = mt5UnlockPageScroll;
 
   window.__mt5PageMeta = {
     packageExpired: <%= packageExpired ? 'true' : 'false' %>,
@@ -1298,6 +1320,7 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
+    if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     const failMsg = mt5NormalizeFailMessage(message, accountInfo);
     await mt5CleanupAfterLoginFail(accountInfo, failMsg);
@@ -1354,6 +1377,7 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
+    if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     const slot =
       (accountInfo && accountInfo.port_slot) ||
@@ -1665,6 +1689,7 @@ document.addEventListener('DOMContentLoaded', function () {
       );
     } finally {
       sessionStorage.removeItem('mt5ConnectTargetSlot');
+      if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
       if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
       if (cancelBtn) {
         cancelBtn.disabled = false;
@@ -2209,7 +2234,7 @@ function mt5SelectPortSlot(slot, opts) {
     window.location.href = '/app/mt5?port_slot=' + encodeURIComponent(n);
     return;
   }
-  if (isConnected || isChecking) {
+  if (isConnected) {
     mt5ScrollToBotSection();
   } else {
     mt5ScrollToLoginSection();
@@ -3229,8 +3254,12 @@ setInterval(loadMt5LiveDashboard, 8000);
 </script>
 
 <style>
-.mt5-lux-modal{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center}
-.mt5-lux-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.72);backdrop-filter:blur(10px)}
+html.mt5-page-scroll,
+html.mt5-page-scroll body{overflow-y:auto!important;height:auto!important;overscroll-behavior-y:auto}
+.portal-shell.premium>.content-shell{overflow:visible;min-height:0}
+.mt5-page{overflow:visible}
+.mt5-lux-modal{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center;pointer-events:auto}
+.mt5-lux-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.72);backdrop-filter:blur(10px);pointer-events:auto}
 .mt5-lux-card{position:relative;width:min(460px,92vw);border-radius:28px;padding:32px;background:linear-gradient(145deg,#111827,#020617);box-shadow:0 30px 100px rgba(0,0,0,.65);color:#fff;text-align:center;animation:mt5LuxPop .22s ease-out}
 .mt5-lux-card.success{border:1px solid rgba(34,197,94,.5);box-shadow:0 30px 100px rgba(0,0,0,.65),0 0 48px rgba(34,197,94,.18)}
 .mt5-lux-card.error{border:1px solid rgba(248,113,113,.45);box-shadow:0 30px 100px rgba(0,0,0,.65),0 0 48px rgba(248,113,113,.18)}
@@ -3964,11 +3993,12 @@ function deletePortCountdown(e, form) {
     ctx.stroke();
   }
 
-  async function loadBotAnalytics(instanceId) {
+  async function loadBotAnalytics(instanceId, opts) {
+    const o = opts || {};
     const panel = document.getElementById('mt5BotAnalyticsPanel');
     if (!panel || !instanceId) return;
     const card = document.getElementById('mt5BotAnalyticsCard');
-    if (card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    if (card && o.scroll !== false) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
     panel.innerHTML = '<div class="mt5-empty">กำลังโหลดวิเคราะห์...</div>';
     try {
       const res = await fetch('/app/mt5/bot-analytics/' + instanceId, {
@@ -4021,10 +4051,15 @@ function deletePortCountdown(e, form) {
       const stopForm = row && row.querySelector('form[action*="/mt5/stop/"]');
       if (stopForm) {
         const m = stopForm.action.match(/\/stop\/(\d+)/);
-        if (m) loadBotAnalytics(m[1]);
+        if (m) loadBotAnalytics(m[1], { scroll: false });
       }
     }
   }, 8000);
+
+  if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
+  if (!sessionStorage.getItem('mt5ConnectInFlight')) {
+    if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+  }
 })();
 </script>
 
