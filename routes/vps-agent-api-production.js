@@ -956,7 +956,17 @@ router.post('/connect-result', async (req, res) => {
         await processInboundConnectJournal(accountId, node.id, journalBlob).catch(() => {});
       }
 
+      const checkAgeRow = await query(
+        `SELECT connect_started_at FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+        [accountId]
+      ).catch(() => ({ rows: [] }));
+      const checkStarted = checkAgeRow.rows?.[0]?.connect_started_at
+        ? new Date(checkAgeRow.rows[0].connect_started_at).getTime()
+        : 0;
+      const checkAgeSec = checkStarted ? Math.floor((Date.now() - checkStarted) / 1000) : 0;
+
       if (
+        checkAgeSec >= 15 &&
         journalBlob &&
         loginHint &&
         parseJournalRelaxed(journalBlob, loginHint, sinceMs) === 'failed'

@@ -3179,16 +3179,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if ok:
         sock_after, sock_detail = mt5_socket_established(port, payload)
-        msg_low = (msg or "").lower()
-        early_confirmed = "early" in msg_low
-        api_confirmed = "api verified" in msg_low
-        window_confirmed = "window verified" in msg_low or "socket verified" in msg_low
-        if not sock_after and not early_confirmed and not api_confirmed and not window_confirmed:
-            log(f"LOGIN JOURNAL OK BUT NO SOCKET — treat as fail: {sock_detail}")
-            ok = False
-            msg = "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อ Server — กรุณาลองใหม่"
-        elif not sock_after and (early_confirmed or api_confirmed):
-            log(f"LOGIN CONFIRMED WITHOUT SOCKET — ok: {sock_detail}")
+        if not sock_after:
+            log(f"LOGIN OK — journal/window confirmed; socket pending: {sock_detail}")
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)
 
