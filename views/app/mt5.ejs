@@ -556,6 +556,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     const previewBox = document.getElementById('mt5LoginPreview');
     if (previewBox) previewBox.style.display = 'block';
+    window.__mt5ConnectTickStarted = Date.now();
     if (typeof window.mt5UpdateConnectProgress === 'function') {
       window.mt5UpdateConnectProgress({
         connectStep: '① กำลังส่งคำสั่ง login_mt5 ไปเซิร์ฟเวอร์...',
@@ -566,8 +567,107 @@ document.addEventListener('DOMContentLoaded', function () {
         elapsedSec: 0
       });
     }
+
     const form = document.getElementById('mt5ConnectForm');
-    if (form) form.submit();
+    const diagElPre = document.getElementById('mt5ConnectDiag');
+    if (diagElPre) {
+      diagElPre.innerHTML = '<b>ขั้นตอน:</b> กำลังส่งคำสั่งไปเซิร์ฟเวอร์...';
+    }
+    try {
+      const formData = form ? new FormData(form) : new FormData();
+      const data = Object.fromEntries(formData.entries());
+      data.port_slot = connectSlot;
+      const connectCtrl = new AbortController();
+      window.__mt5ConnectAbort = connectCtrl;
+      const connectTimer = setTimeout(function () {
+        connectCtrl.abort();
+      }, 25000);
+      const res = await fetch('/app/mt5/connect?_=' + Date.now(), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Accept: 'application/json',
+          'X-Requested-With': 'XMLHttpRequest'
+        },
+        credentials: 'same-origin',
+        body: JSON.stringify(data),
+        signal: connectCtrl.signal
+      });
+      clearTimeout(connectTimer);
+      window.__mt5ConnectAbort = null;
+      const raw = await res.text();
+      let json;
+      try {
+        json = raw ? JSON.parse(raw) : {};
+      } catch (_) {
+        throw new Error(
+          res.status === 401
+            ? 'กรุณาเข้าสู่ระบบใหม่'
+            : 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง — กด Ctrl+F5 แล้วลองใหม่'
+        );
+      }
+      const pop = typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
+      if (!json.ok) {
+        sessionStorage.removeItem('mt5ConnectInFlight');
+        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+        pop('error', json.message || 'เชื่อมต่อไม่สำเร็จ');
+        return false;
+      }
+      if (json.ok && json.status === 'connected' && json.loginVerified) {
+        if (typeof window.finishMt5ConnectSuccess === 'function') {
+          window.finishMt5ConnectSuccess(json.message || 'เชื่อมต่อสำเร็จ', json.account || null);
+        }
+        return false;
+      }
+      if (
+        json.ok &&
+        (json.status === 'queued' ||
+          json.status === 'pending' ||
+          json.status === 'connecting' ||
+          json.status === 'checking')
+      ) {
+        if (!json.accountId && !json.commandId) {
+          throw new Error(json.message || 'ไม่ได้ส่งคำสั่งไป VPS');
+        }
+        if (json.accountId && typeof window.setMt5PollAccountId === 'function') {
+          window.setMt5PollAccountId(json.accountId);
+        } else if (json.accountId) {
+          sessionStorage.setItem('mt5PollAccountId', String(json.accountId));
+        }
+        if (json.portSlot) {
+          sessionStorage.setItem('mt5ConnectTargetSlot', String(json.portSlot));
+        }
+        if (typeof window.startMt5ConnectPolling === 'function') {
+          window.startMt5ConnectPolling();
+        }
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          window.mt5UpdateConnectProgress({
+            message: json.message || 'ส่งคำสั่งแล้ว — รอ Agent',
+            connectStep: json.connectStep || '② รอ Agent รับคำสั่ง login_mt5',
+            commandStatus: json.commandStatus || 'pending',
+            commandId: json.commandId || null,
+            progressStep: json.progressStep != null ? json.progressStep : 1,
+            progressStepLabel: json.progressStepLabel || 'Agent รับงาน',
+            progressTotal: json.progressTotal || 4,
+            elapsedSec: 0
+          });
+        }
+        return false;
+      }
+      throw new Error(json.message || 'เชื่อมต่อไม่สำเร็จ');
+    } catch (err) {
+      sessionStorage.removeItem('mt5ConnectInFlight');
+      const msg =
+        err && err.name === 'AbortError'
+          ? 'ส่งคำสั่งช้าเกินไป — ลองกดเชื่อมต่ออีกครั้ง'
+          : err.message || 'เชื่อมต่อไม่สำเร็จ';
+      if (diagElPre) {
+        diagElPre.innerHTML = '<span class="err"><b>ไม่สำเร็จ:</b> ' + mt5Esc(msg) + '</span>';
+      }
+      pop('error', msg);
+      if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+      return false;
+    }
   };
 
   (function mt5ConnectAllPortsBtn() {
@@ -1456,12 +1556,20 @@ document.addEventListener('DOMContentLoaded', function () {
     return m;
   }
 
-  async function finishMt5ConnectFail(message, accountInfo) {
+  function mt5StopConnectPolling() {
     mt5Checking = false;
     if (window.mt5Checker) {
       clearInterval(window.mt5Checker);
       window.mt5Checker = null;
     }
+    if (window.mt5ElapsedTicker) {
+      clearInterval(window.mt5ElapsedTicker);
+      window.mt5ElapsedTicker = null;
+    }
+  }
+
+  async function finishMt5ConnectFail(message, accountInfo) {
+    mt5StopConnectPolling();
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
@@ -1514,11 +1622,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const outcomeKey = mt5OutcomeStorageKey('ok', accId || 'port');
     mt5MarkOutcomeShown(outcomeKey);
     if (accId) mt5MarkSuccessModalShown(accId);
-    mt5Checking = false;
-    if (window.mt5Checker) {
-      clearInterval(window.mt5Checker);
-      window.mt5Checker = null;
-    }
+    mt5StopConnectPolling();
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectTargetSlot');
@@ -1599,7 +1703,10 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!box) return;
     box.style.display = 'block';
     const d = data || {};
-    const sec = d.elapsedSec != null ? d.elapsedSec : '';
+    let sec = d.elapsedSec != null ? d.elapsedSec : '';
+    if (window.__mt5ConnectTickStarted && (sec === '' || Number(sec) === 0)) {
+      sec = Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000);
+    }
     const st = String((d.account && d.account.status) || d.status || '').toLowerCase();
     const cmd = String(d.commandStatus || '').toLowerCase();
     const agentOk = d.agentOnline === true;
@@ -1976,16 +2083,30 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
         const btn = document.getElementById('mt5ConnectBtn');
-        const sec = data.elapsedSec != null ? Number(data.elapsedSec) : 0;
+        const localSec = window.__mt5ConnectTickStarted
+          ? Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000)
+          : 0;
+        const sec =
+          data.elapsedSec != null
+            ? Math.max(Number(data.elapsedSec), localSec)
+            : localSec;
         const cmdSt = String(data.commandStatus || '').toLowerCase();
         if (
           ['success', 'done'].includes(cmdSt) &&
           ['connecting', 'checking', 'starting'].includes(stWait)
         ) {
-          if (typeof window.mt5UpdateConnectProgress === 'function') {
-            window.mt5UpdateConnectProgress(data);
-          }
-          if (btn) btn.innerHTML = data.connectStep || 'คำสั่งสำเร็จ — กำลังอัปเดตสถานะ...';
+        if (typeof window.mt5UpdateConnectProgress === 'function') {
+          const localSec =
+            window.__mt5ConnectTickStarted
+              ? Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000)
+              : data.elapsedSec;
+          window.mt5UpdateConnectProgress(
+            Object.assign({}, data, {
+              elapsedSec: data.elapsedSec != null ? Math.max(Number(data.elapsedSec), localSec) : localSec
+            })
+          );
+        }
+        if (btn) btn.innerHTML = data.connectStep || 'คำสั่งสำเร็จ — กำลังอัปเดตสถานะ...';
           return;
         }
         if (/ไม่มีคำสั่ง.*VPS|login_mt5 บน VPS/i.test(String(data.message || data.connectStep || ''))) {
@@ -2119,8 +2240,10 @@ document.addEventListener('DOMContentLoaded', function () {
 
   window.startMt5ConnectPolling = function () {
     if (window.mt5Checker) clearInterval(window.mt5Checker);
+    if (window.mt5ElapsedTicker) clearInterval(window.mt5ElapsedTicker);
     syncMt5PollAccountId();
     window.__mt5ConnectProgressMax = 0;
+    if (!window.__mt5ConnectTickStarted) window.__mt5ConnectTickStarted = Date.now();
     mt5Checking = true;
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
       window.mt5SetCancelConnectVisible(true);
@@ -2130,6 +2253,13 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStorage.removeItem('mt5ConnectedShownId');
     mt5ClearConnectModalDedupe(mt5PollAccountId || '');
     window.mt5Checker = setInterval(checkMt5Connected, 500);
+    window.mt5ElapsedTicker = setInterval(function () {
+      if (!mt5Checking || !window.__mt5ConnectTickStarted) return;
+      const localSec = Math.floor((Date.now() - window.__mt5ConnectTickStarted) / 1000);
+      if (typeof window.mt5UpdateConnectProgress === 'function') {
+        window.mt5UpdateConnectProgress({ elapsedSec: localSec });
+      }
+    }, 1000);
     checkMt5Connected();
   };
 
@@ -2144,8 +2274,13 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
       window.mt5SetCancelConnectVisible(true);
     }
+    sessionStorage.setItem('mt5ConnectInFlight', '1');
+    window.__mt5ConnectTickStarted = Date.now();
     if (typeof window.mt5UpdateConnectProgress === 'function') {
       window.mt5UpdateConnectProgress({ message: 'กำลังตรวจสอบ Login ที่ค้างอยู่...', elapsedSec: 0 });
+    }
+    if (typeof window.startMt5ConnectPolling === 'function') {
+      window.startMt5ConnectPolling();
     }
   }
 

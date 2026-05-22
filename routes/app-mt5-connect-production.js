@@ -1386,7 +1386,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       windowTitle: windowTitleFromMessage(a.last_login_message),
       previewUrl,
       elapsedSec,
-      maxWaitSec: 150,
+      maxWaitSec: Math.floor(connectPollStaleLimitMs() / 1000),
       connectStep,
       progressStep: progress.progressStep,
       progressStepLabel: progress.progressStepLabel,
