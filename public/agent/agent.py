@@ -95,7 +95,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v45"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v46"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3212,8 +3212,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception:
         qdelay = 0
     if qdelay > 0:
-        log(f"LOGIN QUEUE DELAY {qdelay}s (multi-port)")
-        time.sleep(min(qdelay, 180))
+        log(f"LOGIN QUEUE DELAY {qdelay}s (รอ login อื่นบน VPS)")
+        time.sleep(min(qdelay, 30))
 
     port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
@@ -3528,7 +3528,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     other_mt5 = _count_mt5_terminals()
     if other_mt5 > 0:
-        stagger = min(8.0, 1.5 + other_mt5 * 0.8)
+        stagger = min(2.5, 0.8 + other_mt5 * 0.35)
         log(f"MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
         time.sleep(stagger)
 

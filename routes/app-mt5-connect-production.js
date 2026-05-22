@@ -37,7 +37,8 @@ const {
   userPortLockKey,
   computeJournalTimeoutSec,
   countActiveLoginsOnVps,
-  loginQueueDelaySec
+  computeLoginQueueDelaySec,
+  connectPollStaleLimitMs
 } = require('../lib/mt5MultiPortLogin');
 const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
 const {
@@ -53,7 +54,8 @@ const {
   releaseUserPackagePortSlot,
   forceStopPackagePortSlot,
   tryFastConnectConfirm,
-  extractJournalEvidence
+  extractJournalEvidence,
+  hasLoginCommandInProgress
 } = require('../lib/mt5LoginCommandVerify');
 const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
 const {
@@ -1089,7 +1091,7 @@ async function handleMt5ConnectProduction(req, res) {
       activeLoginCount: activeOnVps,
       portSlot
     });
-    const queueDelay = loginQueueDelaySec(portSlot);
+    const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, accountId);
 
     const payload = buildMt5LoginPayload({
       accountId,
@@ -1221,19 +1223,23 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
       : { rows: [] };
-    const staleLimitMs = 150 * 1000;
+    const staleLimitMs = connectPollStaleLimitMs();
 
     if (['connecting', 'starting', 'checking'].includes(status) && staleMs > staleLimitMs) {
-      const staleMsg = 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่';
-      await failAccountFromJournal(a.id, a.port_id, staleMsg, {
-        vpsId: a.vps_id,
-        portNo: a.assigned_port_no,
-        folderPath: a.folder_path,
-        reason: 'connect_poll_timeout'
-      }).catch(() => {});
-      status = 'failed';
-      a.last_error = staleMsg;
-      a.last_login_message = staleMsg;
+      const loginStillBusy = await hasLoginCommandInProgress(a.id, a.vps_id).catch(() => false);
+      if (!loginStillBusy) {
+        const staleMsg = 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่';
+        await failAccountFromJournal(a.id, a.port_id, staleMsg, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no,
+          folderPath: a.folder_path,
+          reason: 'connect_poll_timeout',
+          killMt5: false
+        }).catch(() => {});
+        status = 'failed';
+        a.last_error = staleMsg;
+        a.last_login_message = staleMsg;
+      }
     }
 
     let statusFinal = status;
@@ -1559,7 +1565,7 @@ async function handleMt5ConnectAllPorts(req, res) {
           activeLoginCount: activeOnVps,
           portSlot: slot
         });
-        const queueDelay = loginQueueDelaySec(slot);
+        const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, acc.id);
 
         const payload = buildMt5LoginPayload({
           accountId: acc.id,

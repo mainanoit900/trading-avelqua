@@ -579,7 +579,7 @@ document.addEventListener('DOMContentLoaded', function () {
         typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
       if (
         !confirm(
-          'เชื่อมต่อทุก PORT แพ็กเกจที่มีบัญชีและรหัสผ่านบันทึกไว้แล้ว?\n\nระบบจะคิว Login ทีละช่องบน VPS (ช่องละ ~30–120 วิ)'
+          'เชื่อมต่อทุก PORT แพ็กเกจที่มีบัญชีและรหัสผ่านบันทึกไว้แล้ว?\n\nAgent เปิดทีละช่องบน VPS (ช่องละประมาณ 30–90 วิ)'
         )
       ) {
         return;
@@ -1623,7 +1623,7 @@ document.addEventListener('DOMContentLoaded', function () {
       } else if (st === 'starting' || !!d.previewUrl) {
         activeIdx = 2;
       } else if (['processing', 'picked', 'running'].includes(cmd)) {
-        activeIdx = 1;
+        activeIdx = 2;
       } else if (['success', 'done'].includes(cmd)) {
         activeIdx = 3;
       } else if (cmd === 'pending') {
@@ -1632,6 +1632,11 @@ document.addEventListener('DOMContentLoaded', function () {
         activeIdx = cmd ? 1 : 0;
       }
     }
+    if (typeof window.__mt5ConnectProgressMax !== 'number') {
+      window.__mt5ConnectProgressMax = 0;
+    }
+    window.__mt5ConnectProgressMax = Math.max(window.__mt5ConnectProgressMax, activeIdx);
+    activeIdx = window.__mt5ConnectProgressMax;
     const stepNowLabel =
       d.progressStepLabel ||
       (activeIdx >= progressTotal
@@ -2115,6 +2120,7 @@ document.addEventListener('DOMContentLoaded', function () {
   window.startMt5ConnectPolling = function () {
     if (window.mt5Checker) clearInterval(window.mt5Checker);
     syncMt5PollAccountId();
+    window.__mt5ConnectProgressMax = 0;
     mt5Checking = true;
     if (typeof window.mt5SetCancelConnectVisible === 'function') {
       window.mt5SetCancelConnectVisible(true);
