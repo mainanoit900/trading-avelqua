@@ -1536,6 +1536,23 @@ document.addEventListener('DOMContentLoaded', function () {
         const btn = document.getElementById('mt5ConnectBtn');
         const sec = data.elapsedSec != null ? Number(data.elapsedSec) : 0;
         const cmdSt = String(data.commandStatus || '').toLowerCase();
+        if (
+          ['success', 'done'].includes(cmdSt) &&
+          ['connecting', 'checking', 'starting'].includes(stWait)
+        ) {
+          if (typeof window.mt5UpdateConnectProgress === 'function') {
+            window.mt5UpdateConnectProgress(data);
+          }
+          if (btn) btn.innerHTML = data.connectStep || 'คำสั่งสำเร็จ — กำลังอัปเดตสถานะ...';
+          return;
+        }
+        if (/ไม่มีคำสั่ง.*VPS|login_mt5 บน VPS/i.test(String(data.message || data.connectStep || ''))) {
+          await finishMt5ConnectFail(
+            data.message || 'ยังไม่มีคำสั่ง login บน VPS — กรุณากดเชื่อมต่ออีกครั้ง',
+            data.account
+          );
+          return;
+        }
         if (data.failed === true || ['failed', 'error', 'cancelled'].includes(cmdSt)) {
           await finishMt5ConnectFail(
             data.message ||
@@ -1546,11 +1563,11 @@ document.addEventListener('DOMContentLoaded', function () {
           );
           return;
         }
-        if (sec >= 8 && !cmdSt && !data.account?.id) {
+        if (sec >= 12 && !cmdSt && !data.account?.id && !data.pending) {
           if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
           showMt5ConnectModal(
             'error',
-            'ยังไม่ได้ส่งคำสั่ง Login — กรุณากดปุ่มเชื่อมต่ออีกครั้ง (Ctrl+F5 ก่อน)'
+            data.message || 'ยังไม่ได้ส่งคำสั่ง Login — กรุณากดปุ่มเชื่อมต่ออีกครั้ง (Ctrl+F5 ก่อน)'
           );
           return;
         }

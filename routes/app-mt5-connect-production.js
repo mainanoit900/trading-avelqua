@@ -435,7 +435,12 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
 
   const st = String(account?.status || '').toLowerCase();
   let connectStep = 'เชื่อมต่อ MT5';
-  if (agentOnline === false && (commandStatus === 'pending' || !commandStatus)) {
+  if (
+    ['connecting', 'starting', 'checking'].includes(st) &&
+    commandStatus === 'success'
+  ) {
+    connectStep = 'คำสั่ง Login สำเร็จบน VPS แล้ว — กำลังอัปเดตสถานะ';
+  } else if (agentOnline === false && (commandStatus === 'pending' || !commandStatus)) {
     connectStep = 'VPS Agent ไม่ตอบสนอง — คำสั่ง login อาจค้างในคิว';
   } else if (commandStatus === 'pending' && commandAgeSec != null && commandAgeSec >= 45) {
     connectStep = 'คำสั่ง login ค้างนาน — รอ Agent หรือ restart AvelquaPythonAgent';
@@ -671,6 +676,19 @@ async function archiveStaleLoginAccounts(userId, mt5Login, serverName) {
   );
 }
 
+/** connected ใน DB แต่ MT5 บน VPS ไม่รัน — ต้องส่ง login_mt5 ใหม่ */
+async function connectedNeedsReopenLogin(accountRow) {
+  const accountId = Number(accountRow?.id || 0);
+  const vpsId = Number(accountRow?.vps_id || 0);
+  const login = String(accountRow?.mt5_login || '').trim();
+  const portNo = Number(accountRow?.port_slot || accountRow?.assigned_port_no || 0);
+  if (!accountId || !vpsId || !login || !portNo) return true;
+  const live = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
+  if (live.ok) return false;
+  const inProg = await findLoginCommandInProgress(accountId, vpsId).catch(() => null);
+  return !inProg;
+}
+
 async function findActiveLoginCommandForAccount(accountId) {
   const r = await query(
     `
@@ -778,7 +796,8 @@ async function handleMt5ConnectProduction(req, res) {
     // สำเร็จทันทีเฉพาะเมื่อ connected อยู่ที่ PORT ที่ขอเท่านั้น (ห้ามยก PORT อื่นมาเป็นสำเร็จโดยไม่ส่ง login_mt5)
     const alreadyConnected = await query(
       `
-      SELECT id, port_slot, last_balance, last_equity
+      SELECT id, port_slot, port_id, vps_id, assigned_port_no, mt5_login,
+             last_balance, last_equity
       FROM vps_system.mt5_accounts
       WHERE user_id=$1
         AND mt5_login=$2
@@ -809,16 +828,20 @@ async function handleMt5ConnectProduction(req, res) {
           400
         );
       }
-      return respondConnect(req, res, {
-        ok: true,
-        status: 'connected',
-        loginVerified: true,
-        connected: true,
-        accountId: connectedRow.id,
-        portSlot: connSlot || null,
-        message: `PORT ${connSlot} เชื่อมต่ออยู่แล้ว — ไปขั้นตอน 3 เปิด BOT`,
-        account: connectedRow
-      });
+      const needsReopen = await connectedNeedsReopenLogin(connectedRow);
+      if (!needsReopen) {
+        return respondConnect(req, res, {
+          ok: true,
+          status: 'connected',
+          loginVerified: true,
+          connected: true,
+          accountId: connectedRow.id,
+          portSlot: connSlot || null,
+          message: `PORT ${connSlot} เชื่อมต่ออยู่แล้ว — ไปขั้นตอน 3 เปิด BOT`,
+          account: connectedRow
+        });
+      }
+      /* MT5 ปิดบน VPS — ส่ง login_mt5 ใหม่ด้านล่าง */
     }
 
     // ป้องกันผู้ใช้กดเชื่อมต่อซ้ำแล้วรีสตาร์ท flow เดิมจนคำสั่งถูก cancel วน
@@ -894,8 +917,6 @@ async function handleMt5ConnectProduction(req, res) {
       ).catch(() => {});
     }
 
-    await cancelPendingLoginCommands({ mt5Login });
-
     const requestedSlot = num(req.body.port_slot || req.body.portSlot);
     const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
     let portSlot;
@@ -916,15 +937,26 @@ async function handleMt5ConnectProduction(req, res) {
         throw new Error(slotGate.message);
       }
       if (slotGate.alreadyConnected && slotGate.accountId) {
-        return respondConnect(req, res, {
-          ok: true,
-          status: 'connected',
-          loginVerified: true,
-          connected: true,
-          accountId: slotGate.accountId,
-          portSlot: requestedSlot,
-          message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้ — ไปขั้นตอน 3 เปิด BOT'
-        });
+        const occRow = await query(
+          `
+          SELECT id, port_slot, port_id, vps_id, assigned_port_no, mt5_login
+          FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1
+        `,
+          [slotGate.accountId]
+        ).catch(() => ({ rows: [] }));
+        const occ = occRow.rows?.[0];
+        const needsReopen = occ ? await connectedNeedsReopenLogin(occ) : false;
+        if (!needsReopen) {
+          return respondConnect(req, res, {
+            ok: true,
+            status: 'connected',
+            loginVerified: true,
+            connected: true,
+            accountId: slotGate.accountId,
+            portSlot: requestedSlot,
+            message: 'บัญชีนี้เชื่อมต่ออยู่แล้วบน PORT นี้ — ไปขั้นตอน 3 เปิด BOT'
+          });
+        }
       }
       if (slotGate.inProgress && slotGate.accountId) {
         const activeOnSlot = await findActiveLoginCommandForAccount(slotGate.accountId);
@@ -1131,6 +1163,12 @@ async function handleMt5ConnectProduction(req, res) {
     await expireStalePendingAgentCommands(reservedPort.vps_id, 90).catch(() => ({}));
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
     await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
+
+    await cancelPendingLoginCommands({
+      portId: reservedPort.port_id,
+      accountId,
+      mt5Login
+    });
 
     if (reservedPort.admin_node_id && allocPortNo) {
       await setAdminAllocationStatus(
@@ -1515,6 +1553,65 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const staleMs = Date.now() - startedAt;
     const elapsedSec = Math.max(0, Math.floor(staleMs / 1000));
     let status = String(a.status || '').toLowerCase();
+
+    if (['connecting', 'starting', 'checking'].includes(status)) {
+      const recentOk = a.vps_id
+        ? await findRecentLoginCommand(a.id, a.vps_id).catch(() => null)
+        : null;
+      const recentSt = String(recentOk?.status || '').toLowerCase();
+      if (['success', 'done'].includes(recentSt)) {
+        const fastOk = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
+        if (fastOk.resolved && fastOk.status === 'connected') {
+          const accR = await query(
+            `
+            SELECT a.*, p.folder_path
+            FROM vps_system.mt5_accounts a
+            LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+            WHERE a.id=$1 AND a.user_id=$2
+            LIMIT 1
+          `,
+            [a.id, userId]
+          ).catch(() => ({ rows: [a] }));
+          const accNow = accR.rows?.[0] || a;
+          const previewPath = previewPublicPath(accNow.id);
+          return res.json({
+            ok: true,
+            account: accNow,
+            connected: true,
+            failed: false,
+            checking: false,
+            pending: false,
+            status: 'connected',
+            loginVerified: true,
+            message: fastOk.message || MT5_SUCCESS_MSG,
+            windowTitle: windowTitleFromMessage(accNow.last_login_message),
+            previewUrl: previewPath ? `${previewPath}?t=${Date.now()}` : '',
+            elapsedSec
+          });
+        }
+      }
+      const activeLogin = a.vps_id
+        ? await findLoginCommandInProgress(a.id, a.vps_id).catch(() => null)
+        : null;
+      if (!activeLogin && elapsedSec >= 12 && !['success', 'done'].includes(recentSt)) {
+        return res.json({
+          ok: true,
+          account: a,
+          connected: false,
+          failed: false,
+          checking: true,
+          pending: false,
+          status: status,
+          loginVerified: false,
+          message: 'ยังไม่มีคำสั่ง login_mt5 บน VPS — กรุณากดเชื่อมต่ออีกครั้ง',
+          connectStep: 'ไม่มีคำสั่ง VPS — กดเชื่อมต่อใหม่',
+          commandStatus: '',
+          elapsedSec,
+          waitHint: 'ถ้าค้างนาน ให้ Ctrl+F5 แล้วกดเชื่อมต่ออีกครั้ง'
+        });
+      }
+    }
+
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
       : { rows: [] };
