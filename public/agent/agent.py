@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-utf8-journal-v22"
+AGENT_BUILD_ID = "2026-05-22-journal-mtime-v23"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1684,6 +1684,73 @@ def cleanup_mt5_after_login_fail(
         log(f"CLEANUP clear ini/cache: {e}")
 
 
+def _journal_failed_words() -> List[str]:
+    return [
+        "authorization failed",
+        "failed (invalid account)",
+        "failed [invalid account]",
+        "invalid account",
+        "invalid password",
+        "wrong password",
+        "login failed",
+        "not authorized",
+    ]
+
+
+def _journal_dirs_for_port(port_dir: Path) -> List[Path]:
+    return [
+        Path(port_dir) / "Logs",
+        Path(port_dir) / "logs",
+        Path(port_dir) / "MQL5" / "Logs",
+        Path(port_dir) / "MQL5" / "logs",
+    ]
+
+
+def _collect_journal_log_files(port_dir: Path, since_ts: float = 0.0) -> List[Path]:
+    """
+    รวมไฟล์ journal — ไฟล์วันนี้ (YYYYMMDD.log) อ่านเสมอ
+    เพราะ mtime มักเป็นต้นวัน แต่มีบรรทัด authorized ใหม่ท้ายไฟล์
+    """
+    today_name = datetime.now().strftime("%Y%m%d")
+    log_files: List[Path] = []
+    for d in _journal_dirs_for_port(port_dir):
+        if not d.exists():
+            continue
+        today_log = d / f"{today_name}.log"
+        if today_log.exists():
+            log_files.append(today_log)
+        try:
+            log_files.extend(d.rglob("*.log"))
+        except Exception:
+            pass
+
+    seen = set()
+    uniq: List[Path] = []
+    for f in log_files:
+        try:
+            is_today = f.name.lower() == f"{today_name}.log".lower()
+            if since_ts and not is_today and f.stat().st_mtime < since_ts - 10:
+                continue
+        except Exception:
+            pass
+        try:
+            k = str(f.resolve())
+        except Exception:
+            k = str(f)
+        if k not in seen:
+            seen.add(k)
+            uniq.append(f)
+
+    def _sort_key(p: Path) -> float:
+        try:
+            return float(p.stat().st_mtime)
+        except Exception:
+            return 0.0
+
+    uniq.sort(key=_sort_key, reverse=True)
+    return uniq
+
+
 def _read_log_tail(path: Path, max_bytes: int = 262144) -> str:
     try:
         with open(path, "rb") as fh:
@@ -1807,25 +1874,7 @@ def check_mt5_journal_login_result(
         return False, "MT5 Login หรือ Password ไม่ถูกต้อง", ""
     deadline = time.time() + timeout_sec
     since_ts = since_ts or 0.0
-
-    journal_dirs = [
-        Path(port_dir) / "Logs",
-        Path(port_dir) / "logs",
-        Path(port_dir) / "MQL5" / "Logs",
-        Path(port_dir) / "MQL5" / "logs",
-    ]
-
-    failed_words = [
-        "authorization failed",
-        "failed (invalid account)",
-        "failed [invalid account]",
-        "invalid account",
-        "invalid password",
-        "wrong password",
-        "login failed",
-        "not authorized",
-    ]
-    today_name = datetime.now().strftime("%Y%m%d")
+    failed_words = _journal_failed_words()
     last_progress_at = 0.0
     wait_start = time.time()
 
@@ -1837,30 +1886,7 @@ def check_mt5_journal_login_result(
                 log(f"JOURNAL PROGRESS CB ERROR: {e}")
             last_progress_at = time.time()
 
-        log_files: List[Path] = []
-        for d in journal_dirs:
-            if not d.exists():
-                continue
-            today_log = d / f"{today_name}.log"
-            if today_log.exists():
-                log_files.append(today_log)
-            log_files.extend(d.rglob("*.log"))
-
-        seen = set()
-        uniq: List[Path] = []
-        for f in log_files:
-            try:
-                if since_ts and f.stat().st_mtime < since_ts - 10:
-                    continue
-            except Exception:
-                pass
-            try:
-                k = str(f.resolve())
-            except Exception:
-                k = str(f)
-            if k not in seen:
-                seen.add(k)
-                uniq.append(f)
+        uniq = _collect_journal_log_files(port_dir, since_ts)
 
         if not uniq:
             time.sleep(JOURNAL_POLL_INTERVAL_SEC)
@@ -1888,49 +1914,10 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
     login = str(login).strip()
     if not login:
         return None, ""
-    today_name = datetime.now().strftime("%Y%m%d")
-    journal_dirs = [
-        Path(port_dir) / "Logs",
-        Path(port_dir) / "logs",
-        Path(port_dir) / "MQL5" / "Logs",
-        Path(port_dir) / "MQL5" / "logs",
-    ]
-    failed_words = [
-        "authorization failed",
-        "failed (invalid account)",
-        "failed [invalid account]",
-        "invalid account",
-        "invalid password",
-        "wrong password",
-        "login failed",
-        "not authorized",
-    ]
-    log_files: List[Path] = []
-    for d in journal_dirs:
-        if not d.exists():
-            continue
-        today_log = d / f"{today_name}.log"
-        if today_log.exists():
-            log_files.append(today_log)
-        log_files.extend(d.rglob("*.log"))
-    seen = set()
-    uniq: List[Path] = []
-    for f in log_files:
-        try:
-            if since_ts and f.stat().st_mtime < since_ts - 10:
-                continue
-        except Exception:
-            pass
-        try:
-            k = str(f.resolve())
-        except Exception:
-            k = str(f)
-        if k not in seen:
-            seen.add(k)
-            uniq.append(f)
+    failed_words = _journal_failed_words()
+    uniq = _collect_journal_log_files(port_dir, since_ts)
     if not uniq:
         return None, ""
-    uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     chunk = _read_log_tail(uniq[0])
     outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
     if outcome is True:
@@ -1950,7 +1937,8 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    deadline = time.time() + max(6, min(timeout_sec, 12))
+    wait_cap = max(18, min(int(timeout_sec or 30), 60))
+    deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
@@ -2079,7 +2067,41 @@ def wait_mt5_login_hybrid(
             journal_evidence=j_chunk,
         )
         return False, JOURNAL_FAIL_MSG, j_chunk
-    return False, JOURNAL_TIMEOUT_MSG, chunk
+
+    remain = max(8, int(deadline - time.time()))
+    extra_ok, extra_msg, extra_chunk = check_mt5_journal_login_result(
+        port_dir, login, timeout_sec=remain, since_ts=journal_since
+    )
+    if extra_ok:
+        return True, extra_msg, extra_chunk
+
+    if window_ok_streak >= 2 and j_out is not False:
+        titles = mt5_window_titles(port, payload)
+        joined = " | ".join(titles)
+        if mt5_login_verified_by_window(port, payload)[0]:
+            try:
+                enforce_login_no_trading(
+                    port_dir,
+                    port,
+                    payload,
+                    login,
+                    str(payload_get(payload, "mt5Password", "password") or ""),
+                    LOCKED_MT5_SERVER,
+                )
+            except Exception:
+                pass
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อสำเร็จ (ยืนยันจากหน้าต่าง MT5) — ยังไม่เปิด BOT",
+                port,
+                process_id=proc_pid,
+                window_title=joined,
+                window_verified=True,
+            )
+            return True, "window verified; journal slow", extra_chunk or joined
+
+    return False, JOURNAL_TIMEOUT_MSG, chunk or extra_chunk
 
 
 def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2250,7 +2272,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "30"))
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "45"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
