@@ -80,7 +80,7 @@ STOP_FLAG = AGENT_DIR / "agent.disabled"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
-CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
+CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "90"))
 JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v26"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v27"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -448,6 +448,17 @@ def payload_get(payload: Optional[Dict[str, Any]], *names: str, default: str = "
         if v is not None and str(v).strip() != "":
             return str(v)
     return default
+
+
+def journal_timeout_sec(payload: Optional[Dict[str, Any]]) -> int:
+    """รอ Journal อย่างน้อย 60 วิ — MT5 บน VPS มักใช้ 30–90 วิ กว่าจะ authorized on"""
+    env_default = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "90"))
+    raw = payload_get(payload, "journalTimeoutSec", "journal_timeout_sec", default=str(env_default))
+    try:
+        n = int(raw)
+    except Exception:
+        n = env_default
+    return max(60, min(n, 120))
 
 
 def normalize_port(port: Any) -> int:
@@ -1939,6 +1950,13 @@ def check_mt5_journal_login_result(
 
         time.sleep(JOURNAL_POLL_INTERVAL_SEC)
 
+    uniq = _collect_journal_log_files(port_dir, since_ts)
+    if uniq:
+        tail = _read_log_tail(uniq[0])
+        late = _journal_outcome_for_login(tail, login, failed_words, LOCKED_MT5_SERVER)
+        if late is False:
+            log(f"MT5 JOURNAL FAIL (late) login={login} file={uniq[0].name}")
+            return False, JOURNAL_FAIL_MSG, tail
     log(f"MT5 JOURNAL TIMEOUT login={login} port_dir={port_dir}")
     return False, JOURNAL_TIMEOUT_MSG, ""
 
@@ -1971,7 +1989,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    wait_cap = max(20, min(int(timeout_sec or 60), 75))
+    wait_cap = max(60, min(int(timeout_sec or 90), 120))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
@@ -1994,7 +2012,8 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if now - last_wizard_at >= 4.0:
+        wizard_iv = 2.0 if elapsed < 35 else 4.0
+        if now - last_wizard_at >= wizard_iv:
             automate_mt5_open_account_wizard()
             last_wizard_at = now
 
@@ -2111,6 +2130,20 @@ def wait_mt5_login_hybrid(
 
     journal_files = _collect_journal_log_files(port_dir, journal_since)
     probe_tail = _read_log_tail(journal_files[0]) if journal_files else ""
+    late_fail = _journal_outcome_for_login(
+        probe_tail or chunk or extra_chunk, login, _journal_failed_words(), LOCKED_MT5_SERVER
+    )
+    if late_fail is False:
+        cleanup_mt5_after_login_fail(port, payload, port_dir)
+        send_connect_result(
+            payload,
+            "failed",
+            JOURNAL_FAIL_MSG,
+            port,
+            process_id=proc_pid,
+            journal_evidence=(probe_tail or chunk or extra_chunk)[-2000:],
+        )
+        return False, JOURNAL_FAIL_MSG, probe_tail or chunk or extra_chunk
     if _journal_only_terminal_startup(probe_tail or chunk, login):
         fail_no_broker = (
             "MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อโบรกเกอร์ — ตรวจ Login/รหัสผ่าน "
@@ -2324,12 +2357,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_connect_result(
         payload,
         "starting",
-        "กำลังเปิดหน้าจอ MT5 บน VPS — ตรวจสอบเลขบัญชีบน title bar",
+        "กำลังเปิดหน้าจอ MT5 บน VPS — รอ Journal ประมาณ 30–90 วินาที",
         port,
         process_id=proc_pid,
     )
+    time.sleep(2.5)
+    automate_mt5_open_account_wizard()
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "60"))
+    journal_timeout = journal_timeout_sec(payload)
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
