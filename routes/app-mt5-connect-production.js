@@ -38,7 +38,8 @@ const {
   queueJournalReadVerify,
   accountCanSkipLoginVerify,
   mt5LiveForAccount,
-  autoClearPortSlotBeforeLogin
+  autoClearPortSlotBeforeLogin,
+  waitForVpsPortAgentCommandsIdle
 } = require('../lib/mt5LoginCommandVerify');
 
 const connectStatusSyncAt = new Map();
@@ -1272,6 +1273,12 @@ async function handleMt5ConnectProduction(req, res) {
     connectStatusSyncAt.delete(accountId);
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
+    await waitForVpsPortAgentCommandsIdle(
+      reservedPort.vps_id,
+      portSlot,
+      ['stop_mt5', 'kill_mt5', 'force_stop_mt5'],
+      8000
+    ).catch(() => false);
     await cancelPendingStopsBeforeLogin(reservedPort.vps_id, portSlot, {
       cancelAllPending: false
     }).catch(() => ({ cancelled: 0 }));
