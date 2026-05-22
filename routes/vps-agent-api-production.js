@@ -39,6 +39,7 @@ const {
 } = require('../lib/mt5CommandNormalize');
 const {
   REQUIRED_AGENT_VERSION,
+  HEARTBEAT_AUTO_DEPLOY,
   AGENT_SCRIPT_PATH,
   agentVersionOk,
   queueAgentDeploy,
@@ -358,10 +359,13 @@ router.post('/heartbeat', async (req, res) => {
     const level = lastError ? 'error' : (cpu >= 90 || ram >= 90 || ping >= 400 ? 'alarm' : 'normal');
     const deployRequired = !agentVersionOk(req.body);
 
-    if (deployRequired && node.agent_enabled !== false) {
+    if (deployRequired && node.agent_enabled !== false && HEARTBEAT_AUTO_DEPLOY) {
       try {
         await expireStuckMaintenanceCommands(node.id);
-        await queueAgentDeploy(node.id);
+        const q = await queueAgentDeploy(node.id);
+        if (q.queued) {
+          console.warn('[heartbeat deploy] queued', { vpsId: node.id, required: REQUIRED_AGENT_VERSION });
+        }
       } catch (deployErr) {
         console.error('[heartbeat deploy]', deployErr.message || deployErr);
       }
@@ -940,10 +944,6 @@ router.post('/connect-result', async (req, res) => {
         let upgradeState = 'ready';
         if (legacyAgent) {
           upgradeState = await getAgentUpgradeState(node.id);
-          if (upgradeState === 'legacy') {
-            await queueAgentDeploy(node.id).catch(() => {});
-            upgradeState = await getAgentUpgradeState(node.id);
-          }
           if (upgradeState === 'needs_restart') {
             await query(`
               INSERT INTO vps_system.vps_agent_commands
