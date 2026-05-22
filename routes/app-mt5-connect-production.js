@@ -16,6 +16,7 @@ const {
   resolveStuckLoginAccount,
   reconcileConnectedAccountLive,
   tryRecoverLoginFromPortHealth,
+  tryFastConnectConfirm,
   verifyPortRunningLogin,
   findLoginCommandInProgress,
   findRecentLoginCommand,
@@ -1479,10 +1480,14 @@ async function handleMt5ConnectStatusProduction(req, res) {
           a.port_slot = null;
         }
       }
-      const portRecover =
+      let portRecover =
         elapsedSec >= 1 && !failFast.resolved
           ? await tryRecoverLoginFromPortHealth(a).catch(() => ({ resolved: false }))
           : { resolved: false };
+      if (!portRecover.resolved && elapsedSec >= 8) {
+        const fastPoll = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
+        if (fastPoll.resolved) portRecover = fastPoll;
+      }
       if (portRecover.resolved) {
         resolved = portRecover;
         statusFinal = portRecover.status || 'connected';

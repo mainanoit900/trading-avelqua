@@ -915,6 +915,42 @@ router.post('/account-metrics', async (req, res) => {
       params
     );
 
+    if (accountId && (balance > 0 || equity > 0)) {
+      const accRow = await query(
+        `
+        SELECT id, status, port_id, mt5_login, vps_id, assigned_port_no, port_slot
+        FROM vps_system.mt5_accounts
+        WHERE id=$1
+        LIMIT 1
+      `,
+        [accountId]
+      ).catch(() => ({ rows: [] }));
+      const acc = accRow.rows?.[0];
+      const stAcc = String(acc?.status || '').toLowerCase();
+      if (acc && ['connecting', 'starting', 'checking'].includes(stAcc)) {
+        const loginHint = String(acc.mt5_login || '').trim();
+        await promoteAccountConnected({
+          accountId: Number(acc.id),
+          portId: Number(acc.port_id || 0),
+          mt5Login: loginHint,
+          message: MT5_SUCCESS_MSG,
+          balance,
+          equity
+        }).catch(() => {});
+        await finishPendingLoginCommands(Number(acc.id), Number(acc.vps_id || node.id)).catch(
+          () => {}
+        );
+        return res.json({
+          ok: true,
+          balance,
+          equity,
+          node_id: node.id,
+          connected: true,
+          fastPath: 'account_metrics_promote'
+        });
+      }
+    }
+
     return res.json({ ok: true, balance, equity, node_id: node.id });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
@@ -1112,6 +1148,12 @@ router.post('/connect-result', async (req, res) => {
       const connBalEarly = positiveMoney(req.body.balance);
       const connEqEarly = positiveMoney(req.body.equity);
       const msgLowEarly = String(message || '').toLowerCase();
+      const metricsOnConnect =
+        loginForJournal && portNo
+          ? await verifyPortLoginWithFallback(node.id, portNo, loginForJournal, {
+              requireLoginMatch: false
+            }).catch(() => ({ ok: false }))
+          : { ok: false };
 
       await patchAccountMt5Preview(accountId, {
         message: message || MT5_SUCCESS_MSG,
@@ -1119,7 +1161,7 @@ router.post('/connect-result', async (req, res) => {
         previewB64
       }).catch(() => {});
 
-      if (loginVerified && connBalEarly > 0) {
+      if (loginVerified && (connBalEarly > 0 || connEqEarly > 0 || metricsOnConnect.ok)) {
         let connBal = connBalEarly;
         let connEq = connEqEarly;
         await promoteAccountConnected({
@@ -1139,7 +1181,11 @@ router.post('/connect-result', async (req, res) => {
             WHERE id=$1
           `, [portId, pid, mt5Login || loginForJournal]).catch(() => {});
         }
-        return res.json({ ok: true, connected: true, fastPath: 'agent_balance_snapshot' });
+        return res.json({
+          ok: true,
+          connected: true,
+          fastPath: metricsOnConnect.ok ? 'port_health_on_connected' : 'agent_balance_snapshot'
+        });
       }
 
       if (
