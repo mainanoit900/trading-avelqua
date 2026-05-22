@@ -38,8 +38,10 @@ const {
   normalizeLockedServer,
   MT5_LOCKED_SERVER,
   MT5_SUCCESS_MSG,
-  MT5_FAIL_USER_MSG
+  MT5_FAIL_USER_MSG,
+  MT5_LOGIN_TIMEOUT_MSG
 } = require('../lib/mt5Server');
+const { resolveLoginFailUserMessage } = require('../lib/mt5JournalVerify');
 const { expireStuckMaintenanceCommands, deferMaintenanceForLogin } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
@@ -1093,11 +1095,20 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const cmdProbeEarly = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
     if (cmdProbeEarly.failed) {
       const earlySlot = Number(a.port_slot || a.assigned_port_no || 0);
-      if (earlySlot) {
+      if (earlySlot && cmdProbeEarly.authFail === true) {
         await releaseUserPackagePortSlot(userId, earlySlot, {
           message: cmdProbeEarly.message,
           reason: 'login_cmd_failed',
           folderPath: a.folder_path
+        }).catch(() => {});
+      } else if (!cmdProbeEarly.authFail) {
+        await failAccountFromJournal(a.id, a.port_id, cmdProbeEarly.message, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no || a.port_slot,
+          folderPath: a.folder_path,
+          reason: 'login_journal_timeout',
+          killMt5: true,
+          clearPackagePort: false
         }).catch(() => {});
       } else {
         await failAccountFromJournal(a.id, a.port_id, cmdProbeEarly.message, {
@@ -1198,22 +1209,43 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusEarly = String(a.status || '').toLowerCase();
     const authFailMsg = String(a.last_error || a.last_login_message || '').trim();
+    const failResolved = resolveLoginFailUserMessage({
+      login: a.mt5_login,
+      rawMessage: authFailMsg
+    });
     const isAuthLoginFail =
-      statusEarly === 'failed' ||
+      (statusEarly === 'failed' && failResolved.authFail === true) ||
       (statusEarly === 'deleted' &&
-        /ไม่ถูกต้อง|User หรือ|ผิด|authorization failed|invalid account/i.test(authFailMsg));
+        /ไม่ถูกต้อง|User หรือ|authorization failed|invalid account/i.test(authFailMsg) &&
+        !/ทันเวลา|timeout|ไม่สามารถยืนยัน/i.test(authFailMsg));
+
+    if (statusEarly === 'failed' && !isAuthLoginFail) {
+      return res.json({
+        ok: true,
+        account: a,
+        connected: false,
+        failed: true,
+        checking: false,
+        pending: false,
+        status: 'failed',
+        loginVerified: false,
+        message: failResolved.message || MT5_LOGIN_TIMEOUT_MSG,
+        elapsedSec: 0
+      });
+    }
 
     if (isAuthLoginFail) {
       const failSlot = Number(a.port_slot || a.assigned_port_no || 0);
-      if (failSlot) {
+      const userMsg = failResolved.message || authFailMsg || MT5_FAIL_USER_MSG;
+      if (failSlot && failResolved.authFail === true) {
         await releaseUserPackagePortSlot(userId, failSlot, {
-          message: authFailMsg || MT5_FAIL_USER_MSG,
+          message: userMsg,
           reason: 'connect_status_auth_fail',
           folderPath: a.folder_path
         }).catch(() => {});
       } else {
         await ensureLoginFailPortReleased(a.id, {
-          message: authFailMsg || MT5_FAIL_USER_MSG,
+          message: userMsg,
           reason: 'connect_status_auth_fail',
           folderPath: a.folder_path
         }).catch(() => {});
@@ -1227,7 +1259,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         pending: false,
         status: 'failed',
         loginVerified: false,
-        message: authFailMsg || MT5_FAIL_USER_MSG,
+        message: userMsg,
         elapsedSec: 0
       });
     }
@@ -1440,11 +1472,20 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const cmdFailed = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
       if (cmdFailed.failed) {
         const failSlot = Number(a.port_slot || a.assigned_port_no || 0);
-        if (failSlot) {
+        if (failSlot && cmdFailed.authFail === true) {
           await releaseUserPackagePortSlot(userId, failSlot, {
             message: cmdFailed.message,
             reason: 'login_cmd_failed',
             folderPath: a.folder_path
+          }).catch(() => {});
+        } else if (!cmdFailed.authFail) {
+          await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
+            vpsId: a.vps_id,
+            portNo: a.assigned_port_no || a.port_slot,
+            folderPath: a.folder_path,
+            reason: 'login_journal_timeout',
+            killMt5: true,
+            clearPackagePort: false
           }).catch(() => {});
         } else {
           await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {

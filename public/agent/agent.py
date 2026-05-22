@@ -76,7 +76,7 @@ def _journal_timeout_sec() -> int:
             os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "30"),
         )
     )
-    return max(22, min(32, raw))
+    return max(25, min(45, raw))
 MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.2"))
 JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"

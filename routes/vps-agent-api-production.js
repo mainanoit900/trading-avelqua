@@ -12,11 +12,12 @@ const { query } = require('../config/database');
 const {
   parseMt5JournalOutcome,
   messageIndicatesLoginFailed,
+  resolveLoginFailUserMessage,
   MT5_SUCCESS_MSG,
   MT5_EARLY_SUCCESS_MSG,
   MT5_FAIL_USER_MSG
 } = require('../lib/mt5JournalVerify');
-const { normalizeLockedServer } = require('../lib/mt5Server');
+const { normalizeLockedServer, MT5_LOGIN_TIMEOUT_MSG } = require('../lib/mt5Server');
 const { positiveMoney } = require('../lib/mt5EquitySync');
 const {
   verifyLoginFromCommand,
@@ -1214,15 +1215,15 @@ router.post('/connect-result', async (req, res) => {
           return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
         }
         if (String(message || '').includes('ทันเวลา') || String(message || '').includes('timeout')) {
-          await failAccountFromJournal(accountId, metaPortId || portId, MT5_FAIL_USER_MSG, {
+          await failAccountFromJournal(accountId, metaPortId || portId, MT5_LOGIN_TIMEOUT_MSG, {
             vpsId: node.id,
             portNo,
             folderPath,
-            reason: 'login_cmd_journal_failed',
+            reason: 'login_journal_timeout',
             killMt5: true,
-            clearPackagePort: true
+            clearPackagePort: false
           }).catch(() => {});
-          return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
+          return res.json({ ok: true, failed: true, message: MT5_LOGIN_TIMEOUT_MSG });
         }
         if (legacyAgent && upgradeState !== 'ready') {
           failMsg = messageForUpgradeState(upgradeState);
@@ -1339,16 +1340,24 @@ router.post('/connect-result', async (req, res) => {
       const failFolder = failMeta.rows?.[0]?.folder_path || '';
       const failPortId = Number(failMeta.rows?.[0]?.port_id || portId || 0);
       const failSlot = Number(failMeta.rows?.[0]?.port_slot || portNo || 0);
-      const failMsg = MT5_FAIL_USER_MSG;
+      const agentMsg = String(message || req.body.error || '').trim();
+      const failResolved = resolveLoginFailUserMessage({
+        login: loginForFail,
+        sinceMs: sinceMsFail,
+        evidence,
+        rawMessage: agentMsg
+      });
+      const failMsg = failResolved.message;
+      const authFail = failResolved.authFail === true;
 
       await failAccountFromJournal(accountId, failPortId, failMsg, {
         vpsId: node.id,
         portNo: failSlot || portNo,
         folderPath: failFolder,
-        reason: 'agent_reported_failed',
-        journalVerdict: journalVerdictFail || 'failed',
+        reason: authFail ? 'agent_reported_failed' : 'login_journal_timeout',
+        journalVerdict: journalVerdictFail || failResolved.journalVerdict || null,
         killMt5: true,
-        clearPackagePort: true
+        clearPackagePort: authFail
       }).catch(() => {});
 
       await query(`
