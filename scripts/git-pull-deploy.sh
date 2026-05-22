@@ -95,11 +95,6 @@ if [ "$RUN_NPM_INSTALL" = "1" ] && [ -f package.json ]; then
   npm install --omit=dev
 fi
 
-if [ -f scripts/migrate-vps-schema-postgres.sh ]; then
-  echo "==> vps_system schema (postgres)"
-  bash scripts/migrate-vps-schema-postgres.sh || echo "WARN: postgres schema migration failed"
-fi
-
 if [ -f scripts/deploy-mt5-live-fix.sh ]; then
   echo "==> verify MT5 patches"
   bash scripts/deploy-mt5-live-fix.sh "$APP_DIR" || true
@@ -118,8 +113,8 @@ if [ "$AGENT_DEPLOY_ON_PULL" = "1" ]; then
   fi
 fi
 if [ "$DEPLOY_AGENTS" = "1" ] && [ -f scripts/deploy-agents-all-vps.js ]; then
-  echo "==> deploy agent.py to all VPS + queue restart"
-  node scripts/deploy-agents-all-vps.js || echo "WARN: agent deploy script failed (check DB/.env)"
+  echo "==> deploy agent.py to all VPS + reset + restart service"
+  AGENT_DEPLOY_FORCE=1 node scripts/deploy-agents-all-vps.js || echo "WARN: agent deploy script failed (check DB/.env)"
 fi
 
 echo "==> pm2 restart"

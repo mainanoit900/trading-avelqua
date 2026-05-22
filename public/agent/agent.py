@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-login-cli-v25"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v26"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3098,6 +3098,57 @@ def poll_running_mt5_list() -> None:
         log(f"RUNNING SYNC ERROR: {e}")
 
 
+def agent_reset_runtime(
+    service_name: str = SERVICE_NAME,
+    stop_mt5: bool = True,
+) -> Dict[str, Any]:
+    """
+    Reset ทุกครั้งหลังอัปเดต Agent — ปลด agent.disabled, หยุด MT5 ค้างทุก PORT, ลบ startup.ini ชั่วคราว
+    """
+    removed_disabled = False
+    try:
+        if STOP_FLAG.exists():
+            STOP_FLAG.unlink()
+            removed_disabled = True
+            log("AGENT RESET removed agent.disabled")
+    except Exception as e:
+        log(f"AGENT RESET agent.disabled: {e}")
+
+    stopped: List[str] = []
+    if stop_mt5 and MT5_ROOT.exists():
+        for port_dir in sorted(MT5_ROOT.iterdir()):
+            if not port_dir.is_dir():
+                continue
+            name = port_dir.name.upper()
+            if "PORT" not in name:
+                continue
+            try:
+                kill_mt5_by_folder(port_dir)
+                remove_mt5_login_ini(port_dir)
+                stopped.append(port_dir.name)
+            except Exception as e:
+                log(f"AGENT RESET stop MT5 {port_dir.name}: {e}")
+        if stopped:
+            log(f"AGENT RESET stopped MT5 folders={len(stopped)}")
+
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > 8 * 1024 * 1024:
+            backup = LOG_FILE.with_suffix(".log.bak-" + datetime.now().strftime("%Y%m%d-%H%M%S"))
+            shutil.copy2(LOG_FILE, backup)
+            LOG_FILE.write_text("", encoding="utf-8")
+            log(f"AGENT RESET rotated large log backup={backup}")
+    except Exception as e:
+        log(f"AGENT RESET log rotate: {e}")
+
+    return {
+        "action": "agent_reset",
+        "service_name": service_name,
+        "removed_disabled": removed_disabled,
+        "stopped_folders": stopped,
+        "stopped_count": len(stopped),
+    }
+
+
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
     """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
     if os.name != "nt":
@@ -3216,6 +3267,8 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     log(f"PYTHON AGENT UPDATED path={agent_path} backup={backup} build={build_id}")
 
+    reset_mt5 = payload_get(payload, "resetMt5Ports", "resetOnDeploy", "reset", default=True) is not False
+    reset_info = agent_reset_runtime(service_name, stop_mt5=bool(reset_mt5))
     restart_service_later(service_name)
 
     return {
@@ -3226,6 +3279,7 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
         "service_name": service_name,
         "agent_build_id": build_id,
         "restart": "scheduled",
+        "reset": reset_info,
     }
 
 
@@ -3300,13 +3354,19 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, update_agent_script(payload))
 
         elif ctype in ("restart_agent", "restart_service"):
+            svc = str(
+                payload_get(payload, "service_name", "serviceName", default=SERVICE_NAME) or SERVICE_NAME
+            )
+            reset_mt5 = payload_get(payload, "resetMt5Ports", "resetOnDeploy", "reset", default=True) is not False
+            reset_info = agent_reset_runtime(svc, stop_mt5=bool(reset_mt5))
+            log(f"RESTART_AGENT COMMAND RECEIVED service={svc} reset_ports={len(reset_info.get('stopped_folders') or [])}")
+            restart_service_later(svc)
             command_result(cmd_id, True, {
                 "action": "restart_agent",
-                "service_name": SERVICE_NAME,
-                "restart": "scheduled"
+                "service_name": svc,
+                "restart": "scheduled",
+                "reset": reset_info,
             })
-            log("RESTART_AGENT COMMAND RECEIVED")
-            restart_service_later(SERVICE_NAME)
             return
 
         elif ctype in ("health_check_mt5", "refresh_metrics", "status", "mt5_health"):

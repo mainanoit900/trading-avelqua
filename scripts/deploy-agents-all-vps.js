@@ -39,7 +39,9 @@ async function main() {
     console.log(`  VPS ${r.vpsId} [${r.node}] ${tag}`);
   }
 
-  console.log(`DONE: ${out.count} node(s) — Agent จะดาวน์โหลด + Restart-Service บน Windows ภายใน 1–3 นาที`);
+  console.log(
+    `DONE: ${out.count} node(s) — Agent จะอัปเดต + Reset (หยุด MT5 ค้าง) + Restart-Service บน Windows ภายใน 1–3 นาที`
+  );
 }
 
 main().catch((e) => {
