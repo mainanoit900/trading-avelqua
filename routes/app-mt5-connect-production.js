@@ -1180,7 +1180,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const vpsVerRow = a.vps_id
       ? await query(`SELECT agent_version FROM vps_system.vps_nodes WHERE id=$1`, [a.vps_id]).catch(() => ({ rows: [] }))
       : { rows: [] };
-    const staleLimitMs = 120 * 1000;
+    const staleLimitMs = 150 * 1000;
 
     if (['connecting', 'starting', 'checking'].includes(status) && staleMs > staleLimitMs) {
       const staleMsg = 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่';
@@ -1319,7 +1319,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       windowTitle: windowTitleFromMessage(a.last_login_message),
       previewUrl,
       elapsedSec,
-      maxWaitSec: 120,
+      maxWaitSec: 150,
       connectStep,
       progressStep: progress.progressStep,
       progressStepLabel: progress.progressStepLabel,

@@ -12,6 +12,7 @@ const { query } = require('../config/database');
 const {
   parseMt5JournalOutcome,
   messageIndicatesLoginFailed,
+  windowTitleConfirmsLogin,
   MT5_SUCCESS_MSG,
   MT5_FAIL_USER_MSG
 } = require('../lib/mt5JournalVerify');
@@ -29,7 +30,8 @@ const {
   queueJournalReadVerify,
   queueStopMt5ForAccount,
   failAccountFromJournal,
-  probeRecentLoginCommandFailed
+  probeRecentLoginCommandFailed,
+  verifyPortLoginWithFallback
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -862,6 +864,40 @@ router.post('/connect-result', async (req, res) => {
           VALUES ($1,$2,$3,$4,$5,'connected',$6)
         `, [accountId, node.id, portId || null, portNo || null, mt5Login, message || MT5_SUCCESS_MSG]).catch(() => {});
         return res.json({ ok: true, connected: true, fastPath: 'window_verified' });
+      }
+
+      if (
+        windowVerified &&
+        loginVerified &&
+        journalVerdict !== 'failed' &&
+        journalVerdict !== 'success'
+      ) {
+        const metricsOk = await verifyPortLoginWithFallback(node.id, portNo, loginForJournal, {
+          requireLoginMatch: true
+        }).catch(() => ({ ok: false }));
+        const winOk = windowTitleConfirmsLogin(windowTitle, loginForJournal);
+        if (metricsOk.ok || winOk) {
+          await patchAccountMt5Preview(accountId, {
+            message: message || MT5_SUCCESS_MSG,
+            windowTitle,
+            previewB64
+          });
+          await promoteAccountConnected({
+            accountId,
+            portId,
+            mt5Login: loginForJournal || mt5Login,
+            message: message || MT5_SUCCESS_MSG
+          });
+          if (portId) {
+            await query(`
+              UPDATE vps_system.vps_ports
+              SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
+                  locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
+              WHERE id=$1
+            `, [portId, pid, loginForJournal || mt5Login]).catch(() => {});
+          }
+          return res.json({ ok: true, connected: true, fastPath: 'window_metrics_verify' });
+        }
       }
 
       if (journalVerdict !== 'success') {

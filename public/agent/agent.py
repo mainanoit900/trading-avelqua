@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v27"
+AGENT_BUILD_ID = "2026-05-22-agent-reset-v28"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -452,7 +452,7 @@ def payload_get(payload: Optional[Dict[str, Any]], *names: str, default: str = "
 
 def journal_timeout_sec(payload: Optional[Dict[str, Any]]) -> int:
     """รอ Journal อย่างน้อย 60 วิ — MT5 บน VPS มักใช้ 30–90 วิ กว่าจะ authorized on"""
-    env_default = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "90"))
+    env_default = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "150"))
     raw = payload_get(payload, "journalTimeoutSec", "journal_timeout_sec", default=str(env_default))
     try:
         n = int(raw)
@@ -1821,7 +1821,13 @@ def _journal_outcome_for_login(
             return False
         if ok_rx.search(line):
             return True
-        if "authorized" in low and "failed" not in low:
+        if re.search(
+            rf"(?:'|\")?{login_esc}(?:'|\")?\s*:\s*authorized on\b",
+            line,
+            re.I,
+        ):
+            return True
+        if "authorized" in low and "failed" not in low and login.lower() in low:
             return True
         if "previous successful authorization" in low:
             return True
@@ -1989,7 +1995,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
-    wait_cap = max(60, min(int(timeout_sec or 90), 120))
+    wait_cap = max(60, min(int(timeout_sec or 150), 150))
     deadline = time.time() + wait_cap
     last_preview_at = 0.0
     last_progress_at = 0.0
@@ -2160,7 +2166,8 @@ def wait_mt5_login_hybrid(
         )
         return False, fail_no_broker, probe_tail or chunk
 
-    if window_ok_streak >= 2 and j_out is not False:
+    tail_evidence = probe_tail or chunk or extra_chunk
+    if window_ok_streak >= 1 and j_out is not False:
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)
         if mt5_login_verified_by_window(port, payload)[0]:
@@ -2181,12 +2188,27 @@ def wait_mt5_login_hybrid(
                 "เชื่อมต่อสำเร็จ (ยืนยันจากหน้าต่าง MT5) — ยังไม่เปิด BOT",
                 port,
                 process_id=proc_pid,
+                journal_evidence=tail_evidence[-2000:],
                 window_title=joined,
                 window_verified=True,
             )
-            return True, "window verified; journal slow", extra_chunk or joined
+            return True, "window verified; journal slow", tail_evidence or joined
 
-    return False, JOURNAL_TIMEOUT_MSG, chunk or extra_chunk
+    fail_hint = ""
+    if _journal_only_terminal_startup(tail_evidence, login):
+        fail_hint = (
+            f"MT5 เปิดแล้วแต่ยังไม่เชื่อมต่อโบรกเกอร์ — ตรวจ Login/รหัสผ่าน และ Server {LOCKED_MT5_SERVER}"
+        )
+    send_connect_result(
+        payload,
+        "failed",
+        fail_hint or JOURNAL_TIMEOUT_MSG,
+        port,
+        process_id=proc_pid,
+        journal_evidence=tail_evidence[-2000:],
+        window_title=" | ".join(mt5_window_titles(port, payload)),
+    )
+    return False, fail_hint or JOURNAL_TIMEOUT_MSG, tail_evidence
 
 
 def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -2357,7 +2379,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_connect_result(
         payload,
         "starting",
-        "กำลังเปิดหน้าจอ MT5 บน VPS — รอ Journal ประมาณ 30–90 วินาที",
+        "กำลังเปิดหน้าจอ MT5 บน VPS — รอ Journal ประมาณ 30–120 วินาที",
         port,
         process_id=proc_pid,
     )
