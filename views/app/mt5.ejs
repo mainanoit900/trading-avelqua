@@ -127,7 +127,7 @@ document.addEventListener('DOMContentLoaded', function () {
           <% const acc = typeof pickAccountForPortSlot === 'function' ? pickAccountForPortSlot(portSlotAccounts || accounts, i) : (accounts || []).find(a => Number(a.port_slot) === i); %>
           <% const accStatus = acc ? String(acc.status || '').toLowerCase() : ''; %>
           <% const canUsePort = acc && accStatus === 'connected'; %>
-          <div class="port-item port-slot-pick <%= canUsePort ? 'connected' : (accStatus === 'connecting' || accStatus === 'starting' ? 'checking' : (acc ? 'cancelled' : '')) %>" data-port-slot="<%= i %>">
+          <div class="port-item port-slot-pick <%= canUsePort ? 'connected' : (accStatus === 'connecting' || accStatus === 'starting' ? 'checking' : (acc ? 'cancelled' : '')) %>" data-port-slot="<%= i %>" data-mt5-login="<%= acc ? acc.mt5_login : '' %>">
             <div class="port-main port-slot-pick-hit" role="button" tabindex="0" data-port-slot="<%= i %>">
               <div>
                 <b>PORT <%= i %></b>
@@ -878,6 +878,34 @@ document.addEventListener('DOMContentLoaded', function () {
     return '';
   }
 
+  function mt5FindLoginOnOtherPort(login, targetSlot) {
+    const loginStr = String(login || '').trim();
+    const slotStr = String(targetSlot || '');
+    if (!loginStr || !slotStr) return '';
+    const cards = document.querySelectorAll('.port-item[data-port-slot][data-mt5-login]');
+    for (let i = 0; i < cards.length; i++) {
+      const c = cards[i];
+      const otherSlot = c.getAttribute('data-port-slot');
+      const otherLogin = String(c.getAttribute('data-mt5-login') || '').trim();
+      if (!otherLogin || otherLogin !== loginStr || otherSlot === slotStr) continue;
+      if (c.classList.contains('connected')) {
+        return (
+          'Login ' +
+          loginStr +
+          ' อยู่ที่ PORT ' +
+          otherSlot +
+          ' แล้ว — คลิก PORT ' +
+          otherSlot +
+          ' ไปขั้นตอน 3 (ห้ามใช้เลขเดียวกันข้าม PORT)'
+        );
+      }
+      if (c.classList.contains('checking')) {
+        return 'Login ' + loginStr + ' กำลังเชื่อมต่อที่ PORT ' + otherSlot + ' อยู่ — รอให้เสร็จหรือใช้เลขอื่น';
+      }
+    }
+    return '';
+  }
+
   function mt5ValidatePortForConnect(slot) {
     if (!slot) {
       return 'กรุณาคลิกเลือก PORT ว่าง (ขั้นตอน 1) ก่อนกดเชื่อมต่อ';
@@ -892,6 +920,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (card.classList.contains('checking')) {
       return 'PORT ' + slot + ' กำลังเชื่อมต่ออยู่ — รอให้เสร็จหรือเลือก PORT ว่างอื่น';
     }
+    const login = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
+    const dupOther = mt5FindLoginOnOtherPort(login, slot);
+    if (dupOther) return dupOther;
     return '';
   }
 

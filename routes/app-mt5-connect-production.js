@@ -240,7 +240,12 @@ async function clearExpiredLocks() {
   `).catch(() => {});
 }
 
-const { findMt5LoginInUse, mt5LoginInUseMessage } = require('../lib/mt5LoginDuplicate');
+const {
+  findMt5LoginInUse,
+  findMt5LoginOnOtherUserPort,
+  mt5LoginInUseMessage,
+  mt5LoginOnOtherPortMessage
+} = require('../lib/mt5LoginDuplicate');
 
 async function reserveBestPort(userId, preferredPortNo = 0) {
   const preferNo = num(preferredPortNo, 0);
@@ -680,6 +685,19 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(mt5LoginInUseMessage(duplicate));
     }
 
+    const requestedSlotEarly = num(req.body.port_slot || req.body.portSlot);
+    if (requestedSlotEarly > 0) {
+      const otherPort = await findMt5LoginOnOtherUserPort(
+        userId,
+        mt5Login,
+        serverName,
+        requestedSlotEarly
+      );
+      if (otherPort) {
+        throw new Error(mt5LoginOnOtherPortMessage(otherPort));
+      }
+    }
+
     // ถ้าบัญชีนี้ connected อยู่แล้ว (ผู้ใช้กดเชื่อมต่อซ้ำ) ให้ตอบสำเร็จทันที
     const alreadyConnected = await query(
       `
@@ -1070,7 +1088,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     const r = await query(`
-      SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+      SELECT a.id, a.user_id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
              a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
              a.connect_started_at, a.last_balance, a.last_equity,
              COALESCE(a.mt5_window_title, '') AS mt5_window_title,
