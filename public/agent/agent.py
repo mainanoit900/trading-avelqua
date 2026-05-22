@@ -18,6 +18,26 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+# Windows PowerShell มักใช้ cp1252 — กัน log/print ไทยแล้ว COMMAND POLL ERROR
+if sys.platform == "win32":
+    try:
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        try:
+            import io
+
+            if hasattr(sys.stdout, "buffer"):
+                sys.stdout = io.TextIOWrapper(
+                    sys.stdout.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                )
+            if hasattr(sys.stderr, "buffer"):
+                sys.stderr = io.TextIOWrapper(
+                    sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True
+                )
+        except Exception:
+            pass
+
 
 def load_env_file(path: Path) -> None:
     try:
@@ -58,91 +78,17 @@ LOG_DIR = AGENT_DIR / "logs"
 LOG_FILE = AGENT_DIR / "agent.log"
 STOP_FLAG = AGENT_DIR / "agent.disabled"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
-LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "2"))
-HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "30"))
-PORT_HEALTH_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_SEC", "20"))
-PORT_HEALTH_TITLE_INTERVAL_SEC = int(os.getenv("AVELQUA_PORT_HEALTH_TITLE_SEC", "120"))
-PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lower() in ("1", "true", "yes")
-PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
-CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "28"))
-JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.08"))
-
-
-def _journal_timeout_sec() -> int:
-    """จำกัดสูงสุด ~32s — user จริงมักจบใน 15–30s เมื่อ journal ตอบเร็ว"""
-    raw = int(
-        os.getenv(
-            "AVELQUA_JOURNAL_TIMEOUT_SEC",
-            os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "30"),
-        )
-    )
-    return max(45, min(90, raw))
-MT5_PROBE_CACHE_SEC = float(os.getenv("AVELQUA_MT5_PROBE_CACHE_SEC", "0.2"))
-JOURNAL_EXTENDED_CAP_SEC = int(os.getenv("AVELQUA_JOURNAL_EXTENDED_CAP_SEC", "35"))
+LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
+HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
+CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
+JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
 LOCKED_MT5_SERVER = "MohicansMarkets-Live"
 LOCKED_MT5_COMPANY = "Mohicans Markets Ltd"
 JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
-EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
-JOURNAL_FAIL_MSG = "User หรือ รหัส ไม่ถูกต้อง"
+JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
-MT5_LOGIN_LIVE_RE = re.compile(r"^2\d{8}$")  # บัญชีจริง 9 หลัก ขึ้นต้น 2
-MT5_LOGIN_DEMO_RE = re.compile(r"^8\d{7}$")  # ทดลอง 8 หลัก ขึ้นต้น 8
-
-
-def _login_cmd_result_payload(
-    login: str,
-    server: str,
-    port: Any,
-    bot: str,
-    config_file: Any,
-    terminal: Any,
-    *,
-    status: str = "connected",
-    journal_evidence: str = "",
-    process_id: Any = None,
-    **extra: Any,
-) -> Dict[str, Any]:
-    """ผล login_mt5 ที่ส่งกลับเซิร์ฟเวอร์ — ต้องมี journal/loginVerified ไม่ใช่แค่ status=connected"""
-    je = str(journal_evidence or "")[:8000]
-    jv = False
-    if je and login:
-        try:
-            jv = _journal_outcome_for_login(je, str(login), 0) is True
-        except Exception:
-            jv = "authorized on" in je.lower() and str(login) in je
-    out: Dict[str, Any] = {
-        "action": "login_mt5",
-        "status": status,
-        "login": str(login),
-        "loginVerified": status == "connected",
-        "journalVerified": jv,
-        "journalEvidence": je,
-        "loginOnly": True,
-        "port": port,
-        "server": server,
-        "bot": bot,
-        "config": str(config_file),
-        "terminal": str(terminal),
-        "process_id": process_id,
-    }
-    out.update(extra)
-    return out
-
-
-def validate_mt5_login_format(login: str) -> Tuple[bool, str, str]:
-    """ตรวจรูปแบบเลขบัญชีก่อนเปิด MT5 / อ่าน Journal — ผิดรูปแบบ = User ผิดทันที"""
-    s = str(login or "").strip().replace(" ", "")
-    if not s:
-        return False, "", "กรุณากรอก Login MT5"
-    if not s.isdigit():
-        return False, "", JOURNAL_FAIL_MSG
-    if MT5_LOGIN_LIVE_RE.match(s):
-        return True, "live", ""
-    if MT5_LOGIN_DEMO_RE.match(s):
-        return True, "demo", ""
-    return False, "", JOURNAL_FAIL_MSG
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-19-equity-dashboard-v33"
+AGENT_BUILD_ID = "2026-05-22-utf8-journal-v22"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -165,15 +111,7 @@ def has_journal_gate_marker(version_or_build: str) -> bool:
         return False
     if v == AGENT_BUILD_ID:
         return True
-    for marker in (
-        "journal-gate",
-        "equity-live",
-        "algo-live",
-        "run-bot-hot",
-        "metrics-sync",
-        "agent-perf",
-        "mt5-connect",
-    ):
+    for marker in ("journal-gate", "equity-live", "algo-live", "run-bot-hot", "metrics-sync"):
         if marker in v:
             return True
     return False
@@ -194,30 +132,24 @@ def mt5_existing_login_config(port_dir: Path) -> Optional[Path]:
     return None
 
 
-def _configure_stdio_utf8() -> None:
-    """Windows service console มักเป็น cp874/cp1252 — กัน COMMAND POLL ERROR จากข้อความไทย"""
-    for stream in (sys.stdout, sys.stderr):
-        try:
-            if stream is not None and hasattr(stream, "reconfigure"):
-                stream.reconfigure(encoding="utf-8", errors="replace")
-        except Exception:
-            pass
-
-
-_configure_stdio_utf8()
+def _safe_console_text(msg: str) -> str:
+    try:
+        enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+        return str(msg).encode(enc, errors="replace").decode(enc, errors="replace")
+    except Exception:
+        return str(msg).encode("ascii", errors="replace").decode("ascii")
 
 
 def log(msg: str) -> None:
     text = f"{datetime.now():%Y-%m-%d %H:%M:%S} - {msg}"
-    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
     try:
-        text.encode(enc)
-    except (UnicodeEncodeError, LookupError, TypeError):
-        text = text.encode("utf-8", errors="replace").decode("utf-8", errors="replace")
-    try:
-        print(text, flush=True)
-    except UnicodeEncodeError:
-        print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
+        print(_safe_console_text(text), flush=True)
+    except Exception:
+        try:
+            sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.flush()
+        except Exception:
+            pass
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(text + "\n")
@@ -266,9 +198,25 @@ def api(method: str, path_or_url: str, body: Optional[Dict[str, Any]] = None, ti
 def post_json(path, payload):
     return api("POST", path, payload)
 
+def _shrink_command_result(result: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+    if not result:
+        return {}
+    out: Dict[str, Any] = dict(result)
+    for key in ("content", "journalEvidence", "journal_evidence", "text", "preview_b64"):
+        val = out.get(key)
+        if isinstance(val, str) and len(val) > 12000:
+            out[key] = val[-12000:]
+    return out
+
+
 def command_result(cmd_id: Any, ok: bool = True, result: Optional[Dict[str, Any]] = None, error: str = "") -> None:
     try:
-        api("POST", f"/commands/{cmd_id}/result", {"ok": ok, "result": result or {}, "error": error})
+        body = {
+            "ok": ok,
+            "result": _shrink_command_result(result),
+            "error": str(error or "")[:2000],
+        }
+        api("POST", f"/commands/{cmd_id}/result", body)
         log(f"RESULT SENT CommandID={cmd_id} Ok={ok}")
     except Exception as e:
         log(f"RESULT ERROR CommandID={cmd_id}: {e}")
@@ -369,48 +317,20 @@ def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dic
         return None
 
 
-_LAST_LOGIN_PROGRESS_HEARTBEAT_AT = 0.0
-
-
-def send_login_progress_heartbeat(login: str = "", port: Any = None) -> None:
-    """คงสถานะ Agent online ระหว่างคำสั่ง login_mt5 ที่อาจใช้เวลานาน"""
-    global _LAST_LOGIN_PROGRESS_HEARTBEAT_AT
-    now = time.time()
-    interval_sec = float(os.getenv("AVELQUA_LOGIN_PROGRESS_HEARTBEAT_SEC", "12"))
-    if now - _LAST_LOGIN_PROGRESS_HEARTBEAT_AT < max(5.0, interval_sec):
-        return
-    _LAST_LOGIN_PROGRESS_HEARTBEAT_AT = now
-    body = {
-        "status": "online",
-        "service_name": SERVICE_NAME,
-        "computer_name": platform.node(),
-        "agent_type": "python",
-        "agent_version": AGENT_VERSION,
-        "agent_build_id": AGENT_BUILD_ID,
-    }
-    if login:
-        body["login_progress"] = f"port={port or ''} login={str(login)[:32]}"
-    try:
-        api("POST", "/heartbeat", body, timeout=4)
-    except Exception:
-        pass
-
-
 def _maybe_self_deploy_agent(heartbeat_res: Dict[str, Any]) -> None:
     """ดาวน์โหลด agent.py ล่าสุดเมื่อเซิร์ฟเวอร์บอกว่าเวอร์ชันเก่า (กัน deploy ค้างแต่ service ไม่รีสตาร์ท)"""
     global _LAST_SELF_DEPLOY_AT
     now = time.time()
+    if now - _LAST_SELF_DEPLOY_AT < float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "3600")):
+        return
+    _LAST_SELF_DEPLOY_AT = now
     required = str(
         heartbeat_res.get("required_agent_version")
         or heartbeat_res.get("requiredAgentVersion")
         or AGENT_BUILD_ID
     ).strip()
-    if AGENT_BUILD_ID == required:
+    if has_journal_gate_marker(AGENT_BUILD_ID) and has_journal_gate_marker(required):
         return
-    cooldown = float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "180"))
-    if now - _LAST_SELF_DEPLOY_AT < cooldown:
-        return
-    _LAST_SELF_DEPLOY_AT = now
     script_url = str(heartbeat_res.get("agent_script_url") or heartbeat_res.get("scriptUrl") or "").strip()
     if not script_url:
         script_url = f"{SERVER_URL}/agent-script"
@@ -444,131 +364,55 @@ def extract_port_no(path_text):
     return 0
 
 
-_LAST_PORT_HEALTH = 0.0
-_LAST_PORT_HEALTH_TITLE = 0.0
-_PORT_LOGIN_CACHE: Dict[int, str] = {}
-_PORT_FOLDER_CACHE: List[Tuple[int, Path, str]] = []
-_PORT_FOLDER_CACHE_AT = 0.0
-
-
-def _list_mt5_port_folders(mt5_root: Path) -> List[Tuple[int, Path, str]]:
-    """Cache รายการโฟลเดอร์ port — ลด glob ซ้ำทุกลูป"""
-    global _PORT_FOLDER_CACHE, _PORT_FOLDER_CACHE_AT
-    now = time.time()
-    if _PORT_FOLDER_CACHE and now - _PORT_FOLDER_CACHE_AT < PORT_FOLDER_CACHE_SEC:
-        return _PORT_FOLDER_CACHE
-    folders: List[Tuple[int, Path, str]] = []
-    for folder in sorted(mt5_root.glob("*PORT*")):
-        port_no = extract_port_no(str(folder))
-        if not port_no:
-            continue
-        folder_norm = str(folder).lower().replace("/", "\\")
-        folders.append((port_no, folder, folder_norm))
-    _PORT_FOLDER_CACHE = folders
-    _PORT_FOLDER_CACHE_AT = now
-    return folders
-
-
-def _scan_running_mt5_ports(
-    port_folders: List[Tuple[int, Path, str]],
-) -> Dict[int, Dict[str, Any]]:
-    """จับคู่ terminal64.exe กับ port ครั้งเดียว — O(processes × ports) แต่ไม่ซ้ำ glob"""
-    running_map: Dict[int, Dict[str, Any]] = {}
-    if not port_folders or not psutil:
-        return running_map
-    try:
-        for proc in psutil.process_iter(["pid", "name", "exe"]):
-            try:
-                name = (proc.info.get("name") or "").lower()
-                if name != "terminal64.exe":
-                    continue
-                exe = proc.info.get("exe") or ""
-                if not exe:
-                    continue
-                exe_norm = exe.lower().replace("/", "\\")
-                for port_no, folder, folder_norm in port_folders:
-                    if port_no in running_map:
-                        continue
-                    if folder_norm in exe_norm:
-                        running_map[port_no] = {
-                            "process_id": proc.pid,
-                            "exe_path": exe,
-                            "folder_path": str(folder),
-                        }
-            except Exception:
-                pass
-    except Exception:
-        pass
-    return running_map
-
-
-def _read_mt5_login_from_title(process_id: int) -> str:
-    try:
-        ps = (
-            f"(Get-Process -Id {process_id} -ErrorAction SilentlyContinue)"
-            ".MainWindowTitle"
-        )
-        title = (_run_powershell(ps, timeout=3) or "").strip()
-        m = re.match(r"^(\d{4,})\s*[-–]", title)
-        if m:
-            return m.group(1)
-    except Exception:
-        pass
-    return ""
-
-
-def send_port_health() -> None:
-    global _LAST_PORT_HEALTH, _LAST_PORT_HEALTH_TITLE, _PORT_LOGIN_CACHE
-
-    now = time.time()
-    if now - _LAST_PORT_HEALTH < PORT_HEALTH_INTERVAL_SEC:
-        return
-    _LAST_PORT_HEALTH = now
+def send_port_health():
+    ports = []
 
     try:
         mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
-        port_folders = _list_mt5_port_folders(mt5_root)
-        running_map = _scan_running_mt5_ports(port_folders)
 
-        read_titles = PORT_HEALTH_READ_TITLE and (
-            now - _LAST_PORT_HEALTH_TITLE >= PORT_HEALTH_TITLE_INTERVAL_SEC
-        )
-        if read_titles:
-            _LAST_PORT_HEALTH_TITLE = now
+        running_map = {}
 
-        ports: List[Dict[str, Any]] = []
-        for port_no, folder, _folder_norm in port_folders:
+        for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
+            try:
+                name = (p.info.get("name") or "").lower()
+                exe = (p.info.get("exe") or "")
+
+                if name != "terminal64.exe":
+                    continue
+
+                exe_norm = exe.lower().replace("/", "\\")
+
+                for folder in mt5_root.glob("*PORT*"):
+                    folder_norm = str(folder).lower().replace("/", "\\")
+
+                    if folder_norm in exe_norm:
+                        port_no = extract_port_no(str(folder))
+
+                        running_map[port_no] = {
+                            "process_id": p.pid,
+                            "exe_path": exe,
+                            "folder_path": str(folder)
+                        }
+
+            except Exception:
+                pass
+
+        for folder in sorted(mt5_root.glob("*PORT*")):
+            port_no = extract_port_no(str(folder))
+
+            if not port_no:
+                continue
+
             run = running_map.get(port_no)
-            mt5_login: Optional[str] = None
-            if run:
-                if read_titles and run.get("process_id"):
-                    login = _read_mt5_login_from_title(int(run["process_id"]))
-                    if login:
-                        _PORT_LOGIN_CACHE[port_no] = login
-                        mt5_login = login
-                elif port_no in _PORT_LOGIN_CACHE:
-                    mt5_login = _PORT_LOGIN_CACHE[port_no]
-            else:
-                _PORT_LOGIN_CACHE.pop(port_no, None)
 
-            balance = None
-            equity = None
-            if run:
+            mt5_login = ""
+            if run and run.get("process_id"):
                 try:
-                    pl = {
-                        "vpsFolderPath": str(folder),
-                        "folder_path": str(folder),
-                        "mt5Login": mt5_login or _PORT_LOGIN_CACHE.get(port_no),
-                    }
-                    file_snap = account_snapshot_equity_file(folder, max_age_sec=120)
-                    balance = file_snap.get("balance")
-                    equity = file_snap.get("equity")
-                    if not _snap_positive(file_snap):
-                        snap = account_snapshot(port_no, pl)
-                        balance = snap.get("balance")
-                        equity = snap.get("equity")
-                        if balance or equity:
-                            send_account_metrics(pl, balance, equity, snap.get("currency", ""))
+                    ps = f"(Get-Process -Id {run['process_id']} -ErrorAction SilentlyContinue).MainWindowTitle"
+                    title = (_run_powershell(ps, timeout=4) or "").strip()
+                    m = re.match(r"^(\d{4,})\s*[-–]", title)
+                    if m:
+                        mt5_login = m.group(1)
                 except Exception:
                     pass
 
@@ -579,15 +423,16 @@ def send_port_health() -> None:
                 "running": bool(run),
                 "is_running": bool(run),
                 "process_id": run.get("process_id") if run else None,
-                "mt5_login": mt5_login,
+                "mt5_login": mt5_login or None,
                 "exe_path": run.get("exe_path") if run else "",
                 "status": "running" if run else "free",
-                "balance": balance,
-                "equity": equity,
             })
 
-        post_json("/port-health", {"ports": ports})
-        log(f"PORT HEALTH SENT count={len(ports)} titles={read_titles}")
+        post_json("/port-health", {
+            "ports": ports
+        })
+
+        log(f"PORT HEALTH SENT count={len(ports)}")
 
     except Exception as e:
         log(f"PORT HEALTH ERROR {e}")
@@ -612,28 +457,10 @@ def normalize_port(port: Any) -> int:
     return n
 
 
-def _folder_candidates_for_port(n: int) -> List[Path]:
-    if n <= 0:
-        return []
-    return [
-        MT5_ROOT / f"VPS-WIN-01-PORT-{n:02d}",
-        MT5_ROOT / f"VPS-WIN-01-PORT-{n}",
-        MT5_ROOT / f"PORT{n:02d}",
-        MT5_ROOT / f"PORT{n}",
-    ]
-
-
 def resolve_mt5_port_dir(port: Any, payload: Optional[Dict[str, Any]] = None) -> Path:
     payload = payload or {}
 
-    slot_raw = payload_get(payload, "portSlot", "port_slot")
-    n = 0
-    if slot_raw:
-        n = normalize_port(slot_raw)
-    else:
-        n = normalize_port(port) if port not in (None, "") else 0
-
-    # ✅ ใช้ path จริงจากเว็บ (รองรับหลาย VPS) — ต้องตรงเลข PORT แพ็กเกจ
+    # ✅ ใช้ path จริงจากเว็บ (รองรับหลาย VPS)
     folder = payload_get(payload, "vpsFolderPath", "folder_path", "path")
     if folder:
         p = Path(folder).expanduser()
@@ -641,27 +468,15 @@ def resolve_mt5_port_dir(port: Any, payload: Optional[Dict[str, Any]] = None) ->
         if str(p).lower().endswith(r"mql5\experts"):
             p = p.parent.parent
 
-        m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", p.name)
-        folder_no = int(m.group(1)) if m else 0
-
-        if folder_no and folder_no != n:
-            for strict in _folder_candidates_for_port(n):
-                if strict.exists():
-                    log(
-                        f"PORT mismatch: slot={n} payload_folder={p.name} "
-                        f"— using {strict.name}"
-                    )
-                    return strict
-            raise RuntimeError(
-                f"PORT mismatch: selected={n} folder={p.name} (โฟลเดอร์ไม่ตรง PORT แพ็กเกจ)"
-            )
-
         if not p.exists():
-            for strict in _folder_candidates_for_port(n):
-                if strict.exists():
-                    log(f"PORT folder missing {p.name} — fallback {strict.name}")
-                    return strict
             raise RuntimeError(f"PORT not found: {p}")
+
+        # 🔒 เช็คว่า port ตรงกันจริง
+        n = normalize_port(port)
+        m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", p.name)
+
+        if m and int(m.group(1)) != n:
+            log(f"PORT mismatch warning: selected={n} folder={p.name} — using folder_path from payload")
 
         return p
 
@@ -699,49 +514,6 @@ def iter_terminal_processes() -> Iterable[Any]:
         except Exception:
             continue
     return out
-
-
-def _norm_win_path(s: str) -> str:
-    return str(s or "").lower().replace("/", "\\").rstrip("\\")
-
-
-def _port_folder_token(port_dir: Path) -> str:
-    m = re.search(r"(?i)PORT[-_ ]*0*([0-9]+)$", port_dir.name)
-    if not m:
-        return ""
-    return f"port-{int(m.group(1)):02d}"
-
-
-def _process_matches_port_dir(proc: Any, port_dir: Path) -> bool:
-    """จับคู่ terminal64 กับโฟลเดอร์ PORT (exe/cmdline/cwd + ชื่อโฟลเดอร์)"""
-    root = _norm_win_path(port_dir)
-    name = port_dir.name.lower()
-    token = _port_folder_token(port_dir)
-    try:
-        exe = _norm_win_path(proc.info.get("exe") or "")
-        cmd = _norm_win_path(" ".join(proc.info.get("cmdline") or []))
-        cwd = ""
-        try:
-            cwd = _norm_win_path(proc.cwd())
-        except Exception:
-            pass
-        for hay in (exe, cmd, cwd):
-            if not hay:
-                continue
-            if hay.startswith(root) or root in hay:
-                return True
-            if name and name in hay:
-                return True
-            if token and token in hay:
-                return True
-    except Exception:
-        pass
-    return False
-
-
-def mt5_processes_for_port_dir(port_dir: Path) -> List[Any]:
-    return [p for p in iter_terminal_processes() if _process_matches_port_dir(p, port_dir)]
-
 
 def stop_mt5_by_folder(folder_path):
     if not folder_path:
@@ -896,10 +668,13 @@ def clear_mt5_logs(port_dir: Path) -> None:
 
 
 def clear_mt5_login_cache(port_dir: Path) -> None:
-    """ลบ cache บัญชีที่ MT5 จำไว้ — เก็บ servers.dat (รายการ server/IP) ไว้ให้เชื่อมต่อได้"""
+    """ลบ cache บัญชีที่ MT5 จำไว้ — บังคับใช้ Login/Password จาก INI ล่าสุดเท่านั้น"""
     for rel in (
         "config/accounts.dat",
+        "config/servers.dat",
         "config/account.ini",
+        "config/common.ini",
+        "config/settings.ini",
     ):
         p = port_dir / rel
         if p.is_file():
@@ -908,95 +683,6 @@ def clear_mt5_login_cache(port_dir: Path) -> None:
                 log(f"CLEAR MT5 CACHE FILE {p}")
             except Exception as e:
                 log(f"CLEAR MT5 CACHE ERROR {p}: {e}")
-
-
-def resolve_mt5_server(payload: Optional[Dict[str, Any]] = None) -> str:
-    """Server จาก payload (เว็บล็อค MohicansMarkets-Live) — ค่าเริ่มต้น LOCKED_MT5_SERVER"""
-    payload = payload or {}
-    s = str(
-        payload_get(payload, "serverName", "server_name", "mt5_server", "server") or ""
-    ).strip()
-    if not s:
-        return LOCKED_MT5_SERVER
-    if "mohicans" in s.lower():
-        return LOCKED_MT5_SERVER
-    return s
-
-
-def _patch_ini_common_login(
-    path: Path, login: str, password: str, server: str
-) -> bool:
-    """บันทึก Login/Password/Server ใน config/common.ini ของ portable (บังคับเลือก server)"""
-    if not login or not server:
-        return False
-    safe_password = password.replace("\r", "").replace("\n", "")
-    if any(c in safe_password for c in ('=', ';', '#', '"')):
-        safe_password = safe_password.replace('"', "'")
-        pw_line = f'Password="{safe_password}"'
-    else:
-        pw_line = f"Password={safe_password}"
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore") if path.is_file() else ""
-    except Exception:
-        text = ""
-    lines = text.splitlines() if text else []
-    out: List[str] = []
-    in_common = False
-    seen_login = seen_pw = seen_srv = False
-    for line in lines:
-        low = line.strip().lower()
-        if low == "[common]":
-            in_common = True
-            out.append(line)
-            continue
-        if in_common and low.startswith("[") and low != "[common]":
-            in_common = False
-        if in_common:
-            if low.startswith("login="):
-                out.append(f"Login={login}")
-                seen_login = True
-                continue
-            if low.startswith("password="):
-                out.append(pw_line)
-                seen_pw = True
-                continue
-            if low.startswith("server="):
-                out.append(f"Server={server}")
-                seen_srv = True
-                continue
-        out.append(line)
-    if not any(l.strip().lower() == "[common]" for l in out):
-        if out and out[-1].strip():
-            out.append("")
-        out.append("[Common]")
-    idx = max(i for i, l in enumerate(out) if l.strip().lower() == "[common]")
-    insert: List[str] = []
-    if not seen_login:
-        insert.append(f"Login={login}")
-    if not seen_pw and password:
-        insert.append(pw_line)
-    if not seen_srv:
-        insert.append(f"Server={server}")
-    if insert:
-        out[idx + 1 : idx + 1] = insert
-    try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(out) + "\n", encoding="utf-8", errors="replace")
-        return True
-    except Exception as e:
-        log(f"PATCH COMMON LOGIN ERROR {path}: {e}")
-        return False
-
-
-def write_mt5_common_login_config(
-    port_dir: Path, login: str, password: str, server: str
-) -> None:
-    """เขียน Server/Login ลง common.ini ของ PORT — กัน MT5 เปิดโดยไม่เลือก MohicansMarkets-Live"""
-    server = str(server or LOCKED_MT5_SERVER).strip()
-    for rel in ("config/common.ini", "config/settings.ini"):
-        p = port_dir / Path(rel.replace("/", os.sep))
-        if _patch_ini_common_login(p, login, password, server):
-            log(f"PATCH COMMON LOGIN server={server} file={p}")
 
 
 def write_mt5_login_ini(
@@ -1017,33 +703,24 @@ def write_mt5_login_ini(
             except Exception:
                 pass
     trade_flag = "true" if allow_expert_trading else "false"
-    safe_password = password.replace("\r", "").replace("\n", "")
-    if any(c in safe_password for c in ('=', ';', '#', '"')):
-        safe_password = safe_password.replace('"', "'")
-        pw_line = f'Password="{safe_password}"'
-    else:
-        pw_line = f"Password={safe_password}"
     ini = f"""[Common]
 Login={login}
-{pw_line}
+Password={password}
 Server={server}
-AutoConfiguration=true
-ProxyEnable=false
-CertInstall=0
+AutoConfiguration=false
 
 [Experts]
 AllowLiveTrading={trade_flag}
 AllowDllImport=true
 Enabled={trade_flag}
 """
-    config_file.write_text(ini, encoding="utf-8", errors="replace")
+    config_file.write_text(ini, encoding="ascii", errors="ignore")
     for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
         if alias.resolve() != config_file.resolve():
             try:
-                alias.write_text(ini, encoding="utf-8", errors="replace")
+                alias.write_text(ini, encoding="ascii", errors="ignore")
             except Exception:
                 pass
-    write_mt5_common_login_config(port_dir, login, password, server)
     log(
         f"WRITE MT5 INI {config_file} LOGIN={login} SERVER={server} "
         f"PW_LEN={len(password)} EXPERT_TRADING={trade_flag}"
@@ -1177,13 +854,7 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
         return False
 
 
-def patch_mt5_experts_config(
-    port_dir: Path, enabled: bool, *, skip_if_mt5_running: bool = True
-) -> None:
-    """แก้ [Experts] ใน ini — ข้ามเมื่อ terminal64 เปิดอยู่ (MT5 มัก reload/restart)"""
-    if skip_if_mt5_running and mt5_running_for_port_dir(port_dir):
-        log(f"PATCH EXPERTS skipped — MT5 running (gate/Files only) enabled={enabled}")
-        return
+def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> None:
     for rel in ("config/common.ini", "config/settings.ini", "MQL5/config/common.ini"):
         p = port_dir / Path(rel.replace("/", os.sep))
         if _patch_ini_experts_section(p, enabled):
@@ -1216,7 +887,16 @@ def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
 
 
 def mt5_running_for_port_dir(port_dir: Path) -> bool:
-    return len(mt5_processes_for_port_dir(port_dir)) > 0
+    root = str(port_dir).rstrip("\\/").lower()
+    for p in iter_terminal_processes():
+        try:
+            exe = (p.info.get("exe") or "").lower()
+            cmd = " ".join(p.info.get("cmdline") or []).lower()
+            if exe.startswith(root) or root in cmd:
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def enforce_login_no_trading(
@@ -1397,107 +1077,13 @@ def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[s
 _LAST_ALGO_ENABLE: Dict[str, float] = {}
 
 
-def _mt5_main_window_title(port: Any, payload: Optional[Dict[str, Any]] = None) -> str:
-    if os.name != "nt":
-        return ""
-    try:
-        port_dir = resolve_mt5_port_dir(port, payload or {})
-        root = str(port_dir).replace("\\", "\\\\")
-        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
-        ps = f"""
-$ErrorActionPreference = 'SilentlyContinue'
-$root = '{root}'
-$login = '{login}'
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-  $x = $_.Path
-  if ($x -and $x -like "*$root*") {{ return $true }}
-  if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
-  return $false
-}} | Select-Object -First 1
-if ($p) {{ $p.MainWindowTitle }} else {{ '' }}
-"""
-        return (_run_powershell(ps, timeout=8) or "").strip()
-    except Exception:
-        return ""
-
-
-def _chart_symbol_from_window_title(title: str) -> str:
-    t = str(title or "").upper()
-    if not t:
-        return ""
-    for pat in (
-        r"XAU\s*USD",
-        r"GOLD",
-        r"([A-Z]{6,7})",
-        r"([A-Z]{3,4}[A-Z]{3,4})",
-    ):
-        m = re.search(pat, t)
-        if not m:
-            continue
-        sym = m.group(1) if m.lastindex else m.group(0)
-        sym = str(sym or "").replace(" ", "").strip(",[]")
-        if sym:
-            return sym
-    return ""
-
-
-def assess_mt5_bot_ready(
-    port: Any,
-    payload: Optional[Dict[str, Any]],
-    bot_code: str,
-    *,
-    algo_enabled: Optional[bool] = None,
-) -> Dict[str, Any]:
-    """ตรวจว่า MT5 พร้อมให้ EA เทรดจริงหรือยัง (แยกจากสถานะ running บนเว็บ)"""
-    port_dir = resolve_mt5_port_dir(port, payload or {})
-    rel = str(
-        payload_get(payload or {}, "expertsRelative", "experts_relative", default=r"MQL5\Experts\Trading Bot")
-        or r"MQL5\Experts\Trading Bot"
-    )
-    experts_dir = port_dir / Path(rel.replace("\\", os.sep))
-    ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
-    title = _mt5_main_window_title(port, payload)
-    chart_sym = _chart_symbol_from_window_title(title)
-    sym_u = chart_sym.upper().replace("GOLD", "XAUUSD")
-
-    if not ea_info.get("ok"):
-        return {
-            "ea_status": "attach_required",
-            "message": "แนบ EA บนกราฟ XAUUSD แล้ว Load preset",
-            "chartSymbol": chart_sym,
-            "windowTitle": title,
-        }
-    if algo_enabled is False:
-        return {
-            "ea_status": "algo_off",
-            "message": "เปิดปุ่ม Algo Trading บน MT5 ให้เป็นสีเขียว",
-            "chartSymbol": chart_sym,
-            "windowTitle": title,
-        }
-    if chart_sym and "XAU" not in sym_u:
-        return {
-            "ea_status": "wrong_chart",
-            "message": f"เปิดกราฟ XAUUSD (ตอนนี้หน้าต่าง MT5 เป็น {chart_sym})",
-            "chartSymbol": chart_sym,
-            "windowTitle": title,
-        }
-    return {
-        "ea_status": "ready",
-        "message": "พร้อมเทรด",
-        "chartSymbol": chart_sym or "XAUUSD",
-        "windowTitle": title,
-    }
-
-
-def enable_mt5_algo_trading_uia(
-    port: Any, payload: Optional[Dict[str, Any]] = None, *, force: bool = False
-) -> bool:
+def enable_mt5_algo_trading_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> bool:
     """กดปุ่ม Algo Trading บนแถบเครื่องมือ MT5 (ต้องเป็นสีเขียว BOT ถึงเทรดได้)"""
     if os.name != "nt":
         return False
     key = str(normalize_port(port) or port or "")
     now = time.time()
-    if not force and key and now - _LAST_ALGO_ENABLE.get(key, 0) < 90:
+    if key and now - _LAST_ALGO_ENABLE.get(key, 0) < 90:
         return False
     if key:
         _LAST_ALGO_ENABLE[key] = now
@@ -1562,14 +1148,6 @@ def account_snapshot_uia(port: Any, payload: Optional[Dict[str, Any]] = None) ->
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class AvqWin {{
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-}}
-"@
 $root = '{root}'
 $login = '{login}'
 $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
@@ -1580,10 +1158,6 @@ $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
   return $false
 }} | Select-Object -First 1
 if (-not $proc) {{ Write-Output '{{}}'; exit 0 }}
-if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {{
-  [void][AvqWin]::ShowWindow($proc.MainWindowHandle, 9)
-  Start-Sleep -Milliseconds 400
-}}
 $ae = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
 if (-not $ae) {{ Write-Output '{{}}'; exit 0 }}
 $names = New-Object System.Collections.Generic.List[string]
@@ -1636,8 +1210,7 @@ def ensure_equity_pulse_indicator(port_dir: Path) -> None:
         log(f"DEPLOY AvelquaEquityPulse ERROR: {e}")
 
 
-def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """ดึง Balance/Equity ผ่าน MetaTrader5 package (เชื่อม terminal ที่รันอยู่ได้)"""
+def account_snapshot_mt5_api(port_dir: Path) -> Dict[str, Any]:
     try:
         import MetaTrader5 as mt5  # type: ignore
     except Exception:
@@ -1645,39 +1218,18 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {}
-    login_hint = 0
     try:
-        login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
-    except Exception:
-        login_hint = 0
-    try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        ok = mt5.initialize(path=str(terminal))
-        if not ok:
-            log(f"MT5 API INIT FAIL path={terminal} err={mt5.last_error()}")
+        if not mt5.initialize(path=str(terminal)):
             return {}
         ai = mt5.account_info()
-        if ai is None and login_hint:
-            try:
-                mt5.login(login_hint)
-                ai = mt5.account_info()
-            except Exception:
-                ai = None
         mt5.shutdown()
         if ai is None:
             return {}
-        if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
-            return {}
-        out = {
+        return {
             "balance": float(ai.balance),
             "equity": float(ai.equity),
             "currency": str(ai.currency or ""),
         }
-        log(f"MT5 API SNAPSHOT path={port_dir.name} BALANCE={out['balance']} EQUITY={out['equity']}")
-        return out
     except Exception as e:
         log(f"MT5 API SNAPSHOT ERROR: {e}")
         try:
@@ -1685,63 +1237,6 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         except Exception:
             pass
         return {}
-
-
-def mt5_login_verify_api(
-    port_dir: Path,
-    login: str,
-    password: str,
-    server: str = LOCKED_MT5_SERVER,
-) -> Tuple[bool, str]:
-    """ยืนยัน login ผ่าน MetaTrader5 package — ใช้เมื่อหน้าต่าง/socket พร้อมแต่ journal ช้า"""
-    login = str(login).strip()
-    if not login:
-        return False, ""
-    try:
-        import MetaTrader5 as mt5  # type: ignore
-    except Exception:
-        return False, "MetaTrader5 package not installed"
-    terminal = port_dir / "terminal64.exe"
-    if not terminal.exists():
-        return False, "terminal64.exe not found"
-    try:
-        login_int = int(login)
-    except Exception:
-        return False, "invalid login"
-    srv = str(server or LOCKED_MT5_SERVER).strip()
-    try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        if not mt5.initialize(path=str(terminal)):
-            err = mt5.last_error()
-            return False, f"init fail {err}"
-        ai = mt5.account_info()
-        ai_login = int(getattr(ai, "login", 0) or 0) if ai is not None else 0
-        if ai_login != login_int:
-            if password:
-                logged = bool(mt5.login(login_int, password=str(password), server=srv))
-            else:
-                logged = bool(mt5.login(login_int))
-            if not logged:
-                err = mt5.last_error()
-                mt5.shutdown()
-                return False, f"login fail {err}"
-            ai = mt5.account_info()
-        mt5.shutdown()
-        if ai is None:
-            return False, "account_info empty"
-        ai_login = int(getattr(ai, "login", 0) or 0)
-        if ai_login != login_int:
-            return False, f"account mismatch {ai_login}"
-        return True, f"api ok equity={float(getattr(ai, 'equity', 0) or 0):.2f}"
-    except Exception as e:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        return False, str(e)
 
 
 def _snap_positive(snap: Dict[str, Any]) -> bool:
@@ -1771,26 +1266,22 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
         ensure_equity_pulse_indicator(port_dir)
         mt5_open = mt5_running_for_port_dir(port_dir)
 
-        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=120 if mt5_open else 0)
-        if _snap_positive(file_snap):
-            snap.update({k: v for k, v in file_snap.items() if v is not None and v != ""})
-            return _snap_merge_profit(snap)
-
         if mt5_open:
-            api_snap = account_snapshot_mt5_api(port_dir, payload)
-            if _snap_positive(api_snap):
-                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
-                return _snap_merge_profit(snap)
-
             uia_snap = account_snapshot_uia(port, payload)
             if _snap_positive(uia_snap):
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
                 return _snap_merge_profit(snap)
 
+        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=25 if mt5_open else 0)
+        if _snap_positive(file_snap):
+            snap.update({k: v for k, v in file_snap.items() if v is not None and v != ""})
+            return _snap_merge_profit(snap)
+
         if not mt5_open:
-            api_snap = account_snapshot_mt5_api(port_dir, payload)
+            api_snap = account_snapshot_mt5_api(port_dir)
             if _snap_positive(api_snap):
                 snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                log(f"MT5 SNAPSHOT API PORT={port} BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}")
                 return _snap_merge_profit(snap)
 
         if not mt5_open:
@@ -1854,7 +1345,7 @@ def send_account_metrics(
     try:
         url = os.getenv(
             "AVELQUA_ACCOUNT_METRICS_URL",
-            "https://trading.avelqua.com/api/vps-agent/account-metrics",
+            "https://trading.avelqua.com/app/mt5/account-metrics",
         )
         body = {
             "accountId": account_id,
@@ -1917,17 +1408,6 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Pope
     )
 
 
-_MT5_TITLE_CACHE: Dict[str, Tuple[float, List[str]]] = {}
-_MT5_SOCK_CACHE: Dict[str, Tuple[float, bool, str]] = {}
-
-
-def _mt5_port_cache_key(port: Any, payload: Optional[Dict[str, Any]] = None) -> str:
-    try:
-        return str(resolve_mt5_port_dir(port, payload)).lower()
-    except Exception:
-        return str(port or "")
-
-
 def _run_powershell(command: str, timeout: int = 8) -> str:
     try:
         return subprocess.check_output(
@@ -1941,12 +1421,6 @@ def _run_powershell(command: str, timeout: int = 8) -> str:
 
 def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[str]:
     """Return MainWindowTitle values for terminal64.exe matched to this PORT folder."""
-    cache_key = _mt5_port_cache_key(port, payload)
-    now = time.time()
-    hit = _MT5_TITLE_CACHE.get(cache_key)
-    if hit and (now - hit[0]) < MT5_PROBE_CACHE_SEC:
-        return list(hit[1])
-
     titles: List[str] = []
     port_dir = resolve_mt5_port_dir(port, payload)
     root = str(port_dir).rstrip("\\/").lower()
@@ -1992,7 +1466,6 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
                     titles.append(line.strip())
         except Exception:
             pass
-    _MT5_TITLE_CACHE[cache_key] = (now, titles)
     return titles
 
 
@@ -2033,12 +1506,6 @@ def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bo
 
 def mt5_socket_established(port: Any, payload: Optional[Dict[str, Any]] = None) -> Tuple[bool, str]:
     """Detect whether the terminal matched to this PORT has an established broker socket."""
-    cache_key = _mt5_port_cache_key(port, payload)
-    now = time.time()
-    hit = _MT5_SOCK_CACHE.get(cache_key)
-    if hit and (now - hit[0]) < MT5_PROBE_CACHE_SEC:
-        return hit[1], hit[2]
-
     if psutil is None:
         return False, "psutil not installed"
     pids = set()
@@ -2061,10 +1528,7 @@ def mt5_socket_established(port: Any, payload: Optional[Dict[str, Any]] = None) 
                 pass
     except Exception as e:
         return False, str(e)
-    ok = len(hits) > 0
-    detail = ", ".join(hits[:5])
-    _MT5_SOCK_CACHE[cache_key] = (now, ok, detail)
-    return ok, detail
+    return len(hits) > 0, ", ".join(hits[:5])
 
 
 def mt5_has_login_failure_text(text: str) -> bool:
@@ -2130,21 +1594,10 @@ $bmp.Save($ms, $enc, $ep)
 """
         out = _run_powershell(ps, timeout=12).strip()
         if out and len(out) > 200 and not out.lower().startswith("exit"):
-            return out[:400_000]
+            return out[:2_400_000]
     except Exception as e:
         log(f"MT5 SCREENSHOT ERROR: {e}")
     return ""
-
-
-def _connect_preview_payload(status: str, preview_b64: str) -> str:
-    """ส่งภาพหน้าจอเฉพาะตอน connected — ลด PayloadTooLarge ตอน checking/starting"""
-    raw = str(preview_b64 or "").strip()
-    if not raw:
-        return ""
-    st = str(status or "").lower()
-    if st != "connected":
-        return ""
-    return raw[:120_000]
 
 
 def send_connect_result(
@@ -2172,6 +1625,7 @@ def send_connect_result(
             "portSlot": port_slot,
             "portNumber": port,
             "mt5Login": payload_get(payload, "mt5Login", "login"),
+            "mt5Password": payload_get(payload, "mt5Password", "password"),
             "serverName": payload_get(payload, "serverName", default="MohicansMarkets-Live"),
             "status": status,
             "message": message,
@@ -2183,8 +1637,8 @@ def send_connect_result(
             "journalEvidence": (journal_evidence or "")[:8000],
             "windowTitle": (window_title or "")[:500],
             "mt5WindowTitle": (window_title or "")[:500],
-            "previewImage": _connect_preview_payload(status, preview_b64),
-            "mt5PreviewImage": _connect_preview_payload(status, preview_b64),
+            "previewImage": (preview_b64 or "")[:2_400_000],
+            "mt5PreviewImage": (preview_b64 or "")[:2_400_000],
             "windowVerified": bool(window_verified),
             "agentVersion": AGENT_BUILD_ID,
             "agentBuildId": AGENT_BUILD_ID,
@@ -2244,32 +1698,11 @@ def _read_log_tail(path: Path, max_bytes: int = 262144) -> str:
             return ""
 
 
-def _parse_mt5_journal_line_time_ms(line: str) -> Optional[float]:
-    m = re.match(
-        r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:\.(\d+))?",
-        str(line or "").strip(),
-    )
-    if not m:
-        return None
-    ms = int(str(m.group(7) or "0").ljust(3, "0")[:3]) if m.group(7) else 0
-    dt = datetime(
-        int(m.group(1)),
-        int(m.group(2)),
-        int(m.group(3)),
-        int(m.group(4)),
-        int(m.group(5)),
-        int(m.group(6)),
-        ms * 1000,
-    )
-    return dt.timestamp()
-
-
 def _journal_outcome_for_login(
     text: str,
     login: str,
     failed_words: List[str],
     server: str = LOCKED_MT5_SERVER,
-    since_ts: float = 0.0,
 ) -> Optional[bool]:
     """
     อ่าน Journal ตามรูปแบบ MT5 จริง (ล็อค Server MohicansMarkets-Live):
@@ -2292,7 +1725,6 @@ def _journal_outcome_for_login(
         re.I,
     )
 
-    since_ts = float(since_ts or 0)
     lines = text.splitlines()
     for line in reversed(lines):
         low = line.lower()
@@ -2300,85 +1732,15 @@ def _journal_outcome_for_login(
             continue
         if server.lower() not in low:
             continue
-        if since_ts > 0:
-            line_ts = _parse_mt5_journal_line_time_ms(line)
-            if line_ts is None or line_ts < since_ts - 5:
-                continue
         if fail_rx.search(line):
+            return False
+        if any(w in low for w in failed_words):
+            return False
+        if "authorization on" in low and "failed" in low:
             return False
         if ok_rx.search(line):
             return True
     return None
-
-
-def automate_mt5_login_server_form(
-    login: str,
-    password: str,
-    server: str = LOCKED_MT5_SERVER,
-) -> bool:
-    """กรอกฟอร์ม Login MT5 — เน้นเลือก Server MohicansMarkets-Live (ช่องค้นหา server)"""
-    login_esc = str(login or "").replace("+", "{+}").replace("{", "{{").replace("}", "}}")
-    server_esc = (
-        str(server or LOCKED_MT5_SERVER)
-        .replace("+", "{+}")
-        .replace("{", "{{")
-        .replace("}", "}}")
-    )
-    pw_esc = (
-        str(password or "")
-        .replace("+", "{+}")
-        .replace("^", "{^}")
-        .replace("%", "{%}")
-        .replace("~", "{~}")
-        .replace("(", "{(}")
-        .replace(")", "{)}")
-        .replace("{", "{{")
-        .replace("}", "}}")
-    )
-    ps = f"""
-Add-Type -AssemblyName System.Windows.Forms
-$ErrorActionPreference = "SilentlyContinue"
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.MainWindowHandle -ne 0 }} |
-  Sort-Object MainWindowTitle -Descending |
-  Select-Object -First 1
-if (-not $p) {{ exit 0 }}
-Add-Type @"
-using System;
-using System.Runtime.InteropServices;
-public class W32 {{
-  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
-  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
-}}
-"@
-[W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
-[W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 400
-# Login -> Password -> Server (combobox) -> Enter
-[System.Windows.Forms.SendKeys]::SendWait("{login_esc}")
-Start-Sleep -Milliseconds 200
-[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
-Start-Sleep -Milliseconds 150
-[System.Windows.Forms.SendKeys]::SendWait("{pw_esc}")
-Start-Sleep -Milliseconds 200
-[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
-Start-Sleep -Milliseconds 150
-[System.Windows.Forms.SendKeys]::SendWait("^a")
-Start-Sleep -Milliseconds 80
-[System.Windows.Forms.SendKeys]::SendWait("{server_esc}")
-Start-Sleep -Milliseconds 350
-[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
-Start-Sleep -Milliseconds 200
-[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
-exit 0
-"""
-    try:
-        _run_powershell(ps, timeout=14)
-        log(f"MT5 LOGIN FORM server={server} login={login}")
-        return True
-    except Exception as e:
-        log(f"MT5 LOGIN FORM ERROR: {e}")
-        return False
 
 
 def automate_mt5_open_account_wizard(
@@ -2507,9 +1869,7 @@ def check_mt5_journal_login_result(
         uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
         newest = uniq[0]
         chunk = _read_log_tail(newest)
-        outcome = _journal_outcome_for_login(
-            chunk, login, failed_words, LOCKED_MT5_SERVER, since_ts
-        )
+        outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
         if outcome is False:
             log(f"MT5 JOURNAL FAIL login={login} file={newest.name} server={LOCKED_MT5_SERVER}")
             return False, JOURNAL_FAIL_MSG, chunk
@@ -2572,146 +1932,12 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
         return None, ""
     uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     chunk = _read_log_tail(uniq[0])
-    outcome = _journal_outcome_for_login(
-        chunk, login, failed_words, LOCKED_MT5_SERVER, since_ts
-    )
+    outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
     if outcome is True:
         return True, chunk
     if outcome is False:
         return False, chunk
     return None, chunk
-
-
-def _early_connect_enabled() -> bool:
-    return os.getenv("AVELQUA_EARLY_CONNECT", "true").lower() not in ("0", "false", "no")
-
-
-def _send_early_connect_if_journal_ok(
-    payload: Dict[str, Any],
-    port: Any,
-    proc_pid: Any,
-    login: str,
-    journal_chunk: str,
-    early_sent: List[bool],
-    window_title: str = "",
-) -> bool:
-    """ยืนยันบนเว็บทันทีเมื่อ journal authorized (ก่อนหน้าต่าง MT5 โหลดเต็ม)"""
-    if early_sent[0] or not _early_connect_enabled() or not journal_chunk:
-        return early_sent[0]
-    early_sent[0] = True
-    send_connect_result(
-        payload,
-        "connected",
-        EARLY_CONNECT_MSG,
-        port,
-        process_id=proc_pid,
-        journal_evidence=journal_chunk,
-        window_title=window_title or "",
-        window_verified=False,
-    )
-    log(f"EARLY CONNECT SENT PORT={port} LOGIN={login}")
-    return True
-
-
-def _safe_exc_text(exc: BaseException) -> str:
-    try:
-        return str(exc).encode("utf-8", errors="replace").decode("utf-8")
-    except Exception:
-        return repr(exc)
-
-
-def _connect_on_snapshot_success(
-    payload: Dict[str, Any],
-    port: Any,
-    port_dir: Path,
-    login: str,
-    proc_pid: Any,
-    joined: str,
-    preview_b64: str = "",
-) -> Tuple[bool, str]:
-    """ยืนยันเมื่อมี balance/equity จริง — กรณี journal ช้าแต่ MT5 login แล้ว"""
-    login_s = str(login).strip()
-    if not login_s:
-        return False, ""
-    snap = account_snapshot(port, payload)
-    if not _snap_positive(snap):
-        return False, ""
-    ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
-    joined_s = str(joined or "")
-    if ok_w or (login_s in joined_s):
-        try:
-            pw = str(payload_get(payload, "mt5Password", "password") or "")
-            srv = resolve_mt5_server(payload)
-            enforce_login_no_trading(port_dir, port, payload, login_s, pw, srv)
-        except Exception:
-            pass
-        send_connect_result(
-            payload,
-            "connected",
-            "เชื่อมต่อสำเร็จ — เห็นบัญชีและยอดเงินบน MT5",
-            port,
-            process_id=proc_pid,
-            journal_evidence=joined_s,
-            window_title=joined_s,
-            preview_b64=preview_b64,
-            window_verified=bool(ok_w),
-        )
-        bal = snap.get("balance")
-        return True, f"snapshot+window balance={bal}"
-    pw = str(payload_get(payload, "mt5Password", "password") or "")
-    srv = resolve_mt5_server(payload)
-    api_ok, api_detail = mt5_login_verify_api(port_dir, login_s, pw, srv)
-    if api_ok:
-        try:
-            enforce_login_no_trading(port_dir, port, payload, login_s, pw, srv)
-        except Exception:
-            pass
-        send_connect_result(
-            payload,
-            "connected",
-            "เชื่อมต่อสำเร็จ — ยืนยันบัญชีจาก MT5 แล้ว",
-            port,
-            process_id=proc_pid,
-            journal_evidence=joined or "",
-            window_title=joined or "",
-            preview_b64=preview_b64,
-            window_verified=True,
-        )
-        return True, f"snapshot+api; {api_detail}"
-    return False, ""
-
-
-def _connect_on_api_verify(
-    payload: Dict[str, Any],
-    port: Any,
-    port_dir: Path,
-    login: str,
-    proc_pid: Any,
-    joined: str,
-    preview_b64: str = "",
-) -> Tuple[bool, str]:
-    pw = str(payload_get(payload, "mt5Password", "password") or "")
-    srv = resolve_mt5_server(payload)
-    api_ok, api_detail = mt5_login_verify_api(port_dir, login, pw, srv)
-    if not api_ok:
-        return False, api_detail
-    try:
-        enforce_login_no_trading(port_dir, port, payload, login, pw, srv)
-    except Exception:
-        pass
-    j_out, j_chunk = _quick_journal_probe(port_dir, login, time.time() - 120)
-    send_connect_result(
-        payload,
-        "connected",
-        "เชื่อมต่อสำเร็จ — ยืนยันบัญชีจาก MT5 แล้ว",
-        port,
-        process_id=proc_pid,
-        journal_evidence=j_chunk or joined,
-        window_title=joined,
-        preview_b64=preview_b64,
-        window_verified=True,
-    )
-    return True, api_detail
 
 
 def wait_mt5_login_hybrid(
@@ -2723,31 +1949,22 @@ def wait_mt5_login_hybrid(
     proc_pid: Any,
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
-    """รอ login — Journal + หน้าต่าง MT5 + MT5 API (เมื่อ journal ช้าแต่ terminal login แล้ว)"""
-    timeout_sec = max(15, int(timeout_sec or CONNECT_TIMEOUT_SECONDS))
-    deadline = time.time() + timeout_sec
+    """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
+    deadline = time.time() + max(6, min(timeout_sec, 12))
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_wizard_at = 0.0
     last_gate_at = 0.0
-    last_api_at = 0.0
-    last_probe_at = 0.0
-    last_snap_at = 0.0
     last_title = ""
     window_ok_streak = 0
     wait_start = time.time()
     preview_b64 = ""
-    early_sent: List[bool] = [False]
-    joined = ""
-    ok_w = False
-    sock_ok = False
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
         now = time.time()
-        send_login_progress_heartbeat(login, port)
 
-        if now - last_gate_at >= 3.0:
+        if now - last_gate_at >= 1.5:
             try:
                 write_avelqua_trading_gate(port_dir, False, payload)
                 patch_mt5_experts_config(port_dir, False)
@@ -2755,11 +1972,8 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if elapsed < 8 and (last_wizard_at <= wait_start or now - last_wizard_at >= 2.5):
-            srv = resolve_mt5_server(payload)
-            pw = str(payload_get(payload, "mt5Password", "password") or "")
-            automate_mt5_open_account_wizard(server=srv)
-            automate_mt5_login_server_form(login, pw, srv)
+        if now - last_wizard_at >= 4.0:
+            automate_mt5_open_account_wizard()
             last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
@@ -2775,26 +1989,12 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, j_chunk
         if j_out is True:
-            if now - last_api_at >= 0.25:
-                last_api_at = now
-                api_ok, api_detail = _connect_on_api_verify(
-                    payload, port, port_dir, login, proc_pid, joined or last_title, preview_b64
-                )
-                if api_ok:
-                    return True, f"api verified; {api_detail}", j_chunk
-            _send_early_connect_if_journal_ok(
-                payload, port, proc_pid, login, j_chunk, early_sent, last_title
-            )
-            return True, "journal ok (early web confirm)", j_chunk
+            return True, "window verified; journal ok", j_chunk
 
-        if now - last_probe_at >= MT5_PROBE_CACHE_SEC:
-            titles = mt5_window_titles(port, payload)
-            joined = " | ".join(titles)
-            ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
-            sock_ok, _sock_info = mt5_socket_established(port, payload)
-            last_probe_at = now
-            if joined and joined != last_title:
-                last_title = joined
+        titles = mt5_window_titles(port, payload)
+        joined = " | ".join(titles)
+        if joined and joined != last_title:
+            last_title = joined
 
         if mt5_title_suggests_auth_failure(joined):
             cleanup_mt5_after_login_fail(port, payload, port_dir)
@@ -2808,73 +2008,14 @@ def wait_mt5_login_hybrid(
             )
             return False, JOURNAL_FAIL_MSG, joined
 
+        ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
         if ok_w:
             window_ok_streak += 1
         else:
             window_ok_streak = 0
 
-        if ok_w and window_ok_streak >= 1 and now - last_api_at >= 0.35:
-            last_api_at = now
-            api_ok, api_detail = _connect_on_api_verify(
-                payload, port, port_dir, login, proc_pid, joined, preview_b64
-            )
-            if api_ok:
-                return True, f"api verified; {api_detail}", api_detail
-
-        if elapsed >= 6 and now - last_snap_at >= 2.0:
-            last_snap_at = now
-            snap_ok, snap_detail = _connect_on_snapshot_success(
-                payload, port, port_dir, login, proc_pid, joined, preview_b64
-            )
-            if snap_ok:
-                return True, snap_detail, snap_detail
-
-        if sock_ok and ok_w and j_out is True:
-            try:
-                enforce_login_no_trading(
-                    port_dir, port, payload, login,
-                    str(payload_get(payload, "mt5Password", "password") or ""),
-                    LOCKED_MT5_SERVER,
-                )
-            except Exception:
-                pass
-            send_connect_result(
-                payload,
-                "connected",
-                "เชื่อมต่อสำเร็จ — ยังไม่เปิด BOT กรุณาตั้งค่าขั้นตอน 3) แล้วกด ▶ เปิด BOT",
-                port,
-                process_id=proc_pid,
-                journal_evidence=j_chunk or joined,
-                window_title=joined,
-                preview_b64=preview_b64 if preview_b64 else capture_mt5_window_base64(port, payload),
-                window_verified=True,
-            )
-            return True, "socket+journal ok", j_chunk or joined
-
-        if sock_ok and ok_w and j_out is not False and window_ok_streak >= 1:
-            j_relaxed, j_rel_chunk = _quick_journal_probe(port_dir, login, journal_since - 900)
-            if j_relaxed is True:
-                try:
-                    enforce_login_no_trading(
-                        port_dir, port, payload, login,
-                        str(payload_get(payload, "mt5Password", "password") or ""),
-                        LOCKED_MT5_SERVER,
-                    )
-                except Exception:
-                    pass
-                send_connect_result(
-                    payload,
-                    "connected",
-                    "เชื่อมต่อสำเร็จ — MT5 login (socket verified)",
-                    port,
-                    process_id=proc_pid,
-                    journal_evidence=j_rel_chunk or joined,
-                    window_title=joined,
-                    window_verified=True,
-                )
-                return True, "socket verified; journal ok", j_rel_chunk or joined
-
-        if window_ok_streak >= 1 and j_out is True:
+        # สำเร็จเฉพาะเมื่อ Journal ยืนยัน authorized on (ห้ามยอมแค่เห็นเลขบนหน้าต่าง)
+        if window_ok_streak >= 2 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), LOCKED_MT5_SERVER)
             except Exception:
@@ -2893,37 +2034,22 @@ def wait_mt5_login_hybrid(
             return True, "window verified; login success", j_chunk or joined
 
         preview_b64 = ""
-        if now - last_preview_at >= 8.0 and window_ok_streak < 1:
+        if now - last_preview_at >= 10.0 and window_ok_streak < 1:
             preview_b64 = capture_mt5_window_base64(port, payload)
             last_preview_at = now
 
-        if ok_w and now - last_progress_at >= 0.45:
-            j_chk, j_chk_chunk = _quick_journal_probe(port_dir, login, journal_since)
-            if j_chk is False:
-                cleanup_mt5_after_login_fail(port, payload, port_dir)
-                send_connect_result(
-                    payload,
-                    "failed",
-                    JOURNAL_FAIL_MSG,
-                    port,
-                    process_id=None,
-                    journal_evidence=j_chk_chunk or j_chunk,
-                    window_title=joined,
-                )
-                return False, JOURNAL_FAIL_MSG, j_chk_chunk or j_chunk
+        if ok_w and now - last_progress_at >= 1.2:
             send_connect_result(
                 payload,
                 "checking",
                 f"เห็นบัญชี {login} บนหน้าต่าง MT5 แล้ว — กำลังยืนยัน...",
                 port,
                 process_id=proc_pid,
-                journal_evidence=j_chk_chunk or j_chunk or "",
                 window_title=joined,
                 preview_b64=preview_b64,
             )
             last_progress_at = now
-        elif now - last_progress_at >= 0.9:
-            j_hint, j_hint_chunk = _quick_journal_probe(port_dir, login, journal_since)
+        elif now - last_progress_at >= 2.0:
             hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
             send_connect_result(
                 payload,
@@ -2931,21 +2057,17 @@ def wait_mt5_login_hybrid(
                 hint,
                 port,
                 process_id=proc_pid,
-                journal_evidence=j_hint_chunk or "",
                 window_title=joined,
                 preview_b64=preview_b64,
             )
             last_progress_at = now
 
-        time.sleep(0.05 if ok_w else 0.1)
+        time.sleep(0.14)
 
     chunk = ""
     j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
     if j_out is True:
-        _send_early_connect_if_journal_ok(
-            payload, port, proc_pid, login, j_chunk, early_sent, last_title
-        )
-        return True, "journal ok (early web confirm)", j_chunk
+        return True, JOURNAL_OK_MSG, j_chunk
     if j_out is False:
         cleanup_mt5_after_login_fail(port, payload, port_dir)
         send_connect_result(
@@ -2957,95 +2079,7 @@ def wait_mt5_login_hybrid(
             journal_evidence=j_chunk,
         )
         return False, JOURNAL_FAIL_MSG, j_chunk
-
-    ok_w_end, joined_end = mt5_login_verified_by_window(port, payload)
-    joined_final = joined_end or last_title
-    if ok_w_end:
-        api_ok, api_detail = _connect_on_api_verify(
-            payload, port, port_dir, login, proc_pid, joined_final
-        )
-        if api_ok:
-            return True, f"api verified (final); {api_detail}", api_detail
-        j_relaxed, j_rel_chunk = _quick_journal_probe(port_dir, login, journal_since - 900)
-        if j_relaxed is True:
-            send_connect_result(
-                payload,
-                "connected",
-                "เชื่อมต่อสำเร็จ — ยืนยันจากหน้าต่าง MT5",
-                port,
-                process_id=proc_pid,
-                journal_evidence=j_rel_chunk or joined_final,
-                window_title=joined_final,
-                window_verified=True,
-            )
-            return True, "window verified (post-wait)", j_rel_chunk or joined_final
-        sock_ok, _sock = mt5_socket_established(port, payload)
-        if sock_ok:
-            send_connect_result(
-                payload,
-                "connected",
-                "เชื่อมต่อสำเร็จ — MT5 login (socket verified)",
-                port,
-                process_id=proc_pid,
-                journal_evidence=joined_final,
-                window_title=joined_final,
-                window_verified=True,
-            )
-            return True, "window+socket verified (post-wait)", joined_final
-
-    api_ok, api_detail = _connect_on_api_verify(
-        payload, port, port_dir, login, proc_pid, joined_final
-    )
-    if api_ok:
-        return True, f"api verified (final); {api_detail}", api_detail
-
-    snap_ok, snap_detail = _connect_on_snapshot_success(
-        payload, port, port_dir, login, proc_pid, joined_final, preview_b64
-    )
-    if snap_ok:
-        return True, snap_detail, snap_detail
-
-    remain = max(5, int(deadline - time.time()))
-    remain = min(remain, JOURNAL_EXTENDED_CAP_SEC if ok_w_end else max(JOURNAL_EXTENDED_CAP_SEC, 15))
-    if remain >= 5:
-        log(f"MT5 JOURNAL EXTENDED WAIT login={login} remain_sec={remain}")
-        ok_j, msg_j, chunk_j = check_mt5_journal_login_result(
-            port_dir, login, timeout_sec=remain, since_ts=journal_since
-        )
-        chunk = chunk_j or chunk
-        if ok_j:
-            _send_early_connect_if_journal_ok(
-                payload, port, proc_pid, login, chunk_j, early_sent, joined_end or last_title
-            )
-            return True, "journal ok (extended wait)", chunk_j
-        if not ok_j and msg_j and msg_j != JOURNAL_TIMEOUT_MSG:
-            cleanup_mt5_after_login_fail(port, payload, port_dir)
-            send_connect_result(
-                payload,
-                "failed",
-                msg_j,
-                port,
-                process_id=proc_pid,
-                journal_evidence=chunk_j,
-            )
-            return False, msg_j, chunk_j
-
-    fail_hint = JOURNAL_TIMEOUT_MSG
-    if not ok_w_end and not joined_final.strip():
-        fail_hint = (
-            "MT5 ยังไม่แสดงเลขบัญชีบนหน้าต่าง — "
-            "ตรวจรหัสผ่าน / Server MohicansMarkets-Live แล้วกดเชื่อมต่อใหม่"
-        )
-    cleanup_mt5_after_login_fail(port, payload, port_dir)
-    send_connect_result(
-        payload,
-        "failed",
-        fail_hint,
-        port,
-        process_id=proc_pid,
-        journal_evidence=chunk,
-    )
-    return False, fail_hint, chunk
+    return False, JOURNAL_TIMEOUT_MSG, chunk
 
 
 def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -3054,10 +2088,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     - exact PORT isolation
     - ยืนยันล็อกอินสำเร็จเฉพาะจาก Journal: เลข login + "authorized on" เท่านั้น
     """
-    port = payload_get(payload, "portSlot", "port_slot", "port", "port_no", "portNumber", "vpsPortNumber", "folderPort")
+    port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
-    server = resolve_mt5_server(payload)
+    server = LOCKED_MT5_SERVER
     bot = payload_get(payload, "botCode", default="LOGIN_ONLY")
     if not port:
         raise RuntimeError("payload.port is required")
@@ -3065,12 +2099,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError("payload.mt5Login is required")
     if not password:
         raise RuntimeError("payload.mt5Password is required")
-
-    fmt_ok, _fmt_type, fmt_msg = validate_mt5_login_format(login)
-    if not fmt_ok:
-        log(f"LOGIN FORMAT REJECT PORT={port} LOGIN={login!r} msg={fmt_msg}")
-        send_connect_result(payload, "failed", fmt_msg or JOURNAL_FAIL_MSG, port)
-        raise RuntimeError(fmt_msg or JOURNAL_FAIL_MSG)
 
     port_dir = resolve_mt5_port_dir(port, payload)
     terminal = port_dir / "terminal64.exe"
@@ -3085,57 +2113,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
 
-    procs_existing = mt5_port_processes(port, payload)
-    mt5_already_open = bool(procs_existing) or mt5_running_for_port_dir(port_dir)
-
     ok_fast, title_fast = mt5_login_verified_by_window(port, payload)
-    sock_ok = False
-    sock_info = ""
-    if mt5_already_open:
-        sock_ok, sock_info = mt5_socket_established(port, payload)
-        journal_since_open = time.time() - 600
-        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, journal_since_open)
-        if not sock_ok and j_fast is not True:
-            log(
-                f"MT5 OPEN BUT OFFLINE PORT={port} login={login} "
-                f"socket={sock_info} — kill and relaunch with fresh INI"
-            )
-            try:
-                kill_mt5_by_folder(port_dir)
-                time.sleep(2)
-            except Exception as e:
-                log(f"OFFLINE RELAUNCH kill error: {e}")
-            mt5_already_open = False
-            procs_existing = []
-        elif sock_ok and j_fast is True:
-            enforce_login_no_trading(port_dir, port, payload, login, password, server)
-            proc_pid = procs_existing[0].pid if procs_existing else None
-            send_connect_result(
-                payload,
-                "connected",
-                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่ ยังไม่เปิด BOT กรุณากด Run BOT ในขั้นตอน 3)",
-                port,
-                process_id=proc_pid,
-                journal_evidence=j_chunk_fast,
-                window_title=title_fast,
-            )
-            log(f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} journal=ok socket=ok")
-            return _login_cmd_result_payload(
-                login,
-                server,
-                port,
-                bot,
-                config_file,
-                terminal,
-                fastReuse=True,
-                keepMt5Open=True,
-                process_id=proc_pid,
-                journal_evidence=j_chunk_fast,
-            )
-    if mt5_already_open:
-        journal_since_open = time.time() - 600
-        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, journal_since_open)
-        if j_fast is False and ok_fast:
+    if ok_fast and mt5_running_for_port_dir(port_dir):
+        j_fast, j_chunk_fast = _quick_journal_probe(port_dir, login, time.time() - 180)
+        if j_fast is False:
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
                 payload,
@@ -3145,76 +2126,31 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 journal_evidence=j_chunk_fast,
             )
             raise RuntimeError(JOURNAL_FAIL_MSG)
-        if j_fast is True or (ok_fast and sock_ok):
+        if j_fast is True:
             enforce_login_no_trading(port_dir, port, payload, login, password, server)
-            proc_pid = procs_existing[0].pid if procs_existing else None
             send_connect_result(
                 payload,
                 "connected",
-                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่ ยังไม่เปิด BOT กรุณากด Run BOT ในขั้นตอน 3)",
+                "เชื่อมต่อแล้ว — ยังไม่เปิด BOT กรุณาตั้งค่าขั้นตอน 3) แล้วกด Run BOT",
                 port,
-                process_id=proc_pid,
                 window_title=title_fast,
-                window_verified=ok_fast,
+                window_verified=True,
                 journal_evidence=j_chunk_fast,
             )
-            log(
-                f"LOGIN REUSE OPEN MT5 PORT={port} LOGIN={login} "
-                f"journal={j_fast} window={ok_fast} socket={sock_ok}"
-            )
-            return _login_cmd_result_payload(
-                login,
-                server,
-                port,
-                bot,
-                config_file,
-                terminal,
-                fastReuse=True,
-                keepMt5Open=True,
-                process_id=proc_pid,
-                journal_evidence=j_chunk_fast,
-            )
-        proc_pid = procs_existing[0].pid if procs_existing else None
-        log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid} (no kill/relaunch)")
-        journal_since = time.time()
-        journal_timeout = _journal_timeout_sec()
-        ok, msg, journal_chunk = wait_mt5_login_hybrid(
-            port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
-        )
-        titles = " | ".join(mt5_window_titles(port, payload))
-        if ok:
-            enforce_login_no_trading(port_dir, port, payload, login, password, server)
-            send_connect_result(
-                payload,
-                "connected",
-                "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่",
-                port,
-                process_id=proc_pid,
-                journal_evidence=journal_chunk,
-                window_title=titles,
-            )
-            return _login_cmd_result_payload(
-                login,
-                server,
-                port,
-                bot,
-                config_file,
-                terminal,
-                fastReuse=True,
-                keepMt5Open=True,
-                process_id=proc_pid,
-                journal_evidence=journal_chunk,
-            )
-        send_connect_result(
-            payload,
-            "failed",
-            msg or "ไม่สามารถยืนยัน Login บน MT5 ที่เปิดอยู่",
-            port,
-            process_id=proc_pid,
-            journal_evidence=journal_chunk,
-            window_title=titles,
-        )
-        raise RuntimeError(msg or "login verify failed on open MT5")
+            log(f"LOGIN FAST REUSE PORT={port} LOGIN={login} (journal ok)")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
+        log(f"LOGIN FAST REUSE skipped — journal not confirmed for {login}")
 
     # ====================================
     # BLOCK SAME LOGIN ON ANOTHER PORT (not this port_dir)
@@ -3249,17 +2185,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             except Exception:
                 pass
 
-            try:
-                proc_alive = p.is_running()
-            except Exception:
-                proc_alive = False
-            if (
-                login
-                and proc_alive
-                and title_text
-                and title_text.strip()
-                and login in title_text
-            ):
+            if login and title_text and title_text.strip() and login in title_text:
                 log(
                     f"BLOCK DUPLICATE LOGIN OTHER PORT login={login} pid={p.pid} "
                     f"title={(title_text or '')[:80]}"
@@ -3297,13 +2223,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
-        procs = mt5_port_processes(port, payload)
-        if procs or mt5_running_for_port_dir(port_dir):
-            pid = procs[0].pid if procs else None
-            log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
-            return procs[0] if procs else None
+        try:
+            stop_mt5_port_only(port, payload)
+        except Exception as e:
+            log(f"STOP OLD MT5 ERROR: {e}")
+        time.sleep(0.35)
         write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
-        write_mt5_common_login_config(port_dir, login, password, server)
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
         quarantine_chart_profiles_with_ea(port_dir)
@@ -3311,39 +2236,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         # ไม่ลบ log ก่อนเปิด MT5 — เก็บบรรทัด authorized on ให้ตรวจได้
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
-        log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
-        proc = _popen_hidden(args, cwd=str(port_dir))
-        if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
-            time.sleep(0.25)
-            automate_mt5_login_server_form(login, password, server)
-        return proc
+        log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
+        return _popen_hidden(args, cwd=str(port_dir))
 
     journal_since = time.time()
     proc = launch_mt5("initial")
     proc_pid = proc.pid if proc else None
-    for launch_try in range(2):
-        time.sleep(2.0 if launch_try else 1.2)
-        if mt5_port_processes(port, payload) or mt5_running_for_port_dir(port_dir):
-            if not proc_pid and mt5_port_processes(port, payload):
-                proc_pid = mt5_port_processes(port, payload)[0].pid
-            break
-        log(f"MT5 LAUNCH VERIFY FAIL try={launch_try + 1} PORT={port} — relaunch")
-        try:
-            kill_mt5_by_folder(port_dir)
-            time.sleep(1)
-        except Exception as e:
-            log(f"MT5 LAUNCH KILL ERROR: {e}")
-        proc = launch_mt5(f"retry-{launch_try + 1}")
-        proc_pid = proc.pid if proc else proc_pid
-    if not (mt5_port_processes(port, payload) or mt5_running_for_port_dir(port_dir)):
-        remove_mt5_login_ini(port_dir)
-        send_connect_result(
-            payload,
-            "failed",
-            "ไม่สามารถเปิดโปรแกรม MT5 บน VPS ได้ — ตรวจ terminal64.exe ในโฟลเดอร์ PORT",
-            port,
-        )
-        raise RuntimeError("MT5 terminal failed to start on VPS")
     send_connect_result(
         payload,
         "starting",
@@ -3352,16 +2250,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = _journal_timeout_sec()
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "30"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
         port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
     )
-    if ok:
-        sock_after, sock_detail = mt5_socket_established(port, payload)
-        if not sock_after:
-            log(f"LOGIN OK — journal/window confirmed; socket pending: {sock_detail}")
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)
 
@@ -3426,22 +2320,22 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         preview_b64=preview_final,
         window_verified=True,
     )
-    try:
-        _PORT_LOGIN_CACHE[int(port)] = str(login)
-    except Exception:
-        pass
     log(f"LOGIN OK PORT={port} LOGIN={login} (login_only, no auto trade)")
-    return _login_cmd_result_payload(
-        login,
-        server,
-        port,
-        bot,
-        config_file,
-        terminal,
-        process_id=proc_pid,
-        journal_evidence=journal_final,
-        windowVerified=True,
-    )
+    return {
+        "action": "login_mt5",
+        "status": "connected",
+        "loginOnly": True,
+        "port": port,
+        "login": login,
+        "server": server,
+        "bot": bot,
+        "config": str(config_file),
+        "terminal": str(terminal),
+        "journalEvidence": journal_final,
+        "journalVerified": bool(journal_final),
+        "loginVerified": True,
+        "windowVerified": True,
+    }
 
 def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
     folder = Path(payload_get(payload, "folder_path", default=str(AGENT_DIR)))
@@ -3460,7 +2354,17 @@ def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def mt5_port_processes(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    return mt5_processes_for_port_dir(port_dir)
+    root = str(port_dir).rstrip("\\/").lower()
+    out = []
+    for p in list(iter_terminal_processes()):
+        try:
+            exe = (p.info.get("exe") or "").lower()
+            cmd = " ".join(p.info.get("cmdline") or []).lower()
+            if exe.startswith(root) or root in cmd:
+                out.append(p)
+        except Exception:
+            pass
+    return out
 
 
 def mt5_port_status_one(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -3517,42 +2421,6 @@ def scan_all_mt5_ports() -> List[Dict[str, Any]]:
             log(f"SCAN PORT ERROR folder={folder}: {e}")
 
     return sorted(ports, key=lambda x: int(x.get("portNumber") or 0))
-
-def dashboard_equity_snapshot(payload: Dict[str, Any]) -> Dict[str, Any]:
-    """ดึง balance/equity PORT เดียวจากโฟลเดอร์จริง (ใช้กับคำสั่ง dashboard + equitySnapshot)"""
-    port = payload_get(payload, "port", "portNumber", "port_no", "portSlot") or "1"
-    port_no = normalize_port(port)
-    port_dir = resolve_mt5_port_dir(port, payload)
-    running = len(mt5_port_processes(port, payload)) > 0
-    snap = account_snapshot(port, payload)
-    bal = snap.get("balance")
-    eq = snap.get("equity")
-    log(f"EQUITY DASHBOARD PORT={port_no} folder={port_dir} BALANCE={bal} EQUITY={eq} running={running}")
-    row = {
-        "port": f"PORT{port_no:02d}",
-        "portNumber": port_no,
-        "path": str(port_dir),
-        "running": running,
-        "busy": running,
-        "status": "full" if running else "free",
-        "pid": [],
-        "lot": 0,
-        "balance": bal,
-        "equity": eq,
-    }
-    return {
-        "action": "dashboard",
-        "equitySnapshot": True,
-        "ports": [row],
-        "balance": bal,
-        "equity": eq,
-        "profit": snap.get("profit"),
-        "currency": snap.get("currency", ""),
-        "used_ports": 1 if running else 0,
-        "used_lot": 0,
-        "at": datetime.now().isoformat(timespec="seconds"),
-    }
-
 
 def mt5_ports_dashboard() -> Dict[str, Any]:
     ports = []
@@ -3668,13 +2536,7 @@ def port_list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def _optional_port_read_purpose(payload: Dict[str, Any]) -> bool:
     purpose = str(payload_get(payload, "purpose") or "").lower()
-    return purpose in (
-        "equity_sync",
-        "equity_sync_journal",
-        "equity_poller",
-        "equity_connect",
-        "journal_probe",
-    )
+    return purpose in ("equity_sync", "equity_sync_journal", "journal_probe")
 
 
 def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -3900,63 +2762,57 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not set_info.get("ok"):
         log(f"RUN BOT preset .set skipped: {set_info.get('reason')}")
 
+    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
+    password = str(payload_get(payload, "mt5Password", "password") or "")
+    server = str(payload_get(payload, "serverName", "server") or LOCKED_MT5_SERVER).strip() or LOCKED_MT5_SERVER
+
     procs = mt5_port_processes(port, payload)
     mt5_open = bool(procs) or mt5_running_for_port_dir(port_dir)
+    launched = False
     proc_pid = procs[0].pid if procs else None
-
-    if not mt5_open:
-        raise RuntimeError(
-            "MT5 ยังไม่เปิดอยู่บน PORT นี้ — กรุณาเชื่อมต่อจากเว็บก่อน "
-            "(ระบบจะไม่ปิด/เปิด MT5 ใหม่เมื่อกดเปิด BOT)"
-        )
+    hot_run = False
 
     write_avelqua_trading_gate(port_dir, True, payload)
     patch_mt5_experts_config(port_dir, True)
     try:
         files_dir = port_dir / "MQL5" / "Files"
         files_dir.mkdir(parents=True, exist_ok=True)
-        run_meta: Dict[str, Any] = {
-            "phase": "bot_running",
-            "tradingEnabled": True,
-            "allowExpertTrading": True,
-            "botCode": bot_code,
-            "instanceId": payload_get(payload, "instanceId", "instance_id"),
-            "updatedAt": datetime.now().isoformat(timespec="seconds"),
-        }
         (files_dir / "avelqua_run.json").write_text(
-            json.dumps(run_meta, ensure_ascii=False, indent=2),
+            json.dumps(
+                {
+                    "phase": "bot_running",
+                    "tradingEnabled": True,
+                    "allowExpertTrading": True,
+                    "botCode": bot_code,
+                    "instanceId": payload_get(payload, "instanceId", "instance_id"),
+                    "updatedAt": datetime.now().isoformat(timespec="seconds"),
+                },
+                ensure_ascii=False,
+                indent=2,
+            ),
             encoding="utf-8",
         )
     except Exception as e:
         log(f"avelqua_run.json bot_running: {e}")
-        run_meta = {}
 
-    log(f"RUN BOT HOT PORT={port} PID={proc_pid or '?'} — MT5 stays open, trading gate ON")
-
-    algo_ok = False
-    for attempt in range(3):
-        if attempt:
-            time.sleep(2)
-        if enable_mt5_algo_trading_uia(port, payload, force=(attempt == 0)):
-            algo_ok = True
-            break
-
-    readiness = assess_mt5_bot_ready(port, payload, bot_code, algo_enabled=algo_ok)
-    try:
-        run_meta.update(
-            {
-                "eaStatus": readiness.get("ea_status"),
-                "algoTradingEnabled": algo_ok,
-                "chartSymbol": readiness.get("chartSymbol"),
-                "readinessMessage": readiness.get("message"),
-            }
-        )
-        (port_dir / "MQL5" / "Files" / "avelqua_run.json").write_text(
-            json.dumps(run_meta, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-    except Exception as e:
-        log(f"avelqua_run.json readiness: {e}")
+    if mt5_open:
+        hot_run = True
+        log(f"RUN BOT HOT PORT={port} PID={proc_pid or '?'} — MT5 stays open, trading gate ON")
+    else:
+        if login and password:
+            try:
+                write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=True)
+            except Exception as e:
+                log(f"RUN BOT enable expert trading in ini skipped: {e}")
+        cfg = mt5_startup_ini_path(port_dir)
+        if not cfg.exists():
+            raise RuntimeError("MT5 startup.ini missing — connect MT5 from web first")
+        args = [str(terminal), "/portable", f"/config:{cfg}"]
+        log(f"RUN BOT launch MT5 PORT={port} cwd={port_dir} config={cfg}")
+        proc = _popen_hidden(args, cwd=str(port_dir))
+        launched = True
+        proc_pid = proc.pid if proc else None
+        time.sleep(3)
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -3969,7 +2825,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             profit = None
 
     instance_id = payload_get(payload, "instanceId")
-    ea_status = readiness.get("ea_status") or ("attach_required" if ea_missing else "ready")
+    ea_status = "attach_required" if ea_missing else "ready"
     send_mt5_live_status(
         instance_id,
         port,
@@ -3984,16 +2840,23 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_account_metrics(payload, bal, eq, snap.get("currency", ""))
     schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
     threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
+    threading.Thread(
+        target=lambda: (time.sleep(2), enable_mt5_algo_trading_uia(port, payload)),
+        daemon=True,
+    ).start()
 
-    hint = readiness.get("message") or ""
-    if ea_status == "ready":
-        msg = "BOT พร้อมเทรด — MT5 ยังเปิดอยู่"
-    elif ea_status == "algo_off":
-        msg = hint or "เปิดปุ่ม Algo Trading (สีเขียว) ใน MT5"
-    elif ea_status == "wrong_chart":
-        msg = hint or "เปิดกราฟ XAUUSD ใน MT5"
+    if hot_run:
+        msg = (
+            "BOT enabled — MT5 stayed open; attach EA / load preset / turn on Algo Trading"
+            if ea_missing
+            else "BOT enabled — MT5 stayed open"
+        )
     else:
-        msg = hint or "แนบ EA บน XAUUSD แล้ว Load preset"
+        msg = (
+            "BOT ready — attach EA on XAUUSD and load preset"
+            if ea_missing
+            else "BOT ready on PORT"
+        )
     return {
         "action": "run_bot",
         "ok": True,
@@ -4002,22 +2865,19 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "folderPath": str(port_dir),
         "portNumber": normalize_port(port),
         "mt5Running": True,
-        "hotRun": True,
+        "hotRun": hot_run,
         "keepMt5Open": True,
-        "launched": False,
+        "launched": launched,
         "processId": proc_pid,
         "balance": bal,
         "equity": eq,
         "profit": profit,
         "eaStatus": ea_status,
-        "algoTradingEnabled": algo_ok,
-        "chartSymbol": readiness.get("chartSymbol"),
         "botCode": bot_code,
         "expertsPath": str(experts_dir),
         "eaFiles": ea_info,
         "eaSet": set_info,
         "instanceId": instance_id,
-        "readiness": readiness,
     }
 
 
@@ -4112,18 +2972,15 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         if not port:
             return
         instance_id = payload_get(payload, "instanceId")
-        bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "")
         st = mt5_port_status_one(port, payload)
         snap = account_snapshot(port, payload)
-        algo_ok = False
         if st["running"]:
-            algo_ok = enable_mt5_algo_trading_uia(port, payload)
-        ready = assess_mt5_bot_ready(port, payload, bot_code, algo_enabled=algo_ok)
+            enable_mt5_algo_trading_uia(port, payload)
         send_mt5_live_status(
             instance_id,
             port,
             "running" if st["running"] else "stopped",
-            ready.get("ea_status") or "unknown",
+            st["status"],
             snap.get("balance"),
             snap.get("equity"),
             "",
@@ -4162,46 +3019,28 @@ def poll_running_mt5_list() -> None:
         log(f"RUNNING SYNC ERROR: {e}")
 
 
-def _windows_service_running(service_name: str) -> bool:
-    if os.name != "nt":
-        return False
-    try:
-        ps = (
-            f"$s = Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue; "
-            f"if ($s -and $s.Status -eq 'Running') {{ '1' }} else {{ '0' }}"
-        )
-        out = (_run_powershell(ps, timeout=8) or "").strip()
-        return out == "1"
-    except Exception:
-        return False
-
-
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
-    """รีสตาร์ท Windows Service (ถ้ามี) แล้วออกจาก process ให้โหลด agent.py ใหม่จากดิสก์"""
+    """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
     if os.name != "nt":
         log("SERVICE RESTART SKIPPED: not Windows")
         return
-    service_running = _windows_service_running(service_name)
-    if service_running:
-        ps = (
-            f"Start-Sleep -Seconds 2; "
-            f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue"
-        )
-        subprocess.Popen(
-            ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
-            creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-        )
-        log(f"SERVICE RESTART SCHEDULED name={service_name}")
-    else:
-        log(
-            f"SERVICE NOT RUNNING name={service_name} — will exit process to reload agent.py "
-            f"(or run: net start {service_name})"
-        )
+    ps = (
+        f"Start-Sleep -Seconds 2; "
+        f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue; "
+        f"if (-not (Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue | "
+        f"Where-Object {{ $_.Status -eq 'Running' }}) ) {{ "
+        f"net stop {service_name}; net start {service_name} }}"
+    )
+    subprocess.Popen(
+        ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
+        creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
+    )
+    log(f"SERVICE RESTART SCHEDULED name={service_name} exit_process={exit_process}")
 
     if exit_process:
         def _exit_after_delay() -> None:
-            time.sleep(4 if service_running else 2)
-            log("AGENT EXIT after deploy/restart — loading new agent.py")
+            time.sleep(4)
+            log("AGENT EXIT after deploy/restart — loading new agent.py on service start")
             os._exit(0)
 
         import threading
@@ -4290,18 +3129,6 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
     tmp.write_text(content, encoding="utf-8")
     tmp.replace(agent_path)
 
-    for alt in (
-        Path(r"C:\Avelqua-python-agent\agent.py"),
-        Path(r"C:\avelqua-python-agent\agent.py"),
-    ):
-        try:
-            if alt.resolve() != agent_path.resolve():
-                alt.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(agent_path, alt)
-                log(f"AGENT DEPLOY COPY {alt}")
-        except Exception as copy_err:
-            log(f"AGENT DEPLOY COPY SKIP {alt}: {copy_err}")
-
     build_id = AGENT_BUILD_ID
     m = re.search(r'AGENT_BUILD_ID\s*=\s*["\']([^"\']+)["\']', content)
     if m:
@@ -4371,11 +3198,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
     cmd_id = cmd.get("id")
     ctype = str(cmd.get("command_type") or "").lower()
     payload = cmd.get("payload") or {}
-    log(
-        f"COMMAND RECEIVED ID={cmd_id} TYPE={ctype} "
-        f"account={payload_get(payload, 'accountId', 'account_id')} "
-        f"port={payload_get(payload, 'port', 'portNumber', 'portSlot', 'vpsPortNumber')}"
-    )
+    log(f"COMMAND RECEIVED ID={cmd_id} TYPE={ctype} PAYLOAD={safe_json(payload)}")
     try:
         if ctype in ("status", "service_status"):
             command_result(cmd_id, True, {
@@ -4464,38 +3287,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, restart_ea_command(payload))
 
         elif ctype in ("connect_mt5", "login_mt5"):
-            def _login_mt5_worker() -> None:
-                try:
-                    result = start_mt5_bot(payload)
-                    command_result(cmd_id, True, result)
-                except Exception as e:
-                    err_txt = str(e).encode("ascii", errors="replace").decode("ascii")
-                    log(f"COMMAND ERROR ID={cmd_id}: {err_txt}")
-                    try:
-                        send_connect_result(payload, "failed", err_txt[:500])
-                    except Exception:
-                        pass
-                    try:
-                        command_result(
-                            cmd_id,
-                            False,
-                            {
-                                "action": ctype,
-                                "status": "failed",
-                                "login": payload_get(payload, "mt5Login", "login"),
-                                "message": err_txt[:500],
-                            },
-                            err_txt[:500],
-                        )
-                    except Exception:
-                        pass
-
-            threading.Thread(
-                target=_login_mt5_worker,
-                daemon=True,
-                name=f"avelqua-login-{cmd_id}",
-            ).start()
-            log(f"LOGIN_MT5 THREAD START ID={cmd_id} port={payload_get(payload, 'port', 'portSlot')}")
+            command_result(cmd_id, True, start_mt5_bot(payload))
 
         elif ctype in ("run_mt5_bot", "run_mt5"):
             command_result(cmd_id, True, run_bot_command(payload))
@@ -4532,32 +3324,19 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port"):
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
             port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
-            stop_soft = (
-                ctype == "stop_mt5_bot"
-                or str(payload_get(payload, "action") or "").lower() == "stop_bot_trading"
-                or payload_get(payload, "stopTradingOnly", "keepMt5Open", "softStop")
+            stop_soft = ctype == "stop_mt5_bot" or payload_get(
+                payload, "stopTradingOnly", "keepMt5Open", "softStop"
             )
 
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, payload))
             elif folder:
-                out = stop_mt5_by_folder(folder)
-                stopped = list(out.get("stopped") or [])
-                if not stopped and port:
-                    out2 = stop_mt5_port_only(port, payload)
-                    stopped = list(out2.get("stopped") or [])
-                    out = {**out, "stopped": stopped, "fallback": "port_only"}
-                command_result(cmd_id, True, out)
+                command_result(cmd_id, True, stop_mt5_by_folder(folder))
             else:
                 command_result(cmd_id, True, stop_mt5_port_only(port, payload))
 
         elif ctype in ("dashboard", "watchdog"):
-            purpose = str(payload_get(payload, "purpose") or "")
-            equity_snap = payload_get(payload, "equitySnapshot", "equity_snapshot")
-            if equity_snap in (True, "true", "1", 1) or purpose.startswith("equity"):
-                command_result(cmd_id, True, dashboard_equity_snapshot(payload))
-            else:
-                command_result(cmd_id, True, mt5_ports_dashboard())
+            command_result(cmd_id, True, mt5_ports_dashboard())
 
         elif ctype == "port_open_folder":
             command_result(cmd_id, True, open_mt5_port_folder(payload))
@@ -4617,11 +3396,10 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, False, {"command_type": ctype}, err_unknown)
 
     except Exception as e:
-        err_txt = _safe_exc_text(e)
-        log(f"COMMAND ERROR ID={cmd_id}: {err_txt}")
+        log(f"COMMAND ERROR ID={cmd_id}: {e}")
         if ctype in ("connect_mt5", "login_mt5"):
             try:
-                send_connect_result(payload, "failed", err_txt[:500])
+                send_connect_result(payload, "failed", str(e))
             except Exception:
                 pass
             try:
@@ -4632,9 +3410,9 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                         "action": ctype,
                         "status": "failed",
                         "login": payload_get(payload, "mt5Login", "login"),
-                        "message": err_txt[:500],
+                        "message": str(e)[:500],
                     },
-                    err_txt[:500],
+                    str(e)[:500],
                 )
             except Exception:
                 pass
@@ -4699,14 +3477,13 @@ def main() -> None:
                     handle_command(cmd)
 
             except Exception as e:
-                err = str(e).encode("ascii", errors="replace").decode("ascii")
-                log(f"COMMAND POLL ERROR: {err}")
+                log(f"COMMAND POLL ERROR: {e}")
 
-            time.sleep(LOOP_SECONDS)
+            time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
 
         except Exception as e:
             log(f"MAIN LOOP ERROR: {e}")
-            time.sleep(LOOP_SECONDS)
+            time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
 if __name__ == "__main__":
     try:
         main()

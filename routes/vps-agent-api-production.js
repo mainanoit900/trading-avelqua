@@ -1116,10 +1116,14 @@ router.post('/commands/:id/result', async (req, res) => {
     const pl = pay.rows?.[0]?.payload || {};
     const ctype = String(pay.rows?.[0]?.command_type || '').toLowerCase();
 
-    await processCommandResultSideEffects(node, commandId, ctype, pl, result, {
-      ok,
-      message: msg
-    });
+    try {
+      await processCommandResultSideEffects(node, commandId, ctype, pl, result, {
+        ok,
+        message: msg
+      });
+    } catch (sideErr) {
+      console.error('[COMMANDS ID RESULT side-effects]', sideErr.message || sideErr);
+    }
 
     await query(`
       UPDATE vps_system.vps_agent_commands
