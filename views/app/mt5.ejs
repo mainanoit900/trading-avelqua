@@ -188,7 +188,7 @@ document.addEventListener('DOMContentLoaded', function () {
         <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">ไม่เลือก PORT = ระบบหา <b>PORT แพ็กเกจว่าง</b> อัตโนมัติ แล้วเปิด <b>FolderPort ว่าง</b> บน VPS (/admin/vps/ports) — แต่ละ PORT ใช้ Login คนละบัญชี</small>
       </div>
 
-      <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="return window.mt5PrepareConnectSubmit(event)">
+      <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="event.preventDefault(); window.mt5PrepareConnectSubmit(event); return false;">
         <input type="hidden" name="port_slot" id="mt5SelectedPortSlot" value="">
 
   <div id="mt5LoginPreview" class="mt5-login-preview" style="display:none;margin:12px 0;padding:12px;background:#0b1220;border:1px solid #1e3a5f;border-radius:12px">
@@ -434,7 +434,7 @@ document.addEventListener('DOMContentLoaded', function () {
   const packageExpired = <%= packageExpired ? 'true' : 'false' %>;
   let mt5StatusPollInFlight = false;
 
-  window.mt5PrepareConnectSubmit = function () {
+  window.mt5PrepareConnectSubmit = async function () {
     if (packageExpired) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
@@ -510,10 +510,24 @@ document.addEventListener('DOMContentLoaded', function () {
       );
       return false;
     }
-    if (window.__mt5PortsState && (window.__mt5PortsState.vpsOnlineCount || 0) < 1) {
+    let vpsOnline = window.__mt5PortsState ? Number(window.__mt5PortsState.vpsOnlineCount || 0) : -1;
+    if (vpsOnline < 1 && typeof refreshMt5PortCards === 'function') {
+      await refreshMt5PortCards().catch(function () {});
+      vpsOnline = window.__mt5PortsState ? Number(window.__mt5PortsState.vpsOnlineCount || 0) : -1;
+    }
+    if (vpsOnline === 0) {
+      const nodes = (window.__mt5PortsState && window.__mt5PortsState.vpsNodes) || [];
+      const offlineNames = nodes
+        .filter(function (n) { return !n.agentOnline; })
+        .map(function (n) { return n.nodeName || ('VPS-' + n.adminNodeId); })
+        .join(', ');
+      const detail = offlineNames
+        ? ' (' + offlineNames + ' offline)'
+        : '';
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
-        'ไม่มี VPS Windows ที่ Agent online — ตรวจ /admin/vps แล้ว restart Agent'
+        'ไม่มี VPS Windows ที่ Agent online' + detail + ' — ตรวจ /admin/vps แล้ว restart Agent',
+        { forceShow: true, dedupeKey: 'vps-offline:' + vpsOnline }
       );
       return false;
     }
@@ -543,7 +557,8 @@ document.addEventListener('DOMContentLoaded', function () {
         elapsedSec: 0
       });
     }
-    return true;
+    const form = document.getElementById('mt5ConnectForm');
+    if (form) form.submit();
   };
 
   (function mt5HandleConnectRedirect() {
