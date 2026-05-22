@@ -26,6 +26,7 @@ const {
   failAccountFromJournal,
   ensureLoginFailPortReleased,
   releaseUserPackagePortSlot,
+  forceStopPackagePortSlot,
   releaseFolderForLoginRetry,
   cancelJournalVerifyForAccount,
   cancelJournalVerifyWrongPort,
@@ -790,8 +791,8 @@ async function handleMt5ConnectProduction(req, res) {
         });
       }
       portSlot = requestedSlot;
-      await releaseUserPackagePortSlot(userId, requestedSlot, {
-        reason: 'pre_connect_slot_cleanup'
+      await forceStopPackagePortSlot(userId, requestedSlot, {
+        reason: 'pre_connect_force_stop'
       }).catch(() => {});
       const reserve = await reserveBestPort(userId, requestedSlot);
       if (!reserve.ok) throw new Error(reserve.message);
@@ -1698,6 +1699,26 @@ async function handleMt5ConnectStatusProduction(req, res) {
   }
 }
 
+async function handleMt5ForceStopPort(req, res) {
+  try {
+    const userId = Number(req.user?.id || 0);
+    if (!userId) return res.status(401).json({ ok: false, message: 'กรุณาเข้าสู่ระบบใหม่' });
+
+    const portSlot = Number(req.body?.portSlot || req.body?.port_slot || 0);
+    if (!portSlot) {
+      return res.json({ ok: false, message: 'กรุณาเลือก PORT ก่อน' });
+    }
+
+    const out = await forceStopPackagePortSlot(userId, portSlot, {
+      reason: 'ui_force_stop_port',
+      folderPath: String(req.body?.folderPath || req.body?.folder_path || '').trim()
+    });
+    return res.json({ ok: true, stopped: true, ...out });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+}
+
 async function handleMt5ConnectFailCleanup(req, res) {
   try {
     const userId = Number(req.user?.id || 0);
@@ -1748,6 +1769,7 @@ async function handleMt5ConnectFailCleanup(req, res) {
 router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction);
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
 router.post('/mt5/connect-fail-cleanup', requireLogin, handleMt5ConnectFailCleanup);
+router.post('/mt5/force-stop-port', requireLogin, handleMt5ForceStopPort);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
 

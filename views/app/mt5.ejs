@@ -223,6 +223,9 @@ document.addEventListener('DOMContentLoaded', function () {
         <button type="submit" id="mt5ConnectBtn" class="mt5-btn primary" <%= packageExpired ? 'disabled' : '' %>>
   <%= packageExpired ? 'แพ็คเกจหมดอายุ' : 'เชื่อมต่อ' %>
 </button>
+        <button type="button" id="mt5ForceStopPortBtnStatic" class="mt5-btn" style="margin-top:10px;display:none" title="ปิด terminal64 บน FolderPort ที่เลือก">
+          ปิด MT5 บน VPS (PORT ที่เลือก)
+        </button>
       </form>
     </div>
   </section>
@@ -628,6 +631,9 @@ document.addEventListener('DOMContentLoaded', function () {
   function mt5FolderPortState(p) {
     if (!p) return '';
     if (p.accountId) return p.statusLabel || 'เชื่อมต่อแล้ว';
+    if (p.folderRunning && !p.accountId) {
+      return p.folderMt5Login ? 'MT5 เปิดอยู่ · ' + p.folderMt5Login : 'MT5 เปิดอยู่ (ไม่ว่าง)';
+    }
     if (p.folderAvailable === false) {
       return p.folderMt5Login ? 'ไม่ว่าง · MT5 ' + p.folderMt5Login : 'ไม่ว่าง';
     }
@@ -682,17 +688,15 @@ document.addEventListener('DOMContentLoaded', function () {
         (p.folderPath ? ' · ' + p.folderPath : '');
       return;
     }
-    if (p.folderAvailable === false) {
+    if (p.folderRunning || p.folderAvailable === false) {
       hint.innerHTML =
         'PORT แพ็กเกจ ' +
         slot +
         ' → <span class="warn">FolderPort P' +
         String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
-        ' ไม่ว่าง</span>' +
-        (p.folderMt5Login ? ' (MT5 ' + mt5Esc(p.folderMt5Login) + ')' : '') +
-        (p.adminPortsUrl
-          ? ' · <a href="' + mt5Esc(p.adminPortsUrl) + '" target="_blank" rel="noopener" style="color:#38bdf8">Admin</a>'
-          : '');
+        ' — MT5 ยังเปิดบน VPS</span>' +
+        (p.folderMt5Login ? ' (Login ' + mt5Esc(p.folderMt5Login) + ')' : '') +
+        ' · <button type="button" class="mt5-btn mini" id="mt5ForceStopPortBtn" style="margin-left:6px">ปิด MT5 บน VPS</button>';
       return;
     }
     hint.textContent =
@@ -1530,6 +1534,17 @@ function mt5SelectPortSlot(slot, opts) {
   if (typeof window.mt5UpdateFolderPortHint === 'function') {
     window.mt5UpdateFolderPortHint(String(n));
   }
+  const ports = (window.__mt5PortsState && window.__mt5PortsState.ports) || [];
+  const pSel = ports.find(function (x) {
+    return String(x.slot) === String(n);
+  });
+  const stopStatic = document.getElementById('mt5ForceStopPortBtnStatic');
+  if (stopStatic) {
+    stopStatic.style.display =
+      pSel && !pSel.accountId && (pSel.folderRunning || pSel.folderAvailable === false)
+        ? 'inline-block'
+        : 'none';
+  }
   const sub = document.getElementById('mt5BotSectionSubtitle');
   if (sub) sub.textContent = 'PORT แพ็กเกจ ' + n + ' — เปิด/หยุด BOT (MT5 เปิดอยู่ที่ FolderPort)';
   document.querySelectorAll('.port-item[data-port-slot]').forEach(function (el) {
@@ -1549,6 +1564,60 @@ function mt5SelectPortSlot(slot, opts) {
   }
 }
 window.mt5SelectPortSlot = mt5SelectPortSlot;
+
+async function mt5ForceStopPortOnVps() {
+  const slot =
+    (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+    new URLSearchParams(window.location.search).get('port_slot') ||
+    '';
+  if (!slot) {
+    alert('กรุณาเลือก PORT ก่อน');
+    return;
+  }
+  if (!confirm('ปิด MT5 บน VPS สำหรับ PORT ' + slot + ' ?')) return;
+  const btn = document.getElementById('mt5ForceStopPortBtnStatic');
+  const prev = btn ? btn.textContent : '';
+  if (btn) {
+    btn.disabled = true;
+    btn.textContent = 'กำลังส่งคำสั่งปิด...';
+  }
+  try {
+    const res = await fetch('/app/mt5/force-stop-port', {
+      method: 'POST',
+      credentials: 'same-origin',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'X-Requested-With': 'XMLHttpRequest'
+      },
+      body: JSON.stringify({ port_slot: Number(slot) })
+    });
+    const data = await res.json().catch(function () {
+      return { ok: false, message: 'อ่านผลไม่ได้' };
+    });
+    if (!res.ok || data.ok === false) {
+      alert(data.message || 'ปิด MT5 ไม่สำเร็จ');
+      return;
+    }
+    alert(data.message || 'ส่งคำสั่งปิด MT5 แล้ว — รอ 5–15 วินาที แล้วกดเชื่อมต่อ');
+    window.location.reload();
+  } catch (e) {
+    alert('ปิด MT5 ไม่สำเร็จ: ' + (e.message || e));
+  } finally {
+    if (btn) {
+      btn.disabled = false;
+      btn.textContent = prev || 'ปิด MT5 บน VPS (PORT ที่เลือก)';
+    }
+  }
+}
+window.mt5ForceStopPortOnVps = mt5ForceStopPortOnVps;
+
+document.addEventListener('click', function (e) {
+  const t = e.target.closest('#mt5ForceStopPortBtn, #mt5ForceStopPortBtnStatic');
+  if (!t) return;
+  e.preventDefault();
+  mt5ForceStopPortOnVps();
+});
 
 window.mt5StopBot = async function (instanceId) {
   const btn = document.getElementById('mt5BtnStopBot');

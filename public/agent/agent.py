@@ -4341,7 +4341,13 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, payload))
             elif folder:
-                command_result(cmd_id, True, stop_mt5_by_folder(folder))
+                out = stop_mt5_by_folder(folder)
+                stopped = list(out.get("stopped") or [])
+                if not stopped and port:
+                    out2 = stop_mt5_port_only(port, payload)
+                    stopped = list(out2.get("stopped") or [])
+                    out = {**out, "stopped": stopped, "fallback": "port_only"}
+                command_result(cmd_id, True, out)
             else:
                 command_result(cmd_id, True, stop_mt5_port_only(port, payload))
 
