@@ -61,7 +61,11 @@ const {
 const { buildConnectAdvice, buildDemoTradingPlan } = require('../lib/mt5AiConnectAdvisor');
 const { positiveMoney, ensureEquityOnConnect } = require('../lib/mt5EquitySync');
 const { loadAccountPortContext } = require('../lib/mt5AccountPort');
-const { checkVpsAgentLiveness, assertVpsAgentCanRunLogin } = require('../lib/vpsAgentLiveness');
+const {
+  checkVpsAgentLiveness,
+  assertVpsAgentOnline,
+  assertVpsAgentCanRunLogin
+} = require('../lib/vpsAgentLiveness');
 const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
 const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 
