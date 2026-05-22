@@ -2156,7 +2156,7 @@ document.addEventListener('DOMContentLoaded', function () {
             (sec >= 60 && maxW > 0 ? ' (' + sec + '/' + maxW + ' วิ)' : ' (' + sec + ' วิ)');
         }
         if (typeof window.mt5UpdateConnectProgress === 'function') {
-          window.mt5UpdateConnectProgress(data);
+          window.mt5UpdateConnectProgress(Object.assign({}, data, { elapsedSec: sec }));
         }
         if (btn) btn.innerHTML = waitMsg;
         return;
