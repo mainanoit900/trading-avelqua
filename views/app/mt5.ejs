@@ -461,20 +461,8 @@ document.addEventListener('DOMContentLoaded', function () {
     const portRow = (window.__mt5PortsState && window.__mt5PortsState.ports || []).find(function (p) {
       return String(p.slot) === String(connectSlot);
     });
-    if (portRow && portRow.folderAvailable === false && !portRow.accountId) {
+    if (portRow && !portRow.accountId) {
       mt5CleanupAfterLoginFail({ port_slot: connectSlot });
-      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
-        'error',
-        'PORT ' + connectSlot + ' — กำลังปิด MT5 บน VPS รอ 3–5 วินาทีแล้วกดเชื่อมต่ออีกครั้ง' +
-          (portRow.folderPath ? ' · ' + portRow.folderPath : '')
-      );
-      if (typeof refreshMt5PortCards === 'function') {
-        refreshMt5PortCards().catch(function () {});
-        setTimeout(function () {
-          refreshMt5PortCards().catch(function () {});
-        }, 3000);
-      }
-      return false;
     }
     if (window.__mt5PortsState && (window.__mt5PortsState.vpsOnlineCount || 0) < 1) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(

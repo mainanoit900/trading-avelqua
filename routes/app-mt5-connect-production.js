@@ -25,6 +25,7 @@ const {
   syncJournalFromLatestCommand,
   failAccountFromJournal,
   ensureLoginFailPortReleased,
+  releaseUserPackagePortSlot,
   cancelJournalVerifyForAccount,
   cancelJournalVerifyWrongPort,
   queueJournalReadVerify
@@ -786,6 +787,9 @@ async function handleMt5ConnectProduction(req, res) {
         });
       }
       portSlot = requestedSlot;
+      await releaseUserPackagePortSlot(userId, requestedSlot, {
+        reason: 'pre_connect_slot_cleanup'
+      }).catch(() => {});
       const reserve = await reserveBestPort(userId, requestedSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
@@ -1088,14 +1092,23 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     const cmdProbeEarly = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
     if (cmdProbeEarly.failed) {
-      await failAccountFromJournal(a.id, a.port_id, cmdProbeEarly.message, {
-        vpsId: a.vps_id,
-        portNo: a.assigned_port_no || a.port_slot,
-        folderPath: a.folder_path,
-        reason: 'login_cmd_failed',
-        killMt5: true,
-        clearPackagePort: true
-      }).catch(() => {});
+      const earlySlot = Number(a.port_slot || a.assigned_port_no || 0);
+      if (earlySlot) {
+        await releaseUserPackagePortSlot(userId, earlySlot, {
+          message: cmdProbeEarly.message,
+          reason: 'login_cmd_failed',
+          folderPath: a.folder_path
+        }).catch(() => {});
+      } else {
+        await failAccountFromJournal(a.id, a.port_id, cmdProbeEarly.message, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no || a.port_slot,
+          folderPath: a.folder_path,
+          reason: 'login_cmd_failed',
+          killMt5: true,
+          clearPackagePort: true
+        }).catch(() => {});
+      }
       return res.json({
         ok: true,
         account: { ...a, status: 'failed', port_slot: null },
@@ -1191,12 +1204,20 @@ async function handleMt5ConnectStatusProduction(req, res) {
         /ไม่ถูกต้อง|User หรือ|ผิด|authorization failed|invalid account/i.test(authFailMsg));
 
     if (isAuthLoginFail) {
-      await ensureLoginFailPortReleased(a.id, {
-        message: authFailMsg || MT5_FAIL_USER_MSG,
-        reason: 'connect_status_auth_fail',
-        portSlot: a.port_slot,
-        folderPath: a.folder_path
-      }).catch(() => {});
+      const failSlot = Number(a.port_slot || a.assigned_port_no || 0);
+      if (failSlot) {
+        await releaseUserPackagePortSlot(userId, failSlot, {
+          message: authFailMsg || MT5_FAIL_USER_MSG,
+          reason: 'connect_status_auth_fail',
+          folderPath: a.folder_path
+        }).catch(() => {});
+      } else {
+        await ensureLoginFailPortReleased(a.id, {
+          message: authFailMsg || MT5_FAIL_USER_MSG,
+          reason: 'connect_status_auth_fail',
+          folderPath: a.folder_path
+        }).catch(() => {});
+      }
       return res.json({
         ok: true,
         account: { ...a, status: 'failed', port_slot: null },
@@ -1418,14 +1439,23 @@ async function handleMt5ConnectStatusProduction(req, res) {
     if (shouldSyncJournal) {
       const cmdFailed = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
       if (cmdFailed.failed) {
-        await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
-          vpsId: a.vps_id,
-          portNo: a.assigned_port_no || a.port_slot,
-          folderPath: a.folder_path,
-          reason: 'login_cmd_failed',
-          killMt5: true,
-          clearPackagePort: true
-        }).catch(() => {});
+        const failSlot = Number(a.port_slot || a.assigned_port_no || 0);
+        if (failSlot) {
+          await releaseUserPackagePortSlot(userId, failSlot, {
+            message: cmdFailed.message,
+            reason: 'login_cmd_failed',
+            folderPath: a.folder_path
+          }).catch(() => {});
+        } else {
+          await failAccountFromJournal(a.id, a.port_id, cmdFailed.message, {
+            vpsId: a.vps_id,
+            portNo: a.assigned_port_no || a.port_slot,
+            folderPath: a.folder_path,
+            reason: 'login_cmd_failed',
+            killMt5: true,
+            clearPackagePort: true
+          }).catch(() => {});
+        }
         return res.json({
           ok: true,
           account: { ...a, status: 'deleted', port_slot: null },
@@ -1621,70 +1651,28 @@ async function handleMt5ConnectFailCleanup(req, res) {
     if (!userId) return res.status(401).json({ ok: false, message: 'กรุณาเข้าสู่ระบบใหม่' });
 
     const accountId = Number(req.body?.accountId || req.body?.account_id || 0);
-    const portSlot = Number(req.body?.portSlot || req.body?.port_slot || 0);
+    let portSlot = Number(req.body?.portSlot || req.body?.port_slot || 0);
 
-    let targetId = accountId;
-    if (!targetId && portSlot > 0) {
-      const r = await query(
+    if (!portSlot && accountId) {
+      const slotRow = await query(
         `
-        SELECT id
+        SELECT COALESCE(port_slot, assigned_port_no, windows_port_no, 0) AS slot
         FROM vps_system.mt5_accounts
-        WHERE user_id=$1
-          AND (
-            port_slot=$2
-            OR assigned_port_no IN ($2, $2 + 100)
-            OR windows_port_no IN ($2, $2 + 100)
-          )
-          AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
-        ORDER BY updated_at DESC, id DESC
+        WHERE id=$1 AND user_id=$2
         LIMIT 1
       `,
-        [userId, portSlot]
+        [accountId, userId]
       ).catch(() => ({ rows: [] }));
-      targetId = Number(r.rows?.[0]?.id || 0);
+      portSlot = Number(slotRow.rows?.[0]?.slot || 0);
     }
 
-    if (!targetId) {
-      const folderPath =
-        portSlot > 0 ? folderPathForPackageSlot({ node_name: 'VPS-WIN-01' }, portSlot) : '';
-      const nodes = await query(
-        `
-        SELECT sn.id AS vps_id
-        FROM vps_nodes n
-        JOIN vps_system.vps_nodes sn
-          ON UPPER(TRIM(COALESCE(sn.node_code, ''))) = UPPER(TRIM(COALESCE(n.node_name, '')))
-        WHERE COALESCE(n.agent_enabled, TRUE)=TRUE
-        ORDER BY n.id ASC
-        LIMIT 1
-      `
-      ).catch(() => ({ rows: [] }));
-      const vpsId = Number(nodes.rows?.[0]?.vps_id || 0);
-      if (vpsId && portSlot) {
-        const { queueForceStopMt5, releaseUserPortCompletely, resolveSystemVpsId } = require('../lib/adminVpsBridge');
-        await queueForceStopMt5(vpsId, portSlot, folderPath, 'login_fail_slot_cleanup').catch(() => {});
-        const { adminNodeId } = await resolveSystemVpsId(vpsId).catch(() => ({ adminNodeId: 0 }));
-        await releaseUserPortCompletely({
-          systemVpsId: vpsId,
-          adminNodeId: adminNodeId || vpsId,
-          portNo: portSlot,
-          folderPath
-        }).catch(() => {});
-      }
-      return res.json({ ok: true, cleaned: true, portSlot: null, message: MT5_FAIL_USER_MSG });
+    if (!portSlot) {
+      return res.json({ ok: false, message: 'ไม่พบ PORT แพ็กเกจที่ต้องเคลียร์' });
     }
 
-    const owned = await query(
-      `SELECT 1 FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
-      [targetId, userId]
-    ).catch(() => ({ rows: [] }));
-    if (!owned.rows?.[0]) {
-      return res.status(403).json({ ok: false, message: 'ไม่มีสิทธิ์' });
-    }
-
-    const out = await ensureLoginFailPortReleased(targetId, {
+    const out = await releaseUserPackagePortSlot(userId, portSlot, {
       message: MT5_FAIL_USER_MSG,
-      reason: 'ui_login_fail_cleanup',
-      portSlot
+      reason: 'ui_login_fail_cleanup'
     });
     return res.json({ ok: true, cleaned: true, ...out });
   } catch (e) {
