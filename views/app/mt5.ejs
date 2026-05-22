@@ -439,7 +439,7 @@ document.addEventListener('DOMContentLoaded', function () {
   }
   const urlParams = new URLSearchParams(window.location.search);
   const packageExpired = <%= packageExpired ? 'true' : 'false' %>;
-  const MT5_CONNECT_MIN_UI_MS = 3500;
+  const MT5_CONNECT_MIN_UI_MS = 2000;
   let mt5StatusPollInFlight = false;
 
   function mt5ConnectUiElapsedMs() {

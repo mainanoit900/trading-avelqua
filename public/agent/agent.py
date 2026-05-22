@@ -3005,7 +3005,7 @@ def wait_mt5_login_hybrid(
                 via,
             )
 
-        if window_ok_streak >= 2 and j_out is True:
+        if window_ok_streak >= 1 and j_out is True:
             try:
                 enforce_login_no_trading(port_dir, port, payload, login, str(payload_get(payload, "mt5Password", "password") or ""), server)
             except Exception:

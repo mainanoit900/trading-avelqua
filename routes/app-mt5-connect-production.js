@@ -714,10 +714,10 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   };
 }
 
-/** ยืนยัน Login จริง (journal/คำสั่ง) — ไม่ใช่แค่ status=connected ในฐานข้อมูล */
+/** ยืนยัน Login จริง (journal/คำสั่ง) — ใช้ได้ทั้ง checking/connecting เมื่อคำสั่งสำเร็จแล้ว */
 async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   const st = String(statusFinal || '').toLowerCase();
-  if (st !== 'connected') return false;
+  if (!['connecting', 'starting', 'checking', 'connected'].includes(st)) return false;
 
   const accountId = Number(account?.id || 0);
   const vpsId = Number(account?.vps_id || 0);
@@ -1313,8 +1313,41 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
+    const cmdMetaEarly = await resolveLoginCommandMeta(a.id, a.vps_id);
+    const cmdStEarly = String(cmdMetaEarly.commandStatus || '').toLowerCase();
 
-    if (['connecting', 'starting', 'checking'].includes(statusFinal) && staleMs >= 8000) {
+    if (
+      ['success', 'done'].includes(cmdStEarly) &&
+      ['connecting', 'starting', 'checking'].includes(statusFinal)
+    ) {
+      await syncJournalFromLatestCommand(
+        a.id,
+        a.vps_id,
+        a.mt5_login,
+        a.folder_path,
+        a.assigned_port_no
+      ).catch(() => {});
+      const jr = await query(
+        `
+        SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+               a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+               p.folder_path
+        FROM vps_system.mt5_accounts a
+        LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+        WHERE a.id=$1 AND a.user_id=$2
+        LIMIT 1
+      `,
+        [a.id, userId]
+      ).catch(() => ({ rows: [] }));
+      if (jr.rows?.[0]) {
+        Object.assign(a, jr.rows[0]);
+        status = String(a.status || '').toLowerCase();
+        statusFinal = status;
+      }
+    }
+
+    const fastAfterMs = ['success', 'done'].includes(cmdStEarly) ? 2000 : 8000;
+    if (['connecting', 'starting', 'checking'].includes(statusFinal) && staleMs >= fastAfterMs) {
       const fastEarly = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
       if (fastEarly.resolved) {
         statusFinal = fastEarly.status || statusFinal;
@@ -1395,10 +1428,24 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const failedMsg = a.last_error || a.last_login_message || '';
     const elapsedSec = Math.max(0, Math.floor(staleMs / 1000));
     const previewPath = previewPublicPath(a.id);
-    const cmdMeta = await resolveLoginCommandMeta(a.id, a.vps_id);
+    const cmdMeta = cmdMetaEarly.commandId != null || cmdMetaEarly.commandStatus
+      ? cmdMetaEarly
+      : await resolveLoginCommandMeta(a.id, a.vps_id);
     const agentMeta = await resolveVpsAgentOnline(a.vps_id);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
-    const loginVerified = await resolvePollLoginVerified(a, statusFinal, cmdMeta);
+    let loginVerified = await resolvePollLoginVerified(a, statusFinal, cmdMeta);
+    if (loginVerified && statusFinal !== 'connected') {
+      await promoteAccountConnected({
+        accountId: a.id,
+        portId: a.port_id,
+        mt5Login: a.mt5_login,
+        message: MT5_SUCCESS_MSG
+      }).catch(() => {});
+      statusFinal = 'connected';
+      a.status = 'connected';
+      a.last_error = null;
+      a.last_login_message = MT5_SUCCESS_MSG;
+    }
     if (statusFinal === 'connected' && !loginVerified) {
       statusFinal = ['checking', 'starting', 'connecting'].includes(
         String(a.status || '').toLowerCase()
