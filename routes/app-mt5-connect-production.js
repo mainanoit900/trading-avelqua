@@ -385,6 +385,28 @@ function buildConnectWaitHint(waitSec) {
   return 'โดยปกติใช้เวลา 15–35 วินาที — หลังสำเร็จไปขั้นตอน 3 เลือกบอทแล้วเปิด BOT';
 }
 
+const LOGIN_PROGRESS_LABELS = [
+  'ส่งคำสั่ง',
+  'Agent รับงาน',
+  'เปิด MT5',
+  'ตรวจ Login',
+  'เชื่อมต่อสำเร็จ'
+];
+
+/** ขั้นที่ 0–4 สำหรับ UI 4 สเตป */
+function resolveLoginProgressStep(accountStatus, commandStatus) {
+  const st = String(accountStatus || '').toLowerCase();
+  const cmd = String(commandStatus || '').toLowerCase();
+  if (st === 'connected') return 4;
+  if (st === 'checking') return 3;
+  if (st === 'starting') return 2;
+  if (['processing', 'picked', 'running'].includes(cmd)) return 2;
+  if (['success', 'done'].includes(cmd)) return 3;
+  if (cmd === 'pending') return 1;
+  if (st === 'connecting') return cmd ? 1 : 0;
+  return 0;
+}
+
 async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
   const accountId = Number(account?.id || 0);
   const vpsId = Number(account?.vps_id || 0);
@@ -399,11 +421,12 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
   let commandStatus = '';
   let commandMessage = '';
   let commandAgeSec = null;
+  let commandId = null;
   if (accountId || vpsId) {
     const cmd = await query(
       accountId
         ? `
-      SELECT status, result_message, error, created_at, updated_at, finished_at
+      SELECT id, status, result_message, error, created_at, updated_at, finished_at
       FROM vps_system.vps_agent_commands
       WHERE command_type IN ('login_mt5', 'connect_mt5')
         AND (payload->>'accountId')::text = $1::text
@@ -412,7 +435,7 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
       LIMIT 1
     `
         : `
-      SELECT status, result_message, error, created_at, updated_at, finished_at
+      SELECT id, status, result_message, error, created_at, updated_at, finished_at
       FROM vps_system.vps_agent_commands
       WHERE command_type IN ('login_mt5', 'connect_mt5')
         AND vps_id = $1
@@ -424,6 +447,7 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
     ).catch(() => ({ rows: [] }));
     const row = cmd.rows?.[0];
     if (row) {
+      commandId = Number(row.id || 0) || null;
       commandStatus = String(row.status || '').toLowerCase();
       commandMessage = String(row.result_message || row.error || '').trim().slice(0, 240);
       const ts = row.updated_at || row.created_at;
@@ -461,6 +485,8 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
     commandAgeSec != null ? commandAgeSec : 0
   );
   const waitHint = buildConnectWaitHint(waitSec);
+  const progressStep = resolveLoginProgressStep(st, commandStatus);
+  const progressStepLabel = LOGIN_PROGRESS_LABELS[progressStep] || LOGIN_PROGRESS_LABELS[0];
 
   return {
     agentOnline,
@@ -468,7 +494,11 @@ async function getLoginConnectDiagnostics(account, elapsedSec = 0) {
     commandStatus,
     commandMessage,
     commandAgeSec,
+    commandId,
     connectStep,
+    progressStep,
+    progressStepLabel,
+    progressTotal: 4,
     waitHint,
     waitSec,
     expectedMaxSec: MT5_CONNECT_HINT_TYPICAL_MAX_SEC,
@@ -1248,6 +1278,11 @@ async function handleMt5ConnectProduction(req, res) {
       portSlot,
       folderPath: reservedPort.folder_path || null,
       message: `กำลังเปิด MT5 — PORT ${portSlot} · โฟลเดอร์ VPS ${pickName} (${serverName})`,
+      progressStep: 1,
+      progressStepLabel: LOGIN_PROGRESS_LABELS[1],
+      progressTotal: 4,
+      commandStatus: 'pending',
+      connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน (ขั้นที่ 2/4)',
       aiConnect: connectAdvice
     });
   } catch (e) {
@@ -1606,6 +1641,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
           message: 'ยังไม่มีคำสั่ง login_mt5 บน VPS — กรุณากดเชื่อมต่ออีกครั้ง',
           connectStep: 'ไม่มีคำสั่ง VPS — กดเชื่อมต่อใหม่',
           commandStatus: '',
+          progressStep: 0,
+          progressStepLabel: LOGIN_PROGRESS_LABELS[0],
+          progressTotal: 4,
           elapsedSec,
           waitHint: 'ถ้าค้างนาน ให้ Ctrl+F5 แล้วกดเชื่อมต่ออีกครั้ง'
         });
@@ -1890,11 +1928,15 @@ async function handleMt5ConnectStatusProduction(req, res) {
       previewUrl,
       elapsedSec,
       connectStep: diagnostics?.connectStep || '',
+      progressStep: diagnostics?.progressStep ?? (loginVerified ? 4 : 0),
+      progressStepLabel: diagnostics?.progressStepLabel || '',
+      progressTotal: diagnostics?.progressTotal ?? 4,
       agentOnline: diagnostics?.agentOnline ?? null,
       agentMessage: diagnostics?.agentMessage || '',
       commandStatus: diagnostics?.commandStatus || '',
       commandMessage: diagnostics?.commandMessage || '',
       commandAgeSec: diagnostics?.commandAgeSec ?? null,
+      commandId: diagnostics?.commandId ?? null,
       waitHint: diagnostics?.waitHint || '',
       waitSec: diagnostics?.waitSec ?? elapsedSec,
       expectedMaxSec: diagnostics?.expectedMaxSec ?? MT5_CONNECT_HINT_TYPICAL_MAX_SEC,

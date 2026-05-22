@@ -192,8 +192,9 @@ document.addEventListener('DOMContentLoaded', function () {
         <input type="hidden" name="port_slot" id="mt5SelectedPortSlot" value="">
 
   <div id="mt5LoginPreview" class="mt5-login-preview" style="display:none;margin:12px 0;padding:12px;background:#0b1220;border:1px solid #1e3a5f;border-radius:12px">
-    <div style="font-size:13px;color:#93c5fd;margin-bottom:8px">
-      <b>สถานะ Login</b> — รอ Agent เปิด MT5 (ปกติ 15–35 วิ) · ค้างนานกด <b>ยกเลิก</b>
+    <div id="mt5ConnectStatusHead" style="font-size:13px;color:#93c5fd;margin-bottom:8px">
+      <b>สถานะ Login</b> — <span id="mt5ConnectStepNow">ขั้นที่ 1/4: ส่งคำสั่ง</span>
+      <span style="color:#64748b"> · ปกติ 15–35 วิ · ค้างนานกด <b>ยกเลิก</b></span>
     </div>
     <div id="mt5ConnectSteps" class="mt5-connect-steps"></div>
     <div id="mt5ConnectDiag" class="mt5-connect-diag" style="font-size:12px;color:#94a3b8;margin:8px 0;line-height:1.5"></div>
@@ -1216,23 +1217,47 @@ document.addEventListener('DOMContentLoaded', function () {
     const agentOk = d.agentOnline === true;
     const agentBad = d.agentOnline === false;
     const stepLabels = [
-      { key: 'queue', label: 'ส่งคำสั่ง' },
-      { key: 'agent', label: 'Agent รับงาน' },
-      { key: 'mt5', label: 'เปิด MT5' },
-      { key: 'verify', label: 'ตรวจ Login' }
+      { key: 'queue', label: '① ส่งคำสั่ง' },
+      { key: 'agent', label: '② Agent รับงาน' },
+      { key: 'mt5', label: '③ เปิด MT5' },
+      { key: 'verify', label: '④ ตรวจ Login' }
     ];
-    // ไล่ทีละสเตป: 0=ส่งคำสั่ง → 1=Agent → 2=เปิด MT5 → 3=ตรวจ Login
-    let activeIdx = 0;
-    if (st === 'connected' || d.connected === true) {
-      activeIdx = stepLabels.length;
-    } else if (st === 'checking') {
-      activeIdx = 3;
-    } else if (st === 'starting' || !!d.previewUrl) {
-      activeIdx = 2;
-    } else if (['processing', 'picked', 'running'].includes(cmd)) {
-      activeIdx = 1;
-    } else if (cmd === 'pending' || !cmd) {
-      activeIdx = 0;
+    const progressTotal = Number(d.progressTotal || 4) || 4;
+    let activeIdx =
+      d.progressStep != null && !Number.isNaN(Number(d.progressStep))
+        ? Math.max(0, Math.min(progressTotal, Number(d.progressStep)))
+        : 0;
+    if (d.progressStep == null) {
+      if (st === 'connected' || d.connected === true) {
+        activeIdx = progressTotal;
+      } else if (st === 'checking') {
+        activeIdx = 3;
+      } else if (st === 'starting' || !!d.previewUrl) {
+        activeIdx = 2;
+      } else if (['processing', 'picked', 'running'].includes(cmd)) {
+        activeIdx = 2;
+      } else if (['success', 'done'].includes(cmd)) {
+        activeIdx = 3;
+      } else if (cmd === 'pending') {
+        activeIdx = 1;
+      } else if (st === 'connecting') {
+        activeIdx = cmd ? 1 : 0;
+      }
+    }
+    const stepNowLabel =
+      d.progressStepLabel ||
+      (activeIdx >= progressTotal
+        ? 'เชื่อมต่อสำเร็จ'
+        : stepLabels[activeIdx]
+          ? stepLabels[activeIdx].label.replace(/^[①②③④]\s*/, '')
+          : 'ส่งคำสั่ง');
+    const stepNowEl = document.getElementById('mt5ConnectStepNow');
+    if (stepNowEl) {
+      const showNum = activeIdx >= progressTotal ? progressTotal : activeIdx + 1;
+      stepNowEl.textContent =
+        activeIdx >= progressTotal
+          ? 'เสร็จสมบูรณ์ (' + progressTotal + '/' + progressTotal + ')'
+          : 'ขั้นที่ ' + showNum + '/' + progressTotal + ': ' + stepNowLabel;
     }
     if (stepsEl) {
       stepsEl.innerHTML = stepLabels
@@ -1255,11 +1280,16 @@ document.addEventListener('DOMContentLoaded', function () {
             '</span>'
         );
       }
+      if (d.commandId) {
+        lines.push('<b>Command ID:</b> #' + mt5Esc(String(d.commandId)));
+      }
       if (cmd) {
         let cmdLine = '<b>คำสั่ง login:</b> ' + mt5Esc(cmd);
         if (d.commandAgeSec != null) cmdLine += ' (' + d.commandAgeSec + ' วินาที)';
         if (d.commandMessage) cmdLine += ' — ' + mt5Esc(d.commandMessage);
         lines.push(cmdLine);
+      } else if (activeIdx === 0 && sec !== '' && Number(sec) >= 8) {
+        lines.push('<span class="warn">ยังไม่เห็นคำสั่งในคิว VPS — กดเชื่อมต่อใหม่หรือ Ctrl+F5</span>');
       }
       if (sec !== '') {
         const maxW = d.maxWaitSec != null ? Number(d.maxWaitSec) : 120;
@@ -1279,12 +1309,12 @@ document.addEventListener('DOMContentLoaded', function () {
     } else if (ph && (!img || img.style.display === 'none')) {
       ph.style.display = 'block';
       const phMsgs = [
-        'รอ VPS Agent รับคำสั่ง...',
+        'ขั้น 1/4: ส่งคำสั่ง login_mt5 ไปเซิร์ฟเวอร์...',
         agentBad
-          ? 'VPS Agent ไม่ตอบสนอง — ตรวจ service AvelquaPythonAgent'
-          : 'Agent รับงานแล้ว — รอเปิด MT5...',
-        'กำลังเปิด MT5 — รอภาพหน้าจอจาก VPS...',
-        'กำลังตรวจ Login — รอภาพหน้าจอ MT5...'
+          ? 'ขั้น 2/4: VPS Agent ไม่ตอบสนอง — restart AvelquaPythonAgent'
+          : 'ขั้น 2/4: รอ VPS Agent รับคำสั่งจากคิว...',
+        'ขั้น 3/4: Agent กำลังเปิด MT5 — รอภาพหน้าจอจาก VPS...',
+        'ขั้น 4/4: ตรวจ Login / Journal / ยอดเงินบัญชี...'
       ];
       ph.textContent = phMsgs[Math.min(activeIdx, phMsgs.length - 1)] || phMsgs[0];
     }
@@ -2456,8 +2486,12 @@ if (false && mt5ConnectForm) {
         if (typeof window.mt5UpdateConnectProgress === 'function') {
           window.mt5UpdateConnectProgress({
             message: json.message || 'กำลังเปิด MT5...',
-            connectStep: 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
-            commandStatus: 'pending',
+            connectStep: json.connectStep || 'ส่งคำสั่งแล้ว — รอ Agent รับงาน',
+            commandStatus: json.commandStatus || 'pending',
+            commandId: json.commandId || null,
+            progressStep: json.progressStep != null ? json.progressStep : 1,
+            progressStepLabel: json.progressStepLabel || 'Agent รับงาน',
+            progressTotal: json.progressTotal || 4,
             waitHint: 'โดยปกติ 15–35 วินาที — สำเร็จแล้วเลือกบอทขั้นตอน 3',
             expectedMaxSec: 35,
             maxWaitSec: 60,
