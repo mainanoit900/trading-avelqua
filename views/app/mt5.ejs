@@ -452,6 +452,29 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     let connectSlot = String((document.getElementById('mt5SelectedPortSlot') || {}).value || '').trim();
     if (!connectSlot) connectSlot = mt5FirstEmptyPortSlotFromDom();
+    const loginVal = String((document.getElementById('mt5LoginInput') || {}).value || '').trim();
+    const ports = (window.__mt5PortsState && window.__mt5PortsState.ports) || [];
+    if (loginVal) {
+      const owner = ports.find(function (p) {
+        return p.accountId && String(p.mt5_login || '') === loginVal;
+      });
+      if (owner && String(owner.slot) !== String(connectSlot)) {
+        connectSlot = String(owner.slot);
+        const slotInputFix = document.getElementById('mt5SelectedPortSlot');
+        if (slotInputFix) slotInputFix.value = connectSlot;
+        document.querySelectorAll('.port-item[data-port-slot]').forEach(function (el) {
+          el.classList.toggle('active', String(el.getAttribute('data-port-slot')) === connectSlot);
+        });
+        if (typeof window.mt5UpdateFolderPortHint === 'function') {
+          window.mt5UpdateFolderPortHint(Number(connectSlot), ports);
+        }
+        const lblFix = document.getElementById('mt5LoginPortLabel');
+        if (lblFix) {
+          lblFix.textContent =
+            'Login ' + loginVal + ' อยู่ที่ PORT ' + connectSlot + ' — สลับมาเปิด MT5 ที่นี่';
+        }
+      }
+    }
     const portPickErr = mt5ValidatePortForConnect(connectSlot);
     if (portPickErr) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
