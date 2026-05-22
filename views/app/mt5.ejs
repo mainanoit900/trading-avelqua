@@ -484,7 +484,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (slotInput) slotInput.value = String(connectSlot);
     mt5SaveLoginIfRemembered();
     sessionStorage.setItem('mt5ConnectInFlight', '1');
-    sessionStorage.removeItem('mt5OutcomeShown');
+    mt5ClearConnectModalDedupe();
     sessionStorage.setItem('mt5ConnectTargetSlot', String(connectSlot));
     const btn = document.getElementById('mt5ConnectBtn');
     if (btn) {
@@ -502,7 +502,10 @@ document.addEventListener('DOMContentLoaded', function () {
     if (err) {
       try {
         if (typeof window.showMt5ConnectModal === 'function') {
-          window.showMt5ConnectModal('error', decodeURIComponent(err.replace(/\+/g, ' ')));
+          window.showMt5ConnectModal('error', decodeURIComponent(err.replace(/\+/g, ' ')), {
+            forceShow: true,
+            dedupeKey: 'url-connect-error'
+          });
         } else {
           alert(decodeURIComponent(err.replace(/\+/g, ' ')));
         }
@@ -515,6 +518,7 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     const accId = urlParams.get('connect_account');
     if (accId && urlParams.get('connect_queued') === '1') {
+      mt5ClearConnectModalDedupe(accId);
       if (typeof window.setMt5PollAccountId === 'function') window.setMt5PollAccountId(accId);
       else {
         mt5PollAccountId = String(accId);
@@ -574,6 +578,23 @@ document.addEventListener('DOMContentLoaded', function () {
     sessionStorage.setItem('mt5OutcomeShown', key);
   }
 
+  function mt5ClearConnectModalDedupe(accountId) {
+    if (accountId) {
+      try {
+        localStorage.removeItem(mt5SuccessModalStorageKey(accountId));
+      } catch (_) {}
+    }
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const k = localStorage.key(i);
+        if (k && k.indexOf('mt5SuccessModal:') === 0) localStorage.removeItem(k);
+      }
+    } catch (_) {}
+    sessionStorage.removeItem('mt5OutcomeShown');
+    window.__mt5LastModalKey = '';
+    window.__mt5LastModalAt = 0;
+  }
+
   function mt5SuccessModalStorageKey(accountId) {
     return 'mt5SuccessModal:' + String(accountId || '0');
   }
@@ -604,14 +625,14 @@ document.addEventListener('DOMContentLoaded', function () {
       opts.dedupeKey ||
       String(type) + ':' + String(opts.accountId != null ? opts.accountId : '') + ':' + String(message || '').slice(0, 80);
     const now = Date.now();
-    if (type === 'success' && opts.accountId && mt5WasSuccessModalShown(opts.accountId)) {
-      return false;
-    }
-    if (window.__mt5LastModalKey === dedupeKey && now - (window.__mt5LastModalAt || 0) < 60000) {
-      return false;
-    }
-    if (document.getElementById(type === 'success' ? 'mt5SuccessModal' : 'mt5ErrorModal')) {
-      return false;
+    const forceShow = opts.forceShow === true;
+    if (!forceShow) {
+      if (type === 'success' && opts.accountId && mt5WasSuccessModalShown(opts.accountId)) {
+        return false;
+      }
+      if (window.__mt5LastModalKey === dedupeKey && now - (window.__mt5LastModalAt || 0) < 2500) {
+        return false;
+      }
     }
     window.__mt5LastModalKey = dedupeKey;
     window.__mt5LastModalAt = now;
@@ -1111,7 +1132,8 @@ document.addEventListener('DOMContentLoaded', function () {
     mt5MarkOutcomeShown(failKey);
     showMt5ConnectModal('error', failMsg, {
       accountId: accountInfo && accountInfo.id,
-      dedupeKey: failKey
+      dedupeKey: failKey,
+      forceShow: true
     });
     if (typeof refreshMt5PortCards === 'function') {
       await refreshMt5PortCards().catch(function () {});
@@ -1127,26 +1149,10 @@ document.addEventListener('DOMContentLoaded', function () {
     if (!mt5ConnectInFlightNow()) {
       return;
     }
-    if (accId && mt5WasSuccessModalShown(accId)) {
-      mt5Checking = false;
-      if (window.mt5Checker) {
-        clearInterval(window.mt5Checker);
-        window.mt5Checker = null;
-      }
-      sessionStorage.removeItem('mt5PollAccountId');
-      sessionStorage.removeItem('mt5ConnectInFlight');
-      sessionStorage.removeItem('mt5ConnectTargetSlot');
-      if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
-      return;
-    }
     window.__mt5FinishSuccessRunning = true;
     const base = message || 'เชื่อมต่อสำเร็จ';
     const msg = base + ' — ยังไม่เปิด BOT กรุณาไปขั้นตอน 3) ตั้งค่า BOT แล้วกด ▶ เปิด BOT (ปิด Algo Trading จนกว่าจะเปิด BOT)';
     const outcomeKey = mt5OutcomeStorageKey('ok', accId || 'port');
-    if (mt5OutcomeWasShown(outcomeKey)) {
-      window.__mt5FinishSuccessRunning = false;
-      return;
-    }
     mt5MarkOutcomeShown(outcomeKey);
     if (accId) mt5MarkSuccessModalShown(accId);
     mt5Checking = false;
@@ -1170,7 +1176,8 @@ document.addEventListener('DOMContentLoaded', function () {
     mt5SaveLoginIfRemembered();
     showMt5ConnectModal('success', msg, {
       accountId: accId,
-      dedupeKey: outcomeKey
+      dedupeKey: outcomeKey,
+      forceShow: true
     });
     if (accId) {
       const eq = accountInfo.last_equity != null ? Number(accountInfo.last_equity) : null;
@@ -1218,7 +1225,7 @@ document.addEventListener('DOMContentLoaded', function () {
     const failOutcomeKey = 'url-fail:' + failMsg.slice(0, 120);
     if (!mt5OutcomeWasShown(failOutcomeKey)) {
       mt5MarkOutcomeShown(failOutcomeKey);
-      showMt5ConnectModal('error', failMsg, { dedupeKey: failOutcomeKey });
+      showMt5ConnectModal('error', failMsg, { dedupeKey: failOutcomeKey, forceShow: true });
     }
     if (window.history && window.history.replaceState) {
       window.history.replaceState({}, '', '/app/mt5');
@@ -1531,6 +1538,16 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         return;
       }
+      if (inFlight && data.failed === true) {
+        await finishMt5ConnectFail(
+          data.message ||
+            data.account.last_error ||
+            data.account.last_login_message ||
+            'User หรือ รหัส ไม่ถูกต้อง',
+          data.account
+        );
+        return;
+      }
       const stWait = String(data.account.status || data.status || '').toLowerCase();
       const targetSlot = mt5ConnectTargetSlot();
       const accSlot = data.account && data.account.port_slot != null ? String(data.account.port_slot) : '';
@@ -1739,6 +1756,7 @@ document.addEventListener('DOMContentLoaded', function () {
     window.__mt5SuccessShown = false;
     window.__mt5FinishSuccessRunning = false;
     sessionStorage.removeItem('mt5ConnectedShownId');
+    mt5ClearConnectModalDedupe(mt5PollAccountId || '');
     window.mt5Checker = setInterval(checkMt5Connected, 500);
     checkMt5Connected();
   };
@@ -1847,10 +1865,27 @@ document.addEventListener('DOMContentLoaded', function () {
         }
         const stBoot = String((data.account && data.account.status) || data.status || '').toLowerCase();
         if (data.connected === true && stBoot === 'connected' && data.loginVerified === true) {
+          if (mt5ConnectInFlightNow()) {
+            if (typeof window.finishMt5ConnectSuccess === 'function') {
+              window.finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ', data.account || null);
+            }
+            return;
+          }
           sessionStorage.removeItem('mt5PollAccountId');
           sessionStorage.removeItem('mt5ConnectInFlight');
           mt5Checking = false;
           if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+          return;
+        }
+        if (data.failed === true && mt5ConnectInFlightNow()) {
+          if (typeof window.finishMt5ConnectFail === 'function') {
+            window.finishMt5ConnectFail(
+              data.message ||
+                data.account.last_error ||
+                'User หรือ รหัส ไม่ถูกต้อง',
+              data.account
+            );
+          }
           return;
         }
         if (['connecting', 'checking', 'starting'].includes(stBoot) || data.pending || data.checking) {
