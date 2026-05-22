@@ -2849,7 +2849,7 @@ router.post('/mt5/save-equity', requireLogin, async (req, res) => {
   }
 });
 
-/** อ่าน Balance/Equity จาก DB เท่านั้น — เร็ว สำหรับ poll บนหน้าเว็บ */
+/** อ่าน Balance/Equity — ค่าเริ่มต้นจาก DB; ?live=1 ดึงจาก VPS/MT5 ล่าสุด */
 router.get('/mt5/account-equity', requireLogin, async (req, res) => {
   try {
     const userId = req.user.id;
@@ -2896,6 +2896,42 @@ router.get('/mt5/account-equity', requireLogin, async (req, res) => {
     );
     const acc = row.rows?.[0];
     if (!acc) return res.json({ ok: false, message: 'ไม่พบบัญชี' });
+
+    const wantLive = String(req.query.live || req.query.refresh || '') === '1';
+    if (wantLive && acc.vps_id) {
+      const ctx = await loadAccountPortContext(accountId, userId);
+      if (ctx?.vpsId) {
+        const live = await fetchEquityFromVps(ctx, accountId, userId, {
+          waitMs: 8000,
+          skipJournal: true,
+          light: true,
+          forceFresh: true,
+          purpose: 'equity_live_api'
+        }).catch(() => ({ ok: false }));
+        if (live?.ok) {
+          const balL = positiveMoney(live.balance);
+          const eqL = positiveMoney(live.equity);
+          let profitL =
+            live.profit != null && Number.isFinite(Number(live.profit))
+              ? Number(live.profit)
+              : null;
+          if (profitL == null && balL != null && eqL != null) {
+            profitL = Math.round((eqL - balL) * 100) / 100;
+          }
+          return res.json({
+            ok: true,
+            balance: balL || 0,
+            equity: eqL,
+            profit: profitL,
+            hasEquity: eqL != null,
+            hasBalance: balL != null,
+            capital: eqL || balL || 0,
+            updatedAt: new Date().toISOString(),
+            source: live.source || 'vps_live'
+          });
+        }
+      }
+    }
 
     let balanceNum =
       positiveMoney(acc.bi_balance) ??
@@ -2965,36 +3001,14 @@ router.get('/mt5/account-snapshot', requireLogin, async (req, res) => {
     const needsSync = connected && !equityNum;
 
     let fetchMeta = null;
-    let shouldVpsSync = connected && ctx.vpsId && needsSync;
-    if (connected && ctx.vpsId && forceRefresh && !needsSync) {
-      const fresh = await query(
-        `
-        SELECT 1 FROM vps_system.mt5_accounts
-        WHERE id=$1 AND user_id=$2 AND updated_at > NOW() - INTERVAL '8 seconds'
-        LIMIT 1
-      `,
-        [accountId, userId]
-      ).catch(() => ({ rows: [] }));
-      const pending = await query(
-        `
-        SELECT 1 FROM vps_system.vps_agent_commands
-        WHERE vps_id=$1
-          AND command_type IN ('account_snapshot', 'sync_mt5_account', 'read_account_metrics', 'dashboard', 'watchdog')
-          AND COALESCE(payload->>'accountId', '')=$2
-          AND LOWER(COALESCE(status, '')) IN ('pending', 'queued', 'picked', 'processing')
-          AND created_at > NOW() - INTERVAL '12 seconds'
-        LIMIT 1
-      `,
-        [ctx.vpsId, String(accountId)]
-      ).catch(() => ({ rows: [] }));
-      shouldVpsSync = !fresh.rows?.[0] && !pending.rows?.[0];
-    }
+    const shouldVpsSync = connected && ctx.vpsId && (needsSync || forceRefresh);
     if (shouldVpsSync) {
       fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
-        waitMs: needsSync ? (waitSync ? 12000 : 0) : 0,
-        skipJournal: false,
+        waitMs: waitSync ? 12000 : forceRefresh ? 8000 : 0,
+        skipJournal: true,
         light: true,
-        purpose: forceRefresh ? 'equity_refresh' : 'equity_sync'
+        forceFresh: !!forceRefresh,
+        purpose: forceRefresh ? 'equity_live_poll' : 'equity_sync'
       });
       if (needsSync && !fetchMeta?.ok && waitSync) {
         fetchMeta = await fetchEquityFromVps(ctx, accountId, userId, {
@@ -3004,9 +3018,15 @@ router.get('/mt5/account-snapshot', requireLogin, async (req, res) => {
           purpose: 'equity_journal_retry'
         });
       }
+      if (fetchMeta?.ok) {
+        balanceNum = positiveMoney(fetchMeta.balance) ?? balanceNum;
+        equityNum = positiveMoney(fetchMeta.equity) ?? equityNum;
+      }
       ctx = await loadAccountPortContext(accountId, userId);
-      balanceNum = positiveMoney(ctx?.account?.last_balance);
-      equityNum = positiveMoney(ctx?.account?.last_equity);
+      if (!fetchMeta?.ok) {
+        balanceNum = positiveMoney(ctx?.account?.last_balance) ?? balanceNum;
+        equityNum = positiveMoney(ctx?.account?.last_equity) ?? equityNum;
+      }
     }
 
     const profitNum =
@@ -3025,7 +3045,8 @@ router.get('/mt5/account-snapshot', requireLogin, async (req, res) => {
       hasBalance: balanceNum != null,
       capital: equityNum || balanceNum || 0,
       syncing: connected && !equityNum && forceRefresh,
-      source: fetchMeta?.source || null,
+      source: fetchMeta?.source || (forceRefresh ? 'vps_pending' : null),
+      live: !!(fetchMeta?.ok && forceRefresh),
       updatedAt: new Date().toISOString(),
       hint: fetchMeta?.hint || (needsSync && !equityNum ? 'กำลังดึงจาก MT5...' : null),
       agentDeployQueued: !!fetchMeta?.agentDeployQueued

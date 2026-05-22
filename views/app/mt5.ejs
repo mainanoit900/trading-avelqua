@@ -208,7 +208,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
         <label>MT5 Login</label>
         <input name="mt5_login" id="mt5LoginInput" placeholder="จริง: 201200244 · ทดลอง: 89610453" inputmode="numeric" pattern="[0-9]*" maxlength="9" autocomplete="username" required>
-        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">เว็บตรวจรูปแบบทันที (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — รหัสผ่านยืนยันจากหน้าต่าง MT5+ยอดเงิน (เร็ว ~15–40 วิ) หรือ Journal</small>
+        <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">เว็บตรวจรูปแบบทันที (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — ยอดเงินอัปเดตจาก MT5 บน VPS ทุก 15 วิ (ไม่ใช่ค่าเก่าใน DB)</small>
 
         <label>Password</label>
         <input name="mt5_password" id="mt5PasswordInput" type="password" placeholder="รหัสผ่าน MT5" autocomplete="current-password" required>
@@ -1455,12 +1455,10 @@ document.addEventListener('DOMContentLoaded', function () {
       forceShow: true
     });
     if (accId) {
-      const eq = accountInfo.last_equity != null ? Number(accountInfo.last_equity) : null;
-      const bal = accountInfo.last_balance != null ? Number(accountInfo.last_balance) : null;
-      if (eq > 0 && typeof applyEquityUiState === 'function') {
-        applyEquityUiState(eq, bal > 0 ? bal : null);
-      }
       window.__mt5EquityWaitOnce = true;
+      if (typeof updatePortLockEquity === 'function') {
+        updatePortLockEquity(null, null, true);
+      }
       if (typeof pollAccountEquity === 'function') {
         pollAccountEquity();
       }
@@ -3720,35 +3718,20 @@ function deletePortCountdown(e, form) {
     updateMt5Stats(bal, eq, profitVal);
     if (capitalHint) {
       capitalHint.textContent = eq
-        ? ('ทุนจาก MT5: ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก 20 วิ')
-        : 'เลือก PORT — อัปเดตทุนจาก MT5 ทุก 20 วิ (ขั้นต่ำ $100)';
+        ? ('ทุนจาก MT5 (VPS ล่าสุด): ' + fmtMt5Money(eq) + (bal ? ' · Balance ' + fmtMt5Money(bal) : '') + ' · อัปเดตทุก 15 วิ')
+        : 'เลือก PORT — กำลังดึงยอดจาก MT5 บน VPS... (ขั้นต่ำ $100)';
     }
     if (eq && capitalInput && (!capitalInput.dataset.userCapitalEdited || capitalInput.dataset.userCapitalEdited !== '1')) {
       capitalInput.value = eq >= 100 ? eq : 100;
     }
   }
 
-  async function refreshAccountEquityFast(accountId) {
+  async function refreshAccountSnapshot(accountId, doVpsRefresh, waitSync) {
     if (!accountId) return null;
     try {
-      const res = await fetch('/app/mt5/account-equity?account_id=' + encodeURIComponent(accountId), {
-        credentials: 'same-origin',
-        cache: 'no-store',
-        headers: { Accept: 'application/json' }
-      });
-      const data = await res.json();
-      return data.ok ? data : null;
-    } catch (_) {
-      return null;
-    }
-  }
-
-  async function refreshAccountSnapshot(accountId, doVpsRefresh) {
-    if (!accountId) return null;
-    try {
-      const waitQ = window.__mt5EquityWaitOnce ? '&wait=1' : '';
+      const waitQ = waitSync || window.__mt5EquityWaitOnce ? '&wait=1' : '';
       if (window.__mt5EquityWaitOnce) window.__mt5EquityWaitOnce = false;
-      const refreshQ = doVpsRefresh ? '&refresh=1' : '';
+      const refreshQ = doVpsRefresh !== false ? '&refresh=1' : '';
       const res = await fetch('/app/mt5/account-snapshot?account_id=' + encodeURIComponent(accountId) + waitQ + refreshQ, {
         credentials: 'same-origin',
         cache: 'no-store',
@@ -3791,14 +3774,13 @@ function deletePortCountdown(e, form) {
       let snapBal = data.mt5Balance;
       let snapEq = data.mt5EquityKnown ? data.mt5Equity : null;
       if (!data.mt5EquityKnown) {
-        const snap = await refreshAccountSnapshot(accountId);
+        const snap = await refreshAccountSnapshot(accountId, true, false);
         if (snap) {
           snapBal = snap.balance;
           snapEq = snap.hasEquity ? snap.equity : null;
         }
       }
-      const optEq = accountSel ? equityFromAccountOption(accountSel) : null;
-      if (snapEq == null && optEq != null) snapEq = optEq;
+      const optEq = null;
       applyEquityUiState(snapEq, snapBal);
       updateMt5Stats(snapBal, snapEq, data.mt5Profit);
       if (capitalHint && snapEq) {
@@ -3949,14 +3931,7 @@ function deletePortCountdown(e, form) {
       });
     }
     if (accountSel) {
-      applyEquityUiState(equityFromAccountOption(accountSel), null);
-    } else {
-      const lockEl = document.getElementById('mt5PortLockEquity');
-      const initEq = lockEl && lockEl.dataset.initialEquity ? Number(lockEl.dataset.initialEquity) : null;
-      const initBal = lockEl && lockEl.dataset.initialBalance ? Number(lockEl.dataset.initialBalance) : null;
-      if ((initEq && initEq > 0) || (initBal && initBal > 0)) {
-        applyEquityUiState(initEq, initBal);
-      }
+      updatePortLockEquity(null, null, true);
     }
     refreshPresetCalc();
     const runForm = document.getElementById('mt5RunForm');
@@ -3994,16 +3969,13 @@ function deletePortCountdown(e, form) {
     opt.textContent = 'PORT ' + portSlot + ' / Login ' + login + suffix;
   }
 
-  const MT5_EQUITY_POLL_MS = 20 * 1000;
-  let mt5EquityVpsTick = 0;
+  const MT5_EQUITY_POLL_MS = 15 * 1000;
   let mt5EquityVpsBusy = false;
 
   (function applyInitialPortLockEquity() {
     const el = document.getElementById('mt5PortLockEquity');
     if (!el) return;
-    const eq = Number(el.getAttribute('data-initial-equity') || 0);
-    const bal = Number(el.getAttribute('data-initial-balance') || 0);
-    if (eq > 0 || bal > 0) applyEquityUiState(eq > 0 ? eq : null, bal > 0 ? bal : null);
+    updatePortLockEquity(null, null, true);
   })();
 
   function applyEquitySnap(snap) {
@@ -4015,10 +3987,20 @@ function deletePortCountdown(e, form) {
     }
     const ts = document.getElementById('mt5PortLockEquityTs');
     if (ts) {
+      const src = snap.source ? String(snap.source) : 'vps';
+      const srcLabel =
+        src === 'account_snapshot' || src === 'vps_live' || src === 'equity_live_poll'
+          ? 'MT5 VPS'
+          : src === 'port_health_db'
+            ? 'Port health'
+            : src;
       try {
-        ts.textContent = 'Live · ' + new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        ts.textContent =
+          srcLabel +
+          ' · ' +
+          new Date().toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
       } catch (_) {
-        ts.textContent = 'Live';
+        ts.textContent = 'MT5 VPS · Live';
       }
     }
   }
@@ -4026,21 +4008,24 @@ function deletePortCountdown(e, form) {
   function pollAccountEquity() {
     const accId = getMt5AccountId();
     if (!accId) return;
-
-    refreshAccountEquityFast(accId).then(applyEquitySnap);
-
-    mt5EquityVpsTick += 1;
     if (mt5EquityVpsBusy) return;
     mt5EquityVpsBusy = true;
-    refreshAccountSnapshot(accId, true)
+    updatePortLockEquity(null, null, true);
+    const waitSync = !!window.__mt5EquityWaitOnce;
+    if (waitSync) window.__mt5EquityWaitOnce = false;
+    refreshAccountSnapshot(accId, true, waitSync)
       .then(function (snap) {
-        if (snap && snap.hasEquity) applyEquitySnap(snap);
-        else if (snap && !snap.syncing) {
+        if (snap && (snap.hasEquity || snap.hasBalance)) {
+          applyEquitySnap(snap);
+        } else if (snap && snap.syncing) {
+          const capitalHint = document.getElementById('mt5CapitalHint');
+          if (capitalHint) capitalHint.textContent = 'กำลังดึงยอดจาก MT5 บน VPS...';
+        } else {
           const capitalHint = document.getElementById('mt5CapitalHint');
           const cap = document.getElementById('capital_manual');
           if (capitalHint) {
             capitalHint.textContent =
-              'ยังอ่านทุนจาก MT5 ไม่ได้ — ตรวจว่า MT5 เปิดอยู่และ Agent service รันอยู่ หรือใส่ทุนมือ (ขั้นต่ำ $100)';
+              'ยังอ่านทุนจาก MT5 ไม่ได้ — ตรวจว่า MT5 เปิดอยู่และ Agent รันอยู่ หรือใส่ทุนมือ (ขั้นต่ำ $100)';
           }
           if (cap && !cap.value) cap.placeholder = 'ใส่ทุนมือ (เช่น 1000)';
         }
