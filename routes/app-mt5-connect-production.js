@@ -24,6 +24,7 @@ const {
   expireStuckLoginCommands,
   syncJournalFromLatestCommand,
   failAccountFromJournal,
+  ensureLoginFailPortReleased,
   cancelJournalVerifyForAccount,
   cancelJournalVerifyWrongPort,
   queueJournalReadVerify
@@ -1190,6 +1191,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
         /ไม่ถูกต้อง|User หรือ|ผิด|authorization failed|invalid account/i.test(authFailMsg));
 
     if (isAuthLoginFail) {
+      await ensureLoginFailPortReleased(a.id, {
+        message: authFailMsg || MT5_FAIL_USER_MSG,
+        reason: 'connect_status_auth_fail',
+        portSlot: a.port_slot,
+        folderPath: a.folder_path
+      }).catch(() => {});
       return res.json({
         ok: true,
         account: { ...a, status: 'failed', port_slot: null },
@@ -1608,9 +1615,87 @@ async function handleMt5ConnectStatusProduction(req, res) {
   }
 }
 
+async function handleMt5ConnectFailCleanup(req, res) {
+  try {
+    const userId = Number(req.user?.id || 0);
+    if (!userId) return res.status(401).json({ ok: false, message: 'กรุณาเข้าสู่ระบบใหม่' });
+
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0);
+    const portSlot = Number(req.body?.portSlot || req.body?.port_slot || 0);
+
+    let targetId = accountId;
+    if (!targetId && portSlot > 0) {
+      const r = await query(
+        `
+        SELECT id
+        FROM vps_system.mt5_accounts
+        WHERE user_id=$1
+          AND (
+            port_slot=$2
+            OR assigned_port_no IN ($2, $2 + 100)
+            OR windows_port_no IN ($2, $2 + 100)
+          )
+          AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
+        ORDER BY updated_at DESC, id DESC
+        LIMIT 1
+      `,
+        [userId, portSlot]
+      ).catch(() => ({ rows: [] }));
+      targetId = Number(r.rows?.[0]?.id || 0);
+    }
+
+    if (!targetId) {
+      const folderPath =
+        portSlot > 0 ? folderPathForPackageSlot({ node_name: 'VPS-WIN-01' }, portSlot) : '';
+      const nodes = await query(
+        `
+        SELECT sn.id AS vps_id
+        FROM vps_nodes n
+        JOIN vps_system.vps_nodes sn
+          ON UPPER(TRIM(COALESCE(sn.node_code, ''))) = UPPER(TRIM(COALESCE(n.node_name, '')))
+        WHERE COALESCE(n.agent_enabled, TRUE)=TRUE
+        ORDER BY n.id ASC
+        LIMIT 1
+      `
+      ).catch(() => ({ rows: [] }));
+      const vpsId = Number(nodes.rows?.[0]?.vps_id || 0);
+      if (vpsId && portSlot) {
+        const { queueForceStopMt5, releaseUserPortCompletely, resolveSystemVpsId } = require('../lib/adminVpsBridge');
+        await queueForceStopMt5(vpsId, portSlot, folderPath, 'login_fail_slot_cleanup').catch(() => {});
+        const { adminNodeId } = await resolveSystemVpsId(vpsId).catch(() => ({ adminNodeId: 0 }));
+        await releaseUserPortCompletely({
+          systemVpsId: vpsId,
+          adminNodeId: adminNodeId || vpsId,
+          portNo: portSlot,
+          folderPath
+        }).catch(() => {});
+      }
+      return res.json({ ok: true, cleaned: true, portSlot: null, message: MT5_FAIL_USER_MSG });
+    }
+
+    const owned = await query(
+      `SELECT 1 FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
+      [targetId, userId]
+    ).catch(() => ({ rows: [] }));
+    if (!owned.rows?.[0]) {
+      return res.status(403).json({ ok: false, message: 'ไม่มีสิทธิ์' });
+    }
+
+    const out = await ensureLoginFailPortReleased(targetId, {
+      message: MT5_FAIL_USER_MSG,
+      reason: 'ui_login_fail_cleanup',
+      portSlot
+    });
+    return res.json({ ok: true, cleaned: true, ...out });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+}
+
 // ใช้ได้ทั้ง endpoint ใหม่และ endpoint เดิมของหน้าเว็บ
 router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction);
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
+router.post('/mt5/connect-fail-cleanup', requireLogin, handleMt5ConnectFailCleanup);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
 
