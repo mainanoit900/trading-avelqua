@@ -46,7 +46,10 @@ const {
   buildMt5LoginPayload
 } = require('../lib/adminVpsPortPicker');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
-const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
+const {
+  clearOtherAccountsOnPortSlot,
+  listAccountsToHandoffOnPortSlot
+} = require('../lib/mt5PortAccount');
 const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
 const {
   findLoginCommandInProgress,
@@ -544,9 +547,12 @@ async function findRetryPortForLogin(userId, mt5Login, serverName) {
 }
 
 /** ปล่อยแถว mt5_accounts ที่ค้างบน vps+port เดียวกัน (กัน uq_mt5_running_vps_port ตอน INSERT) */
-async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) {
+async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null, opts = {}) {
   if (!vpsId || !portNo) return;
   const params = [vpsId, portNo];
+  const statuses = opts.includeConnected
+    ? ['connecting', 'checking', 'starting', 'connected', 'ready']
+    : ['connecting', 'checking', 'starting'];
   let sql = `
     UPDATE vps_system.mt5_accounts
     SET status='expired',
@@ -554,17 +560,95 @@ async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) 
         windows_port_no=NULL,
         vps_id=NULL,
         port_id=NULL,
-        last_login_message='ถูกแทนที่ด้วยการเชื่อมต่อใหม่',
+        port_slot=NULL,
+        last_login_message=$3,
         updated_at=NOW()
     WHERE vps_id=$1
       AND assigned_port_no=$2
-      AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting')
+      AND LOWER(COALESCE(status, '')) = ANY($4::text[])
   `;
+  const msg = opts.message || 'ถูกแทนที่ด้วยการเชื่อมต่อใหม่';
+  params.push(msg, statuses);
   if (keepAccountId) {
     params.push(keepAccountId);
-    sql += ` AND id <> $3`;
+    sql += ` AND id <> $${params.length}`;
   }
   await query(sql, params).catch(() => {});
+}
+
+const PORT_SWAP_HANDOFF_MSG = 'ถูกแทนที่ด้วย Login ใหม่บน PORT เดิม';
+
+/** สลับบัญชี MT5 ใหม่ทับ port_slot เดิม — ไม่ต้องกดลบ PORT */
+async function handoffPackagePortSlotForNewLogin(userId, portSlot, newLogin, serverName) {
+  const uid = Number(userId || 0);
+  const slot = Number(portSlot || 0);
+  if (!uid || !slot) return { handoffCount: 0 };
+
+  const botBusy = await query(
+    `
+    SELECT b.id
+    FROM vps_system.bot_instances b
+    JOIN vps_system.mt5_accounts a ON a.id = b.mt5_account_id
+    WHERE b.user_id = $1
+      AND a.port_slot = $2
+      AND b.status IN ('running', 'pending', 'starting', 'restarting')
+      AND NOT (
+        a.mt5_login = $3
+        AND COALESCE(a.server_name, a.mt5_server, '') = $4
+      )
+    LIMIT 1
+  `,
+    [uid, slot, String(newLogin || '').trim(), String(serverName || '').trim()]
+  ).catch(() => ({ rows: [] }));
+
+  if (botBusy.rows?.[0]) {
+    throw new Error('PORT นี้กำลังรัน BOT อยู่ — กดหยุด BOT ก่อนสลับบัญชี MT5');
+  }
+
+  const toHandoff = await listAccountsToHandoffOnPortSlot(
+    query,
+    uid,
+    slot,
+    newLogin,
+    serverName
+  );
+  if (!toHandoff.length) return { handoffCount: 0 };
+
+  const seenVpsPort = new Set();
+  for (const row of toHandoff) {
+    await cancelAgentCommandsForAccount(Number(row.id), Number(row.vps_id || 0)).catch(() => 0);
+    await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET status='expired',
+          port_slot=NULL,
+          assigned_port_no=NULL,
+          windows_port_no=NULL,
+          vps_id=NULL,
+          port_id=NULL,
+          last_error=NULL,
+          last_login_message=$2,
+          updated_at=NOW()
+      WHERE id=$1
+    `,
+      [row.id, PORT_SWAP_HANDOFF_MSG]
+    ).catch(() => {});
+    const vpsId = Number(row.vps_id || 0);
+    const portNo = Number(row.assigned_port_no || row.windows_port_no || slot);
+    if (vpsId && portNo) seenVpsPort.add(`${vpsId}:${portNo}`);
+  }
+
+  await forceStopPackagePortSlot(uid, slot, { reason: 'port_slot_login_swap' }).catch(() => {});
+
+  for (const key of seenVpsPort) {
+    const [vpsId, portNo] = key.split(':').map(Number);
+    await releaseStaleVpsPortAccounts(vpsId, portNo, null, {
+      includeConnected: true,
+      message: PORT_SWAP_HANDOFF_MSG
+    });
+  }
+
+  return { handoffCount: toHandoff.length };
 }
 
 async function releasePort(portId, message = '') {
@@ -1011,6 +1095,8 @@ async function handleMt5ConnectProduction(req, res) {
     const allocPortNo = num(
       reservedPort.port_number || parsePortNumber(reservedPort) || portSlot
     );
+
+    await handoffPackagePortSlotForNewLogin(userId, portSlot, mt5Login, serverName);
 
     // ไม่พึ่ง ON CONFLICT เพราะฐานข้อมูลเดิมบางชุดอาจยังไม่มี unique constraint ครบ
     // ใช้วิธี UPDATE ก่อน ถ้าไม่มีค่อย INSERT เพื่อไม่ให้ deploy แล้วล้ม

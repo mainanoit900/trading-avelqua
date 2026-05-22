@@ -534,6 +534,28 @@ document.addEventListener('DOMContentLoaded', function () {
       );
       return false;
     }
+    const swapOldLogin = connectCard ? mt5PortCardLogin(connectSlot) : '';
+    const swapNewLogin = loginVal;
+    if (
+      connectCard &&
+      connectCard.classList.contains('connected') &&
+      swapOldLogin &&
+      swapNewLogin &&
+      swapOldLogin !== swapNewLogin &&
+      typeof window.mt5Confirm === 'function'
+    ) {
+      const swapOk = await window.mt5Confirm(
+        'PORT ' +
+          connectSlot +
+          ' จะใช้ Login ' +
+          swapNewLogin +
+          ' แทน ' +
+          swapOldLogin +
+          ' (ไม่ต้องลบ PORT) — ระบบจะปิด MT5 เดิมแล้ว login ใหม่',
+        { title: 'สลับบัญชีบน PORT ' + connectSlot }
+      );
+      if (!swapOk) return false;
+    }
     if (!connectSlot) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
@@ -1377,8 +1399,11 @@ document.addEventListener('DOMContentLoaded', function () {
       if (login && cardLogin && login === cardLogin) {
         return '';
       }
+      if (login && cardLogin && login !== cardLogin) {
+        return '';
+      }
       return (
-        'PORT ' + slot + ' มีบัญชีเชื่อมต่อแล้ว — กรอก Login เดิม + รหัสผ่านเพื่อเปิด MT5 ใหม่ หรือคลิก PORT ว่างสำหรับบัญชีใหม่'
+        'PORT ' + slot + ' มีบัญชีเชื่อมต่อแล้ว — กรอก Login เดิม + รหัสผ่านเพื่อเปิด MT5 ใหม่ หรือใส่ Login ใหม่เพื่อสลับบัญชีทับช่องนี้'
       );
     }
     if (card.classList.contains('checking')) {
