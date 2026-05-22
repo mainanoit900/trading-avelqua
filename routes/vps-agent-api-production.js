@@ -1125,7 +1125,16 @@ router.post('/commands/:id/result', async (req, res) => {
       console.error('[COMMANDS ID RESULT side-effects]', sideErr.message || sideErr);
     }
 
-    await query(`
+    let resultJson = '{}';
+    try {
+      resultJson = toJsonbParam(prepareCommandResultForDb(result));
+    } catch (jsonErr) {
+      console.error('[COMMANDS ID RESULT jsonb]', jsonErr.message || jsonErr);
+      resultJson = '{}';
+    }
+
+    const upd = await query(
+      `
       UPDATE vps_system.vps_agent_commands
       SET status=$1,
           result_message=$2,
@@ -1134,14 +1143,41 @@ router.post('/commands/:id/result', async (req, res) => {
           finished_at=NOW(),
           updated_at=NOW()
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
-    `, [
-      ok ? 'success' : 'failed',
-      sanitizePgText(msg),
-      toJsonbParam(prepareCommandResultForDb(result)),
-      ok ? null : sanitizePgText(msg),
-      commandId,
-      node.id
-    ]);
+      RETURNING id
+    `,
+      [
+        ok ? 'success' : 'failed',
+        sanitizePgText(msg),
+        resultJson,
+        ok ? null : sanitizePgText(msg),
+        commandId,
+        node.id
+      ]
+    ).catch((e) => {
+      throw e;
+    });
+
+    if (!upd.rows?.[0]) {
+      await query(
+        `
+        UPDATE vps_system.vps_agent_commands
+        SET status=$1,
+            result_message=$2,
+            result=$3::jsonb,
+            error=$4,
+            finished_at=NOW(),
+            updated_at=NOW()
+        WHERE id=$5
+      `,
+        [
+          ok ? 'success' : 'failed',
+          sanitizePgText(msg),
+          resultJson,
+          ok ? null : sanitizePgText(msg),
+          commandId
+        ]
+      ).catch(() => {});
+    }
 
     return res.json({ ok: true });
   } catch (e) {

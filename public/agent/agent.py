@@ -88,7 +88,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-journal-mtime-v23"
+AGENT_BUILD_ID = "2026-05-22-utf8-journal-v24"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -133,6 +133,8 @@ def mt5_existing_login_config(port_dir: Path) -> Optional[Path]:
 
 
 def _safe_console_text(msg: str) -> str:
+    if sys.platform == "win32":
+        return str(msg).encode("ascii", errors="replace").decode("ascii")
     try:
         enc = getattr(sys.stdout, "encoding", None) or "utf-8"
         return str(msg).encode(enc, errors="replace").decode(enc, errors="replace")
@@ -142,14 +144,15 @@ def _safe_console_text(msg: str) -> str:
 
 def log(msg: str) -> None:
     text = f"{datetime.now():%Y-%m-%d %H:%M:%S} - {msg}"
+    line = (text + "\n").encode("utf-8", errors="replace")
     try:
-        print(_safe_console_text(text), flush=True)
-    except Exception:
-        try:
-            sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+        if hasattr(sys.stdout, "buffer"):
+            sys.stdout.buffer.write(line)
             sys.stdout.flush()
-        except Exception:
-            pass
+        else:
+            print(_safe_console_text(text), flush=True)
+    except Exception:
+        pass
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(text + "\n")
@@ -321,7 +324,7 @@ def _maybe_self_deploy_agent(heartbeat_res: Dict[str, Any]) -> None:
     """ดาวน์โหลด agent.py ล่าสุดเมื่อเซิร์ฟเวอร์บอกว่าเวอร์ชันเก่า (กัน deploy ค้างแต่ service ไม่รีสตาร์ท)"""
     global _LAST_SELF_DEPLOY_AT
     now = time.time()
-    if now - _LAST_SELF_DEPLOY_AT < float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "3600")):
+    if now - _LAST_SELF_DEPLOY_AT < float(os.getenv("AVELQUA_SELF_DEPLOY_COOLDOWN_SEC", "300")):
         return
     _LAST_SELF_DEPLOY_AT = now
     required = str(
@@ -329,7 +332,7 @@ def _maybe_self_deploy_agent(heartbeat_res: Dict[str, Any]) -> None:
         or heartbeat_res.get("requiredAgentVersion")
         or AGENT_BUILD_ID
     ).strip()
-    if has_journal_gate_marker(AGENT_BUILD_ID) and has_journal_gate_marker(required):
+    if required and required == AGENT_BUILD_ID:
         return
     script_url = str(heartbeat_res.get("agent_script_url") or heartbeat_res.get("scriptUrl") or "").strip()
     if not script_url:
