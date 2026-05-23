@@ -110,7 +110,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-multiport-launch-v51"
+AGENT_BUILD_ID = "2026-05-23-port2-process-detect-v52"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -631,20 +631,57 @@ def iter_terminal_processes() -> Iterable[Any]:
             continue
     return out
 
+
+def _norm_port_path(path: Any) -> str:
+    return str(path or "").rstrip("\\/").lower().replace("/", "\\")
+
+
+def _pid_is_running(pid: Any) -> bool:
+    try:
+        pid_n = int(pid or 0)
+        if pid_n <= 0:
+            return False
+        if not psutil:
+            return False
+        proc = psutil.Process(pid_n)
+        return proc.is_running() and (proc.info.get("name") or proc.name()).lower() == "terminal64.exe"
+    except Exception:
+        return False
+
+
+def _terminal_process_matches_port_dir(proc: Any, port_dir: Path) -> bool:
+    root = _norm_port_path(port_dir)
+    if not root:
+        return False
+    try:
+        exe = _norm_port_path(proc.info.get("exe") or "")
+        cmd = _norm_port_path(" ".join(proc.info.get("cmdline") or []))
+        if exe.startswith(root) or root in cmd:
+            return True
+        try:
+            cwd = _norm_port_path(proc.cwd())
+            if cwd.startswith(root) or root in cwd:
+                return True
+        except Exception:
+            pass
+    except Exception:
+        pass
+    return False
+
 def stop_mt5_by_folder(folder_path):
     if not folder_path:
         raise Exception("missing folder_path")
 
     folder_path = str(folder_path).lower().replace("/", "\\")
+    port_dir = Path(folder_path)
     stopped = []
 
     for p in iter_terminal_processes():
         try:
             name = (p.info.get("name") or "").lower()
-            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
-            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
-
-            if name == "terminal64.exe" and (folder_path in exe or folder_path in cmd):
+            if name != "terminal64.exe":
+                continue
+            if _terminal_process_matches_port_dir(p, port_dir):
                 p.kill()
                 stopped.append(p.pid)
                 log(f"KILLED MT5 PID={p.pid} FOLDER={folder_path}")
@@ -661,14 +698,11 @@ def stop_mt5_by_folder(folder_path):
 
 def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    root = str(port_dir).rstrip("\\/").lower()
     stopped: List[int] = []
     for p in list(iter_terminal_processes()):
         try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
-                log(f"STOP MT5 PORT={port} PID={p.pid} PATH={exe}")
+            if _terminal_process_matches_port_dir(p, port_dir):
+                log(f"STOP MT5 PORT={port} PID={p.pid}")
                 p.kill()
                 stopped.append(p.pid)
         except Exception as e:
@@ -678,10 +712,7 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
     # kill ghost terminal ของ PORT นี้อีกรอบ
     for p in list(iter_terminal_processes()):
         try:
-            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
-            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
-
-            if exe.startswith(root) or root in cmd or str(port_dir).lower().replace("/", "\\") in cmd:
+            if _terminal_process_matches_port_dir(p, port_dir):
                 log(f"KILL GHOST MT5 PORT={port} PID={p.pid}")
                 p.kill()
                 if p.pid not in stopped:
@@ -1175,13 +1206,12 @@ def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
             log(f"QUARANTINE CHART SKIP {src}: {e}")
 
 
-def mt5_running_for_port_dir(port_dir: Path) -> bool:
-    root = str(port_dir).rstrip("\\/").lower()
+def mt5_running_for_port_dir(port_dir: Path, active_pid: Any = None) -> bool:
+    if _pid_is_running(active_pid):
+        return True
     for p in iter_terminal_processes():
         try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
+            if _terminal_process_matches_port_dir(p, port_dir):
                 return True
         except Exception:
             pass
@@ -2856,6 +2886,7 @@ def wait_mt5_login_hybrid(
     timeout_sec: int,
     other_terminals: int = 0,
     relaunch_fn: Optional[Any] = None,
+    active_pid_ref: Optional[List[Any]] = None,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal-first: poll authorized on ทันที; UIA เป็น fallback เท่านั้น"""
     server = resolve_mt5_server(payload, login)
@@ -2883,6 +2914,10 @@ def wait_mt5_login_hybrid(
     no_mt5_threshold = 50 if other_terminals > 0 else 22
     relaunch_attempts = 0
     relaunch_max = 2 if other_terminals > 0 else 1
+    active_pid = active_pid_ref if active_pid_ref is not None else [proc_pid]
+
+    def _mt5_open_for_port() -> bool:
+        return mt5_running_for_port_dir(port_dir, active_pid[0] if active_pid else None)
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
     if journal_since < wait_start - 120:
@@ -2943,7 +2978,7 @@ def wait_mt5_login_hybrid(
             journal_first
             and elapsed >= no_mt5_threshold
             and j_out is None
-            and not mt5_running_for_port_dir(port_dir)
+            and not _mt5_open_for_port()
         ):
             j_late, chunk_late = _quick_journal_probe(port_dir, login, 0.0, server)
             if j_late is False:
@@ -2970,7 +3005,15 @@ def wait_mt5_login_hybrid(
                     f"other_terminals={other_terminals} attempt={relaunch_attempts}/{relaunch_max}"
                 )
                 try:
-                    relaunch_fn()
+                    relaunch_proc = relaunch_fn()
+                    if relaunch_proc is not None:
+                        try:
+                            new_pid = relaunch_proc.pid
+                            if new_pid:
+                                active_pid[0] = new_pid
+                                log(f"MT5 RELAUNCH PID PORT={port} pid={new_pid}")
+                        except Exception:
+                            pass
                 except Exception as e:
                     log(f"MT5 RELAUNCH ERROR PORT={port}: {e}")
                 time.sleep(3.0)
@@ -3705,6 +3748,18 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
+        if proc:
+            time.sleep(2.0)
+            exit_code = proc.poll()
+            if exit_code is not None:
+                log(
+                    f"MT5 EXIT EARLY PORT={port} reason={reason} exit={exit_code} "
+                    f"cwd={port_dir}"
+                )
+            elif not _pid_is_running(proc.pid):
+                log(f"MT5 PID MISSING PORT={port} reason={reason} pid={proc.pid}")
+            else:
+                log(f"MT5 RUNNING PORT={port} pid={proc.pid}")
         if proc and _mt5_login_form_enabled():
             time.sleep(0.9)
             automate_mt5_login_server_form(login, password, server, port_dir, proc.pid if proc else None)
@@ -3720,8 +3775,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         time.sleep(stagger)
 
     journal_since = time.time()
+    active_pid_ref: List[Any] = [None]
     proc = launch_mt5("initial")
     proc_pid = proc.pid if proc else None
+    active_pid_ref[0] = proc_pid
     send_connect_result(
         payload,
         "starting",
@@ -3752,7 +3809,9 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         journal_timeout,
         other_terminals=other_mt5,
         relaunch_fn=lambda: launch_mt5("retry-not-running"),
+        active_pid_ref=active_pid_ref,
     )
+    proc_pid = active_pid_ref[0] or proc_pid
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)
 
@@ -3856,13 +3915,10 @@ def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def mt5_port_processes(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    root = str(port_dir).rstrip("\\/").lower()
     out = []
     for p in list(iter_terminal_processes()):
         try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
+            if _terminal_process_matches_port_dir(p, port_dir):
                 out.append(p)
         except Exception:
             pass
