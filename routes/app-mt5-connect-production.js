@@ -67,7 +67,8 @@ const {
   tryFastConnectConfirm,
   verifyLoginFromCommand,
   extractJournalEvidence,
-  hasLoginCommandInProgress
+  hasLoginCommandInProgress,
+  loginUsesEquityVerify
 } = require('../lib/mt5LoginCommandVerify');
 const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
 const {
@@ -862,14 +863,17 @@ async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   return verified.ok === true;
 }
 
-function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified, hasLoginCmd = true) {
+function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified, hasLoginCmd = true, mt5Login = '') {
   const progressTotal = 4;
+  const equityMode = loginUsesEquityVerify(mt5Login);
   if (!hasLoginCmd && ['connecting', 'starting', 'checking'].includes(statusFinal)) {
     return {
       progressStep: 0,
       progressTotal,
       progressStepLabel: 'ส่งคำสั่ง',
-      connectStep: '① กำลังส่งคำสั่ง login_mt5 ไป VPS...'
+      connectStep: equityMode
+        ? '① กำลังส่งคำสั่งเปิด MT5 ไป VPS...'
+        : '① กำลังส่งคำสั่ง login_mt5 ไป VPS...'
     };
   }
   if (loginVerified) {
@@ -877,7 +881,7 @@ function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified, ha
       progressStep: progressTotal,
       progressTotal,
       progressStepLabel: 'เชื่อมต่อสำเร็จ',
-      connectStep: '④ Login สำเร็จ — พร้อมขั้นตอน 3 เปิด BOT'
+      connectStep: '④ เชื่อมต่อสำเร็จ — พร้อมขั้นตอน 3 เปิด BOT'
     };
   }
   if (statusFinal === 'failed') {
@@ -885,15 +889,17 @@ function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified, ha
       progressStep: 3,
       progressTotal,
       progressStepLabel: 'Login ไม่สำเร็จ',
-      connectStep: '④ Login ไม่สำเร็จ'
+      connectStep: equityMode ? '④ เชื่อมต่อไม่สำเร็จ (ไม่พบ Equity)' : '④ Login ไม่สำเร็จ'
     };
   }
   if (statusFinal === 'checking') {
     return {
       progressStep: 3,
       progressTotal,
-      progressStepLabel: 'ตรวจ Journal',
-      connectStep: '④ กำลังตรวจ Login จาก Journal MT5...'
+      progressStepLabel: equityMode ? 'ตรวจ Equity' : 'ตรวจ Journal',
+      connectStep: equityMode
+        ? '④ กำลังตรวจ Equity ล่าสุดจาก MT5...'
+        : '④ กำลังตรวจ Login จาก Journal MT5...'
     };
   }
   if (statusFinal === 'starting' || previewUrl) {
@@ -901,7 +907,9 @@ function deriveConnectProgress(statusFinal, cmdSt, previewUrl, loginVerified, ha
       progressStep: 2,
       progressTotal,
       progressStepLabel: 'เปิด MT5',
-      connectStep: '③ เปิด MT5 บน VPS...'
+      connectStep: equityMode
+        ? '③ เปิด MT5 — รอ Equity ล่าสุด...'
+        : '③ เปิด MT5 บน VPS...'
     };
   }
   if (cmdSt === 'running') {
@@ -1641,7 +1649,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
       cmdSt,
       previewUrl,
       loginVerified,
-      hasLoginCmd
+      hasLoginCmd,
+      a.mt5_login
     );
     let connectStep = progress.connectStep;
     const loginMsg = String(a.last_login_message || '').trim();
@@ -1652,9 +1661,16 @@ async function handleMt5ConnectStatusProduction(req, res) {
       connectStep = '② VPS Agent ไม่ตอบสนอง — ตรวจ /admin/vps';
     }
     if (inProgress && ['success', 'done'].includes(cmdSt)) {
-      connectStep = '④ กำลังตรวจ Login จาก Journal MT5';
-      if (/MT5 เปิดแล้ว|ยังไม่เห็นเลข|title bar|หน้าต่าง MT5/i.test(loginMsg)) {
-        connectStep = '④ รอเลข Login บนหน้าต่าง MT5 — ตรวจรหัสผ่านและ Server';
+      if (loginUsesEquityVerify(a.mt5_login)) {
+        connectStep = '④ กำลังตรวจ Equity ล่าสุดจาก MT5';
+        if (/Equity|equity/i.test(loginMsg)) {
+          connectStep = loginMsg;
+        }
+      } else {
+        connectStep = '④ กำลังตรวจ Login จาก Journal MT5';
+        if (/MT5 เปิดแล้ว|ยังไม่เห็นเลข|title bar|หน้าต่าง MT5/i.test(loginMsg)) {
+          connectStep = '④ รอเลข Login บนหน้าต่าง MT5 — ตรวจรหัสผ่านและ Server';
+        }
       }
     }
     const statusDetail =

@@ -109,8 +109,10 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
+EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
+EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-port2-process-detect-v52"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v53"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1714,6 +1716,122 @@ def _classify_mt5_login(login: str) -> str:
     return "invalid"
 
 
+def _login_uses_equity_verify(login: str) -> bool:
+    """Login ขึ้นต้น 8 (Demo) หรือ 2 (Live) — ยืนยันจาก Equity ล่าสุด ไม่รอ Journal"""
+    s = str(login or "").strip()
+    return s.isdigit() and len(s) >= 6 and s[0] in ("8", "2")
+
+
+def _snap_has_equity(snap: Dict[str, Any]) -> bool:
+    e = snap.get("equity")
+    try:
+        return e is not None and float(e) > 0
+    except Exception:
+        return False
+
+
+def _latest_equity_snapshot(port: Any, payload: Dict[str, Any], port_dir: Path) -> Dict[str, Any]:
+    """ดึง Equity ล่าสุด — ไฟล์ pulse ก่อน แล้ว API/UIA"""
+    try:
+        sync_avelqua_data_exports(port_dir, force=True)
+        ensure_equity_pulse_indicator(port_dir)
+    except Exception:
+        pass
+    for max_age in (20, 0):
+        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=max_age)
+        if _snap_has_equity(file_snap):
+            return file_snap
+    if mt5_running_for_port_dir(port_dir):
+        api_snap = account_snapshot_mt5_api(port_dir, payload)
+        if _snap_has_equity(api_snap):
+            return api_snap
+        uia_snap = account_snapshot_uia(port, payload)
+        if _snap_has_equity(uia_snap):
+            return uia_snap
+    return account_snapshot(port, payload)
+
+
+def _send_equity_connected(
+    payload: Dict[str, Any],
+    port: Any,
+    proc_pid: Any,
+    login: str,
+    snap: Dict[str, Any],
+    window_title: str = "",
+) -> None:
+    send_connect_result(
+        payload,
+        "connected",
+        EQUITY_LOGIN_OK_MSG,
+        port,
+        process_id=proc_pid,
+        window_title=window_title,
+        preview_b64=capture_mt5_window_base64(port, payload),
+        window_verified=True,
+        balance=snap.get("balance"),
+        equity=snap.get("equity"),
+        verify_mode="equity",
+    )
+    log(
+        f"EQUITY LOGIN OK PORT={port} LOGIN={login} "
+        f"equity={snap.get('equity')} balance={snap.get('balance')}"
+    )
+
+
+def wait_mt5_equity_login(
+    port: Any,
+    payload: Dict[str, Any],
+    port_dir: Path,
+    login: str,
+    proc_pid: Any,
+    timeout_sec: int,
+    active_pid_ref: Optional[List[Any]] = None,
+) -> Tuple[bool, str, Dict[str, Any]]:
+    """เปิด MT5 แล้วรอ Equity ล่าสุด — ขึ้น=สำเร็จ, ไม่ขึ้น=ล้มเหลว+ปิด MT5"""
+    wait_start = time.time()
+    deadline = time.time() + max(45, int(timeout_sec or 90))
+    last_progress = 0.0
+    active_pid = active_pid_ref[0] if active_pid_ref else proc_pid
+
+    while time.time() < deadline:
+        elapsed = int(time.time() - wait_start)
+        now = time.time()
+        if active_pid_ref is not None and active_pid_ref[0]:
+            active_pid = active_pid_ref[0]
+
+        snap = _latest_equity_snapshot(port, payload, port_dir)
+        if _snap_has_equity(snap):
+            titles = " | ".join(mt5_window_titles(port, payload))
+            _send_equity_connected(payload, port, active_pid, login, snap, titles)
+            return True, EQUITY_LOGIN_OK_MSG, snap
+
+        if now - last_progress >= 1.2:
+            eq = snap.get("equity")
+            hint = f"รอ Equity ล่าสุด ({elapsed} วิ) — login {login}"
+            if eq is not None:
+                hint += f" · Equity={eq}"
+            send_connect_result(
+                payload,
+                "checking",
+                hint,
+                port,
+                process_id=active_pid,
+            )
+            last_progress = now
+
+        time.sleep(0.45)
+
+    cleanup_mt5_after_login_fail(port, payload, port_dir)
+    send_connect_result(
+        payload,
+        "failed",
+        EQUITY_LOGIN_FAIL_MSG,
+        port,
+        process_id=None,
+    )
+    return False, EQUITY_LOGIN_FAIL_MSG, {}
+
+
 def _try_socket_metrics_login_confirm(
     port: Any,
     payload: Dict[str, Any],
@@ -2188,6 +2306,9 @@ def send_connect_result(
     window_title: str = "",
     preview_b64: str = "",
     window_verified: bool = False,
+    balance: Any = None,
+    equity: Any = None,
+    verify_mode: str = "",
 ) -> None:
     try:
         callback = payload_get(payload, "callbackUrl", default=DEFAULT_CALLBACK_URL)
@@ -2218,16 +2339,22 @@ def send_connect_result(
             "previewImage": (preview_b64 or "")[:2_400_000],
             "mt5PreviewImage": (preview_b64 or "")[:2_400_000],
             "windowVerified": bool(window_verified),
+            "verifyMode": verify_mode or "",
             "agentVersion": AGENT_BUILD_ID,
             "agentBuildId": AGENT_BUILD_ID,
         }
         if status == "connected" and port:
             schedule_account_metrics_retry(payload, port)
             try:
-                snap = account_snapshot(port, payload)
-                body["balance"] = snap.get("balance")
-                body["equity"] = snap.get("equity")
-                body["accountCurrency"] = snap.get("currency", "")
+                if balance is not None or equity is not None:
+                    body["balance"] = balance
+                    body["equity"] = equity
+                else:
+                    snap = account_snapshot(port, payload)
+                    body["balance"] = snap.get("balance")
+                    body["equity"] = snap.get("equity")
+                snap_cur = account_snapshot(port, payload)
+                body["accountCurrency"] = snap_cur.get("currency", "")
             except Exception as snap_err:
                 log(f"CONNECT SNAPSHOT DEFERRED: {snap_err}")
         api("POST", callback, body)
@@ -3413,6 +3540,140 @@ def _payload_force_login(payload: Optional[Dict[str, Any]]) -> bool:
     )
 
 
+def _execute_equity_login(
+    payload: Dict[str, Any],
+    port: Any,
+    login: str,
+    password: str,
+    server: str,
+    bot: Any,
+    port_dir: Path,
+    terminal: Path,
+    config_file: Path,
+) -> Dict[str, Any]:
+    """Login 8/2 — เปิด MT5 ทันที ยืนยันจาก Equity ล่าสุด"""
+    log(f"EQUITY-FIRST LOGIN PORT={port} LOGIN={login}")
+
+    snap_open = _latest_equity_snapshot(port, payload, port_dir)
+    if _snap_has_equity(snap_open) and mt5_running_for_port_dir(port_dir):
+        procs = mt5_port_processes(port, payload)
+        proc_pid = procs[0].pid if procs else None
+        enforce_login_no_trading(port_dir, port, payload, login, password, server)
+        titles = " | ".join(mt5_window_titles(port, payload))
+        _send_equity_connected(payload, port, proc_pid, login, snap_open, titles)
+        return {
+            "action": "login_mt5",
+            "status": "connected",
+            "loginOnly": True,
+            "fastReuse": True,
+            "equityVerified": True,
+            "port": port,
+            "login": login,
+            "server": server,
+            "equity": snap_open.get("equity"),
+            "balance": snap_open.get("balance"),
+        }
+
+    def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
+        procs = mt5_port_processes(port, payload)
+        already = bool(procs) or mt5_running_for_port_dir(port_dir)
+        force = _payload_force_login(payload)
+        if already:
+            ok_w, _title = mt5_login_verified_by_window(port, payload)
+            if force or not ok_w:
+                try:
+                    kill_mt5_by_folder(port_dir)
+                except Exception as e:
+                    log(f"EQUITY RELAUNCH kill error: {e}")
+                time.sleep(1.2)
+                procs = []
+            else:
+                return procs[0] if procs else None
+        try:
+            stop_mt5_port_only(port, payload)
+        except Exception as e:
+            log(f"EQUITY STOP OLD MT5 ERROR: {e}")
+        time.sleep(0.35)
+        write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+        write_avelqua_trading_gate(port_dir, False, payload)
+        patch_mt5_experts_config(port_dir, False)
+        clear_mt5_login_cache(port_dir)
+        cfg = mt5_startup_ini_path(port_dir)
+        args = [str(terminal), "/portable", f"/config:{cfg}"]
+        log(f"EQUITY START MT5 reason={reason} server={server} cwd={port_dir}")
+        proc = _popen_hidden(args, cwd=str(port_dir))
+        if proc:
+            time.sleep(2.0)
+            if proc.poll() is not None:
+                log(f"EQUITY MT5 EXIT EARLY PORT={port} exit={proc.returncode}")
+            elif _pid_is_running(proc.pid):
+                log(f"EQUITY MT5 RUNNING PORT={port} pid={proc.pid}")
+        if proc and _mt5_login_form_enabled():
+            time.sleep(0.9)
+            automate_mt5_login_server_form(login, password, server, port_dir, proc.pid if proc else None)
+        return proc
+
+    other_mt5 = _count_mt5_terminals()
+    if other_mt5 > 0:
+        stagger = min(4.0, 1.5 + other_mt5 * 0.75)
+        log(f"EQUITY MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
+        time.sleep(stagger)
+
+    active_pid_ref: List[Any] = [None]
+    proc = launch_mt5("equity-initial")
+    proc_pid = proc.pid if proc else None
+    active_pid_ref[0] = proc_pid
+    send_connect_result(
+        payload,
+        "starting",
+        f"กำลังเปิด MT5 — รอ Equity ล่าสุด (login {login})...",
+        port,
+        process_id=proc_pid,
+    )
+    sync_avelqua_data_exports(port_dir, force=True)
+    ensure_equity_pulse_indicator(port_dir)
+
+    eq_timeout = min(120, max(60, journal_timeout_sec(payload)))
+    ok, msg, snap = wait_mt5_equity_login(
+        port,
+        payload,
+        port_dir,
+        login,
+        proc_pid,
+        eq_timeout,
+        active_pid_ref=active_pid_ref,
+    )
+    proc_pid = active_pid_ref[0] or proc_pid
+
+    if not ok:
+        try:
+            kill_mt5_by_folder(port_dir)
+            stop_mt5_port_only(port, payload)
+        except Exception as e:
+            log(f"EQUITY FAIL cleanup: {e}")
+        remove_mt5_login_ini(port_dir)
+        clear_mt5_login_cache(port_dir)
+        raise RuntimeError("MT5_EQUITY_FAILED")
+
+    enforce_login_no_trading(port_dir, port, payload, login, password, server)
+    log(f"EQUITY LOGIN OK PORT={port} LOGIN={login} equity={snap.get('equity')}")
+    return {
+        "action": "login_mt5",
+        "status": "connected",
+        "loginOnly": True,
+        "equityVerified": True,
+        "port": port,
+        "login": login,
+        "server": server,
+        "bot": bot,
+        "config": str(config_file),
+        "terminal": str(terminal),
+        "equity": snap.get("equity"),
+        "balance": snap.get("balance"),
+        "loginVerified": True,
+    }
+
+
 def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
     PRO MT5 Engine V2:
@@ -3694,6 +3955,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             raise
         except Exception:
             pass
+
+    if _login_uses_equity_verify(login):
+        return _execute_equity_login(
+            payload, port, login, password, server, bot, port_dir, terminal, config_file
+        )
 
     def result_ok(message: str, process_id: Any = None) -> Dict[str, Any]:
         try:

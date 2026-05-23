@@ -31,7 +31,8 @@ const {
   queueStopMt5ForAccount,
   failAccountFromJournal,
   probeRecentLoginCommandFailed,
-  verifyPortLoginWithFallback
+  verifyPortLoginWithFallback,
+  loginUsesEquityVerify
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -52,7 +53,7 @@ const {
   expireStuckMaintenanceCommands
 } = require('../lib/agentDeploy');
 const { patchAccountMt5Preview } = require('../lib/mt5Preview');
-const { applyEquityFromCommandResult } = require('../lib/mt5EquitySync');
+const { applyEquityFromCommandResult, positiveMoney } = require('../lib/mt5EquitySync');
 const { applyRunBotCommandResult } = require('../lib/mt5RunBotResult');
 const { sanitizePgText, deepSanitizeForPg, toJsonbParam } = require('../lib/pgSanitize');
 
@@ -814,6 +815,57 @@ router.post('/connect-result', async (req, res) => {
           [accountId]
         ).catch(() => ({ rows: [] }));
         loginForJournal = String(accRow.rows?.[0]?.mt5_login || '').trim();
+      }
+
+      /** Login 8/2 — ยืนยันจาก Equity ล่าสุด (ไม่บังคับ Journal) */
+      const bodyEqEarly = positiveMoney(req.body.equity);
+      const verifyMode = String(req.body.verifyMode || req.body.verify_mode || '').toLowerCase();
+      if (
+        loginUsesEquityVerify(loginForJournal) &&
+        loginVerified &&
+        (bodyEqEarly > 0 || verifyMode === 'equity')
+      ) {
+        let eqVal = bodyEqEarly;
+        let balVal = positiveMoney(req.body.balance);
+        if (eqVal <= 0) {
+          const metricsEq = await verifyPortLoginWithFallback(node.id, portNo, loginForJournal, {
+            requireLoginMatch: false
+          }).catch(() => ({ ok: false }));
+          eqVal = positiveMoney(metricsEq.equity);
+          balVal = positiveMoney(metricsEq.balance) || balVal;
+        }
+        if (eqVal > 0) {
+          await patchAccountMt5Preview(accountId, {
+            message: message || MT5_SUCCESS_MSG,
+            windowTitle,
+            previewB64
+          });
+          await promoteAccountConnected({
+            accountId,
+            portId,
+            mt5Login: loginForJournal || mt5Login,
+            message: message || MT5_SUCCESS_MSG
+          });
+          await query(`
+            UPDATE vps_system.mt5_accounts
+            SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity)
+            WHERE id=$1
+          `, [accountId, balVal || null, eqVal || null]).catch(() => {});
+          if (portId) {
+            await query(`
+              UPDATE vps_system.vps_ports
+              SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
+                  locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
+              WHERE id=$1
+            `, [portId, pid, loginForJournal || mt5Login]).catch(() => {});
+          }
+          await query(`
+            INSERT INTO vps_system.mt5_login_history
+            (account_id, vps_id, port_id, port_no, mt5_login, status, message)
+            VALUES ($1,$2,$3,$4,$5,'connected',$6)
+          `, [accountId, node.id, portId || null, portNo || null, loginForJournal || mt5Login, message || MT5_SUCCESS_MSG]).catch(() => {});
+          return res.json({ ok: true, connected: true, fastPath: 'equity_verify' });
+        }
       }
 
       let journalEvidence = sanitizeJournalText(
