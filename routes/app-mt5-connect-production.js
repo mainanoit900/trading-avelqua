@@ -1223,10 +1223,6 @@ async function handleMt5ConnectProduction(req, res) {
     }
 
     const accountId = upserted.id;
-    await cancelPendingLoginCommands({
-      portId: reservedPort.port_id,
-      accountId
-    });
     await expireDuplicatePortSlotRows(
       query,
       userId,
@@ -1267,6 +1263,11 @@ async function handleMt5ConnectProduction(req, res) {
     const equityFast = loginUsesEquityVerify(mt5Login);
     const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, accountId, {
       equityFast
+    });
+
+    await cancelPendingLoginCommands({
+      portId: reservedPort.port_id,
+      accountId
     });
 
     const connectStartedAt = new Date().toISOString();
@@ -1336,6 +1337,122 @@ async function handleMt5ConnectProduction(req, res) {
     if (loginLockKey) await redis.del(loginLockKey).catch(() => {});
     if (lockKey) await redis.del(lockKey).catch(() => {});
   }
+}
+
+async function ensureActiveLoginCommandForPoll(account) {
+  const accountId = Number(account?.id || 0);
+  const vpsId = Number(account?.vps_id || 0);
+  const portSlot = Number(account?.port_slot || account?.assigned_port_no || 0);
+  const portNo = Number(account?.assigned_port_no || account?.port_slot || 0);
+  const login = String(account?.mt5_login || '').trim();
+  const status = String(account?.status || '').toLowerCase();
+  if (!accountId || !vpsId || !login || !portNo) return { requeued: false };
+  if (!['connecting', 'starting', 'checking', 'connected'].includes(status)) {
+    return { requeued: false };
+  }
+
+  const connectMs = account.connect_started_at
+    ? new Date(account.connect_started_at).getTime()
+    : 0;
+  if (!connectMs || Date.now() - connectMs > 8 * 60 * 1000) return { requeued: false };
+  if (Date.now() - connectMs < 2500) return { requeued: false };
+
+  const live = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
+  if (live.ok) return { requeued: false, live: true };
+
+  if (await hasLoginCommandInProgress(accountId, vpsId).catch(() => false)) {
+    return { requeued: false };
+  }
+
+  const roundCmd = await findRecentTerminalLoginCommand(accountId, vpsId, {
+    sinceMs: connectMs
+  }).catch(() => null);
+  if (roundCmd) {
+    const st = String(roundCmd.status || '').toLowerCase();
+    if (['pending', 'processing', 'picked', 'running', 'success', 'done'].includes(st)) {
+      return { requeued: false };
+    }
+  }
+
+  const cred = await query(
+    `
+    SELECT mt5_password, user_id, port_id, server_name, port_slot, assigned_port_no,
+           COALESCE(p.folder_path, '') AS folder_path
+    FROM vps_system.mt5_accounts a
+    LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+    WHERE a.id = $1
+    LIMIT 1
+  `,
+    [accountId]
+  ).catch(() => ({ rows: [] }));
+  const row = cred.rows?.[0];
+  if (!row?.mt5_password) return { requeued: false };
+
+  if (status === 'connected') {
+    await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET status='checking',
+          last_login_message='② กำลังส่งคำสั่งเปิด MT5 ไป VPS...',
+          last_error=NULL,
+          updated_at=NOW()
+      WHERE id=$1
+    `,
+      [accountId]
+    ).catch(() => {});
+    account.status = 'checking';
+    account.last_login_message = '② กำลังส่งคำสั่งเปิด MT5 ไป VPS...';
+    account.last_error = null;
+  }
+
+  const userId = Number(row.user_id || 0);
+  const totalPorts = userId ? await getUserPackagePortLimit(userId).catch(() => 4) : 4;
+  const activeOnVps = await countActiveLoginsOnVps(vpsId).catch(() => 0);
+  const runningOnVps = await countRunningMt5OnVps(vpsId).catch(() => 0);
+  const journalTimeoutSec = computeJournalTimeoutSec({
+    totalPorts,
+    activeLoginCount: activeOnVps,
+    runningMt5Count: runningOnVps,
+    portSlot: portSlot || portNo
+  });
+  const equityFast = loginUsesEquityVerify(login);
+  const queueDelay = await computeLoginQueueDelaySec(vpsId, accountId, { equityFast }).catch(
+    () => 0
+  );
+  const connectStartedAt = account.connect_started_at
+    ? new Date(account.connect_started_at).toISOString()
+    : new Date().toISOString();
+  const reservedPort = {
+    vps_id: vpsId,
+    port_id: Number(row.port_id || account.port_id || 0),
+    port_no: portNo,
+    folder_path: row.folder_path || account.folder_path || ''
+  };
+  const payload = {
+    ...buildMt5LoginPayload({
+      accountId,
+      userId,
+      reservedPort,
+      portSlot: portSlot || portNo,
+      mt5Login: login,
+      mt5Password: String(row.mt5_password),
+      serverName: String(row.server_name || resolveServerForLogin(login)),
+      journalTimeoutSec,
+      loginQueueDelaySec: queueDelay
+    }),
+    connectStartedAt,
+    forceLogin: true,
+    purpose: 'poll_requeue_login'
+  };
+
+  const queued = await insertPendingAgentCommand({
+    vpsId,
+    portId: reservedPort.port_id || null,
+    commandType: 'login_mt5',
+    payload
+  }).catch(() => ({ id: 0 }));
+
+  return { requeued: !!queued.id, commandId: queued.id || null };
 }
 
 async function handleMt5ConnectStatusProduction(req, res) {
@@ -1442,6 +1559,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
         loginVerified: false,
         message: userMsg
       });
+    }
+    const requeueLogin = await ensureActiveLoginCommandForPoll(a).catch(() => ({
+      requeued: false
+    }));
+    if (requeueLogin.requeued) {
+      status = String(a.status || status).toLowerCase();
     }
     const loginNum = String(a.mt5_login || '').trim();
     const msgBlobEarly = String(a.last_login_message || a.last_error || '');
