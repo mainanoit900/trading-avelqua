@@ -2571,22 +2571,8 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       await cancelPendingEquitySnapshots(stopNodeId, { accountId: id }).catch(() => 0);
     }
 
-    // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
+    // STEP 2: ปิด MT5 + ปล่อย pool (releaseUserPortCompletely ส่ง force_stop ให้ Agent แล้ว)
     if (stopNodeId && stopPortNo) {
-      await insertPendingAgentCommand({
-        vpsId: stopNodeId,
-        portId: oldPort.port_id || null,
-        commandType: 'stop_mt5',
-        payload: {
-          port: stopPortNo,
-          portSlot: oldPort.port_slot,
-          assignedPortNo: oldPort.assigned_port_no,
-          windowsPortNo: oldPort.windows_port_no,
-          folder_path: folderPath,
-          vpsFolderPath: folderPath,
-          reason: 'user_delete_port'
-        }
-      }).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
       if (oldPort.port_id) {
         await query(`
           UPDATE vps_system.vps_ports
@@ -2628,7 +2614,8 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       adminNodeId: adminNodeId || stopNodeId,
       portNo: stopPortNo,
       folderPath,
-      portId: oldPort.port_id || null
+      portId: oldPort.port_id || null,
+      reason: 'user_delete_port'
     }).catch(() => {});
 
     flash(req, 'success', 'ลบ PORT ' + (oldPort.port_slot || '') + ' แล้ว — ช่องว่างพร้อมใช้ใหม่');
