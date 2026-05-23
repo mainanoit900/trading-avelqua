@@ -837,12 +837,15 @@ async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   const portNo = Number(account?.assigned_port_no || account?.port_slot || 0);
   if (!accountId || !vpsId || !login) return false;
 
+  const msg = String(account?.last_login_message || account?.last_error || '');
+  if (messageIndicatesLoginFailed(msg, login)) return false;
+
+  // บัญชี connected แล้ว (Agent / promote) — อย่ารอ journal ซ้ำจนปุ่มค้าง
+  if (st === 'connected') return true;
+
   const cmdSt = String(cmdMeta?.commandStatus || '').toLowerCase();
   if (['pending', 'processing', 'picked', 'running'].includes(cmdSt)) return false;
   if (await hasLoginCommandInProgress(accountId, vpsId).catch(() => false)) return false;
-
-  const msg = String(account?.last_login_message || account?.last_error || '');
-  if (messageIndicatesLoginFailed(msg, login)) return false;
 
   const verified = await verifyLoginFromCommand({
     accountId,
@@ -1551,12 +1554,14 @@ async function handleMt5ConnectStatusProduction(req, res) {
       a.last_login_message = MT5_SUCCESS_MSG;
     }
     if (statusFinal === 'connected' && !loginVerified) {
-      statusFinal = ['checking', 'starting', 'connecting'].includes(
-        String(a.status || '').toLowerCase()
-      )
-        ? String(a.status || '').toLowerCase()
-        : 'checking';
-      a.status = statusFinal;
+      const loginInMsg = String(a.mt5_login || '').trim();
+      const msgBlob = String(a.last_login_message || a.last_error || '');
+      if (!messageIndicatesLoginFailed(msgBlob, loginInMsg)) {
+        loginVerified = true;
+      } else {
+        statusFinal = 'checking';
+        a.status = statusFinal;
+      }
     }
     const inProgress = ['connecting', 'checking', 'starting'].includes(statusFinal);
     let userMessage;
