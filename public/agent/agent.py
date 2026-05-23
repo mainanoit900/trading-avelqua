@@ -2981,7 +2981,7 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        if not ok_w and password and elapsed >= 10 and now - last_form_at >= 18.0:
+        if not ok_w and password and elapsed >= 8 and now - last_form_at >= 10.0:
             last_form_at = now
             try:
                 automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
@@ -3265,6 +3265,14 @@ def wait_mt5_login_hybrid(
         window_title=" | ".join(mt5_window_titles(port, payload)),
     )
     return False, fail_hint or JOURNAL_TIMEOUT_MSG, tail_evidence
+
+
+def _payload_force_login(payload: Optional[Dict[str, Any]]) -> bool:
+    return str(payload_get(payload or {}, "forceLogin", "force_login") or "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
 
 
 def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -3570,10 +3578,25 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
         procs = mt5_port_processes(port, payload)
-        if procs or mt5_running_for_port_dir(port_dir):
-            pid = procs[0].pid if procs else None
-            log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
-            return procs[0] if procs else None
+        already = bool(procs) or mt5_running_for_port_dir(port_dir)
+        force = _payload_force_login(payload)
+        if already:
+            ok_w, _title = mt5_login_verified_by_window(port, payload)
+            if force or not ok_w:
+                log(
+                    f"RELAUNCH MT5 PORT={port} reason={reason} force={force} "
+                    f"window_ok={ok_w} — kill stale terminal"
+                )
+                try:
+                    kill_mt5_by_folder(port_dir)
+                except Exception as e:
+                    log(f"FORCE RELAUNCH kill error: {e}")
+                time.sleep(1.2)
+                procs = []
+            else:
+                pid = procs[0].pid if procs else None
+                log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
+                return procs[0] if procs else None
         try:
             stop_mt5_port_only(port, payload)
         except Exception as e:

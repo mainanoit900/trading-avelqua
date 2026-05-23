@@ -1241,8 +1241,14 @@ async function handleMt5ConnectProduction(req, res) {
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
     await deferMaintenanceForLogin(reservedPort.vps_id).catch(() => {});
-    const { expireStalePendingAgentCommands } = require('../lib/mt5LoginCommandVerify');
-    await expireStalePendingAgentCommands(reservedPort.vps_id, 90).catch(() => {});
+    const { expireStalePendingAgentCommands, cancelPendingStopCommandsForSlot } =
+      require('../lib/mt5LoginCommandVerify');
+    await cancelPendingStopCommandsForSlot(
+      reservedPort.vps_id,
+      portSlot,
+      reservedPort.folder_path || ''
+    ).catch(() => {});
+    await expireStalePendingAgentCommands(reservedPort.vps_id, 45).catch(() => {});
 
     if (reservedPort.admin_node_id && allocPortNo) {
       await setAdminAllocationStatus(
