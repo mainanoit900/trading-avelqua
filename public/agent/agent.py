@@ -1548,8 +1548,8 @@ def _mt5_initialize_for_port(port_dir: Path) -> Tuple[bool, str]:
 def account_snapshot_mt5_api(
     port_dir: Path, payload: Optional[Dict[str, Any]] = None
 ) -> Dict[str, Any]:
-    """ดึง Balance/Equity ผ่าน MetaTrader5 package — ข้ามเมื่อ terminal เปิดอยู่แล้วแต่ attach ไม่ได้ (-6)"""
-    if _mt5_api_should_skip(port_dir) or mt5_running_for_port_dir(port_dir):
+    """ดึง Balance/Equity ผ่าน MetaTrader5 package (attach terminal ที่เปิดอยู่)"""
+    if _mt5_api_should_skip(port_dir):
         return {}
     ok_init, _ = _mt5_initialize_for_port(port_dir)
     if not ok_init:
@@ -1778,14 +1778,14 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             return _snap_merge_profit(snap)
 
         if mt5_open:
-            uia_snap = account_snapshot_uia(port, payload)
-            if _snap_positive(uia_snap):
-                snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
-                return _snap_merge_profit(snap)
-
             api_snap = account_snapshot_mt5_api(port_dir, payload)
             if _snap_positive(api_snap):
                 snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                return _snap_merge_profit(snap)
+
+            uia_snap = account_snapshot_uia(port, payload)
+            if _snap_positive(uia_snap):
+                snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
                 return _snap_merge_profit(snap)
 
         if not mt5_open:
@@ -1811,7 +1811,12 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             snap["profit"] = parsed["profit"]
         if parsed.get("currency"):
             snap["currency"] = parsed["currency"]
-        log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}")
+        if _snap_positive(snap) or os.getenv("AVELQUA_DEBUG_SNAPSHOT", "").lower() in (
+            "1",
+            "true",
+            "yes",
+        ):
+            log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}")
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
@@ -2799,6 +2804,19 @@ def _connect_on_api_verify(
     except Exception:
         pass
     j_out, j_chunk = _quick_journal_probe(port_dir, login, time.time() - 120, srv)
+    snap_api: Dict[str, Any] = {}
+    try:
+        snap_api = account_snapshot_mt5_api(port_dir, payload)
+    except Exception:
+        snap_api = {}
+    if _snap_positive(snap_api):
+        schedule_account_metrics_retry(payload, port, delays=(2, 8, 20))
+        send_account_metrics(
+            payload,
+            snap_api.get("balance"),
+            snap_api.get("equity"),
+            snap_api.get("currency", ""),
+        )
     send_connect_result(
         payload,
         "connected",
@@ -2982,7 +3000,8 @@ def wait_mt5_login_hybrid(
             and not _mt5_api_should_skip(port_dir)
             and ok_w
             and window_ok_streak >= 1
-            and now - last_api_at >= 1.0
+            and elapsed >= 5
+            and now - last_api_at >= 2.0
         ):
             last_api_at = now
             api_hit, api_msg = _connect_on_api_verify(
