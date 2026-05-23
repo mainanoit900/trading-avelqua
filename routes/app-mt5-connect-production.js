@@ -18,7 +18,9 @@ const {
   syncJournalFromLatestCommand,
   failAccountFromJournal,
   promoteAccountConnected,
-  isLegacyWindowVerifiedMessage
+  isLegacyWindowVerifiedMessage,
+  probeRecentLoginCommandFailed,
+  findRecentTerminalLoginCommand
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const {
@@ -798,7 +800,7 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   const vid = num(vpsId);
   if (!aid || !vid) return {};
   const inProg = await findLoginCommandInProgress(aid, vid);
-  const recent = inProg ? null : await findLoginCommandForAttempt(aid, vid);
+  const recent = inProg ? null : await findRecentTerminalLoginCommand(aid, vid);
   const cmd = inProg || recent;
   if (!cmd) return {};
   const st = String(cmd.status || '').toLowerCase();
@@ -1290,6 +1292,45 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const updatedAt = a.updated_at ? new Date(a.updated_at).getTime() : 0;
     const staleMs = Date.now() - updatedAt;
     let status = String(a.status || '').toLowerCase();
+
+    if (['connecting', 'starting', 'checking'].includes(status)) {
+      const cmdFailEarly = await probeRecentLoginCommandFailed(a).catch(() => ({ failed: false }));
+      if (cmdFailEarly.failed) {
+        const failMsg = cmdFailEarly.message || MT5_LOGIN_TIMEOUT_MSG;
+        await failAccountFromJournal(a.id, a.port_id, failMsg, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no || a.port_slot,
+          folderPath: a.folder_path,
+          reason: 'login_cmd_failed',
+          killMt5: true,
+          clearPackagePort: true,
+          forceFailed: true
+        }).catch(() => {});
+        status = 'failed';
+        a.status = 'failed';
+        a.last_error = failMsg;
+        a.last_login_message = failMsg;
+      }
+    }
+
+    if (status === 'failed') {
+      const failMsg = a.last_error || a.last_login_message || MT5_FAIL_USER_MSG;
+      return res.json({
+        ok: true,
+        account: { ...a, status: 'failed' },
+        connected: false,
+        failed: true,
+        checking: false,
+        pending: false,
+        status: 'failed',
+        loginVerified: false,
+        message: failMsg,
+        commandStatus: 'failed',
+        commandMessage: failMsg,
+        elapsedSec: Math.max(0, Math.floor(staleMs / 1000)),
+        connectStep: '④ Login ไม่สำเร็จ'
+      });
+    }
 
     if (['deleted', 'expired'].includes(status)) {
       const { MT5_LOGIN_TIMEOUT_MSG } = require('../lib/mt5Server');

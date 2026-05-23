@@ -760,10 +760,16 @@ router.post('/connect-result', async (req, res) => {
             portNo,
             folderPath: accRow.folder_path,
             reason: cmdFail.authFail ? 'login_cmd_failed' : 'login_journal_timeout',
-            killMt5: false
+            killMt5: true,
+            clearPackagePort: true,
+            forceFailed: true
           }).catch(() => {});
           return res.json({ ok: true, failed: true, message: cmdFail.message });
         }
+      }
+      const accStatus = String(accRow?.status || '').toLowerCase();
+      if (accStatus === 'failed') {
+        return res.json({ ok: true, failed: true, message: message || MT5_FAIL_USER_MSG });
       }
       const titleBlob = `${windowTitle} ${message}`;
       if (messageIndicatesLoginFailed(titleBlob, loginHint)) {

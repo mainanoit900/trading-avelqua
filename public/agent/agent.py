@@ -110,7 +110,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-journal-first-v47"
+AGENT_BUILD_ID = "2026-05-23-journal-first-v48"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2933,6 +2933,26 @@ def wait_mt5_login_hybrid(
                 payload, port, proc_pid, login, j_chunk, early_sent, last_title
             )
             return True, "journal ok (early web confirm)", j_chunk
+
+        if (
+            journal_first
+            and elapsed >= 18
+            and j_out is None
+            and not mt5_running_for_port_dir(port_dir)
+        ):
+            no_mt5_msg = (
+                f"MT5 ไม่เปิดบน PORT {port} — กรุณาตรวจ VPS แล้วกดเชื่อมต่อใหม่"
+            )
+            cleanup_mt5_after_login_fail(port, payload, port_dir)
+            send_connect_result(
+                payload,
+                "failed",
+                no_mt5_msg,
+                port,
+                process_id=None,
+                journal_evidence=j_chunk or "",
+            )
+            return False, no_mt5_msg, j_chunk or ""
 
         if now - last_gate_at >= (3.0 if elapsed < 45 else 8.0):
             try:
