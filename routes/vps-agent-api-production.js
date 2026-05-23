@@ -158,6 +158,32 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
       if (aid > 0) {
         await applyEquityToAccount(aid, metrics.balance, metrics.equity).catch(() => {});
       }
+      if (
+        purpose === 'equity_login_verify' &&
+        aid > 0 &&
+        positiveMoney(metrics.equity) > 0
+      ) {
+        const accRow = await query(
+          `
+          SELECT id, status, port_id, mt5_login
+          FROM vps_system.mt5_accounts
+          WHERE id=$1 LIMIT 1
+        `,
+          [aid]
+        ).catch(() => ({ rows: [] }));
+        const acc = accRow.rows?.[0];
+        const st = String(acc?.status || '').toLowerCase();
+        if (acc && ['connecting', 'starting', 'checking'].includes(st)) {
+          await promoteAccountConnected({
+            accountId: aid,
+            portId: Number(acc.port_id || 0) || undefined,
+            mt5Login: String(acc.mt5_login || pl.mt5Login || ''),
+            message: MT5_SUCCESS_MSG,
+            balance: metrics.balance,
+            equity: metrics.equity
+          }).catch(() => {});
+        }
+      }
       if (instanceId > 0) {
         await applyMt5LiveStatus({
           instanceId,

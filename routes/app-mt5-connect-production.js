@@ -68,7 +68,9 @@ const {
   verifyLoginFromCommand,
   extractJournalEvidence,
   hasLoginCommandInProgress,
-  loginUsesEquityVerify
+  loginUsesEquityVerify,
+  loginCommandNeedsEquityResult,
+  queueEquityLoginVerify
 } = require('../lib/mt5LoginCommandVerify');
 const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
 const {
@@ -813,6 +815,13 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   const loginHint = String(
     cmd.payload?.mt5Login || cmd.payload?.login || res.login || ''
   ).trim();
+  if (loginCommandNeedsEquityResult(cmd, loginHint)) {
+    return {
+      commandId: cmd.id,
+      commandStatus: 'processing',
+      commandMessage: 'Agent กำลังเปิด MT5 และรอ Equity ล่าสุด...'
+    };
+  }
   const resolvedCmd = resolveLoginFailUserMessage({
     login: loginHint,
     evidence: extractJournalEvidence(res.journalEvidence, res.journal_evidence, res.message, commandMessage),
@@ -825,7 +834,8 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
   return {
     commandId: cmd.id,
     commandStatus: st,
-    commandMessage
+    commandMessage,
+    commandResult: res
   };
 }
 
@@ -1613,7 +1623,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
       );
       if (['success', 'done'].includes(cmdSt)) {
         userMessage = equityMode
-          ? `กำลังตรวจ Equity ล่าสุดจาก MT5 (${elapsedSec} วินาที)...`
+          ? loginCommandNeedsEquityResult(
+              { status: cmdSt, result: cmdMeta.commandResult || {} },
+              a.mt5_login
+            )
+            ? `Agent กำลังเปิด MT5 และรอ Equity (${elapsedSec} วิ)...`
+            : `กำลังตรวจ Equity ล่าสุดจาก MT5 (${elapsedSec} วินาที)...`
           : `กำลังตรวจ Login จาก Journal MT5 (${elapsedSec} วินาที)...`;
       } else if (upgradeHint) {
         userMessage = `กำลังเปิด MT5 และ Login... (${elapsedSec} วินาที)`;
@@ -1671,6 +1686,16 @@ async function handleMt5ConnectStatusProduction(req, res) {
         connectStep = '④ กำลังตรวจ Equity ล่าสุดจาก MT5';
         if (/Equity|equity/i.test(loginMsg)) {
           connectStep = loginMsg;
+        }
+        if (loginCommandNeedsEquityResult({ status: cmdSt, result: cmdMeta.result || {} }, a.mt5_login)) {
+          connectStep = '③ Agent กำลังเปิด MT5 — รอ Equity ล่าสุด...';
+          await queueEquityLoginVerify({
+            accountId: a.id,
+            vpsId: a.vps_id,
+            folderPath: a.folder_path,
+            mt5Login: a.mt5_login,
+            portNo: a.assigned_port_no || a.port_slot
+          }).catch(() => {});
         }
       } else {
         connectStep = '④ กำลังตรวจ Login จาก Journal MT5';
