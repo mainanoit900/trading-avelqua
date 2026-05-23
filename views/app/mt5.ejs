@@ -442,6 +442,44 @@ document.addEventListener('DOMContentLoaded', function () {
   const MT5_CONNECT_MIN_UI_MS = 2000;
   let mt5StatusPollInFlight = false;
 
+  function mt5ActivePageSlot() {
+    const fromUrl = urlParams.get('port_slot') || '';
+    const fromDom = String((document.getElementById('mt5SelectedPortSlot') || {}).value || '').trim();
+    return fromDom || fromUrl || '';
+  }
+
+  function mt5AccountPortSlot(accountInfo) {
+    if (!accountInfo) return '';
+    return String(
+      accountInfo.port_slot != null
+        ? accountInfo.port_slot
+        : accountInfo.assigned_port_no != null
+          ? accountInfo.assigned_port_no
+          : ''
+    ).trim();
+  }
+
+  function mt5FailBelongsToActivePort(accountInfo) {
+    const active = mt5ActivePageSlot();
+    const accSlot = mt5AccountPortSlot(accountInfo);
+    if (!active || !accSlot) return true;
+    return String(active) === String(accSlot);
+  }
+
+  function mt5ClearStaleConnectSession() {
+    sessionStorage.removeItem('mt5PollAccountId');
+    sessionStorage.removeItem('mt5ConnectInFlight');
+    sessionStorage.removeItem('mt5ConnectStartedAt');
+    sessionStorage.removeItem('mt5ConnectTargetSlot');
+    mt5PollAccountId = '';
+    mt5Checking = false;
+    if (window.mt5Checker) {
+      clearInterval(window.mt5Checker);
+      window.mt5Checker = null;
+    }
+    if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+  }
+
   function mt5ConnectUiElapsedMs() {
     const t = Number(
       sessionStorage.getItem('mt5ConnectStartedAt') ||
@@ -1607,6 +1645,10 @@ document.addEventListener('DOMContentLoaded', function () {
   window.mt5StopConnectPolling = mt5StopConnectPolling;
 
   async function finishMt5ConnectFail(message, accountInfo) {
+    if (!mt5FailBelongsToActivePort(accountInfo)) {
+      mt5ClearStaleConnectSession();
+      return;
+    }
     mt5StopConnectPolling();
     const failSlotHint =
       mt5ConnectTargetSlot() ||
@@ -2551,15 +2593,23 @@ document.addEventListener('DOMContentLoaded', function () {
           if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
           return;
         }
-        if (data.failed === true && mt5ConnectInFlightNow()) {
-          if (typeof window.finishMt5ConnectFail === 'function') {
-            window.finishMt5ConnectFail(
-              data.message ||
-                data.account.last_error ||
-                'User หรือ รหัส ไม่ถูกต้อง',
-              data.account
-            );
+        if (data.failed === true) {
+          if (!mt5FailBelongsToActivePort(data.account)) {
+            mt5ClearStaleConnectSession();
+            return;
           }
+          if (mt5ConnectInFlightNow()) {
+            if (typeof window.finishMt5ConnectFail === 'function') {
+              window.finishMt5ConnectFail(
+                data.message ||
+                  data.account.last_error ||
+                  'User หรือ รหัส ไม่ถูกต้อง',
+                data.account
+              );
+            }
+            return;
+          }
+          mt5ClearStaleConnectSession();
           return;
         }
         if (['connecting', 'checking', 'starting'].includes(stBoot) || data.pending || data.checking) {

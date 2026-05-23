@@ -110,7 +110,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-multiport-wait-v50"
+AGENT_BUILD_ID = "2026-05-23-multiport-launch-v51"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2880,8 +2880,9 @@ def wait_mt5_login_hybrid(
     early_sent: List[bool] = [False]
     api_skip_logged = False
     password = str(payload_get(payload, "mt5Password", "password") or "")
-    no_mt5_threshold = 35 if other_terminals > 0 else 18
-    relaunch_done = False
+    no_mt5_threshold = 50 if other_terminals > 0 else 22
+    relaunch_attempts = 0
+    relaunch_max = 2 if other_terminals > 0 else 1
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
     if journal_since < wait_start - 120:
@@ -2958,15 +2959,15 @@ def wait_mt5_login_hybrid(
                 return False, JOURNAL_FAIL_MSG, chunk_late or j_chunk or ""
 
             if (
-                not relaunch_done
+                relaunch_attempts < relaunch_max
                 and relaunch_fn
                 and other_terminals > 0
-                and elapsed < no_mt5_threshold + 20
+                and elapsed < no_mt5_threshold + 25
             ):
-                relaunch_done = True
+                relaunch_attempts += 1
                 log(
                     f"MT5 NOT RUNNING PORT={port} elapsed={elapsed}s "
-                    f"other_terminals={other_terminals} — relaunch once"
+                    f"other_terminals={other_terminals} attempt={relaunch_attempts}/{relaunch_max}"
                 )
                 try:
                     relaunch_fn()
@@ -3712,7 +3713,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     other_mt5 = _count_mt5_terminals()
     if other_mt5 > 0:
         if _journal_first_login_enabled():
-            stagger = min(1.0, 0.25 + other_mt5 * 0.15)
+            stagger = min(4.0, 1.5 + other_mt5 * 0.75)
         else:
             stagger = min(2.5, 0.8 + other_mt5 * 0.35)
         log(f"MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
