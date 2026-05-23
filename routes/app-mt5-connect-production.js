@@ -1198,7 +1198,10 @@ async function handleMt5ConnectProduction(req, res) {
       runningMt5Count: runningOnVps,
       portSlot
     });
-    const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, accountId);
+    const equityFast = loginUsesEquityVerify(mt5Login);
+    const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, accountId, {
+      equityFast
+    });
 
     const connectStartedAt = new Date().toISOString();
     const payload = {

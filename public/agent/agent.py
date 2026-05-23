@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v54"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v55"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1351,9 +1351,27 @@ def collect_log_text_for_snapshot(port_dir: Path, max_files: int = 10) -> str:
     return "\n".join(chunks)
 
 
-def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[str, Any]:
+def clear_stale_equity_files(port_dir: Path) -> None:
+    """ลบไฟล์ equity เก่าก่อน login ใหม่ — กันอ่านยอดจาก session ก่อนหน้า"""
+    for p in (
+        port_dir / "MQL5" / "Files" / "avelqua_account.txt",
+        port_dir / "MQL5" / "Files" / "avelqua_account.json",
+        port_dir / "Terminal" / "Common" / "Files" / "avelqua_account.txt",
+        port_dir / "Terminal" / "Common" / "Files" / "avelqua_account.json",
+    ):
+        try:
+            if p.exists():
+                p.unlink()
+                log(f"CLEARED STALE EQUITY FILE {p.name}")
+        except Exception as e:
+            log(f"CLEAR STALE EQUITY ERROR {p}: {e}")
+
+
+def account_snapshot_equity_file(
+    port_dir: Path, max_age_sec: int = 0, since_ts: float = 0.0
+) -> Dict[str, Any]:
     """อ่านจาก MQL5/Files/avelqua_account.txt (AvelquaEquityPulse indicator)"""
-    out: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
+    out: Dict[str, Any] = {"balance": None, "equity": None, "currency": "", "login": ""}
     candidates = [
         port_dir / "MQL5" / "Files" / "avelqua_account.txt",
         port_dir / "MQL5" / "Files" / "avelqua_account.json",
@@ -1364,6 +1382,10 @@ def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[s
         if not p.exists():
             continue
         try:
+            if since_ts > 0:
+                mtime = p.stat().st_mtime
+                if mtime < since_ts - 0.5:
+                    continue
             if max_age_sec > 0:
                 age = time.time() - p.stat().st_mtime
                 if age > max_age_sec:
@@ -1376,6 +1398,7 @@ def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[s
                 out["balance"] = _parse_money_token(data.get("balance"))
                 out["equity"] = _parse_money_token(data.get("equity"))
                 out["currency"] = str(data.get("currency") or "")
+                out["login"] = str(data.get("login") or "").strip()
             else:
                 kv: Dict[str, str] = {}
                 for line in raw.splitlines():
@@ -1390,8 +1413,18 @@ def account_snapshot_equity_file(port_dir: Path, max_age_sec: int = 0) -> Dict[s
                     if pr is not None:
                         out["equity"] = round(float(out["balance"]) + float(pr), 2)
                 out["currency"] = str(kv.get("currency") or "").upper()
+                out["login"] = str(kv.get("login") or "").strip()
+                if since_ts > 0 and kv.get("ts"):
+                    try:
+                        if float(kv["ts"]) < since_ts - 2.0:
+                            continue
+                    except Exception:
+                        pass
             if out.get("balance") or out.get("equity"):
-                log(f"MT5 SNAPSHOT FILE {p.name} BALANCE={out.get('balance')} EQUITY={out.get('equity')}")
+                log(
+                    f"MT5 SNAPSHOT FILE {p.name} login={out.get('login')} "
+                    f"BALANCE={out.get('balance')} EQUITY={out.get('equity')}"
+                )
                 return out
         except Exception as e:
             log(f"MT5 SNAPSHOT FILE ERROR {p}: {e}")
@@ -1730,17 +1763,47 @@ def _snap_has_equity(snap: Dict[str, Any]) -> bool:
         return False
 
 
-def _latest_equity_snapshot(port: Any, payload: Dict[str, Any], port_dir: Path) -> Dict[str, Any]:
-    """ดึง Equity ล่าสุด — ไฟล์ pulse ก่อน แล้ว API/UIA"""
+def _equity_snapshot_login_matches(snap: Dict[str, Any], login: str) -> bool:
+    if not login:
+        return True
+    fl = str(snap.get("login") or "").strip()
+    if not fl:
+        return True
+    return fl == str(login).strip()
+
+
+_EQUITY_PULSE_SYNC_AT: Dict[str, float] = {}
+
+
+def _maybe_sync_equity_pulse(port_dir: Path, min_interval_sec: float = 2.0) -> None:
+    key = str(port_dir).lower()
+    now = time.time()
+    if now - _EQUITY_PULSE_SYNC_AT.get(key, 0.0) < min_interval_sec:
+        return
     try:
         sync_avelqua_data_exports(port_dir, force=True)
         ensure_equity_pulse_indicator(port_dir)
+        _EQUITY_PULSE_SYNC_AT[key] = now
     except Exception:
         pass
-    for max_age in (20, 0):
-        file_snap = account_snapshot_equity_file(port_dir, max_age_sec=max_age)
-        if _snap_has_equity(file_snap):
-            return file_snap
+
+
+def _fresh_equity_snapshot(
+    port: Any,
+    payload: Dict[str, Any],
+    port_dir: Path,
+    since_ts: Optional[float] = None,
+    login: str = "",
+) -> Dict[str, Any]:
+    """Equity ล่าสุดเท่านั้น — ไฟล์ต้องใหม่กว่า since_ts (ถ้าระบุ) และ login ตรง"""
+    _maybe_sync_equity_pulse(port_dir)
+    file_max_age = 45 if since_ts is None else 30
+    file_since = float(since_ts) if since_ts is not None else 0.0
+    file_snap = account_snapshot_equity_file(
+        port_dir, max_age_sec=file_max_age, since_ts=file_since
+    )
+    if _snap_has_equity(file_snap) and _equity_snapshot_login_matches(file_snap, login):
+        return file_snap
     if mt5_running_for_port_dir(port_dir):
         api_snap = account_snapshot_mt5_api(port_dir, payload)
         if _snap_has_equity(api_snap):
@@ -1748,7 +1811,7 @@ def _latest_equity_snapshot(port: Any, payload: Dict[str, Any], port_dir: Path) 
         uia_snap = account_snapshot_uia(port, payload)
         if _snap_has_equity(uia_snap):
             return uia_snap
-    return account_snapshot(port, payload)
+    return {"balance": None, "equity": None, "currency": ""}
 
 
 def _send_equity_connected(
@@ -1786,10 +1849,12 @@ def wait_mt5_equity_login(
     proc_pid: Any,
     timeout_sec: int,
     active_pid_ref: Optional[List[Any]] = None,
+    since_ts: float = 0.0,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """เปิด MT5 แล้วรอ Equity ล่าสุด — ขึ้น=สำเร็จ, ไม่ขึ้น=ล้มเหลว+ปิด MT5"""
     wait_start = time.time()
-    deadline = time.time() + max(45, int(timeout_sec or 90))
+    equity_since = since_ts if since_ts > 0 else wait_start
+    deadline = time.time() + max(40, int(timeout_sec or 75))
     last_progress = 0.0
     active_pid = active_pid_ref[0] if active_pid_ref else proc_pid
 
@@ -1799,13 +1864,15 @@ def wait_mt5_equity_login(
         if active_pid_ref is not None and active_pid_ref[0]:
             active_pid = active_pid_ref[0]
 
-        snap = _latest_equity_snapshot(port, payload, port_dir)
-        if _snap_has_equity(snap):
+        snap = _fresh_equity_snapshot(
+            port, payload, port_dir, since_ts=equity_since, login=login
+        )
+        if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
             titles = " | ".join(mt5_window_titles(port, payload))
             _send_equity_connected(payload, port, active_pid, login, snap, titles)
             return True, EQUITY_LOGIN_OK_MSG, snap
 
-        if now - last_progress >= 1.2:
+        if now - last_progress >= 0.8:
             eq = snap.get("equity")
             hint = f"รอ Equity ล่าสุด ({elapsed} วิ) — login {login}"
             if eq is not None:
@@ -1819,7 +1886,7 @@ def wait_mt5_equity_login(
             )
             last_progress = now
 
-        time.sleep(0.45)
+        time.sleep(0.2)
 
     cleanup_mt5_after_login_fail(port, payload, port_dir)
     send_connect_result(
@@ -3551,16 +3618,18 @@ def _execute_equity_login(
     terminal: Path,
     config_file: Path,
 ) -> Dict[str, Any]:
-    """Login 8/2 — เปิด MT5 ทันที ยืนยันจาก Equity ล่าสุด"""
-    log(f"EQUITY-FIRST LOGIN PORT={port} LOGIN={login}")
+    """Login 8/2 — เปิด MT5 ทันที ยืนยันจาก Equity ล่าสุด (ไม่ใช้ Journal)"""
+    server = MT5_LIVE_SERVER
+    log(f"EQUITY-FIRST LOGIN PORT={port} LOGIN={login} server={server}")
 
     force = _payload_force_login(payload)
     ok_w_open, title_open = mt5_login_verified_by_window(port, payload)
     login_on_window = bool(login and title_open and login in str(title_open))
-    snap_open = _latest_equity_snapshot(port, payload, port_dir)
+    snap_open = _fresh_equity_snapshot(port, payload, port_dir, since_ts=None, login=login)
     if (
         not force
         and _snap_has_equity(snap_open)
+        and _equity_snapshot_login_matches(snap_open, login)
         and mt5_running_for_port_dir(port_dir)
         and login_on_window
     ):
@@ -3582,6 +3651,8 @@ def _execute_equity_login(
             "balance": snap_open.get("balance"),
         }
 
+    equity_since_ref: List[float] = [0.0]
+
     def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
         procs = mt5_port_processes(port, payload)
         already = bool(procs) or mt5_running_for_port_dir(port_dir)
@@ -3593,7 +3664,7 @@ def _execute_equity_login(
                     kill_mt5_by_folder(port_dir)
                 except Exception as e:
                     log(f"EQUITY RELAUNCH kill error: {e}")
-                time.sleep(1.2)
+                time.sleep(0.5)
                 procs = []
             else:
                 return procs[0] if procs else None
@@ -3601,7 +3672,9 @@ def _execute_equity_login(
             stop_mt5_port_only(port, payload)
         except Exception as e:
             log(f"EQUITY STOP OLD MT5 ERROR: {e}")
-        time.sleep(0.35)
+        time.sleep(0.15)
+        clear_stale_equity_files(port_dir)
+        equity_since_ref[0] = time.time()
         write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
@@ -3611,19 +3684,16 @@ def _execute_equity_login(
         log(f"EQUITY START MT5 reason={reason} server={server} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc:
-            time.sleep(2.0)
+            time.sleep(0.8)
             if proc.poll() is not None:
                 log(f"EQUITY MT5 EXIT EARLY PORT={port} exit={proc.returncode}")
             elif _pid_is_running(proc.pid):
                 log(f"EQUITY MT5 RUNNING PORT={port} pid={proc.pid}")
-        if proc and _mt5_login_form_enabled():
-            time.sleep(0.9)
-            automate_mt5_login_server_form(login, password, server, port_dir, proc.pid if proc else None)
         return proc
 
     other_mt5 = _count_mt5_terminals()
     if other_mt5 > 0:
-        stagger = min(4.0, 1.5 + other_mt5 * 0.75)
+        stagger = min(1.5, 0.3 + other_mt5 * 0.3)
         log(f"EQUITY MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
         time.sleep(stagger)
 
@@ -3638,10 +3708,9 @@ def _execute_equity_login(
         port,
         process_id=proc_pid,
     )
-    sync_avelqua_data_exports(port_dir, force=True)
-    ensure_equity_pulse_indicator(port_dir)
+    _maybe_sync_equity_pulse(port_dir, min_interval_sec=0.0)
 
-    eq_timeout = min(120, max(60, journal_timeout_sec(payload)))
+    eq_timeout = min(75, max(50, journal_timeout_sec(payload) // 2))
     ok, msg, snap = wait_mt5_equity_login(
         port,
         payload,
@@ -3650,6 +3719,7 @@ def _execute_equity_login(
         proc_pid,
         eq_timeout,
         active_pid_ref=active_pid_ref,
+        since_ts=equity_since_ref[0],
     )
     proc_pid = active_pid_ref[0] or proc_pid
 
@@ -3688,16 +3758,17 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     - exact PORT isolation
     - ยืนยันล็อกอินสำเร็จเฉพาะจาก Journal: เลข login + "authorized on" เท่านั้น
     """
+    port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
+    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     try:
         qdelay = int(payload_get(payload, "loginQueueDelaySec", "login_queue_delay_sec", default="0") or 0)
     except Exception:
         qdelay = 0
     if qdelay > 0:
+        if _login_uses_equity_verify(login):
+            qdelay = min(qdelay, 2)
         log(f"LOGIN QUEUE DELAY {qdelay}s (รอ login อื่นบน VPS)")
         time.sleep(min(qdelay, 30))
-
-    port = payload_get(payload, "port", "port_no", "portNumber", "vpsPortNumber", "folderPort", "portSlot")
-    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
     server = resolve_mt5_server(payload, login)
     log(f"START MT5 login={login} server={server}")
