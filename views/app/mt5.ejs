@@ -490,20 +490,12 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   function mt5CanFinishConnectSuccess(data) {
-    if (!data) return false;
-    const st = String((data.account && data.account.status) || data.status || '').toLowerCase();
+    if (!data || data.loginVerified !== true || data.connected !== true) return false;
+    const step = data.progressStep != null ? Number(data.progressStep) : 0;
+    const total = Number(data.progressTotal || 4) || 4;
     const cmdSt = String(data.commandStatus || '').toLowerCase();
-    const cmdOk = ['success', 'done'].includes(cmdSt);
-    if (data.loginVerified === true && data.connected === true) {
-      const step = data.progressStep != null ? Number(data.progressStep) : 0;
-      const total = Number(data.progressTotal || 4) || 4;
-      const stepReady = step >= total || cmdOk;
-      return mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS && stepReady;
-    }
-    if (st === 'connected' && cmdOk && mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS) {
-      return true;
-    }
-    return false;
+    const stepReady = step >= total || ['success', 'done'].includes(cmdSt);
+    return mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS && stepReady;
   }
 
   window.mt5PrepareConnectSubmit = async function () {
@@ -1386,6 +1378,40 @@ document.addEventListener('DOMContentLoaded', function () {
     const loginStr = String(login || '').trim();
     const slotStr = String(targetSlot || '');
     if (!loginStr || !slotStr) return '';
+    const ports = (window.__mt5PortsState && window.__mt5PortsState.ports) || [];
+    const fromState = ports.find(function (p) {
+      return (
+        String(p.mt5_login || '').trim() === loginStr &&
+        String(p.slot) !== slotStr &&
+        (p.canUse === true || p.cssClass === 'connected' || p.mt5Running === true)
+      );
+    });
+    if (fromState) {
+      const otherSlot = fromState.slot;
+      const fp = 'FolderPort P' + String(otherSlot).padStart(2, '0');
+      if (fromState.mt5NeedReopen) {
+        return (
+          'Login ' +
+          loginStr +
+          ' เคยใช้ที่ PORT ' +
+          otherSlot +
+          ' แต่ MT5 ปิดอยู่ — ไป PORT ' +
+          otherSlot +
+          ' แล้วกดเชื่อมต่อเปิด MT5 ใหม่'
+        );
+      }
+      return (
+        'User นี้ (' +
+        loginStr +
+        ') ใช้งานอยู่ที่ PORT ' +
+        otherSlot +
+        ' · ' +
+        fp +
+        ' แล้ว — คลิก PORT ' +
+        otherSlot +
+        ' เท่านั้น (1 PORT = 1 Login = 1 FolderPort ห้ามซ้ำช่อง)'
+      );
+    }
     const cards = document.querySelectorAll('.port-item[data-port-slot][data-mt5-login]');
     for (let i = 0; i < cards.length; i++) {
       const c = cards[i];
@@ -2377,7 +2403,7 @@ document.addEventListener('DOMContentLoaded', function () {
       }
       if (
         (stWait === 'connected' || data.connected === true) &&
-        (data.loginVerified === true || ['success', 'done'].includes(String(data.commandStatus || '').toLowerCase())) &&
+        data.loginVerified === true &&
         mt5CanFinishConnectSuccess(data) &&
         !/ไม่ถูกต้อง|ผิด|failed|timeout/i.test(
           String(data.message || data.account.last_error || data.account.last_login_message || '')

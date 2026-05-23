@@ -1738,7 +1738,8 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     const summary = await getPortSummaryReadOnly(userId);
     let accounts = await safeQuery(
       `
-      SELECT a.id, a.port_slot, a.mt5_login, a.status, a.last_balance, a.last_equity, (
+      SELECT a.id, a.port_slot, a.vps_id, a.port_id, a.assigned_port_no,
+             a.mt5_login, a.status, a.last_balance, a.last_equity, (
         SELECT COUNT(*)::int FROM vps_system.bot_instances bi
         WHERE bi.mt5_account_id=a.id
           AND bi.user_id=$1
@@ -1756,7 +1757,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     for (const acc of accounts || []) {
       const stAcc = String(acc?.status || '').toLowerCase();
       if (stAcc === 'connected') {
-        const row = await reconcileConnectedAccountLive(acc, { allowDemote: false }).catch(() => null);
+        const row = await reconcileConnectedAccountLive(acc, { allowDemote: true }).catch(() => null);
         if (row?.changed && row.account) {
           acc.status = row.account.status;
           acc.last_error = row.account.last_error;
@@ -1800,25 +1801,42 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       const equityPart =
         equity != null && equity !== '' ? ` / Equity: ${equity}` : '';
       const vpsId = acc ? Number(acc.vps_id || 0) : 0;
+      const portNo = acc ? Number(acc.assigned_port_no || acc.port_slot || slot) : slot;
       const health =
         vpsId > 0
-          ? healthByPort.get(`${vpsId}:${slot}`) ||
-            healthByPort.get(`${vpsId}:${100 + slot}`)
+          ? healthByPort.get(`${vpsId}:${portNo}`) ||
+            healthByPort.get(`${vpsId}:${slot}`) ||
+            healthByPort.get(`${vpsId}:${100 + slot}`) ||
+            healthByPort.get(`${vpsId}:${100 + portNo}`)
           : null;
       const mt5Running = health ? !!health.running : false;
+      const loginOnHealth = health ? String(health.mt5_login || '').trim() : '';
+      const loginOnAcc = acc ? String(acc.mt5_login || '').trim() : '';
+      const loginMismatch =
+        mt5Running && loginOnHealth && loginOnAcc && loginOnHealth !== loginOnAcc;
       const mt5NeedReopen =
-        !!acc && String(acc.status || '').toLowerCase() === 'connected' && !mt5Running;
+        !!acc && String(acc.status || '').toLowerCase() === 'connected' && (!mt5Running || loginMismatch);
+      let canUse = meta.canUse && mt5Running && !loginMismatch;
+      let cssClass = meta.cssClass;
+      let statusLabel = meta.statusLabel;
+      if (mt5NeedReopen) {
+        canUse = false;
+        cssClass = acc && meta.cssClass === 'connected' ? 'cancelled' : meta.cssClass;
+        statusLabel = loginMismatch ? 'Login ไม่ตรง VPS' : 'MT5 ปิด — กดเชื่อมต่อ';
+      } else if (canUse) {
+        statusLabel = 'พร้อมรัน';
+      }
       ports.push({
         slot,
         accountId: acc ? Number(acc.id) : null,
         mt5_login: acc?.mt5_login || null,
         status: acc?.status || null,
-        canUse: meta.canUse,
-        cssClass: meta.cssClass,
+        canUse,
+        cssClass: canUse ? 'connected' : cssClass,
         canPick: meta.canPick,
         botRunning: meta.botRunning,
         canDelete: meta.canDelete,
-        statusLabel: meta.statusLabel,
+        statusLabel,
         mt5Running,
         mt5NeedReopen,
         sublabel: acc
@@ -1831,7 +1849,22 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       ports.find((p) => !p.accountId && p.cssClass !== 'connected' && p.cssClass !== 'checking')
         ?.slot || null;
 
-    const connectedAccounts = accountsForRunForm(accounts, []).map((a) => ({
+    const connectedAccounts = accountsForRunForm(accounts, [])
+      .filter((a) => {
+        const slot = Number(a.port_slot || 0);
+        const vpsId = Number(a.vps_id || 0);
+        const portNo = Number(a.assigned_port_no || slot);
+        if (!vpsId || !portNo) return false;
+        const health =
+          healthByPort.get(`${vpsId}:${portNo}`) ||
+          healthByPort.get(`${vpsId}:${slot}`) ||
+          healthByPort.get(`${vpsId}:${100 + slot}`);
+        if (!health || !health.running) return false;
+        const hl = String(health.mt5_login || '').trim();
+        const al = String(a.mt5_login || '').trim();
+        return !hl || !al || hl === al;
+      })
+      .map((a) => ({
       id: Number(a.id),
       port_slot: Number(a.port_slot),
       mt5_login: a.mt5_login,

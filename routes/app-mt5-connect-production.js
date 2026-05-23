@@ -20,7 +20,9 @@ const {
   promoteAccountConnected,
   isLegacyWindowVerifiedMessage,
   probeRecentLoginCommandFailed,
-  findRecentTerminalLoginCommand
+  findRecentTerminalLoginCommand,
+  isPortMt5Running,
+  verifyPortRunningLogin
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const {
@@ -840,8 +842,12 @@ async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   const msg = String(account?.last_login_message || account?.last_error || '');
   if (messageIndicatesLoginFailed(msg, login)) return false;
 
-  // บัญชี connected แล้ว (Agent / promote) — อย่ารอ journal ซ้ำจนปุ่มค้าง
-  if (st === 'connected') return true;
+  if (st === 'connected') {
+    if (portNo && (await isPortMt5Running(vpsId, portNo))) {
+      const run = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
+      if (run.ok) return true;
+    }
+  }
 
   const cmdSt = String(cmdMeta?.commandStatus || '').toLowerCase();
   if (['pending', 'processing', 'picked', 'running'].includes(cmdSt)) return false;
@@ -1556,8 +1562,26 @@ async function handleMt5ConnectStatusProduction(req, res) {
     if (statusFinal === 'connected' && !loginVerified) {
       const loginInMsg = String(a.mt5_login || '').trim();
       const msgBlob = String(a.last_login_message || a.last_error || '');
-      if (!messageIndicatesLoginFailed(msgBlob, loginInMsg)) {
+      const portRunning =
+        a.vps_id && (a.assigned_port_no || a.port_slot)
+          ? await isPortMt5Running(
+              a.vps_id,
+              Number(a.assigned_port_no || a.port_slot)
+            ).catch(() => false)
+          : false;
+      if (
+        portRunning &&
+        !messageIndicatesLoginFailed(msgBlob, loginInMsg) &&
+        (await verifyPortRunningLogin(
+          a.vps_id,
+          Number(a.assigned_port_no || a.port_slot),
+          loginInMsg
+        ).catch(() => ({ ok: false }))).ok
+      ) {
         loginVerified = true;
+      } else if (!portRunning) {
+        statusFinal = 'checking';
+        a.status = statusFinal;
       } else {
         statusFinal = 'checking';
         a.status = statusFinal;
