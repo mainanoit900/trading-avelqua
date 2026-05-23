@@ -1234,6 +1234,15 @@ async function handleMt5ConnectProduction(req, res) {
     });
   } catch (e) {
     if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
+    const failSlot = num(
+      req.body.port_slot || req.body.portSlot || req.body.ui_port_hint || req.body.uiPortHint
+    );
+    if (failSlot && req.user?.id) {
+      await releaseUserPackagePortSlot(req.user.id, failSlot, {
+        message: e.message,
+        reason: 'connect_request_error'
+      }).catch(() => {});
+    }
     return respondConnectFailed(res, req, e.message);
   } finally {
     if (loginLockKey) await redis.del(loginLockKey).catch(() => {});
@@ -1328,8 +1337,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
           vpsId: a.vps_id,
           portNo: a.assigned_port_no,
           folderPath: a.folder_path,
-          reason: 'connect_poll_timeout',
-          killMt5: false
+          reason: 'connect_poll_timeout'
         }).catch(() => {});
         status = 'failed';
         a.last_error = staleMsg;
@@ -1519,8 +1527,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
           vpsId: a.vps_id,
           portNo: a.assigned_port_no,
           folderPath: a.folder_path,
-          reason: 'journal_verify_poll_timeout',
-          killMt5: false
+          reason: 'journal_verify_poll_timeout'
         }).catch(() => {});
         statusFinal = 'failed';
         a.status = 'failed';
@@ -1557,6 +1564,31 @@ async function handleMt5ConnectStatusProduction(req, res) {
         : loginMsg
           ? loginMsg.replace(/\s*\(\s*\d+\s*วิ(?:นาที)?\s*\)/g, '').trim()
           : '';
+
+    if (statusFinal === 'failed' && Number(a.port_slot || 0) > 0) {
+      await releaseUserPackagePortSlot(userId, Number(a.port_slot), {
+        message: userMessage,
+        reason: 'connect_poll_failed',
+        folderPath: a.folder_path || ''
+      }).catch(() => {});
+      const freedRow = await query(
+        `
+        SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+               a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+               p.folder_path
+        FROM vps_system.mt5_accounts a
+        LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+        WHERE a.id=$1 AND a.user_id=$2
+        LIMIT 1
+      `,
+        [a.id, userId]
+      ).catch(() => ({ rows: [] }));
+      if (freedRow.rows?.[0]) {
+        Object.assign(a, freedRow.rows[0]);
+        statusFinal = String(a.status || 'failed').toLowerCase();
+      }
+    }
+
     return res.json({
       ok: true,
       account: { ...a, status: statusFinal },
