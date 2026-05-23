@@ -1634,8 +1634,14 @@ document.addEventListener('DOMContentLoaded', function () {
     const accErr = accountInfo
       ? String(accountInfo.last_error || accountInfo.last_login_message || '').trim()
       : '';
+    const isSuccessMsg = function (s) {
+      return /^เชื่อมต่อสำเร็จ$/i.test(String(s || '').trim());
+    };
+    if (isSuccessMsg(m)) {
+      return 'เชื่อมต่อไม่สำเร็จ — กรุณาลองใหม่';
+    }
     if (/กำลังเปิด MT5|กำลังตรวจ|ขั้นที่\s*\d|\/\d+\s*วิ\)|\(\d+\s*วิ/.test(m)) {
-      if (accErr && !/กำลังเปิด|กำลังตรวจ/.test(accErr) && !/^ว่าง$/i.test(accErr)) {
+      if (accErr && !/กำลังเปิด|กำลังตรวจ/.test(accErr) && !/^ว่าง$/i.test(accErr) && !isSuccessMsg(accErr)) {
         return accErr;
       }
       if (/ทันเวลา|timeout/i.test(accErr)) {
@@ -1644,7 +1650,7 @@ document.addEventListener('DOMContentLoaded', function () {
       return 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่อีกครั้ง';
     }
     if (!m || /^ว่าง$/i.test(m)) {
-      return accErr && !/^ว่าง$/i.test(accErr)
+      return accErr && !/^ว่าง$/i.test(accErr) && !isSuccessMsg(accErr)
         ? accErr
         : 'เชื่อมต่อไม่สำเร็จ — กรุณาเลือก PORT ว่างแล้วกดเชื่อมต่อใหม่';
     }
@@ -1688,6 +1694,18 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     const failMsg = mt5NormalizeFailMessage(message, accountInfo);
+    if (
+      /^เชื่อมต่อสำเร็จ$/i.test(String(failMsg || '').trim()) ||
+      (accountInfo && String(accountInfo.status || '').toLowerCase() === 'connected')
+    ) {
+      if (accountInfo && String(accountInfo.status || '').toLowerCase() === 'connected') {
+        await finishMt5ConnectSuccess(
+          accountInfo.last_login_message || failMsg || 'เชื่อมต่อสำเร็จ',
+          accountInfo
+        );
+        return;
+      }
+    }
     await mt5CleanupAfterLoginFail(accountInfo, failMsg, failSlotHint);
     const failKey = mt5OutcomeStorageKey('fail', (accountInfo && accountInfo.id) || 'port');
     mt5MarkOutcomeShown(failKey);

@@ -1479,7 +1479,22 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     const shouldSyncJournal =
-      ['connecting', 'starting', 'checking'].includes(statusFinal) && !windowHint;
+      ['connecting', 'starting', 'checking'].includes(statusFinal) &&
+      !windowHint &&
+      !loginUsesEquityVerify(a.mt5_login);
+
+    if (
+      ['connecting', 'starting', 'checking'].includes(statusFinal) &&
+      loginUsesEquityVerify(a.mt5_login)
+    ) {
+      await queueEquityLoginVerify({
+        accountId: a.id,
+        vpsId: a.vps_id,
+        folderPath: a.folder_path,
+        mt5Login: a.mt5_login,
+        portNo: a.assigned_port_no || a.port_slot
+      }).catch(() => {});
+    }
 
     if (shouldSyncJournal) {
       await syncJournalFromLatestCommand(
