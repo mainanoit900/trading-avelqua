@@ -1532,8 +1532,9 @@ document.addEventListener('DOMContentLoaded', function () {
     return true;
   }
 
-  async function mt5CleanupAfterLoginFail(accountInfo, failMessage) {
+  async function mt5CleanupAfterLoginFail(accountInfo, failMessage, portSlotHint) {
     const slot =
+      portSlotHint ||
       mt5ConnectTargetSlot() ||
       (accountInfo && accountInfo.port_slot) ||
       (document.getElementById('mt5SelectedPortSlot') || {}).value ||
@@ -1599,6 +1600,11 @@ document.addEventListener('DOMContentLoaded', function () {
 
   async function finishMt5ConnectFail(message, accountInfo) {
     mt5StopConnectPolling();
+    const failSlotHint =
+      mt5ConnectTargetSlot() ||
+      (accountInfo && accountInfo.port_slot) ||
+      (document.getElementById('mt5SelectedPortSlot') || {}).value ||
+      '';
     sessionStorage.removeItem('mt5PollAccountId');
     sessionStorage.removeItem('mt5ConnectInFlight');
     sessionStorage.removeItem('mt5ConnectStartedAt');
@@ -1606,7 +1612,7 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof window.mt5UnlockPageScroll === 'function') window.mt5UnlockPageScroll();
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     const failMsg = mt5NormalizeFailMessage(message, accountInfo);
-    await mt5CleanupAfterLoginFail(accountInfo, failMsg);
+    await mt5CleanupAfterLoginFail(accountInfo, failMsg, failSlotHint);
     const failKey = mt5OutcomeStorageKey('fail', (accountInfo && accountInfo.id) || 'port');
     mt5MarkOutcomeShown(failKey);
     showMt5ConnectModal('error', failMsg, {

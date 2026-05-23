@@ -1274,11 +1274,17 @@ async function handleMt5ConnectStatusProduction(req, res) {
       WHERE ${where.replace(/\buser_id\b/g, 'a.user_id').replace(/\bid\b/g, 'a.id')}
       ORDER BY
         CASE LOWER(COALESCE(a.status, ''))
-          WHEN 'connecting' THEN 0
+          ${accountId
+            ? `WHEN 'connecting' THEN 0
           WHEN 'starting' THEN 1
           WHEN 'checking' THEN 2
           WHEN 'failed' THEN 3
-          WHEN 'connected' THEN 4
+          WHEN 'connected' THEN 4`
+            : `WHEN 'connected' THEN 0
+          WHEN 'connecting' THEN 1
+          WHEN 'starting' THEN 2
+          WHEN 'checking' THEN 3
+          WHEN 'failed' THEN 4`}
           ELSE 5
         END,
         a.updated_at DESC NULLS LAST,
@@ -1300,6 +1306,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         await failAccountFromJournal(a.id, a.port_id, failMsg, {
           vpsId: a.vps_id,
           portNo: a.assigned_port_no || a.port_slot,
+          portSlot: a.port_slot || a.assigned_port_no,
           folderPath: a.folder_path,
           reason: 'login_cmd_failed',
           killMt5: true,
@@ -1628,30 +1635,6 @@ async function handleMt5ConnectStatusProduction(req, res) {
           ? loginMsg.replace(/\s*\(\s*\d+\s*วิ(?:นาที)?\s*\)/g, '').trim()
           : '';
 
-    if (statusFinal === 'failed' && Number(a.port_slot || 0) > 0) {
-      await releaseUserPackagePortSlot(userId, Number(a.port_slot), {
-        message: userMessage,
-        reason: 'connect_poll_failed',
-        folderPath: a.folder_path || ''
-      }).catch(() => {});
-      const freedRow = await query(
-        `
-        SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
-               a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
-               p.folder_path
-        FROM vps_system.mt5_accounts a
-        LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
-        WHERE a.id=$1 AND a.user_id=$2
-        LIMIT 1
-      `,
-        [a.id, userId]
-      ).catch(() => ({ rows: [] }));
-      if (freedRow.rows?.[0]) {
-        Object.assign(a, freedRow.rows[0]);
-        statusFinal = String(a.status || 'failed').toLowerCase();
-      }
-    }
-
     return res.json({
       ok: true,
       account: { ...a, status: statusFinal },
@@ -1764,6 +1747,9 @@ router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
     const portSlot = num(req.body.portSlot || req.body.port_slot);
     const message = clean(req.body.message) || MT5_FAIL_USER_MSG;
 
+    let folderPath = String(req.body.folderPath || req.body.folder_path || '').trim();
+    let slot = portSlot || 0;
+
     if (accountId) {
       const accR = await query(
         `
@@ -1778,24 +1764,15 @@ router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
       );
       const acc = accR.rows?.[0];
       if (acc) {
-        const { failAccountFromJournal } = require('../lib/mt5LoginCommandVerify');
-        await failAccountFromJournal(Number(acc.id), Number(acc.port_id || 0), message, {
-          vpsId: acc.vps_id,
-          portNo: acc.assigned_port_no || acc.port_slot,
-          folderPath: acc.port_folder,
-          reason: 'connect_fail_cleanup',
-          killMt5: true,
-          clearPackagePort: true,
-          journalVerdict: 'failed',
-          forceFailed: true
-        }).catch(() => {});
+        if (!folderPath && acc.port_folder) folderPath = String(acc.port_folder).trim();
+        if (!slot) slot = num(acc.port_slot || acc.assigned_port_no);
       }
     }
 
-    const slot = portSlot || 0;
     if (slot > 0) {
       await releaseUserPackagePortSlot(userId, slot, {
         message,
+        folderPath,
         reason: 'connect_fail_cleanup_ui'
       }).catch(() => {});
     }

@@ -110,7 +110,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-journal-first-v48"
+AGENT_BUILD_ID = "2026-05-23-port-isolated-fail-v49"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4479,7 +4479,7 @@ def poll_running_mt5_list() -> None:
 
 def agent_reset_runtime(
     service_name: str = SERVICE_NAME,
-    stop_mt5: bool = True,
+    stop_mt5: bool = False,
 ) -> Dict[str, Any]:
     """
     Reset ทุกครั้งหลังอัปเดต Agent — ปลด agent.disabled, หยุด MT5 ค้างทุก PORT, ลบ startup.ini ชั่วคราว
@@ -4646,7 +4646,7 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     log(f"PYTHON AGENT UPDATED path={agent_path} backup={backup} build={build_id}")
 
-    reset_mt5 = payload_get(payload, "resetMt5Ports", "resetOnDeploy", "reset", default=True) is not False
+    reset_mt5 = payload_get(payload, "resetMt5Ports", "resetOnDeploy", "reset", default=False) is True
     reset_info = agent_reset_runtime(service_name, stop_mt5=bool(reset_mt5))
     restart_service_later(service_name)
 
@@ -4736,7 +4736,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             svc = str(
                 payload_get(payload, "service_name", "serviceName", default=SERVICE_NAME) or SERVICE_NAME
             )
-            reset_mt5 = payload_get(payload, "resetMt5Ports", "resetOnDeploy", "reset", default=True) is not False
+            reset_mt5 = payload_get(payload, "resetMt5Ports", "resetOnDeploy", "reset", default=False) is True
             reset_info = agent_reset_runtime(svc, stop_mt5=bool(reset_mt5))
             log(f"RESTART_AGENT COMMAND RECEIVED service={svc} reset_ports={len(reset_info.get('stopped_folders') or [])}")
             restart_service_later(svc)
