@@ -32,7 +32,9 @@ const {
   failAccountFromJournal,
   probeRecentLoginCommandFailed,
   verifyPortLoginWithFallback,
-  loginUsesEquityVerify
+  loginUsesEquityVerify,
+  accountConnectSinceMs,
+  isPortHealthFresh
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
@@ -843,22 +845,32 @@ router.post('/connect-result', async (req, res) => {
         loginForJournal = String(accRow.rows?.[0]?.mt5_login || '').trim();
       }
 
-      /** Login 8/2 — ยืนยันจาก Equity ล่าสุด (ไม่บังคับ Journal) */
+      /** Login 8/2 — ยืนยันจาก Equity ล่าสุดเท่านั้น (ต้องมียอดจริง) */
       const bodyEqEarly = positiveMoney(req.body.equity);
       const verifyMode = String(req.body.verifyMode || req.body.verify_mode || '').toLowerCase();
-      if (
-        loginUsesEquityVerify(loginForJournal) &&
-        loginVerified &&
-        (bodyEqEarly > 0 || verifyMode === 'equity')
-      ) {
+      if (loginUsesEquityVerify(loginForJournal) && loginVerified) {
         let eqVal = bodyEqEarly;
         let balVal = positiveMoney(req.body.balance);
+        const sinceMs = await accountConnectSinceMs(accountId).catch(() => 0);
         if (eqVal <= 0) {
           const metricsEq = await verifyPortLoginWithFallback(node.id, portNo, loginForJournal, {
-            requireLoginMatch: false
+            requireLoginMatch: true
           }).catch(() => ({ ok: false }));
-          eqVal = positiveMoney(metricsEq.equity);
-          balVal = positiveMoney(metricsEq.balance) || balVal;
+          const fresh = metricsEq.ok
+            ? await isPortHealthFresh(node.id, portNo, sinceMs).catch(() => false)
+            : false;
+          if (metricsEq.ok && fresh) {
+            eqVal = positiveMoney(metricsEq.equity);
+            balVal = positiveMoney(metricsEq.balance) || balVal;
+          }
+        }
+        if (eqVal <= 0) {
+          console.warn('[connect-result] ignore connected without equity', {
+            accountId,
+            mt5Login: loginForJournal,
+            verifyMode
+          });
+          return res.json({ ok: true, ignored: true, reason: 'EQUITY_REQUIRED' });
         }
         if (eqVal > 0) {
           await patchAccountMt5Preview(accountId, {

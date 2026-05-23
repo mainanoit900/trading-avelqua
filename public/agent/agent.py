@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v56"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v57"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1807,8 +1807,14 @@ def _fresh_equity_snapshot(
     def _accept(snap: Dict[str, Any]) -> bool:
         return _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login)
 
-    if mt5_open:
+    api_ready = not fresh_login or (time.time() - file_since) >= 2.0
+
+    if mt5_open and api_ready:
         api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
+        if fresh_login and login and api_snap:
+            ai_login = str(api_snap.get("login") or "").strip()
+            if ai_login and ai_login != str(login).strip():
+                api_snap = {}
         if _accept(api_snap):
             return api_snap
         uia_snap = account_snapshot_uia(port, payload)
