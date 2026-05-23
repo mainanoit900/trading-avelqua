@@ -833,6 +833,40 @@ router.post('/connect-result', async (req, res) => {
         return res.json({ ok: true, failed: true, message: MT5_FAIL_USER_MSG });
       }
 
+      /** Journal authorized on + login ตรง → connected ทันที (journal-first, ไม่รอ title/metrics) */
+      if (loginVerified && journalVerdict === 'success') {
+        await patchAccountMt5Preview(accountId, {
+          message: message || MT5_SUCCESS_MSG,
+          windowTitle,
+          previewB64
+        });
+        await promoteAccountConnected({
+          accountId,
+          portId,
+          mt5Login: loginForJournal || mt5Login,
+          message: message || MT5_SUCCESS_MSG
+        });
+        await query(`
+          UPDATE vps_system.mt5_accounts
+          SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity)
+          WHERE id=$1
+        `, [accountId, req.body.balance || null, req.body.equity || null]).catch(() => {});
+        if (portId) {
+          await query(`
+            UPDATE vps_system.vps_ports
+            SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
+                locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
+            WHERE id=$1
+          `, [portId, pid, loginForJournal || mt5Login]).catch(() => {});
+        }
+        await query(`
+          INSERT INTO vps_system.mt5_login_history
+          (account_id, vps_id, port_id, port_no, mt5_login, status, message)
+          VALUES ($1,$2,$3,$4,$5,'connected',$6)
+        `, [accountId, node.id, portId || null, portNo || null, loginForJournal || mt5Login, message || MT5_SUCCESS_MSG]).catch(() => {});
+        return res.json({ ok: true, connected: true, fastPath: 'journal_authorized' });
+      }
+
       if (windowVerified && loginVerified && journalVerdict === 'success') {
         await patchAccountMt5Preview(accountId, {
           message: message || MT5_SUCCESS_MSG,

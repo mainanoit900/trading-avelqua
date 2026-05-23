@@ -86,6 +86,21 @@ PORT_HEALTH_READ_TITLE = os.getenv("AVELQUA_PORT_HEALTH_READ_TITLE", "false").lo
 PORT_FOLDER_CACHE_SEC = int(os.getenv("AVELQUA_PORT_FOLDER_CACHE_SEC", "60"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "90"))
 JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
+JOURNAL_FIRST_POLL_SEC = float(os.getenv("AVELQUA_JOURNAL_FIRST_POLL_SEC", "0.25"))
+
+
+def _journal_first_login_enabled() -> bool:
+    """เปิด MT5 ด้วย ini แล้วยืนยันจาก Journal authorized on ทันที (เร็วเท่าเปิดมือ)"""
+    return os.getenv("AVELQUA_JOURNAL_FIRST_LOGIN", "true").lower() not in ("0", "false", "no")
+
+
+def _mt5_login_form_enabled() -> bool:
+    """UIA กรอกฟอร์ม — ปิดเมื่อ journal-first (ใช้เฉพาะ fallback หลัง 14 วิ)"""
+    if _journal_first_login_enabled():
+        return os.getenv("AVELQUA_MT5_LOGIN_FORM", "false").lower() not in ("0", "false", "no")
+    return os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no")
+
+
 MT5_LIVE_SERVER = "MohicansMarkets-Live"
 MT5_DEMO_SERVER = "MohicansMarkets-Demo"
 LOCKED_MT5_SERVER = MT5_LIVE_SERVER
@@ -95,7 +110,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-22-agent-reset-v46"
+AGENT_BUILD_ID = "2026-05-23-journal-first-v47"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -118,7 +133,7 @@ def has_journal_gate_marker(version_or_build: str) -> bool:
         return False
     if v == AGENT_BUILD_ID:
         return True
-    for marker in ("journal-gate", "equity-live", "algo-live", "run-bot-hot", "metrics-sync"):
+    for marker in ("journal-gate", "journal-first", "equity-live", "algo-live", "run-bot-hot", "metrics-sync"):
         if marker in v:
             return True
     return False
@@ -2774,14 +2789,14 @@ def _send_early_connect_if_journal_ok(
     send_connect_result(
         payload,
         "connected",
-        EARLY_CONNECT_MSG,
+        JOURNAL_OK_MSG,
         port,
         process_id=proc_pid,
         journal_evidence=journal_chunk,
         window_title=window_title or "",
-        window_verified=False,
+        window_verified=bool(window_title and login and login in str(window_title)),
     )
-    log(f"EARLY CONNECT SENT PORT={port} LOGIN={login}")
+    log(f"JOURNAL CONNECT SENT PORT={port} LOGIN={login}")
     return True
 
 
@@ -2840,12 +2855,14 @@ def wait_mt5_login_hybrid(
     proc_pid: Any,
     timeout_sec: int,
 ) -> Tuple[bool, str, str]:
-    """รอ login — Journal + หน้าต่าง MT5 (ยืนยันเร็วเมื่อ title bar แสดงบัญชีแล้ว)"""
+    """รอ login — Journal-first: poll authorized on ทันที; UIA เป็น fallback เท่านั้น"""
     server = resolve_mt5_server(payload, login)
-    log(f"MT5 LOGIN VERIFY login={login} server={server}")
+    journal_first = _journal_first_login_enabled()
+    log(f"MT5 LOGIN VERIFY login={login} server={server} journal_first={journal_first}")
     cap = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_MAX_SEC", "240"))
     wait_cap = max(90, min(int(timeout_sec or 120), cap))
     deadline = time.time() + wait_cap
+    poll_sec = JOURNAL_FIRST_POLL_SEC if journal_first else 0.14
     last_preview_at = 0.0
     last_progress_at = 0.0
     last_gate_at = 0.0
@@ -2889,25 +2906,6 @@ def wait_mt5_login_hybrid(
         elapsed = int(time.time() - wait_start)
         now = time.time()
 
-        if now - last_gate_at >= (3.0 if elapsed < 45 else 8.0):
-            try:
-                write_avelqua_trading_gate(port_dir, False, payload)
-                if elapsed < 20:
-                    patch_mt5_experts_config(port_dir, False)
-                sync_avelqua_data_exports(port_dir, force=elapsed < 60)
-            except Exception:
-                pass
-            last_gate_at = now
-
-        if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
-            try:
-                automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
-                if password:
-                    automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
-            except Exception as e:
-                log(f"LOGIN WIZARD/FORM burst: {e}")
-            last_wizard_at = now
-
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
         if j_out is None and elapsed >= 25 and now - last_broad_journal_at >= 12.0:
             last_broad_journal_at = now
@@ -2935,6 +2933,39 @@ def wait_mt5_login_hybrid(
                 payload, port, proc_pid, login, j_chunk, early_sent, last_title
             )
             return True, "journal ok (early web confirm)", j_chunk
+
+        if now - last_gate_at >= (3.0 if elapsed < 45 else 8.0):
+            try:
+                write_avelqua_trading_gate(port_dir, False, payload)
+                if elapsed < 20:
+                    patch_mt5_experts_config(port_dir, False)
+                sync_avelqua_data_exports(port_dir, force=elapsed < 60)
+            except Exception:
+                pass
+            last_gate_at = now
+
+        if elapsed < 18 and not journal_first and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
+            try:
+                automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+                if password:
+                    automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
+            except Exception as e:
+                log(f"LOGIN WIZARD/FORM burst: {e}")
+            last_wizard_at = now
+        elif (
+            journal_first
+            and j_out is None
+            and password
+            and elapsed >= 14
+            and now - last_form_at >= 12.0
+        ):
+            last_form_at = now
+            try:
+                log(f"JOURNAL-FIRST UIA fallback elapsed={elapsed}s login={login}")
+                automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+                automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
+            except Exception as e:
+                log(f"JOURNAL-FIRST FORM fallback: {e}")
 
         titles = mt5_window_titles(port, payload)
         joined = " | ".join(titles)
@@ -2988,13 +3019,16 @@ def wait_mt5_login_hybrid(
             except Exception as e:
                 log(f"LOGIN FORM RETRY: {e}")
 
-        fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
-            port, payload, login, joined, window_ok_streak, j_out
-        )
-        if not fast_ok:
-            fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
-                port, payload, login, joined, window_ok_streak, j_out, elapsed
+        if not journal_first:
+            fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
+                port, payload, login, joined, window_ok_streak, j_out
             )
+            if not fast_ok:
+                fast_ok, fast_snap, _fast_msg = _try_socket_metrics_login_confirm(
+                    port, payload, login, joined, window_ok_streak, j_out, elapsed
+                )
+        else:
+            fast_ok, fast_snap, _fast_msg = False, {}, ""
         if (
             not fast_ok
             and not _mt5_api_should_skip(port_dir)
@@ -3026,7 +3060,7 @@ def wait_mt5_login_hybrid(
                 api_skip_logged = True
                 log(f"LOGIN API skipped (terminal busy) login={login}")
 
-        if not fast_ok and elapsed >= 18:
+        if not journal_first and not fast_ok and elapsed >= 18:
             snap_loop: Dict[str, Any] = {"balance": None, "equity": None}
             fs = account_snapshot_equity_file(port_dir, max_age_sec=120)
             if _snap_positive(fs):
@@ -3126,7 +3160,7 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
 
-        time.sleep(0.14)
+        time.sleep(poll_sec)
 
     api_final, api_final_msg = _connect_on_api_verify(
         payload, port, port_dir, login, proc_pid, last_title, preview_b64
@@ -3610,14 +3644,17 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
-        if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
+        if proc and _mt5_login_form_enabled():
             time.sleep(0.9)
             automate_mt5_login_server_form(login, password, server, port_dir, proc.pid if proc else None)
         return proc
 
     other_mt5 = _count_mt5_terminals()
     if other_mt5 > 0:
-        stagger = min(2.5, 0.8 + other_mt5 * 0.35)
+        if _journal_first_login_enabled():
+            stagger = min(1.0, 0.25 + other_mt5 * 0.15)
+        else:
+            stagger = min(2.5, 0.8 + other_mt5 * 0.35)
         log(f"MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
         time.sleep(stagger)
 
@@ -3627,16 +3664,19 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_connect_result(
         payload,
         "starting",
-        f"กำลังเปิด MT5 บน {server} — รอ Journal ประมาณ 30–90 วินาที",
+        f"กำลังเปิด MT5 บน {server} — รอ Journal authorized on...",
         port,
         process_id=proc_pid,
     )
-    time.sleep(2.5)
-    automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
-    time.sleep(0.8)
-    automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
-    time.sleep(1.0)
-    sync_avelqua_data_exports(port_dir, force=True)
+    if _journal_first_login_enabled():
+        sync_avelqua_data_exports(port_dir, force=True)
+    else:
+        time.sleep(2.5)
+        automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+        time.sleep(0.8)
+        automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
+        time.sleep(1.0)
+        sync_avelqua_data_exports(port_dir, force=True)
 
     journal_timeout = journal_timeout_sec(payload)
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} SERVER={server} timeout_sec={journal_timeout}")
