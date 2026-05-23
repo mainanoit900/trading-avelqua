@@ -110,7 +110,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-port-isolated-fail-v49"
+AGENT_BUILD_ID = "2026-05-23-multiport-wait-v50"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2854,6 +2854,8 @@ def wait_mt5_login_hybrid(
     journal_since: float,
     proc_pid: Any,
     timeout_sec: int,
+    other_terminals: int = 0,
+    relaunch_fn: Optional[Any] = None,
 ) -> Tuple[bool, str, str]:
     """รอ login — Journal-first: poll authorized on ทันที; UIA เป็น fallback เท่านั้น"""
     server = resolve_mt5_server(payload, login)
@@ -2878,6 +2880,8 @@ def wait_mt5_login_hybrid(
     early_sent: List[bool] = [False]
     api_skip_logged = False
     password = str(payload_get(payload, "mt5Password", "password") or "")
+    no_mt5_threshold = 35 if other_terminals > 0 else 18
+    relaunch_done = False
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
     if journal_since < wait_start - 120:
@@ -2936,10 +2940,41 @@ def wait_mt5_login_hybrid(
 
         if (
             journal_first
-            and elapsed >= 18
+            and elapsed >= no_mt5_threshold
             and j_out is None
             and not mt5_running_for_port_dir(port_dir)
         ):
+            j_late, chunk_late = _quick_journal_probe(port_dir, login, 0.0, server)
+            if j_late is False:
+                cleanup_mt5_after_login_fail(port, payload, port_dir)
+                send_connect_result(
+                    payload,
+                    "failed",
+                    JOURNAL_FAIL_MSG,
+                    port,
+                    process_id=None,
+                    journal_evidence=chunk_late or j_chunk or "",
+                )
+                return False, JOURNAL_FAIL_MSG, chunk_late or j_chunk or ""
+
+            if (
+                not relaunch_done
+                and relaunch_fn
+                and other_terminals > 0
+                and elapsed < no_mt5_threshold + 20
+            ):
+                relaunch_done = True
+                log(
+                    f"MT5 NOT RUNNING PORT={port} elapsed={elapsed}s "
+                    f"other_terminals={other_terminals} — relaunch once"
+                )
+                try:
+                    relaunch_fn()
+                except Exception as e:
+                    log(f"MT5 RELAUNCH ERROR PORT={port}: {e}")
+                time.sleep(3.0)
+                continue
+
             no_mt5_msg = (
                 f"MT5 ไม่เปิดบน PORT {port} — กรุณาตรวจ VPS แล้วกดเชื่อมต่อใหม่"
             )
@@ -3707,7 +3742,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} SERVER={server} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
-        port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
+        port,
+        payload,
+        port_dir,
+        login,
+        journal_since,
+        proc_pid,
+        journal_timeout,
+        other_terminals=other_mt5,
+        relaunch_fn=lambda: launch_mt5("retry-not-running"),
     )
     titles = " | ".join(mt5_window_titles(port, payload))
     preview_final = capture_mt5_window_base64(port, payload)

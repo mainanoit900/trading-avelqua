@@ -1141,6 +1141,7 @@ router.post('/connect-result', async (req, res) => {
       await failAccountFromJournal(accountId, failPortId, failMsg, {
         vpsId: node.id,
         portNo,
+        portSlot: Number(req.body.portSlot || req.body.port_slot || portNo || 0),
         folderPath: failFolder,
         reason: 'agent_reported_failed'
       }).catch(() => {});
