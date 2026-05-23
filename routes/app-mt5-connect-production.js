@@ -1604,11 +1604,14 @@ async function handleMt5ConnectStatusProduction(req, res) {
         ? MT5_LOGIN_TIMEOUT_MSG
         : failedMsg || MT5_FAIL_USER_MSG;
     } else if (inProgress) {
+      const equityMode = loginUsesEquityVerify(a.mt5_login);
       const upgradeHint = /อัปเดต Agent|รอ 2.?3 นาที|Restart-Service/i.test(
         String(a.last_login_message || '')
       );
       if (['success', 'done'].includes(cmdSt)) {
-        userMessage = `กำลังตรวจ Login จาก Journal MT5 (${elapsedSec} วินาที)...`;
+        userMessage = equityMode
+          ? `กำลังตรวจ Equity ล่าสุดจาก MT5 (${elapsedSec} วินาที)...`
+          : `กำลังตรวจ Login จาก Journal MT5 (${elapsedSec} วินาที)...`;
       } else if (upgradeHint) {
         userMessage = `กำลังเปิด MT5 และ Login... (${elapsedSec} วินาที)`;
       } else {

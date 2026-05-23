@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v53"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v54"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3554,8 +3554,16 @@ def _execute_equity_login(
     """Login 8/2 — เปิด MT5 ทันที ยืนยันจาก Equity ล่าสุด"""
     log(f"EQUITY-FIRST LOGIN PORT={port} LOGIN={login}")
 
+    force = _payload_force_login(payload)
+    ok_w_open, title_open = mt5_login_verified_by_window(port, payload)
+    login_on_window = bool(login and title_open and login in str(title_open))
     snap_open = _latest_equity_snapshot(port, payload, port_dir)
-    if _snap_has_equity(snap_open) and mt5_running_for_port_dir(port_dir):
+    if (
+        not force
+        and _snap_has_equity(snap_open)
+        and mt5_running_for_port_dir(port_dir)
+        and login_on_window
+    ):
         procs = mt5_port_processes(port, payload)
         proc_pid = procs[0].pid if procs else None
         enforce_login_no_trading(port_dir, port, payload, login, password, server)
@@ -3718,6 +3726,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     config_file = write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
+
+    if _login_uses_equity_verify(login):
+        return _execute_equity_login(
+            payload, port, login, password, server, bot, port_dir, terminal, config_file
+        )
 
     procs_existing = mt5_port_processes(port, payload)
     mt5_already_open = bool(procs_existing) or mt5_running_for_port_dir(port_dir)
@@ -3955,11 +3968,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             raise
         except Exception:
             pass
-
-    if _login_uses_equity_verify(login):
-        return _execute_equity_login(
-            payload, port, login, password, server, bot, port_dir, terminal, config_file
-        )
 
     def result_ok(message: str, process_id: Any = None) -> Dict[str, Any]:
         try:
