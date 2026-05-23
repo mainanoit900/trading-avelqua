@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v57"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v58"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1517,6 +1517,7 @@ $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
 if (-not $proc) {{ Write-Output '{{}}'; exit 0 }}
 $ae = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
 if (-not $ae) {{ Write-Output '{{}}'; exit 0 }}
+$winTitle = [string]$proc.MainWindowTitle
 $names = New-Object System.Collections.Generic.List[string]
 $walker = [Windows.Automation.TreeWalker]::RawViewWalker
 function Walk($el) {{
@@ -1535,15 +1536,23 @@ if (-not $eq -and $bal -and $blob -match '(?i)(?:Profit|Floating|P/L)[^0-9-]*(-?
   $pr = ($matches[1] -replace '\\s','')
   try {{ $eq = [string]([decimal]$bal + [decimal]$pr) }} catch {{ }}
 }}
-@{{ balance = $bal; equity = $eq }} | ConvertTo-Json -Compress
+@{{ balance = $bal; equity = $eq; login = $login; title = $winTitle }} | ConvertTo-Json -Compress
 """
         raw = _run_powershell(ps, timeout=12).strip()
         if raw and raw.startswith("{"):
             data = json.loads(raw)
             out["balance"] = _parse_money_token(data.get("balance"))
             out["equity"] = _parse_money_token(data.get("equity"))
+            out["login"] = str(data.get("login") or "").strip()
+            if not out["login"] and data.get("title"):
+                m = re.search(r"(\d{6,12})", str(data.get("title") or ""))
+                if m:
+                    out["login"] = m.group(1)
             if out.get("balance") or out.get("equity"):
-                log(f"MT5 SNAPSHOT UIA PORT={port} BALANCE={out.get('balance')} EQUITY={out.get('equity')}")
+                log(
+                    f"MT5 SNAPSHOT UIA PORT={port} login={out.get('login')} "
+                    f"BALANCE={out.get('balance')} EQUITY={out.get('equity')}"
+                )
     except Exception as e:
         log(f"MT5 SNAPSHOT UIA ERROR PORT={port}: {e}")
     return out
@@ -1798,31 +1807,54 @@ def _fresh_equity_snapshot(
     login: str = "",
     bypass_api_skip: bool = False,
 ) -> Dict[str, Any]:
-    """Equity ล่าสุดเท่านั้น — login ตรง; ระหว่าง login ใหม่ใช้ API/UIA ก่อนไฟล์"""
+    """Equity ล่าสุดเท่านั้น — login ตรง; ระหว่าง login ใหม่ใช้ file/UIA ก่อน (กัน MT5 API attach ผิด PORT)"""
     fresh_login = since_ts is not None and float(since_ts) > 0
     file_max_age = 45 if since_ts is None else 30
     file_since = float(since_ts) if since_ts is not None else 0.0
     mt5_open = mt5_running_for_port_dir(port_dir)
+    multi_terminal = _count_mt5_terminals() > 1
 
     def _accept(snap: Dict[str, Any]) -> bool:
         return _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login)
 
-    api_ready = not fresh_login or (time.time() - file_since) >= 2.0
+    if fresh_login:
+        _maybe_sync_equity_pulse(port_dir, min_interval_sec=0.0)
+        file_snap = account_snapshot_equity_file(
+            port_dir, max_age_sec=file_max_age, since_ts=file_since
+        )
+        if _accept(file_snap):
+            return file_snap
+        if mt5_open:
+            uia_snap = account_snapshot_uia(port, payload)
+            if _accept(uia_snap):
+                return uia_snap
+        if mt5_open and not multi_terminal:
+            api_ready = (time.time() - float(since_ts)) >= 2.0
+            if api_ready:
+                api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
+                if fresh_login and login and api_snap:
+                    ai_login = str(api_snap.get("login") or "").strip()
+                    if ai_login and ai_login != str(login).strip():
+                        api_snap = {}
+                if _accept(api_snap):
+                    return api_snap
+        return {"balance": None, "equity": None, "currency": ""}
 
-    if mt5_open and api_ready:
+    api_ready = True
+
+    if mt5_open and api_ready and not multi_terminal:
         api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
-        if fresh_login and login and api_snap:
-            ai_login = str(api_snap.get("login") or "").strip()
-            if ai_login and ai_login != str(login).strip():
-                api_snap = {}
         if _accept(api_snap):
             return api_snap
         uia_snap = account_snapshot_uia(port, payload)
         if _accept(uia_snap):
             return uia_snap
+    elif mt5_open:
+        uia_snap = account_snapshot_uia(port, payload)
+        if _accept(uia_snap):
+            return uia_snap
 
-    if not fresh_login:
-        _maybe_sync_equity_pulse(port_dir)
+    _maybe_sync_equity_pulse(port_dir)
 
     file_snap = account_snapshot_equity_file(
         port_dir, max_age_sec=file_max_age, since_ts=file_since
@@ -1906,6 +1938,8 @@ def wait_mt5_equity_login(
         now = time.time()
         if active_pid_ref is not None and active_pid_ref[0]:
             active_pid = active_pid_ref[0]
+
+        _maybe_sync_equity_pulse(port_dir, min_interval_sec=1.2)
 
         snap = _fresh_equity_snapshot(
             port, payload, port_dir, since_ts=equity_since, login=login, bypass_api_skip=True
@@ -3736,7 +3770,7 @@ def _execute_equity_login(
 
     other_mt5 = _count_mt5_terminals()
     if other_mt5 > 0:
-        stagger = min(1.5, 0.3 + other_mt5 * 0.3)
+        stagger = min(2.5, 0.5 + other_mt5 * 0.45)
         log(f"EQUITY MULTI-PORT STAGGER {stagger:.1f}s (other terminal64={other_mt5})")
         time.sleep(stagger)
 
@@ -3753,7 +3787,10 @@ def _execute_equity_login(
     )
     _maybe_sync_equity_pulse(port_dir, min_interval_sec=0.0)
 
-    eq_timeout = min(75, max(50, journal_timeout_sec(payload) // 2))
+    eq_timeout = min(120, max(60, journal_timeout_sec(payload) // 2))
+    if other_mt5 > 0:
+        eq_timeout = min(150, eq_timeout + other_mt5 * 25)
+        log(f"EQUITY MULTI-PORT TIMEOUT {eq_timeout}s (other terminal64={other_mt5})")
     ok, msg, snap = wait_mt5_equity_login(
         port,
         payload,
