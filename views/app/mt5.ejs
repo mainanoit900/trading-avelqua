@@ -1605,6 +1605,9 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   async function mt5CleanupAfterLoginFail(accountInfo, failMessage, portSlotHint) {
+    if (accountInfo && String(accountInfo.status || '').toLowerCase() === 'connected') {
+      return;
+    }
     const slot =
       portSlotHint ||
       mt5ConnectTargetSlot() ||
@@ -1701,7 +1704,8 @@ document.addEventListener('DOMContentLoaded', function () {
       if (accountInfo && String(accountInfo.status || '').toLowerCase() === 'connected') {
         await finishMt5ConnectSuccess(
           accountInfo.last_login_message || failMsg || 'เชื่อมต่อสำเร็จ',
-          accountInfo
+          accountInfo,
+          { force: true }
         );
         return;
       }
@@ -1728,11 +1732,12 @@ document.addEventListener('DOMContentLoaded', function () {
     if (previewBox) previewBox.style.display = 'none';
   }
 
-  async function finishMt5ConnectSuccess(message, accountInfo) {
+  async function finishMt5ConnectSuccess(message, accountInfo, opts) {
     if (window.__mt5FinishSuccessRunning) return;
     const accId = accountInfo && accountInfo.id;
+    const force = opts && opts.force === true;
     try {
-      if (!mt5ConnectInFlightNow()) {
+      if (!mt5ConnectInFlightNow() && !force) {
         if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
         return;
       }
@@ -2275,9 +2280,35 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       const cmdStFail = String(data.commandStatus || '').toLowerCase();
-      if (['failed', 'error', 'cancelled'].includes(cmdStFail)) {
+      if (
+        inFlight &&
+        (data.loginVerified === true ||
+          data.connected === true ||
+          stWait === 'connected')
+      ) {
+        await finishMt5ConnectSuccess(
+          data.message || data.account.last_login_message || 'เชื่อมต่อสำเร็จ',
+          data.account,
+          { force: true }
+        );
+        return;
+      }
+      if (cmdStFail === 'cancelled') {
+        if (inFlight && (data.pending || data.checking || ['connecting', 'checking', 'starting'].includes(stWait))) {
+          // คำสั่ง login ถูกยกเลิกจากรอบใหม่ — รอ poll รอบถัดไป
+          return;
+        }
+      }
+      if (['failed', 'error'].includes(cmdStFail)) {
         await finishMt5ConnectFail(
           data.message || 'User หรือ รหัส ไม่ถูกต้อง',
+          data.account
+        );
+        return;
+      }
+      if (cmdStFail === 'cancelled') {
+        await finishMt5ConnectFail(
+          data.message || 'เชื่อมต่อไม่สำเร็จ — กรุณาลองใหม่',
           data.account
         );
         return;
@@ -2342,7 +2373,7 @@ document.addEventListener('DOMContentLoaded', function () {
           );
           return;
         }
-        if (data.failed === true || ['failed', 'error', 'cancelled'].includes(cmdSt)) {
+        if (data.failed === true || ['failed', 'error'].includes(cmdSt)) {
           await finishMt5ConnectFail(
             data.message ||
               data.commandMessage ||
@@ -2350,6 +2381,17 @@ document.addEventListener('DOMContentLoaded', function () {
               'User หรือ รหัส ไม่ถูกต้อง',
             data.account
           );
+          return;
+        }
+        if (cmdSt === 'cancelled') {
+          if (data.loginVerified || data.connected || stWait === 'connected') {
+            await finishMt5ConnectSuccess(
+              data.message || data.account.last_login_message || 'เชื่อมต่อสำเร็จ',
+              data.account,
+              { force: true }
+            );
+            return;
+          }
           return;
         }
         if (sec >= 25 && !cmdSt && !data.commandId && !data.pending) {
