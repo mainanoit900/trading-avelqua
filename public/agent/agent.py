@@ -3140,7 +3140,12 @@ def wait_mt5_login_hybrid(
             )
             last_progress_at = now
         elif now - last_progress_at >= 2.0:
-            if not joined and elapsed >= 8:
+            if journal_first and elapsed >= 3:
+                hint = (
+                    f"รอ Journal authorized on {server} ({elapsed} วิ) — "
+                    f"login {login}"
+                )
+            elif not joined and elapsed >= 8:
                 hint = (
                     f"MT5 เปิดแล้ว ({elapsed} วิ) — ยังไม่เห็นเลข {login} บน title "
                     f"(ตรวจรหัสผ่าน + Server {server})"

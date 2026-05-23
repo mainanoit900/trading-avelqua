@@ -1465,8 +1465,30 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const cmdMeta = cmdMetaEarly.commandId != null || cmdMetaEarly.commandStatus
       ? cmdMetaEarly
       : await resolveLoginCommandMeta(a.id, a.vps_id);
-    const agentMeta = await resolveVpsAgentOnline(a.vps_id);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
+
+    if (
+      ['failed', 'error', 'cancelled'].includes(cmdSt) &&
+      ['connecting', 'starting', 'checking'].includes(statusFinal)
+    ) {
+      const failMsg =
+        cmdMeta.commandMessage ||
+        (/authorization|invalid account|user ผิด/i.test(String(a.last_login_message || ''))
+          ? MT5_FAIL_USER_MSG
+          : MT5_LOGIN_TIMEOUT_MSG);
+      await failAccountFromJournal(a.id, a.port_id, failMsg, {
+        vpsId: a.vps_id,
+        portNo: a.assigned_port_no || a.port_slot,
+        folderPath: a.folder_path,
+        reason: 'login_cmd_failed'
+      }).catch(() => {});
+      statusFinal = 'failed';
+      a.status = 'failed';
+      a.last_error = failMsg;
+      a.last_login_message = failMsg;
+    }
+
+    const agentMeta = await resolveVpsAgentOnline(a.vps_id);
     let loginVerified = await resolvePollLoginVerified(a, statusFinal, cmdMeta);
     if (loginVerified && statusFinal !== 'connected') {
       await promoteAccountConnected({
