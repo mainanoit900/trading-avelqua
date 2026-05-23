@@ -49,7 +49,9 @@ const {
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const {
   clearOtherAccountsOnPortSlot,
-  listAccountsToHandoffOnPortSlot
+  listAccountsToHandoffOnPortSlot,
+  upsertAccountForPortSlot,
+  expireDuplicatePortSlotRows
 } = require('../lib/mt5PortAccount');
 const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
 const {
@@ -613,7 +615,31 @@ async function handoffPackagePortSlotForNewLogin(userId, portSlot, newLogin, ser
     newLogin,
     serverName
   );
-  if (!toHandoff.length) return { handoffCount: 0 };
+
+  const slotRow = await query(
+    `
+    SELECT id, mt5_login, vps_id, assigned_port_no, windows_port_no
+    FROM vps_system.mt5_accounts
+    WHERE user_id=$1
+      AND port_slot=$2
+      AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `,
+    [uid, slot]
+  ).catch(() => ({ rows: [] }));
+  const canonical = slotRow.rows?.[0];
+  const loginChanged =
+    canonical &&
+    String(canonical.mt5_login || '').trim() !== String(newLogin || '').trim();
+
+  if (loginChanged || toHandoff.length) {
+    await forceStopPackagePortSlot(uid, slot, { reason: 'port_slot_login_swap' }).catch(() => {});
+  }
+
+  if (!toHandoff.length) {
+    return { handoffCount: loginChanged ? 1 : 0 };
+  }
 
   const seenVpsPort = new Set();
   for (const row of toHandoff) {
@@ -638,8 +664,6 @@ async function handoffPackagePortSlotForNewLogin(userId, portSlot, newLogin, ser
     const portNo = Number(row.assigned_port_no || row.windows_port_no || slot);
     if (vpsId && portNo) seenVpsPort.add(`${vpsId}:${portNo}`);
   }
-
-  await forceStopPackagePortSlot(uid, slot, { reason: 'port_slot_login_swap' }).catch(() => {});
 
   for (const key of seenVpsPort) {
     const [vpsId, portNo] = key.split(':').map(Number);
@@ -1099,144 +1123,32 @@ async function handleMt5ConnectProduction(req, res) {
 
     await handoffPackagePortSlotForNewLogin(userId, portSlot, mt5Login, serverName);
 
-    // ไม่พึ่ง ON CONFLICT เพราะฐานข้อมูลเดิมบางชุดอาจยังไม่มี unique constraint ครบ
-    // ใช้วิธี UPDATE ก่อน ถ้าไม่มีค่อย INSERT เพื่อไม่ให้ deploy แล้วล้ม
-    let acc = await query(`
-      UPDATE vps_system.mt5_accounts
-      SET
-        vps_id=$2,
-        port_id=$3,
-        port_slot=$4,
-        assigned_port_no=$5,
-        windows_port_no=$5,
-        mt5_password=$7,
-        broker='MH Markets',
-        server_name=$8,
-        account_name=$9,
-        status='connecting',
-        connect_started_at=NOW(),
-        last_error=NULL,
-        last_login_message='① ส่งคำสั่ง login_mt5 ไป VPS...',
-        updated_at=NOW()
-      WHERE user_id=$1
-        AND mt5_login=$6
-        AND COALESCE(server_name, mt5_server, '')=$8
-        AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
-        AND (port_slot IS NULL OR port_slot = $4)
-      RETURNING id
-    `, [
+    await releaseStaleVpsPortAccounts(reservedPort.vps_id, allocPortNo, null);
+
+    const upserted = await upsertAccountForPortSlot(query, {
       userId,
-      reservedPort.vps_id,
-      reservedPort.port_id,
       portSlot,
-      allocPortNo,
       mt5Login,
       mt5Password,
       serverName,
-      `PORT ${portSlot}`
-    ]);
+      vpsId: reservedPort.vps_id,
+      portId: reservedPort.port_id,
+      allocPortNo,
+      accountName: `PORT ${portSlot}`
+    });
 
-    const keepId = acc.rows?.[0]?.id || null;
-    await releaseStaleVpsPortAccounts(reservedPort.vps_id, allocPortNo, keepId);
-
-    if (!acc.rows?.[0]) {
-      acc = await query(`
-        INSERT INTO vps_system.mt5_accounts
-        (user_id, vps_id, port_id, port_slot, assigned_port_no, windows_port_no,
-         mt5_login, mt5_password, broker, server_name, mt5_server, account_name, status,
-         last_error, last_login_message, connect_started_at, updated_at)
-        VALUES
-        ($1,$2,$3,$4,$5,$5,$6,$7,'MH Markets',$8,$8,$9,'connecting',NULL,'① ส่งคำสั่ง login_mt5 ไป VPS...',NOW(),NOW())
-        RETURNING id
-      `, [
-        userId,
-        reservedPort.vps_id,
-        reservedPort.port_id,
-        portSlot,
-        allocPortNo,
-        mt5Login,
-        mt5Password,
-        serverName,
-        `PORT ${portSlot}`
-      ]).catch(async (insErr) => {
-        if (insErr?.code !== '23505') throw insErr;
-        await releaseStaleVpsPortAccounts(reservedPort.vps_id, allocPortNo, null);
-        return query(`
-          UPDATE vps_system.mt5_accounts
-          SET
-            vps_id=$2,
-            port_id=$3,
-            port_slot=$4,
-            assigned_port_no=$5,
-            windows_port_no=$5,
-            mt5_password=$7,
-            broker='MH Markets',
-            server_name=$8,
-            account_name=$9,
-            status='connecting',
-            connect_started_at=NOW(),
-            last_error=NULL,
-            last_login_message='① ส่งคำสั่ง login_mt5 ไป VPS...',
-            updated_at=NOW()
-          WHERE user_id=$1
-            AND mt5_login=$6
-            AND COALESCE(server_name, mt5_server, '')=$8
-            AND LOWER(TRIM(COALESCE(status, ''))) NOT IN ('deleted', 'expired')
-          RETURNING id
-        `, [
-          userId,
-          reservedPort.vps_id,
-          reservedPort.port_id,
-          portSlot,
-          allocPortNo,
-          mt5Login,
-          mt5Password,
-          serverName,
-          `PORT ${portSlot}`
-        ]);
-      });
+    if (!upserted.id) {
+      throw new Error('ไม่สามารถบันทึกข้อมูล PORT ได้ — กรุณาลองใหม่');
     }
 
-    if (!acc.rows?.[0]) {
-      acc = await query(
-        `
-        UPDATE vps_system.mt5_accounts
-        SET
-          vps_id=$2,
-          port_id=$3,
-          port_slot=$4,
-          assigned_port_no=$5,
-          windows_port_no=$5,
-          mt5_password=$7,
-          broker='MH Markets',
-          server_name=$8,
-          account_name=$9,
-          status='connecting',
-          connect_started_at=NOW(),
-          last_error=NULL,
-          last_login_message='① ส่งคำสั่ง login_mt5 ไป VPS...',
-          updated_at=NOW()
-        WHERE user_id=$1
-          AND mt5_login=$6
-          AND COALESCE(server_name, mt5_server, '')=$8
-          AND LOWER(TRIM(COALESCE(status, ''))) IN ('deleted', 'expired', 'failed', 'ready', 'cancelled')
-        RETURNING id
-      `,
-        [
-          userId,
-          reservedPort.vps_id,
-          reservedPort.port_id,
-          portSlot,
-          allocPortNo,
-          mt5Login,
-          mt5Password,
-          serverName,
-          `PORT ${portSlot}`
-        ]
-      ).catch(() => ({ rows: [] }));
-    }
-
-    const accountId = acc.rows[0].id;
+    const accountId = upserted.id;
+    await expireDuplicatePortSlotRows(
+      query,
+      userId,
+      portSlot,
+      accountId,
+      PORT_SWAP_HANDOFF_MSG
+    );
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
     await expireStuckMaintenanceCommands(reservedPort.vps_id).catch(() => {});
