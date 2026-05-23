@@ -38,6 +38,7 @@ const {
   computeJournalTimeoutSec,
   countActiveLoginsOnVps,
   computeLoginQueueDelaySec,
+  countRunningMt5OnVps,
   connectPollStaleLimitMs
 } = require('../lib/mt5MultiPortLogin');
 const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
@@ -1253,9 +1254,11 @@ async function handleMt5ConnectProduction(req, res) {
     }
 
     const activeOnVps = await countActiveLoginsOnVps(reservedPort.vps_id);
+    const runningOnVps = await countRunningMt5OnVps(reservedPort.vps_id);
     const journalTimeoutSec = computeJournalTimeoutSec({
       totalPorts,
       activeLoginCount: activeOnVps,
+      runningMt5Count: runningOnVps,
       portSlot
     });
     const queueDelay = await computeLoginQueueDelaySec(reservedPort.vps_id, accountId);

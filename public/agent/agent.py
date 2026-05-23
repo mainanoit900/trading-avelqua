@@ -544,7 +544,7 @@ def journal_timeout_sec(payload: Optional[Dict[str, Any]]) -> int:
         n = int(raw)
     except Exception:
         n = env_default
-    extra = min(60, max(0, _count_mt5_terminals() - 1) * 12)
+    extra = min(90, max(0, _count_mt5_terminals() - 1) * 25)
     return max(120, min(n + extra, cap))
 
 
@@ -2496,12 +2496,36 @@ def resolve_mt5_server(payload: Dict[str, Any], login: Optional[str] = None) -> 
     return MT5_LIVE_SERVER
 
 
+def _powershell_escape_single(value: str) -> str:
+    return str(value or "").replace("'", "''")
+
+
+def _terminal_pid_for_port(port_dir: Optional[Path] = None, proc_pid: Any = None) -> int:
+    try:
+        pid = int(proc_pid or 0)
+        if pid > 0:
+            return pid
+    except Exception:
+        pass
+    if port_dir:
+        folder_payload = {"vpsFolderPath": str(port_dir), "folder_path": str(port_dir)}
+        procs = mt5_port_processes(None, folder_payload)
+        if procs:
+            try:
+                return int(procs[0].pid)
+            except Exception:
+                pass
+    return 0
+
+
 def automate_mt5_login_server_form(
     login: str,
     password: str,
     server: str = MT5_LIVE_SERVER,
+    port_dir: Optional[Path] = None,
+    proc_pid: Any = None,
 ) -> bool:
-    """กรอกฟอร์ม Login MT5 (login / password / server) — จากสำเนา equity-dashboard"""
+    """กรอกฟอร์ม Login MT5 — โฟกัสหน้าต่างของ PORT นี้ (ไม่ใช่ terminal64 ตัวแรกบน VPS)"""
     login_esc = str(login or "").replace("+", "{+}").replace("{", "{{").replace("}", "}}")
     server_esc = (
         str(server or MT5_LIVE_SERVER)
@@ -2520,13 +2544,33 @@ def automate_mt5_login_server_form(
         .replace("{", "{{")
         .replace("}", "}}")
     )
+    pid_target = _terminal_pid_for_port(port_dir, proc_pid)
+    folder_esc = _powershell_escape_single(str(port_dir or ""))
+    if pid_target > 0:
+        proc_select = f"$p = Get-Process -Id {pid_target} -ErrorAction SilentlyContinue"
+    elif folder_esc:
+        proc_select = f"""
+$folder = '{folder_esc}'.ToLower()
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object {{
+    $_.MainWindowHandle -ne 0 -and (
+      ($_.Path -and $_.Path.ToLower().StartsWith($folder)) -or
+      ($_.Path.ToLower().Contains($folder))
+    )
+  }} |
+  Select-Object -First 1
+"""
+    else:
+        proc_select = """
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } |
+  Sort-Object MainWindowTitle -Descending |
+  Select-Object -First 1
+"""
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.MainWindowHandle -ne 0 }} |
-  Sort-Object MainWindowTitle -Descending |
-  Select-Object -First 1
+{proc_select}
 if (-not $p) {{ exit 0 }}
 Add-Type @"
 using System;
@@ -2558,7 +2602,10 @@ exit 0
 """
     try:
         _run_powershell(ps, timeout=14)
-        log(f"MT5 LOGIN FORM server={server} login={login}")
+        log(
+            f"MT5 LOGIN FORM server={server} login={login} "
+            f"pid={pid_target or '-'} folder={port_dir or '-'}"
+        )
         return True
     except Exception as e:
         log(f"MT5 LOGIN FORM ERROR: {e}")
@@ -2838,7 +2885,7 @@ def wait_mt5_login_hybrid(
             try:
                 automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
                 if password:
-                    automate_mt5_login_server_form(login, password, server)
+                    automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
             except Exception as e:
                 log(f"LOGIN WIZARD/FORM burst: {e}")
             last_wizard_at = now
@@ -2919,7 +2966,7 @@ def wait_mt5_login_hybrid(
         if not ok_w and password and elapsed >= 10 and now - last_form_at >= 18.0:
             last_form_at = now
             try:
-                automate_mt5_login_server_form(login, password, server)
+                automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
             except Exception as e:
                 log(f"LOGIN FORM RETRY: {e}")
 
@@ -3523,7 +3570,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
             time.sleep(0.9)
-            automate_mt5_login_server_form(login, password, server)
+            automate_mt5_login_server_form(login, password, server, port_dir, proc.pid if proc else None)
         return proc
 
     other_mt5 = _count_mt5_terminals()
@@ -3545,7 +3592,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     time.sleep(2.5)
     automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
     time.sleep(0.8)
-    automate_mt5_login_server_form(login, password, server)
+    automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
     time.sleep(1.0)
     sync_avelqua_data_exports(port_dir, force=True)
 
