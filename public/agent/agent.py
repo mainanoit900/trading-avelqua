@@ -2288,9 +2288,9 @@ def wait_mt5_equity_login(
             snap = _equity_login_probe(
                 port, payload, port_dir, login, active_pid, equity_since
             )
-                if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
-                    _send_equity_connected(payload, port, active_pid, login, snap)
-                    return True, EQUITY_LOGIN_OK_MSG, snap
+            if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
+                _send_equity_connected(payload, port, active_pid, login, snap)
+                return True, EQUITY_LOGIN_OK_MSG, snap
 
         if now - last_diag >= 15.0 and elapsed >= 8:
             last_diag = now
