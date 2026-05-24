@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v61"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v62"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1641,6 +1641,14 @@ if (-not $eq -and $bal -and $blob -match '(?i)(?:Profit|Floating|P/L)[^0-9-]*(-?
   $pr = ($matches[1] -replace '\\s','')
   try {{ $eq = [string]([decimal]$bal + [decimal]$pr) }} catch {{ }}
 }}
+if (-not $eq -and $winTitle -match '(?i)\[\s*([A-Z]{{3}})\s*,\s*([0-9][0-9,\.\s]+)\s*\]') {{
+  $eq = ($matches[2] -replace '\\s','')
+  if (-not $bal) {{ $bal = $eq }}
+}}
+if (-not $eq -and $winTitle -match '(?i)(USD|EUR|GBP|THB)\s*[,:\s]+\s*([0-9][0-9,\.\s]+)') {{
+  $eq = ($matches[2] -replace '\\s','')
+  if (-not $bal) {{ $bal = $eq }}
+}}
 @{{ balance = $bal; equity = $eq; login = $login; title = $winTitle }} | ConvertTo-Json -Compress
 """
         raw = _run_powershell(ps, timeout=18).strip()
@@ -1653,6 +1661,10 @@ if (-not $eq -and $bal -and $blob -match '(?i)(?:Profit|Floating|P/L)[^0-9-]*(-?
                 m = re.search(r"(\d{6,12})", str(data.get("title") or ""))
                 if m:
                     out["login"] = m.group(1)
+            if not _snap_has_equity(out) and data.get("title"):
+                title_snap = _parse_equity_money_from_text(str(data.get("title") or ""), login)
+                if _snap_has_equity(title_snap):
+                    out.update({k: v for k, v in title_snap.items() if v not in (None, "")})
             if out.get("balance") or out.get("equity"):
                 log(
                     f"MT5 SNAPSHOT UIA PORT={port} login={out.get('login')} "
@@ -1728,13 +1740,13 @@ def _mt5_initialize_for_port(port_dir: Path, bypass_skip: bool = False) -> Tuple
         if not mt5.initialize(path=str(terminal)):
             err = mt5.last_error()
             if _mt5_api_init_error_is_busy(err):
-                _mt5_api_mark_skip(port_dir, 3.0 if bypass_skip else 180.0)
+                _mt5_api_mark_skip(port_dir, 0.8 if bypass_skip else 180.0)
                 return False, "api_attach_busy"
             return False, f"init fail {err}"
         return True, "ok"
     except Exception as e:
         if _mt5_api_init_error_is_busy(e):
-            _mt5_api_mark_skip(port_dir, 3.0 if bypass_skip else 180.0)
+            _mt5_api_mark_skip(port_dir, 0.8 if bypass_skip else 180.0)
             return False, "api_attach_busy"
         return False, str(e)
 
@@ -2025,35 +2037,37 @@ def _send_equity_connected(
     threading.Thread(target=_preview_worker, daemon=True).start()
 
 
-def _port_journal_authorized(port_dir: Path, login: str, since_ts: float = 0.0) -> bool:
-    """Journal ของ PORT นี้บอก authorized สำหรับ login ที่ร้องขอ"""
+def _port_journal_auth_outcome(port_dir: Path, login: str) -> Tuple[Optional[bool], str]:
+    """Journal ของ PORT — True=authorized, False=failed, None=ยังไม่รู้"""
     login = str(login or "").strip()
     if not login:
-        return False
+        return None, ""
     text = collect_log_text_for_snapshot(port_dir)
     if not text:
         _, text = latest_log_text(port_dir)
-    if not text or login not in text:
-        return False
-    outcome, _ = _journal_outcome_flex(text, login, MT5_LIVE_SERVER)
+    if not text:
+        return None, ""
+    return _journal_outcome_flex(text, login, MT5_LIVE_SERVER)
+
+
+def _port_journal_authorized(port_dir: Path, login: str, since_ts: float = 0.0) -> bool:
+    """Journal ของ PORT นี้บอก authorized สำหรับ login ที่ร้องขอ"""
+    outcome, _ = _port_journal_auth_outcome(port_dir, login)
     return outcome is True
 
 
-def _equity_from_window_titles(port: Any, payload: Dict[str, Any], login: str) -> Dict[str, Any]:
-    """ดึงยอดจาก title bar MT5 เมื่อมี login ตรง (multi-port ไม่ใช้ MT5 API)"""
+def _parse_equity_money_from_text(text: str, login: str = "") -> Dict[str, Any]:
+    """ดึงยอดจาก title / UI blob เมื่อมี login ตรง"""
     out: Dict[str, Any] = {"balance": None, "equity": None, "currency": "", "login": login}
-    login = str(login or "").strip()
-    if not login:
-        return out
-    titles = mt5_window_titles(port, payload)
-    joined = " | ".join(titles)
-    if login not in joined:
+    joined = str(text or "")
+    if login and login not in joined:
         return out
     patterns = [
         r"(?i)\[\s*([A-Z]{3})\s*,\s*([0-9][0-9,.\s]+)\s*\]",
         r"(?i)(USD|EUR|GBP|THB)\s*[,:\s]+\s*([0-9][0-9,.\s]+)",
         r"(?i)balance[^0-9]*([0-9][0-9,.\s]+)",
         r"(?i)equity[^0-9]*([0-9][0-9,.\s]+)",
+        r"(?i)(?<!\d)([0-9]{1,3}(?:[,\s][0-9]{3})+(?:\.[0-9]+)?)(?!\d)",
     ]
     for pat in patterns:
         m = re.search(pat, joined)
@@ -2067,11 +2081,19 @@ def _equity_from_window_titles(port: Any, payload: Dict[str, Any], login: str) -
         if val is not None and float(val) > 0:
             out["equity"] = float(val)
             out["balance"] = float(val)
-            log(
-                f"EQUITY TITLE OK login={login} equity={val} title={joined[:120]}"
-            )
             return out
     return out
+
+
+def _equity_from_window_titles(port: Any, payload: Dict[str, Any], login: str) -> Dict[str, Any]:
+    """ดึงยอดจาก title bar MT5 เมื่อมี login ตรง (multi-port ไม่ใช้ MT5 API)"""
+    login = str(login or "").strip()
+    titles = mt5_window_titles(port, payload)
+    joined = " | ".join(titles)
+    snap = _parse_equity_money_from_text(joined, login)
+    if _snap_has_equity(snap):
+        log(f"EQUITY TITLE OK login={login} equity={snap.get('equity')} title={joined[:120]}")
+    return snap
 
 
 def _equity_login_probe(
@@ -2144,6 +2166,33 @@ def _equity_login_probe(
             )
             return api_snap
 
+    if journal_ok:
+        password = str(
+            payload_get(payload, "mt5Password", "password", "mt5_password") or ""
+        ).strip()
+        if password:
+            ok_api, api_msg = mt5_login_verify_api(port_dir, login, password)
+            if ok_api and "equity=" in str(api_msg):
+                m = re.search(r"equity=([0-9.]+)", str(api_msg))
+                if m:
+                    eq_val = float(m.group(1))
+                    if eq_val > 0:
+                        snap_api = {
+                            "login": login,
+                            "equity": eq_val,
+                            "balance": eq_val,
+                            "currency": "USD",
+                        }
+                        log(f"EQUITY VERIFY API OK PORT={port} LOGIN={login} equity={eq_val}")
+                        return snap_api
+
+    snap_full = account_snapshot(port, payload)
+    if _snap_has_equity(snap_full) and _equity_snapshot_login_matches(snap_full, login):
+        log(
+            f"EQUITY SNAPSHOT OK PORT={port} LOGIN={login} equity={snap_full.get('equity')}"
+        )
+        return snap_full
+
     return {}
 
 
@@ -2169,6 +2218,7 @@ def wait_mt5_equity_login(
     deadline = time.time() + max(40, int(timeout_sec or 75))
     last_progress = 0.0
     last_probe = 0.0
+    last_diag = 0.0
     relaunch_done = False
     active_pid = active_pid_ref[0] if active_pid_ref else proc_pid
 
@@ -2211,6 +2261,21 @@ def wait_mt5_equity_login(
             except Exception as e:
                 log(f"EQUITY RELAUNCH WAIT ERROR: {e}")
 
+        if elapsed >= 12:
+            j_out, _j_srv = _port_journal_auth_outcome(port_dir, login)
+            if j_out is False:
+                fail_msg = JOURNAL_FAIL_MSG
+                log(f"EQUITY JOURNAL FAIL FAST PORT={port} LOGIN={login} elapsed={elapsed}s")
+                cleanup_mt5_after_login_fail(port, payload, port_dir)
+                send_connect_result(
+                    payload,
+                    "failed",
+                    fail_msg,
+                    port,
+                    process_id=None,
+                )
+                return False, fail_msg, {}
+
         if now - last_probe >= 1.2 and elapsed >= 2:
             last_probe = now
             file_snap = account_snapshot_equity_file(
@@ -2223,9 +2288,18 @@ def wait_mt5_equity_login(
             snap = _equity_login_probe(
                 port, payload, port_dir, login, active_pid, equity_since
             )
-            if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
-                _send_equity_connected(payload, port, active_pid, login, snap)
-                return True, EQUITY_LOGIN_OK_MSG, snap
+                if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
+                    _send_equity_connected(payload, port, active_pid, login, snap)
+                    return True, EQUITY_LOGIN_OK_MSG, snap
+
+        if now - last_diag >= 15.0 and elapsed >= 8:
+            last_diag = now
+            j_out, _ = _port_journal_auth_outcome(port_dir, login)
+            titles = " | ".join(mt5_window_titles(port, payload))[:100]
+            log(
+                f"EQUITY WAIT DIAG PORT={port} LOGIN={login} elapsed={elapsed}s "
+                f"mt5_up={mt5_up} pid={active_pid} journal={j_out} title={titles}"
+            )
 
         if now - last_progress >= 2.0:
             eq = snap.get("equity")
