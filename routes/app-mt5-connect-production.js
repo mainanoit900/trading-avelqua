@@ -66,6 +66,7 @@ const {
   forceStopPackagePortSlot,
   tryFastConnectConfirm,
   tryFastJournalFail,
+  expireStuckLoginVerify,
   verifyLoginFromCommand,
   extractJournalEvidence,
   hasLoginCommandInProgress,
@@ -996,11 +997,36 @@ async function handleMt5ConnectProduction(req, res) {
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
     const serverName = resolveServerForLogin(mt5Login);
 
-    if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
+    if (!mt5Password) {
+      return respondConnectFailed(res, req, 'กรุณากรอกรหัสผ่าน MT5');
+    }
+    if (mt5Password.length < 4 || mt5Password.length > 64) {
+      return respondConnectFailed(res, req, 'Password ไม่ถูกต้อง (4-64 ตัวอักษร)');
+    }
 
     const uiPreferredSlotEarly = num(
       req.body.port_slot || req.body.portSlot || req.body.ui_port_hint || req.body.uiPortHint
     );
+
+    if (uiPreferredSlotEarly > 0) {
+      const portBusy = await query(
+        `
+        SELECT id FROM vps_system.mt5_accounts
+        WHERE user_id = $1
+          AND port_slot = $2
+          AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting')
+        LIMIT 1
+      `,
+        [userId, uiPreferredSlotEarly]
+      ).catch(() => ({ rows: [] }));
+      if (portBusy.rows?.[0]) {
+        return respondConnectFailed(
+          res,
+          req,
+          `PORT ${uiPreferredSlotEarly} กำลังเชื่อมต่ออยู่ — รอให้จบหรือกดยกเลิกก่อนลองใหม่`
+        );
+      }
+    }
 
     if (uiPreferredSlotEarly > 0 && loginUsesEquityVerify(mt5Login)) {
       const liveRes = await query(
@@ -1525,6 +1551,14 @@ async function handleMt5ConnectStatusProduction(req, res) {
         a.status = 'failed';
         a.last_error = failMsg;
         a.last_login_message = failMsg;
+      } else {
+        const stuck = await expireStuckLoginVerify(a).catch(() => ({ expired: false }));
+        if (stuck.expired) {
+          status = 'failed';
+          a.status = 'failed';
+          a.last_error = stuck.message;
+          a.last_login_message = stuck.message;
+        }
       }
     }
 
@@ -1960,6 +1994,84 @@ router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction)
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
+
+/** สถานะ login แบบย่อ — ใช้ poll UI (alias connect-status) */
+async function handleMt5AccountStatus(req, res) {
+  try {
+    const userId = req.user.id;
+    const accountId = num(req.params.accountId || req.params.id);
+    if (!accountId) return res.status(400).json({ ok: false, message: 'NO_ACCOUNT_ID' });
+
+    const row = await query(
+      `
+      SELECT id, status, last_error, last_login_message, last_equity, connect_started_at,
+             created_at, updated_at, mt5_login, assigned_port_no, port_slot, vps_id, port_id
+      FROM vps_system.mt5_accounts
+      WHERE id = $1 AND user_id = $2
+      LIMIT 1
+    `,
+      [accountId, userId]
+    ).catch(() => ({ rows: [] }));
+
+    const acc = row.rows?.[0];
+    if (!acc) return res.json({ ok: false, status: 'none', message: 'ไม่พบบัญชี' });
+
+    const st = String(acc.status || '').toLowerCase();
+    if (['connecting', 'starting', 'checking'].includes(st)) {
+      await expireStuckLoginVerify(acc).catch(() => ({ expired: false }));
+      const refreshed = await query(
+        `SELECT status, last_error, last_login_message, last_equity, updated_at
+         FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
+        [accountId]
+      ).catch(() => ({ rows: [] }));
+      if (refreshed.rows?.[0]) Object.assign(acc, refreshed.rows[0]);
+    }
+
+    const startedMs = acc.connect_started_at
+      ? new Date(acc.connect_started_at).getTime()
+      : acc.created_at
+        ? new Date(acc.created_at).getTime()
+        : Date.now();
+    const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
+    const statusNow = String(acc.status || '').toLowerCase();
+    let message = acc.last_login_message || acc.last_error || '';
+    if (statusNow === 'connected') message = message || MT5_SUCCESS_MSG;
+    if (statusNow === 'failed') message = acc.last_error || acc.last_login_message || MT5_FAIL_USER_MSG;
+    if (['connecting', 'checking', 'starting'].includes(statusNow)) {
+      if (elapsed < 20) message = message || `⏳ กำลังเปิด MT5... (${elapsed} วิ)`;
+      else if (elapsed < 90) message = message || `⏳ ตรวจ Login / Journal... (${elapsed} วิ)`;
+      else message = message || `⏳ รอผลจาก VPS... (${elapsed} วิ)`;
+    }
+
+    return res.json({
+      ok: true,
+      status: statusNow,
+      equity: acc.last_equity,
+      error: acc.last_error,
+      message,
+      elapsed,
+      accountId: acc.id,
+      failed: statusNow === 'failed',
+      connected: statusNow === 'connected'
+    });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+}
+
+router.get('/mt5/status/:accountId', requireLogin, handleMt5AccountStatus);
+router.get('/mt5/equity/:accountId', requireLogin, async (req, res) => {
+  try {
+    const accountId = num(req.params.accountId);
+    const row = await query(
+      `SELECT last_equity FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
+      [accountId, req.user.id]
+    ).catch(() => ({ rows: [] }));
+    return res.json({ ok: true, equity: row.rows?.[0]?.last_equity ?? null });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
 
 router.post('/mt5/force-stop-port', requireLogin, async (req, res) => {
   try {

@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v47-login-heartbeat"
+AGENT_BUILD_ID = "2026-05-24-agent-v48-wizard-login"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2600,8 +2600,10 @@ public class W32 {{
 [W32]::ShowWindow($dlg.MainWindowHandle, 9) | Out-Null
 [W32]::SetForegroundWindow($dlg.MainWindowHandle) | Out-Null
 Start-Sleep -Milliseconds 500
-# เลือก Mohicans Markets Ltd แล้วกด Next
-[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
+# พิมพ์ชื่อ broker แล้ว Next (แม่นกว่า {DOWN}{ENTER} อย่างเดียว)
+[System.Windows.Forms.SendKeys]::SendWait("Mohicans")
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 Start-Sleep -Milliseconds 700
 [System.Windows.Forms.SendKeys]::SendWait("%n")
 Start-Sleep -Milliseconds 900
@@ -2611,6 +2613,8 @@ Start-Sleep -Milliseconds 400
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 Start-Sleep -Milliseconds 500
 [System.Windows.Forms.SendKeys]::SendWait("%n")
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
 exit 0
 """
     try:
@@ -2890,7 +2894,7 @@ def wait_mt5_login_hybrid(
         if mt5_title_has_open_account_wizard(joined):
             if not wizard_stuck_since:
                 wizard_stuck_since = now
-            elif now - wizard_stuck_since >= 40:
+            elif now - wizard_stuck_since >= 28:
                 stuck_msg = (
                     "MT5 ค้างหน้า Open Account — ปิด MT5 แล้วเชื่อมต่อใหม่ "
                     "หรือตรวจ Login/รหัสผ่านให้ตรง Server "
@@ -2927,7 +2931,7 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        if not ok_w and password and elapsed >= 10 and now - last_form_at >= 18.0:
+        if not ok_w and password and elapsed >= 8 and now - last_form_at >= 10.0:
             last_form_at = now
             try:
                 automate_mt5_login_server_form(login, password, server)

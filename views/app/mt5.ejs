@@ -215,7 +215,8 @@ document.addEventListener('DOMContentLoaded', function () {
         <small id="mt5LoginFormatHint" style="color:#94a3b8;display:block;margin-top:4px">เว็บตรวจรูปแบบทันที (จริง <b>2</b>·9หลัก / ทดลอง <b>8</b>·8หลัก) — หลัง Login ดึง Equity จาก VPS ทันที แล้วอัปเดตทุก 20 วิ</small>
 
         <label>Password</label>
-        <input name="mt5_password" id="mt5PasswordInput" type="password" placeholder="รหัสผ่าน MT5" autocomplete="current-password" required>
+        <input name="mt5_password" id="mt5PasswordInput" type="password" placeholder="รหัสผ่าน MT5" autocomplete="current-password" maxlength="64" required>
+        <small id="mt5PasswordHint" style="color:#64748b;display:block;margin-top:4px">หลังกดเชื่อมต่อ ช่องว่าง = ปกติ (เบราว์เซอร์ซ่อนรหัส) — ระบบส่งรหัสไป VPS แล้ว</small>
 
         <label class="mt5-remember-login" style="display:flex;align-items:center;gap:8px;margin-top:8px;font-weight:normal;color:#94a3b8">
           <input type="checkbox" id="mt5RememberLogin" checked style="width:auto">
@@ -691,6 +692,12 @@ document.addEventListener('DOMContentLoaded', function () {
     try {
       const formData = form ? new FormData(form) : new FormData();
       const data = Object.fromEntries(formData.entries());
+      const loginSubmit = String((document.getElementById('mt5LoginInput') || {}).value || '')
+        .trim()
+        .replace(/\s/g, '');
+      const pwSubmit = String((document.getElementById('mt5PasswordInput') || {}).value || '').trim();
+      data.mt5_login = loginSubmit;
+      data.mt5_password = pwSubmit;
       data.port_slot = connectSlot;
       const connectCtrl = new AbortController();
       window.__mt5ConnectAbort = connectCtrl;
@@ -1414,6 +1421,9 @@ document.addEventListener('DOMContentLoaded', function () {
     }
     if (!pw || pw.length < 4) {
       return 'กรุณากรอกรหัสผ่าน MT5';
+    }
+    if (pw.length > 64) {
+      return 'Password ไม่ถูกต้อง (4-64 ตัวอักษร)';
     }
     return '';
   }
