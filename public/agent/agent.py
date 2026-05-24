@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v53-force-relaunch"
+AGENT_BUILD_ID = "2026-05-24-agent-v54-wizard-finish"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2690,6 +2690,95 @@ exit 0
         return False
 
 
+def automate_mt5_wizard_existing_account_login(
+    login: str,
+    password: str,
+    server: str = MT5_LIVE_SERVER,
+    port_dir: Optional[Path] = None,
+) -> bool:
+    """Wizard Open an Account → Connect with existing trade account → Finish (เหมือน login มือ)"""
+    login_esc = str(login or "").replace("+", "{+}").replace("{", "{{").replace("}", "}}")
+    server_esc = (
+        str(server or MT5_LIVE_SERVER)
+        .replace("+", "{+}")
+        .replace("{", "{{")
+        .replace("}", "}}")
+    )
+    pw_esc = (
+        str(password or "")
+        .replace("+", "{+}")
+        .replace("^", "{^}")
+        .replace("%", "{%}")
+        .replace("~", "{~}")
+        .replace("(", "{(}")
+        .replace(")", "{)}")
+        .replace("{", "{{")
+        .replace("}", "}}")
+    )
+    ps = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$ErrorActionPreference = "SilentlyContinue"
+$dlg = Get-Process | Where-Object {{
+  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Open an Account*"
+}} | Select-Object -First 1
+if (-not $dlg) {{ exit 0 }}
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}}
+"@
+[W32]::ShowWindow($dlg.MainWindowHandle, 9) | Out-Null
+[W32]::SetForegroundWindow($dlg.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 650
+$title = $dlg.MainWindowTitle
+if ($title -notmatch ":") {{
+  [System.Windows.Forms.SendKeys]::SendWait("Mohicans")
+  Start-Sleep -Milliseconds 450
+  [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+  Start-Sleep -Milliseconds 900
+  [System.Windows.Forms.SendKeys]::SendWait("%n")
+  Start-Sleep -Milliseconds 900
+}}
+# เลือก "Connect with an existing trade account"
+[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 80
+[System.Windows.Forms.SendKeys]::SendWait("{login_esc}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
+Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 80
+[System.Windows.Forms.SendKeys]::SendWait("{pw_esc}")
+Start-Sleep -Milliseconds 200
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
+Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 80
+[System.Windows.Forms.SendKeys]::SendWait("{server_esc}")
+Start-Sleep -Milliseconds 350
+[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait("%f")
+Start-Sleep -Milliseconds 350
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+exit 0
+"""
+    try:
+        _run_powershell(ps, timeout=20)
+        log(f"MT5 WIZARD EXISTING login={login} server={server} port_dir={port_dir or 'any'}")
+        return True
+    except Exception as e:
+        log(f"MT5 WIZARD EXISTING ERROR: {e}")
+        return False
+
+
 def dismiss_mt5_open_account_wizard(port_dir: Optional[Path] = None) -> bool:
     """ปิด wizard Open an Account — ไม่สร้างบัญชีใหม่ (ใช้ login ที่มีอยู่จาก startup.ini)"""
     dir_filter = ""
@@ -3095,7 +3184,7 @@ def _relaunch_mt5_for_login(
     log(f"RELAUNCH MT5 reason={reason} login={login} args={args}")
     proc = _popen_hidden(args, cwd=str(port_dir))
     time.sleep(2.5)
-    dismiss_mt5_open_account_wizard(port_dir)
+    automate_mt5_wizard_existing_account_login(login, password, server, port_dir)
     return proc.pid if proc else None
 
 
@@ -3187,9 +3276,11 @@ def wait_mt5_login_hybrid(
         if mt5_title_has_open_account_wizard(joined_probe):
             if last_wizard_at <= wait_start or now - last_wizard_at >= 6.0:
                 try:
-                    dismiss_mt5_open_account_wizard(port_dir)
+                    automate_mt5_wizard_existing_account_login(
+                        login, password, server, port_dir
+                    )
                 except Exception as e:
-                    log(f"LOGIN WIZARD DISMISS: {e}")
+                    log(f"LOGIN WIZARD EXISTING: {e}")
                 last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
@@ -3230,7 +3321,9 @@ def wait_mt5_login_hybrid(
                 wizard_stuck_since = now
             elif now - wizard_stuck_since >= 12:
                 try:
-                    dismiss_mt5_open_account_wizard(port_dir)
+                    automate_mt5_wizard_existing_account_login(
+                        login, password, server, port_dir
+                    )
                 except Exception as e:
                     log(f"LOGIN WIZARD RETRY: {e}")
                 wizard_stuck_since = now
@@ -3647,7 +3740,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 log(f"OFFLINE RELAUNCH kill error: {e}")
             mt5_already_open = False
             procs_existing = []
-        elif j_open is True or (ok_fast_open and sock_ok_open):
+        elif j_open is True or ok_fast_open:
             enforce_login_no_trading(port_dir, port, payload, login, password, server)
             proc_pid_open = procs_existing[0].pid if procs_existing else None
             send_connect_result(
@@ -3932,24 +4025,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
     time.sleep(5.0)
-    dismiss_mt5_open_account_wizard(port_dir)
-    time.sleep(0.8)
-    log("POST-WIZARD RESTART — force relaunch MT5 with startup.ini login")
-    proc = launch_mt5("post_wizard", force=True)
-    if not proc:
-        log("POST-WIZARD LAUNCH FAILED — retry force launch")
-        proc = launch_mt5("post_wizard_retry", force=True)
-    proc_pid = proc.pid if proc else proc_pid
-    journal_since = time.time()
-    send_connect_result(
-        payload,
-        "starting",
-        f"Login จาก startup.ini หลังปิด wizard — รอ Journal 30–90 วิ",
-        port,
-        process_id=proc_pid,
-    )
-    time.sleep(6.0)
-    dismiss_mt5_open_account_wizard(port_dir)
+    for wiz_try in range(2):
+        automate_mt5_wizard_existing_account_login(login, password, server, port_dir)
+        time.sleep(2.5)
+        j_wiz, _ = _quick_journal_probe(port_dir, login, journal_since, server)
+        ok_wiz, _ = mt5_login_verified_by_window(port, payload)
+        if j_wiz is True or ok_wiz:
+            log(f"MT5 WIZARD LOGIN OK try={wiz_try + 1} login={login}")
+            break
     j0, _chunk0 = _quick_journal_probe(port_dir, login, journal_since, server)
     ok0, _t0 = mt5_login_verified_by_window(port, payload)
     if j0 is not True and not ok0:
