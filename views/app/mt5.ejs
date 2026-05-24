@@ -1754,6 +1754,19 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
     }
+    if (typeof window.mt5UpdateConnectProgress === 'function') {
+      window.mt5UpdateConnectProgress({
+        failed: true,
+        status: 'failed',
+        account: accountInfo || { status: 'failed' },
+        progressStep: 3,
+        progressStepLabel: 'Login ไม่สำเร็จ',
+        progressTotal: 4,
+        connectStep: '④ Login ไม่สำเร็จ',
+        message: failMsg,
+        commandStatus: 'failed'
+      });
+    }
     await mt5CleanupAfterLoginFail(accountInfo, failMsg, failSlotHint);
     const failKey = mt5OutcomeStorageKey('fail', (accountInfo && accountInfo.id) || 'port');
     mt5MarkOutcomeShown(failKey);
@@ -1984,13 +1997,8 @@ document.addEventListener('DOMContentLoaded', function () {
     if (typeof window.__mt5ConnectProgressMax !== 'number') {
       window.__mt5ConnectProgressMax = 0;
     }
-    const verifiedUi =
-      d.loginVerified === true || st === 'connected' || d.connected === true;
-    if (verifiedUi) {
-      window.__mt5ConnectProgressMax = Math.max(window.__mt5ConnectProgressMax, activeIdx);
-    } else {
-      window.__mt5ConnectProgressMax = Math.min(window.__mt5ConnectProgressMax, activeIdx);
-    }
+    // Monotonic step — never drop back to ① while connect is in flight
+    window.__mt5ConnectProgressMax = Math.max(window.__mt5ConnectProgressMax, activeIdx);
     activeIdx = window.__mt5ConnectProgressMax;
     const stepNowLabel =
       d.progressStepLabel ||

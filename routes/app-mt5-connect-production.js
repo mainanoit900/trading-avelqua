@@ -1543,7 +1543,10 @@ async function handleMt5ConnectStatusProduction(req, res) {
         commandStatus: 'failed',
         commandMessage: failMsg,
         elapsedSec: Math.max(0, Math.floor(staleMs / 1000)),
-        connectStep: '④ Login ไม่สำเร็จ'
+        connectStep: '④ Login ไม่สำเร็จ',
+        progressStep: 3,
+        progressStepLabel: 'Login ไม่สำเร็จ',
+        progressTotal: 4
       });
     }
 
