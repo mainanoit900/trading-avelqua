@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v62"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v63"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1794,6 +1794,73 @@ def account_snapshot_mt5_api(
         return {}
 
 
+def account_snapshot_mt5_api_subprocess(
+    port_dir: Path, login: str = "", timeout_sec: float = 18.0
+) -> Dict[str, Any]:
+    """MT5 API ใน subprocess แยก — attach ถูก PORT เมื่อมีหลาย terminal64"""
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {}
+    login_hint = 0
+    try:
+        login_hint = int(str(login or "0").strip() or "0")
+    except Exception:
+        login_hint = 0
+    term_json = json.dumps(str(terminal))
+    code = (
+        "import json,sys\n"
+        "try:\n import MetaTrader5 as mt5\n"
+        "except ImportError:\n sys.exit(0)\n"
+        "try:\n mt5.shutdown()\n"
+        "except Exception:\n pass\n"
+        f"path={term_json}\n"
+        "if not mt5.initialize(path=path):\n sys.exit(0)\n"
+        "ai=mt5.account_info()\n"
+        "try:\n mt5.shutdown()\n"
+        "except Exception:\n pass\n"
+        "if ai is None:\n sys.exit(0)\n"
+        f"hint={login_hint}\n"
+        "login=int(getattr(ai,'login',0) or 0)\n"
+        "if hint and login not in (0,hint):\n sys.exit(0)\n"
+        "print(json.dumps({"
+        "'login':str(login) if login else '',"
+        "'balance':float(ai.balance),"
+        "'equity':float(ai.equity),"
+        "'currency':str(ai.currency or '')"
+        "}))\n"
+    )
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            cwd=str(port_dir),
+            capture_output=True,
+            text=True,
+            timeout=max(5.0, float(timeout_sec or 18.0)),
+        )
+        raw = (proc.stdout or "").strip()
+        if not raw:
+            return {}
+        line = raw.splitlines()[-1].strip()
+        if not line.startswith("{"):
+            return {}
+        data = json.loads(line)
+        out = {
+            "balance": data.get("balance"),
+            "equity": data.get("equity"),
+            "currency": str(data.get("currency") or ""),
+            "login": str(data.get("login") or "").strip(),
+        }
+        if _snap_has_equity(out):
+            log(
+                f"MT5 API SUBPROCESS path={port_dir.name} "
+                f"BALANCE={out.get('balance')} EQUITY={out.get('equity')} LOGIN={out.get('login')}"
+            )
+        return out
+    except Exception as e:
+        log(f"MT5 API SUBPROCESS ERROR path={port_dir.name}: {e}")
+        return {}
+
+
 def mt5_login_verify_api(
     port_dir: Path,
     login: str,
@@ -1948,6 +2015,10 @@ def _fresh_equity_snapshot(
         if mt5_open:
             api_ready = (time.time() - float(since_ts)) >= 2.0
             if api_ready:
+                if multi_terminal:
+                    sub_snap = account_snapshot_mt5_api_subprocess(port_dir, login)
+                    if _accept(sub_snap):
+                        return sub_snap
                 api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
                 if fresh_login and login and api_snap:
                     ai_login = str(api_snap.get("login") or "").strip()
@@ -1960,6 +2031,10 @@ def _fresh_equity_snapshot(
     api_ready = True
 
     if mt5_open and api_ready:
+        if multi_terminal:
+            sub_snap = account_snapshot_mt5_api_subprocess(port_dir, login)
+            if _accept(sub_snap):
+                return sub_snap
         api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
         if login and api_snap:
             ai_login = str(api_snap.get("login") or "").strip()
@@ -2157,14 +2232,31 @@ def _equity_login_probe(
                     return file_relaxed
 
     api_ready = (time.time() - float(since_ts or 0)) >= 3.0
-    if api_ready and (not multi_terminal or journal_ok):
-        api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=True)
-        if _snap_has_equity(api_snap) and _equity_snapshot_login_matches(api_snap, login):
-            log(
-                f"EQUITY API OK PORT={port} LOGIN={login} "
-                f"equity={api_snap.get('equity')} multi={multi_terminal}"
-            )
-            return api_snap
+    if api_ready:
+        if multi_terminal:
+            sub_snap = account_snapshot_mt5_api_subprocess(port_dir, login)
+            if _snap_has_equity(sub_snap) and _equity_snapshot_login_matches(sub_snap, login):
+                log(
+                    f"EQUITY API SUBPROCESS OK PORT={port} LOGIN={login} "
+                    f"equity={sub_snap.get('equity')}"
+                )
+                return sub_snap
+        if not multi_terminal or journal_ok:
+            api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=True)
+            if _snap_has_equity(api_snap) and _equity_snapshot_login_matches(api_snap, login):
+                log(
+                    f"EQUITY API OK PORT={port} LOGIN={login} "
+                    f"equity={api_snap.get('equity')} multi={multi_terminal}"
+                )
+                return api_snap
+        elif journal_ok:
+            sub_snap = account_snapshot_mt5_api_subprocess(port_dir, login)
+            if _snap_has_equity(sub_snap) and _equity_snapshot_login_matches(sub_snap, login):
+                log(
+                    f"EQUITY API SUBPROCESS OK PORT={port} LOGIN={login} "
+                    f"equity={sub_snap.get('equity')} journal=1"
+                )
+                return sub_snap
 
     if journal_ok:
         password = str(
