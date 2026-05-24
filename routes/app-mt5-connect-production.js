@@ -395,6 +395,12 @@ async function reserveBestPort(userId, preferredSlot = 0) {
   if (slotHint > 0) {
     const slotReserve = await reservePortForPackageSlot(userId, slotHint);
     if (slotReserve.ok) return slotReserve;
+    return {
+      ok: false,
+      message:
+        `FolderPort P${String(slotHint).padStart(2, '0')} ไม่ว่างบน VPS — ปิด MT5 บนโฟลเดอร์นี้ก่อน ` +
+        `(1 PORT แพ็กเกจ = 1 FolderPort ห้ามข้ามช่อง)`
+    };
   }
 
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -1170,14 +1176,16 @@ async function handleMt5ConnectProduction(req, res) {
       }
 
       if (exist?.port_id && exist?.vps_id && exist?.folder_path) {
-        reservedPort = {
-          port_id: exist.port_id,
-          vps_id: exist.vps_id,
-          port_no: exist.assigned_port_no || exist.port_no,
-          folder_path: exist.folder_path
-        };
-        await query(
-          `
+        const existPhysical = num(exist.assigned_port_no || exist.port_no);
+        if (existPhysical > 0 && existPhysical === portSlot) {
+          reservedPort = {
+            port_id: exist.port_id,
+            vps_id: exist.vps_id,
+            port_no: existPhysical,
+            folder_path: exist.folder_path
+          };
+          await query(
+            `
           UPDATE vps_system.vps_ports
           SET status='locked',
               locked_by_user_id=$1,
@@ -1186,8 +1194,13 @@ async function handleMt5ConnectProduction(req, res) {
               updated_at=NOW()
           WHERE id=$3
         `,
-          [userId, PORT_LOCK_MINUTES, exist.port_id]
-        ).catch(() => {});
+            [userId, PORT_LOCK_MINUTES, exist.port_id]
+          ).catch(() => {});
+        } else {
+          const reserve = await reserveBestPort(userId, uiPreferredSlot || portSlot);
+          if (!reserve.ok) throw new Error(reserve.message);
+          reservedPort = reserve.port;
+        }
       } else {
         const reserve = await reserveBestPort(userId, uiPreferredSlot || portSlot);
         if (!reserve.ok) throw new Error(reserve.message);

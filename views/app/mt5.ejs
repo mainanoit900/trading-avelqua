@@ -1091,6 +1091,9 @@ document.addEventListener('DOMContentLoaded', function () {
   function mt5FolderPortState(p) {
     if (!p) return '';
     if (p.accountId) return p.statusLabel || 'เชื่อมต่อแล้ว';
+    if (p.folderOwnedBySlot) {
+      return 'Folder ใช้โดย PORT ' + p.folderOwnedBySlot;
+    }
     if (p.folderRunning && !p.accountId) {
       return p.folderMt5Login ? 'MT5 เปิดอยู่ · ' + p.folderMt5Login : 'MT5 เปิดอยู่ (ไม่ว่าง)';
     }
@@ -1160,6 +1163,18 @@ document.addEventListener('DOMContentLoaded', function () {
         'PORT ' +
         slot +
         ' เชื่อมต่อแล้วแต่ <span class="warn">MT5 ยังไม่เปิดบน VPS</span> — กรอกรหัสผ่านแล้วกด <b>เชื่อมต่อ</b> (ไม่ใช้ Login ซ้ำกับ PORT อื่น)';
+      return;
+    }
+    if (p.folderOwnedBySlot) {
+      hint.textContent =
+        'PORT ' +
+        slot +
+        ' → FolderPort P' +
+        String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
+        ' ถูกใช้โดย PORT ' +
+        p.folderOwnedBySlot +
+        ' แล้ว — เลือก PORT อื่นหรือไปที่ PORT ' +
+        p.folderOwnedBySlot;
       return;
     }
     if (p.folderRunning || p.folderAvailable === false) {
