@@ -1832,6 +1832,9 @@ document.addEventListener('DOMContentLoaded', function () {
         window.__mt5EquityWaitOnce = true;
         pollAccountEquity();
       }
+      if (typeof startMt5EquityPolling === 'function') {
+        startMt5EquityPolling();
+      }
     }
     refreshMt5PortCards()
       .then(function () {

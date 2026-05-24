@@ -1738,8 +1738,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     const summary = await getPortSummaryReadOnly(userId);
     let accounts = await safeQuery(
       `
-      SELECT a.id, a.port_slot, a.vps_id, a.port_id, a.assigned_port_no,
-             a.mt5_login, a.status, a.last_balance, a.last_equity, (
+      SELECT a.id, a.port_slot, a.mt5_login, a.status, a.last_balance, a.last_equity, (
         SELECT COUNT(*)::int FROM vps_system.bot_instances bi
         WHERE bi.mt5_account_id=a.id
           AND bi.user_id=$1
@@ -1757,7 +1756,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     for (const acc of accounts || []) {
       const stAcc = String(acc?.status || '').toLowerCase();
       if (stAcc === 'connected') {
-        const row = await reconcileConnectedAccountLive(acc, { allowDemote: true }).catch(() => null);
+        const row = await reconcileConnectedAccountLive(acc, { allowDemote: false }).catch(() => null);
         if (row?.changed && row.account) {
           acc.status = row.account.status;
           acc.last_error = row.account.last_error;
@@ -1801,42 +1800,25 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       const equityPart =
         equity != null && equity !== '' ? ` / Equity: ${equity}` : '';
       const vpsId = acc ? Number(acc.vps_id || 0) : 0;
-      const portNo = acc ? Number(acc.assigned_port_no || acc.port_slot || slot) : slot;
       const health =
         vpsId > 0
-          ? healthByPort.get(`${vpsId}:${portNo}`) ||
-            healthByPort.get(`${vpsId}:${slot}`) ||
-            healthByPort.get(`${vpsId}:${100 + slot}`) ||
-            healthByPort.get(`${vpsId}:${100 + portNo}`)
+          ? healthByPort.get(`${vpsId}:${slot}`) ||
+            healthByPort.get(`${vpsId}:${100 + slot}`)
           : null;
       const mt5Running = health ? !!health.running : false;
-      const loginOnHealth = health ? String(health.mt5_login || '').trim() : '';
-      const loginOnAcc = acc ? String(acc.mt5_login || '').trim() : '';
-      const loginMismatch =
-        mt5Running && loginOnHealth && loginOnAcc && loginOnHealth !== loginOnAcc;
       const mt5NeedReopen =
-        !!acc && String(acc.status || '').toLowerCase() === 'connected' && (!mt5Running || loginMismatch);
-      let canUse = meta.canUse && mt5Running && !loginMismatch;
-      let cssClass = meta.cssClass;
-      let statusLabel = meta.statusLabel;
-      if (mt5NeedReopen) {
-        canUse = false;
-        cssClass = acc && meta.cssClass === 'connected' ? 'cancelled' : meta.cssClass;
-        statusLabel = loginMismatch ? 'Login ไม่ตรง VPS' : 'MT5 ปิด — กดเชื่อมต่อ';
-      } else if (canUse) {
-        statusLabel = 'พร้อมรัน';
-      }
+        !!acc && String(acc.status || '').toLowerCase() === 'connected' && !mt5Running;
       ports.push({
         slot,
         accountId: acc ? Number(acc.id) : null,
         mt5_login: acc?.mt5_login || null,
         status: acc?.status || null,
-        canUse,
-        cssClass: canUse ? 'connected' : cssClass,
+        canUse: meta.canUse,
+        cssClass: meta.cssClass,
         canPick: meta.canPick,
         botRunning: meta.botRunning,
         canDelete: meta.canDelete,
-        statusLabel,
+        statusLabel: meta.statusLabel,
         mt5Running,
         mt5NeedReopen,
         sublabel: acc
@@ -1849,22 +1831,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       ports.find((p) => !p.accountId && p.cssClass !== 'connected' && p.cssClass !== 'checking')
         ?.slot || null;
 
-    const connectedAccounts = accountsForRunForm(accounts, [])
-      .filter((a) => {
-        const slot = Number(a.port_slot || 0);
-        const vpsId = Number(a.vps_id || 0);
-        const portNo = Number(a.assigned_port_no || slot);
-        if (!vpsId || !portNo) return false;
-        const health =
-          healthByPort.get(`${vpsId}:${portNo}`) ||
-          healthByPort.get(`${vpsId}:${slot}`) ||
-          healthByPort.get(`${vpsId}:${100 + slot}`);
-        if (!health || !health.running) return false;
-        const hl = String(health.mt5_login || '').trim();
-        const al = String(a.mt5_login || '').trim();
-        return !hl || !al || hl === al;
-      })
-      .map((a) => ({
+    const connectedAccounts = accountsForRunForm(accounts, []).map((a) => ({
       id: Number(a.id),
       port_slot: Number(a.port_slot),
       mt5_login: a.mt5_login,
@@ -2177,10 +2144,14 @@ router.post('/mt5/connect', async (req, res) => {
   try {
     const userId = req.user.id;
 
-console.log('[MT5 CONNECT START]', {
-  userId,
-  body: req.body
-});
+    const loginRaw = clean(req.body.mt5_login);
+    const { validateMt5LoginFormat } = require('../lib/mt5LoginFormat');
+    const fmt = validateMt5LoginFormat(loginRaw);
+    if (!fmt.ok) {
+      throw new Error(fmt.message || 'User ผิด');
+    }
+    const mt5Login = fmt.normalized;
+    const mt5Password = clean(req.body.mt5_password);
 
     lockKey = getUserLockKey(userId);
     let locked = false;
@@ -2195,14 +2166,11 @@ console.log('[MT5 CONNECT START]', {
     }
 
     const summary = await getPortSummary(userId);
-    const mt5Login = clean(req.body.mt5_login);
-    const mt5Password = clean(req.body.mt5_password);
 
     if (summary.packageExpired || summary.totalPorts <= 0) {
       throw new Error('แพ็คเกจหมดอายุ กรุณาต่ออายุแพ็กเกจก่อนเชื่อมต่อ MT5');
     }
 
-    if (!mt5Login) throw new Error('กรุณากรอกเลข Login MT5');
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
     const connectServer = resolveServerForLogin(mt5Login);
@@ -2604,8 +2572,22 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       await cancelPendingEquitySnapshots(stopNodeId, { accountId: id }).catch(() => 0);
     }
 
-    // STEP 2: ปิด MT5 + ปล่อย pool (releaseUserPortCompletely ส่ง force_stop ให้ Agent แล้ว)
+    // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
     if (stopNodeId && stopPortNo) {
+      await insertPendingAgentCommand({
+        vpsId: stopNodeId,
+        portId: oldPort.port_id || null,
+        commandType: 'stop_mt5',
+        payload: {
+          port: stopPortNo,
+          portSlot: oldPort.port_slot,
+          assignedPortNo: oldPort.assigned_port_no,
+          windowsPortNo: oldPort.windows_port_no,
+          folder_path: folderPath,
+          vpsFolderPath: folderPath,
+          reason: 'user_delete_port'
+        }
+      }).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
       if (oldPort.port_id) {
         await query(`
           UPDATE vps_system.vps_ports
@@ -2647,8 +2629,7 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       adminNodeId: adminNodeId || stopNodeId,
       portNo: stopPortNo,
       folderPath,
-      portId: oldPort.port_id || null,
-      reason: 'user_delete_port'
+      portId: oldPort.port_id || null
     }).catch(() => {});
 
     flash(req, 'success', 'ลบ PORT ' + (oldPort.port_slot || '') + ' แล้ว — ช่องว่างพร้อมใช้ใหม่');
