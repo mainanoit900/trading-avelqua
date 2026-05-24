@@ -10,7 +10,7 @@ const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 
-const { injectUser } = require('./middleware/requireAuth');
+const { injectUser, requireLogin } = require('./middleware/requireAuth');
 const { languageMiddleware, normalizeLocale, localeCache } = require('./services/i18n');
 const { query, pool, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
@@ -206,8 +206,11 @@ app.use('/admin', require('./routes/admin-mt5-presets'));
 app.use('/admin', require('./routes/admin-vps-control'));
 app.use('/admin', require('./routes/admin-vps-port-actions'));
 // Production MT5/VPS routes first: atomic port lock + real MT5 login callback
+const connectProdRoutes = require('./routes/app-mt5-connect-production');
 app.use('/api/vps-agent', require('./routes/vps-agent-api-production'));
-app.use('/app', require('./routes/app-mt5-connect-production'));
+app.use('/app', connectProdRoutes);
+app.get('/api/mt5/status/:accountId', requireLogin, connectProdRoutes.handleMt5AccountStatus);
+app.get('/api/mt5/equity/:accountId', requireLogin, connectProdRoutes.handleMt5AccountEquity);
 
 // Legacy routes kept only for endpoints not covered by production route
 app.use('/api/vps-agent-legacy', require('./routes/vps-agent-api'));

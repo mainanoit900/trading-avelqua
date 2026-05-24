@@ -2189,3 +2189,16 @@ router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
 });
 
 module.exports = router;
+module.exports.handleMt5AccountStatus = handleMt5AccountStatus;
+module.exports.handleMt5AccountEquity = async function handleMt5AccountEquity(req, res) {
+  try {
+    const accountId = num(req.params.accountId);
+    const row = await query(
+      `SELECT last_equity FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
+      [accountId, req.user.id]
+    ).catch(() => ({ rows: [] }));
+    return res.json({ ok: true, equity: row.rows?.[0]?.last_equity ?? null });
+  } catch (e) {
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+};

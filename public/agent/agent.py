@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v48-wizard-login"
+AGENT_BUILD_ID = "2026-05-24-agent-v49-heartbeat-fast"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2235,6 +2235,28 @@ def _journal_failed_words() -> List[str]:
     ]
 
 
+def validate_journal_folder(port_dir: Path) -> bool:
+    """ตรวจว่าโฟลเดอร์ Journal/Logs เขียนได้ก่อนเปิด MT5"""
+    ok = True
+    seen: set = set()
+    for d in _journal_dirs_for_port(port_dir):
+        key = str(d).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        try:
+            d.mkdir(parents=True, exist_ok=True)
+            test = d / ".avelqua_write_test"
+            test.write_text("ok", encoding="utf-8")
+            test.unlink(missing_ok=True)
+        except Exception as e:
+            log(f"JOURNAL DIR ERROR {d}: {e}")
+            ok = False
+    if ok:
+        log(f"JOURNAL DIRS OK port_dir={port_dir}")
+    return ok
+
+
 def _journal_dirs_for_port(port_dir: Path) -> List[Path]:
     return [
         Path(port_dir) / "Logs",
@@ -3083,6 +3105,7 @@ def wait_mt5_login_hybrid(
                 else f"กำลังเปิด MT5 ({elapsed} วิ)..."
             )
             send_running_sync_heartbeat(payload, hb_msg, hb_status)
+            send_login_progress(payload, hb_status, hb_msg)
             last_heartbeat_at = now
 
         time.sleep(0.14)
@@ -3264,6 +3287,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     ensure_mt5_port_layout(port_dir)
     _seed_mt5_ini_templates(port_dir)
+    if not validate_journal_folder(port_dir):
+        send_connect_result(
+            payload,
+            "failed",
+            "Journal folder ไม่พร้อม — ตรวจสิทธิ์โฟลเดอร์ MT5 บน VPS",
+            port,
+        )
+        raise RuntimeError("JOURNAL_FOLDER_ERROR")
     patch_mt5_experts_config(port_dir, False)
     sync_avelqua_data_exports(port_dir, force=True)
 
@@ -4329,6 +4360,22 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
 
 _LAST_RUNNING_SYNC = 0.0
 RUNNING_SYNC_INTERVAL_SEC = int(os.getenv("AVELQUA_RUNNING_SYNC_SEC", "4"))
+
+
+def send_login_progress(payload: Dict[str, Any], status: str, message: str) -> None:
+    """รายงานความคืบหน้า login ระหว่าง verify — ไม่บล็อก flow หลัก"""
+    try:
+        body = {
+            "accountId": payload_get(payload, "accountId", "account_id"),
+            "vpsId": payload_get(payload, "vpsId", "nodeId"),
+            "portNo": payload_get(payload, "port", "portNumber", "portNo"),
+            "status": status,
+            "message": message,
+            "mt5Login": payload_get(payload, "mt5Login", "login"),
+        }
+        api("POST", "/login-progress", body)
+    except Exception as e:
+        log(f"LOGIN PROGRESS ERROR: {e}")
 
 
 def send_running_sync_heartbeat(payload: Dict[str, Any], message: str, status: str = "checking") -> None:

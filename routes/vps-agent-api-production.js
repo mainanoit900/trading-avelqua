@@ -58,6 +58,10 @@ const { sanitizePgText, deepSanitizeForPg, toJsonbParam } = require('../lib/pgSa
 
 const router = express.Router();
 
+let agentSchemaReady = false;
+let agentSchemaReadyAt = 0;
+const AGENT_SCHEMA_TTL_MS = Number(process.env.VPS_AGENT_SCHEMA_TTL_MS || 3600000);
+
 function sanitizeJournalText(text) {
   return sanitizePgText(text).slice(-8000);
 }
@@ -214,6 +218,9 @@ router.get('/agent-script', async (req, res) => {
 });
 
 async function ensureAgentTables() {
+  const now = Date.now();
+  if (agentSchemaReady && now - agentSchemaReadyAt < AGENT_SCHEMA_TTL_MS) return;
+
   await query(`CREATE SCHEMA IF NOT EXISTS vps_system`).catch(() => {});
 
   await query(`ALTER TABLE vps_system.vps_nodes ADD COLUMN IF NOT EXISTS node_code TEXT`).catch(() => {});
@@ -314,6 +321,9 @@ async function ensureAgentTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `).catch(() => {});
+
+  agentSchemaReady = true;
+  agentSchemaReadyAt = Date.now();
 }
 
 async function findNode(req) {
@@ -343,85 +353,16 @@ router.post('/mt5/live-status', async (req, res) => {
 
 router.post('/heartbeat', async (req, res) => {
   try {
-    await ensureAgentTables();
     const node = await findNode(req);
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
-    const cpu = Number(req.body.cpu_percent || 0);
-    const ram = Number(req.body.ram_percent || 0);
-    const down = Number(req.body.net_down_mbps || 0);
-    const up = Number(req.body.net_up_mbps || 0);
-    const ping = Number(req.body.ping_ms || 0);
-    const lastError = req.body.last_error || '';
-    const agentBuildId = String(req.body.agent_build_id || req.body.agentBuildId || '').trim();
-    const agentVersion = String(
-      agentBuildId || req.body.agent_version || req.body.agentVersion || ''
-    ).trim();
+    const body = req.body || {};
+    const agentBuildId = String(body.agent_build_id || body.agentBuildId || '').trim();
+    const agentVersion = String(agentBuildId || body.agent_version || body.agentVersion || '').trim();
     const status = node.agent_enabled === false ? 'offline' : 'online';
-    const level = lastError ? 'error' : (cpu >= 90 || ram >= 90 || ping >= 400 ? 'alarm' : 'normal');
-    const deployRequired = !agentVersionOk(req.body);
+    const deployRequired = !agentVersionOk(body);
 
-    if (deployRequired && node.agent_enabled !== false && HEARTBEAT_AUTO_DEPLOY) {
-      try {
-        await expireStuckMaintenanceCommands(node.id);
-        const q = await queueAgentDeploy(node.id);
-        if (q.queued) {
-          console.warn('[heartbeat deploy] queued', { vpsId: node.id, required: REQUIRED_AGENT_VERSION });
-        }
-      } catch (deployErr) {
-        console.error('[heartbeat deploy]', deployErr.message || deployErr);
-      }
-    }
-
-    await query(`
-      UPDATE vps_system.vps_nodes
-      SET status=$2,
-          cpu_percent=$3,
-          ram_percent=$4,
-          net_down_mbps=$5,
-          net_up_mbps=$6,
-          ping_ms=$7,
-          agent_version=$8,
-          last_seen_at=NOW(),
-          last_heartbeat=NOW(),
-          updated_at=NOW()
-      WHERE id=$1
-    `, [node.id, status, cpu, ram, down, up, ping, agentVersion || null]).catch(async () => {
-      await query(`
-        UPDATE vps_system.vps_nodes
-        SET status=$2, cpu_percent=$3, ram_percent=$4, last_seen_at=NOW(), updated_at=NOW()
-        WHERE id=$1
-      `, [node.id, status, cpu, ram]);
-    });
-
-    await query(`DELETE FROM vps_system.vps_node_logs WHERE created_at < NOW() - INTERVAL '5 days'`).catch(() => {});
-    await query(`
-      INSERT INTO vps_system.vps_node_logs
-      (node_id,status,level,cpu_percent,ram_percent,net_down_mbps,net_up_mbps,ping_ms,last_error,payload)
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
-    `, [node.id, status, level, cpu, ram, down, up, ping, lastError, JSON.stringify(req.body || {})]).catch(() => {});
-
-    const nodeCode = String(node.node_code || req.body.computer_name || '').trim();
-    if (nodeCode) {
-      await query(
-        `
-        UPDATE vps_nodes
-        SET status=$2,
-            cpu_percent=$3,
-            ram_percent=$4,
-            net_down_mbps=$5,
-            net_up_mbps=$6,
-            ping_ms=$7,
-            last_seen_at=NOW(),
-            updated_at=NOW()
-        WHERE UPPER(TRIM(COALESCE(node_name,''))) = UPPER(TRIM($8))
-           OR UPPER(TRIM(COALESCE(node_name,''))) = UPPER(TRIM($9))
-      `,
-        [status, cpu, ram, down, up, ping, nodeCode, String(node.node_code || '').trim()]
-      ).catch(() => {});
-    }
-
-    return res.json({
+    res.json({
       ok: true,
       node_id: node.id,
       status,
@@ -429,13 +370,109 @@ router.post('/heartbeat', async (req, res) => {
       deploy_required: deployRequired,
       required_agent_version: REQUIRED_AGENT_VERSION,
       agent_script_url: `${(process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '')}/api/vps-agent/agent-script`,
-      agent_version: agentVersion || null
+      agent_version: agentVersion || null,
+      timestamp: Date.now()
+    });
+
+    setImmediate(() => {
+      persistAgentHeartbeat(node, body, deployRequired).catch((e) => {
+        console.error('[heartbeat async]', e.message || e);
+      });
     });
   } catch (e) {
     console.error('[AGENT HEARTBEAT ERROR]', e);
     return res.status(500).json({ ok: false, message: e.message });
   }
 });
+
+async function persistAgentHeartbeat(node, body, deployRequired) {
+  await ensureAgentTables();
+
+  const cpu = Number(body.cpu_percent || 0);
+  const ram = Number(body.ram_percent || 0);
+  const down = Number(body.net_down_mbps || 0);
+  const up = Number(body.net_up_mbps || 0);
+  const ping = Number(body.ping_ms || 0);
+  const lastError = body.last_error || '';
+  const agentBuildId = String(body.agent_build_id || body.agentBuildId || '').trim();
+  const agentVersion = String(agentBuildId || body.agent_version || body.agentVersion || '').trim();
+  const status = node.agent_enabled === false ? 'offline' : 'online';
+  const level = lastError ? 'error' : cpu >= 90 || ram >= 90 || ping >= 400 ? 'alarm' : 'normal';
+
+  if (deployRequired && node.agent_enabled !== false && HEARTBEAT_AUTO_DEPLOY) {
+    try {
+      await expireStuckMaintenanceCommands(node.id);
+      const q = await queueAgentDeploy(node.id);
+      if (q.queued) {
+        console.warn('[heartbeat deploy] queued', { vpsId: node.id, required: REQUIRED_AGENT_VERSION });
+      }
+    } catch (deployErr) {
+      console.error('[heartbeat deploy]', deployErr.message || deployErr);
+    }
+  }
+
+  await query(
+    `
+    UPDATE vps_system.vps_nodes
+    SET status=$2,
+        cpu_percent=$3,
+        ram_percent=$4,
+        net_down_mbps=$5,
+        net_up_mbps=$6,
+        ping_ms=$7,
+        agent_version=$8,
+        last_seen_at=NOW(),
+        last_heartbeat=NOW(),
+        updated_at=NOW()
+    WHERE id=$1
+  `,
+    [node.id, status, cpu, ram, down, up, ping, agentVersion || null]
+  ).catch(async () => {
+    await query(
+      `
+      UPDATE vps_system.vps_nodes
+      SET status=$2, cpu_percent=$3, ram_percent=$4, last_seen_at=NOW(), updated_at=NOW()
+      WHERE id=$1
+    `,
+      [node.id, status, cpu, ram]
+    );
+  });
+
+  if (Math.random() < 0.02) {
+    await query(`DELETE FROM vps_system.vps_node_logs WHERE created_at < NOW() - INTERVAL '5 days'`).catch(
+      () => {}
+    );
+  }
+
+  await query(
+    `
+    INSERT INTO vps_system.vps_node_logs
+    (node_id,status,level,cpu_percent,ram_percent,net_down_mbps,net_up_mbps,ping_ms,last_error,payload)
+    VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::jsonb)
+  `,
+    [node.id, status, level, cpu, ram, down, up, ping, lastError, JSON.stringify(body || {})]
+  ).catch(() => {});
+
+  const nodeCode = String(node.node_code || body.computer_name || '').trim();
+  if (nodeCode) {
+    await query(
+      `
+      UPDATE vps_nodes
+      SET status=$2,
+          cpu_percent=$3,
+          ram_percent=$4,
+          net_down_mbps=$5,
+          net_up_mbps=$6,
+          ping_ms=$7,
+          last_seen_at=NOW(),
+          updated_at=NOW()
+      WHERE UPPER(TRIM(COALESCE(node_name,''))) = UPPER(TRIM($8))
+         OR UPPER(TRIM(COALESCE(node_name,''))) = UPPER(TRIM($9))
+    `,
+      [status, cpu, ram, down, up, ping, nodeCode, String(node.node_code || '').trim()]
+    ).catch(() => {});
+  }
+}
 
 function mt5FolderForPort(portNo) {
   const n = Number(portNo) || 1;
@@ -527,46 +564,141 @@ router.post('/running-sync', handleRunningSync);
 
 router.post('/port-health', async (req, res) => {
   try {
-    await ensureAgentTables();
     const node = await findNode(req);
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
     const ports = Array.isArray(req.body.ports) ? req.body.ports : [];
-    for (const p of ports) {
-      const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
-      if (!portNo) continue;
-      const running = !!(p.running ?? p.is_running ?? p.isRunning);
-      const pid = p.process_id || p.pid || null;
-      const mt5Login = p.mt5_login || p.mt5Login || null;
-      const folderPath = p.folder_path || p.folderPath || '';
+    res.json({ ok: true, count: ports.length, received: true });
 
-      await query(`
-        INSERT INTO vps_system.vps_port_health
-        (node_id, port_number, folder_path, running, process_id, mt5_login, payload, updated_at)
-        VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,NOW())
-        ON CONFLICT (node_id, port_number)
-        DO UPDATE SET
-          folder_path=EXCLUDED.folder_path,
-          running=EXCLUDED.running,
-          process_id=EXCLUDED.process_id,
-          mt5_login=EXCLUDED.mt5_login,
-          payload=EXCLUDED.payload,
-          updated_at=NOW()
-      `, [node.id, portNo, folderPath, running, pid, mt5Login, JSON.stringify(p)]).catch(() => {});
-
-      await query(`
-        UPDATE vps_system.vps_ports
-        SET process_id=$3,
-            last_pid=$3,
-            current_mt5_login=$4,
-            updated_at=NOW()
-        WHERE vps_id=$1 AND port_no=$2
-      `, [node.id, portNo, pid, mt5Login]).catch(() => {});
-    }
-
-    return res.json({ ok: true, count: ports.length });
+    setImmediate(() => {
+      persistPortHealth(node, ports).catch((e) => {
+        console.error('[port-health async]', e.message || e);
+      });
+    });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
+    return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
+async function persistPortHealth(node, ports) {
+  await ensureAgentTables();
+  for (const p of ports || []) {
+    const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
+    if (!portNo) continue;
+    const running = !!(p.running ?? p.is_running ?? p.isRunning);
+    const pid = p.process_id || p.pid || null;
+    const mt5Login = p.mt5_login || p.mt5Login || null;
+    const folderPath = p.folder_path || p.folderPath || '';
+
+    await query(
+      `
+      INSERT INTO vps_system.vps_port_health
+      (node_id, port_number, folder_path, running, process_id, mt5_login, payload, updated_at)
+      VALUES ($1,$2,$3,$4,$5,$6,$7::jsonb,NOW())
+      ON CONFLICT (node_id, port_number)
+      DO UPDATE SET
+        folder_path=EXCLUDED.folder_path,
+        running=EXCLUDED.running,
+        process_id=EXCLUDED.process_id,
+        mt5_login=EXCLUDED.mt5_login,
+        payload=EXCLUDED.payload,
+        updated_at=NOW()
+    `,
+      [node.id, portNo, folderPath, running, pid, mt5Login, JSON.stringify(p)]
+    ).catch(() => {});
+
+    await query(
+      `
+      UPDATE vps_system.vps_ports
+      SET process_id=$3,
+          last_pid=$3,
+          current_mt5_login=$4,
+          updated_at=NOW()
+      WHERE vps_id=$1 AND port_no=$2
+    `,
+      [node.id, portNo, pid, mt5Login]
+    ).catch(() => {});
+  }
+}
+
+const LOGIN_PROGRESS_STATUS_MAP = {
+  opening: 'starting',
+  verifying: 'checking',
+  success: 'connected',
+  failed: 'failed',
+  starting: 'starting',
+  checking: 'checking',
+  connected: 'connected'
+};
+
+async function processLoginProgressBody(node, body = {}) {
+  await ensureAgentTables();
+  const accountId = Number(body.accountId || body.account_id || 0);
+  if (!accountId || !node?.id) return;
+
+  const rawStatus = String(body.status || 'checking').toLowerCase();
+  const status = LOGIN_PROGRESS_STATUS_MAP[rawStatus] || rawStatus;
+  const message = String(body.message || body.statusDetail || '').trim();
+  const portId = Number(body.portId || body.port_id || 0);
+  const portNo = Number(body.portNo || body.port_no || body.portNumber || body.port || 0);
+  const mt5Login = body.mt5Login || body.mt5_login || null;
+  const equity = body.equity != null && Number.isFinite(Number(body.equity)) ? Number(body.equity) : null;
+  const journalEvidence = sanitizeJournalText(
+    extractJournalEvidence(body.journalEvidence, body.journal_evidence, body.journal, message) || ''
+  );
+
+  if (status === 'failed') {
+    const failMsg = message || MT5_FAIL_USER_MSG;
+    await failAccountFromJournal(accountId, portId, failMsg, {
+        vpsId: node.id,
+        portNo,
+        reason: 'agent_login_progress_fail',
+        killMt5: true,
+        clearPackagePort: true,
+        forceFailed: true
+    }).catch(() => {});
+    return;
+  }
+
+  if (status === 'connected') {
+    await patchAccountMt5Preview(accountId, { message, inProgress: false });
+    if (equity != null) {
+      await query(`UPDATE vps_system.mt5_accounts SET last_equity=$2, updated_at=NOW() WHERE id=$1`, [
+        accountId,
+        equity
+      ]).catch(() => {});
+    }
+    return;
+  }
+
+  await patchAccountMt5Preview(accountId, {
+    status: status === 'starting' ? 'starting' : 'checking',
+    message: message || (status === 'starting' ? 'กำลังเปิด MT5...' : 'กำลังตรวจ Login...'),
+    inProgress: true
+  });
+
+  if (journalEvidence) {
+    await query(
+      `UPDATE vps_system.mt5_accounts SET last_login_message=COALESCE(NULLIF($2,''), last_login_message), updated_at=NOW() WHERE id=$1`,
+      [accountId, message || journalEvidence.slice(0, 200)]
+    ).catch(() => {});
+  }
+}
+
+router.post('/login-progress', async (req, res) => {
+  try {
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+
+    res.json({ ok: true, received: true, timestamp: Date.now() });
+
+    setImmediate(() => {
+      processLoginProgressBody(node, req.body || {}).catch((e) => {
+        console.error('[login-progress async]', e.message || e);
+      });
+    });
+  } catch (e) {
     return res.status(500).json({ ok: false, message: e.message });
   }
 });
