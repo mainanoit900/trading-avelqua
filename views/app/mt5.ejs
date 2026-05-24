@@ -605,11 +605,18 @@ document.addEventListener('DOMContentLoaded', function () {
     if (vpsOnline < 1 && typeof refreshMt5PortCards === 'function') {
       await refreshMt5PortCards().catch(function () {});
       vpsOnline = window.__mt5PortsState ? Number(window.__mt5PortsState.vpsOnlineCount || 0) : -1;
+      if (vpsOnline < 1) {
+        await new Promise(function (r) { setTimeout(r, 1500); });
+        await refreshMt5PortCards().catch(function () {});
+        vpsOnline = window.__mt5PortsState ? Number(window.__mt5PortsState.vpsOnlineCount || 0) : -1;
+      }
     }
     if (vpsOnline === 0) {
       const nodes = (window.__mt5PortsState && window.__mt5PortsState.vpsNodes) || [];
       const offlineNames = nodes
-        .filter(function (n) { return !n.agentOnline; })
+        .filter(function (n) {
+          return !n.agentOnline && String(n.nodeStatus || '').toLowerCase() !== 'maintenance';
+        })
         .map(function (n) { return n.nodeName || ('VPS-' + n.adminNodeId); })
         .join(', ');
       const detail = offlineNames
