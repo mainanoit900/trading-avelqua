@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v49-heartbeat-fast"
+AGENT_BUILD_ID = "2026-05-24-agent-v50-wizard-dismiss"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -793,6 +793,82 @@ def clear_mt5_login_cache(port_dir: Path) -> None:
                 log(f"CLEAR MT5 CACHE ERROR {p}: {e}")
 
 
+def _patch_ini_common_login(
+    path: Path, login: str, password: str, server: str
+) -> bool:
+    """บันทึก Login/Password/Server ใน config/common.ini ของ portable"""
+    if not login or not server:
+        return False
+    safe_password = password.replace("\r", "").replace("\n", "")
+    if any(c in safe_password for c in ('=', ';', '#', '"')):
+        safe_password = safe_password.replace('"', "'")
+        pw_line = f'Password="{safe_password}"'
+    else:
+        pw_line = f"Password={safe_password}"
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore") if path.is_file() else ""
+    except Exception:
+        text = ""
+    lines = text.splitlines() if text else []
+    out: List[str] = []
+    in_common = False
+    seen_login = seen_pw = seen_srv = False
+    for line in lines:
+        low = line.strip().lower()
+        if low == "[common]":
+            in_common = True
+            out.append(line)
+            continue
+        if in_common and low.startswith("[") and low != "[common]":
+            in_common = False
+        if in_common:
+            if low.startswith("login="):
+                out.append(f"Login={login}")
+                seen_login = True
+                continue
+            if low.startswith("password="):
+                out.append(pw_line)
+                seen_pw = True
+                continue
+            if low.startswith("server="):
+                out.append(f"Server={server}")
+                seen_srv = True
+                continue
+        out.append(line)
+    if not any(l.strip().lower() == "[common]" for l in out):
+        if out and out[-1].strip():
+            out.append("")
+        out.append("[Common]")
+    idx = max(i for i, l in enumerate(out) if l.strip().lower() == "[common]")
+    insert: List[str] = []
+    if not seen_login:
+        insert.append(f"Login={login}")
+    if not seen_pw and password:
+        insert.append(pw_line)
+    if not seen_srv:
+        insert.append(f"Server={server}")
+    if insert:
+        out[idx + 1 : idx + 1] = insert
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(out) + "\n", encoding="utf-8", errors="replace")
+        return True
+    except Exception as e:
+        log(f"PATCH COMMON LOGIN ERROR {path}: {e}")
+        return False
+
+
+def write_mt5_common_login_config(
+    port_dir: Path, login: str, password: str, server: str
+) -> None:
+    """เขียน Server/Login ลง common.ini ของ PORT — ให้ MT5 portable รู้ server ตอนเปิด"""
+    server = str(server or MT5_LIVE_SERVER).strip()
+    for rel in ("config/common.ini", "config/settings.ini"):
+        p = port_dir / Path(rel.replace("/", os.sep))
+        if _patch_ini_common_login(p, login, password, server):
+            log(f"PATCH COMMON LOGIN server={server} file={p}")
+
+
 def write_mt5_login_ini(
     port_dir: Path,
     login: str,
@@ -811,13 +887,20 @@ def write_mt5_login_ini(
             except Exception:
                 pass
     trade_flag = "true" if allow_expert_trading else "false"
+    safe_password = password.replace("\r", "").replace("\n", "")
+    if any(c in safe_password for c in ('=', ';', '#', '"')):
+        safe_password = safe_password.replace('"', "'")
+        pw_line = f'Password="{safe_password}"'
+    else:
+        pw_line = f"Password={safe_password}"
     ini = f"""[Common]
 Login={login}
-Password={password}
+{pw_line}
 Server={server}
 KeepPrivate=0
 SavePassword=1
-AutoConfiguration=false
+AutoConfiguration=true
+ProxyEnable=false
 CertInstall=0
 
 [Experts]
@@ -825,13 +908,14 @@ AllowLiveTrading={trade_flag}
 AllowDllImport=true
 Enabled={trade_flag}
 """
-    config_file.write_text(ini, encoding="utf-8", errors="ignore")
+    config_file.write_text(ini, encoding="utf-8", errors="replace")
     for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
         if alias.resolve() != config_file.resolve():
             try:
-                alias.write_text(ini, encoding="utf-8", errors="ignore")
+                alias.write_text(ini, encoding="utf-8", errors="replace")
             except Exception:
                 pass
+    write_mt5_common_login_config(port_dir, login, password, server)
     log(
         f"WRITE MT5 INI {config_file} LOGIN={login} SERVER={server} "
         f"PW_LEN={len(password)} EXPERT_TRADING={trade_flag}"
@@ -2528,12 +2612,76 @@ def resolve_mt5_server(payload: Dict[str, Any], login: Optional[str] = None) -> 
     return MT5_LIVE_SERVER
 
 
+def _ps_esc_path_for_powershell(path: Path) -> str:
+    return str(path).replace("'", "''")
+
+
+def dismiss_mt5_open_account_wizard(port_dir: Optional[Path] = None) -> bool:
+    """ปิด wizard Open an Account — ไม่สร้างบัญชีใหม่ (ใช้ login ที่มีอยู่จาก startup.ini)"""
+    dir_filter = ""
+    if port_dir:
+        dir_esc = _ps_esc_path_for_powershell(port_dir).lower()
+        dir_filter = f"""
+$portDir = '{dir_esc}'
+"""
+    ps = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$ErrorActionPreference = "SilentlyContinue"
+{dir_filter}
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}}
+"@
+$wizards = Get-Process | Where-Object {{
+  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Open an Account*"
+}}
+foreach ($dlg in $wizards) {{
+  [W32]::ShowWindow($dlg.MainWindowHandle, 9) | Out-Null
+  [W32]::SetForegroundWindow($dlg.MainWindowHandle) | Out-Null
+  Start-Sleep -Milliseconds 250
+  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
+  Start-Sleep -Milliseconds 200
+  [System.Windows.Forms.SendKeys]::SendWait("%c")
+  Start-Sleep -Milliseconds 200
+  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
+}}
+if ($portDir) {{
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $_.Path -and ($_.Path.ToLower().StartsWith($portDir))
+  }} | Select-Object -First 1
+}} else {{
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+    Where-Object {{ $_.MainWindowHandle -ne 0 }} |
+    Select-Object -First 1
+}}
+if ($p) {{
+  [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+  [W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+  Start-Sleep -Milliseconds 200
+  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}{{ESC}}")
+}}
+exit 0
+"""
+    try:
+        _run_powershell(ps, timeout=12)
+        log(f"MT5 WIZARD DISMISS port_dir={port_dir or 'any'}")
+        return True
+    except Exception as e:
+        log(f"MT5 WIZARD DISMISS ERROR: {e}")
+        return False
+
+
 def automate_mt5_login_server_form(
     login: str,
     password: str,
     server: str = MT5_LIVE_SERVER,
+    port_dir: Optional[Path] = None,
 ) -> bool:
-    """กรอกฟอร์ม Login MT5 (login / password / server) — จากสำเนา equity-dashboard"""
+    """กรอกฟอร์ม Login MT5 (login / password / server) — โฟกัส terminal ของ PORT นี้"""
     login_esc = str(login or "").replace("+", "{+}").replace("{", "{{").replace("}", "}}")
     server_esc = (
         str(server or MT5_LIVE_SERVER)
@@ -2552,13 +2700,25 @@ def automate_mt5_login_server_form(
         .replace("{", "{{")
         .replace("}", "}}")
     )
+    if port_dir:
+        dir_esc = _ps_esc_path_for_powershell(port_dir).lower()
+        proc_pick = f"""
+$portDir = '{dir_esc}'
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+  $_.MainWindowHandle -ne 0 -and $_.Path -and ($_.Path.ToLower().StartsWith($portDir))
+}} | Select-Object -First 1
+"""
+    else:
+        proc_pick = """
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } |
+  Sort-Object MainWindowTitle -Descending |
+  Select-Object -First 1
+"""
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.MainWindowHandle -ne 0 }} |
-  Sort-Object MainWindowTitle -Descending |
-  Select-Object -First 1
+{proc_pick}
 if (-not $p) {{ exit 0 }}
 Add-Type @"
 using System;
@@ -2570,11 +2730,15 @@ public class W32 {{
 "@
 [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
 [W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 400
+Start-Sleep -Milliseconds 450
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait("{login_esc}")
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
 Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait("^a")
+Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait("{pw_esc}")
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
@@ -2590,7 +2754,7 @@ exit 0
 """
     try:
         _run_powershell(ps, timeout=14)
-        log(f"MT5 LOGIN FORM server={server} login={login}")
+        log(f"MT5 LOGIN FORM server={server} login={login} port_dir={port_dir or 'any'}")
         return True
     except Exception as e:
         log(f"MT5 LOGIN FORM ERROR: {e}")
@@ -2871,13 +3035,13 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
+        if elapsed < 45 and (last_wizard_at <= wait_start or now - last_wizard_at >= 5.0):
             try:
-                automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+                dismiss_mt5_open_account_wizard(port_dir)
                 if password:
-                    automate_mt5_login_server_form(login, password, server)
+                    automate_mt5_login_server_form(login, password, server, port_dir)
             except Exception as e:
-                log(f"LOGIN WIZARD/FORM burst: {e}")
+                log(f"LOGIN DISMISS/FORM burst: {e}")
             last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
@@ -2916,22 +3080,14 @@ def wait_mt5_login_hybrid(
         if mt5_title_has_open_account_wizard(joined):
             if not wizard_stuck_since:
                 wizard_stuck_since = now
-            elif now - wizard_stuck_since >= 28:
-                stuck_msg = (
-                    "MT5 ค้างหน้า Open Account — ปิด MT5 แล้วเชื่อมต่อใหม่ "
-                    "หรือตรวจ Login/รหัสผ่านให้ตรง Server "
-                    f"{server}"
-                )
-                cleanup_mt5_after_login_fail(port, payload, port_dir)
-                send_connect_result(
-                    payload,
-                    "failed",
-                    stuck_msg,
-                    port,
-                    process_id=proc_pid,
-                    window_title=joined,
-                )
-                return False, stuck_msg, joined
+            elif now - wizard_stuck_since >= 12:
+                try:
+                    dismiss_mt5_open_account_wizard(port_dir)
+                    if password:
+                        automate_mt5_login_server_form(login, password, server, port_dir)
+                except Exception as e:
+                    log(f"LOGIN WIZARD RETRY: {e}")
+                wizard_stuck_since = now
         else:
             wizard_stuck_since = 0.0
 
@@ -2953,10 +3109,11 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        if not ok_w and password and elapsed >= 8 and now - last_form_at >= 10.0:
+        if not ok_w and password and elapsed >= 6 and now - last_form_at >= 6.0:
             last_form_at = now
             try:
-                automate_mt5_login_server_form(login, password, server)
+                dismiss_mt5_open_account_wizard(port_dir)
+                automate_mt5_login_server_form(login, password, server, port_dir)
             except Exception as e:
                 log(f"LOGIN FORM RETRY: {e}")
 
@@ -3579,7 +3736,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
             time.sleep(0.9)
-            automate_mt5_login_server_form(login, password, server)
+            dismiss_mt5_open_account_wizard(port_dir)
+            automate_mt5_login_server_form(login, password, server, port_dir)
         return proc
 
     other_mt5 = _count_mt5_terminals()
@@ -3599,9 +3757,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
     time.sleep(2.5)
-    automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
+    dismiss_mt5_open_account_wizard(port_dir)
+    time.sleep(0.5)
+    automate_mt5_login_server_form(login, password, server, port_dir)
     time.sleep(0.8)
-    automate_mt5_login_server_form(login, password, server)
+    dismiss_mt5_open_account_wizard(port_dir)
+    automate_mt5_login_server_form(login, password, server, port_dir)
     time.sleep(1.0)
     sync_avelqua_data_exports(port_dir, force=True)
 
