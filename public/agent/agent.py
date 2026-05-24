@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v58"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v59"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1828,7 +1828,7 @@ def _fresh_equity_snapshot(
             uia_snap = account_snapshot_uia(port, payload)
             if _accept(uia_snap):
                 return uia_snap
-        if mt5_open and not multi_terminal:
+        if mt5_open:
             api_ready = (time.time() - float(since_ts)) >= 2.0
             if api_ready:
                 api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
@@ -1842,8 +1842,12 @@ def _fresh_equity_snapshot(
 
     api_ready = True
 
-    if mt5_open and api_ready and not multi_terminal:
+    if mt5_open and api_ready:
         api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=bypass_api_skip)
+        if login and api_snap:
+            ai_login = str(api_snap.get("login") or "").strip()
+            if ai_login and ai_login != str(login).strip():
+                api_snap = {}
         if _accept(api_snap):
             return api_snap
         uia_snap = account_snapshot_uia(port, payload)
@@ -1947,6 +1951,43 @@ def wait_mt5_equity_login(
         if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
             _send_equity_connected(payload, port, active_pid, login, snap)
             return True, EQUITY_LOGIN_OK_MSG, snap
+
+        if elapsed >= 5:
+            ok_w, title = mt5_login_verified_by_window(port, payload)
+            if ok_w:
+                uia_snap = account_snapshot_uia(port, payload)
+                if _snap_has_equity(uia_snap):
+                    if not str(uia_snap.get("login") or "").strip():
+                        uia_snap["login"] = login
+                    if _equity_snapshot_login_matches(uia_snap, login):
+                        log(
+                            f"EQUITY UIA OK PORT={port} LOGIN={login} "
+                            f"equity={uia_snap.get('equity')} title={title[:80]}"
+                        )
+                        _send_equity_connected(payload, port, active_pid, login, uia_snap)
+                        return True, EQUITY_LOGIN_OK_MSG, uia_snap
+                api_snap = account_snapshot_mt5_api(port_dir, payload, bypass_skip=True)
+                if _snap_has_equity(api_snap) and _equity_snapshot_login_matches(api_snap, login):
+                    log(
+                        f"EQUITY API OK PORT={port} LOGIN={login} "
+                        f"equity={api_snap.get('equity')} (multi-port)"
+                    )
+                    _send_equity_connected(payload, port, active_pid, login, api_snap)
+                    return True, EQUITY_LOGIN_OK_MSG, api_snap
+                sock_ok, sock_hint = mt5_socket_established(port, payload)
+                if sock_ok and elapsed >= 8:
+                    file_relaxed = account_snapshot_equity_file(
+                        port_dir, max_age_sec=120, since_ts=max(0.0, equity_since - 30.0)
+                    )
+                    if _snap_has_equity(file_relaxed) and _equity_snapshot_login_matches(
+                        file_relaxed, login
+                    ):
+                        log(
+                            f"EQUITY FILE RELAXED OK PORT={port} LOGIN={login} "
+                            f"equity={file_relaxed.get('equity')}"
+                        )
+                        _send_equity_connected(payload, port, active_pid, login, file_relaxed)
+                        return True, EQUITY_LOGIN_OK_MSG, file_relaxed
 
         if now - last_progress >= 2.0:
             eq = snap.get("equity")
