@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v51-safe-dismiss"
+AGENT_BUILD_ID = "2026-05-24-agent-v52-post-wizard-restart"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2738,7 +2738,38 @@ public class W32 {{
 }}
 "@
 [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
-[W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+$focusHwnd = $p.MainWindowHandle
+Add-Type @"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class WinEnum {{
+  public delegate bool EnumProc(IntPtr hWnd, IntPtr lParam);
+  [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc proc, IntPtr lp);
+  [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
+  [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int max);
+  [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
+}}
+"@
+$dialogHwnd = [IntPtr]::Zero
+[WinEnum]::EnumWindows({{
+  param($h, $l)
+  [uint32]$wpid = 0
+  [void][WinEnum]::GetWindowThreadProcessId($h, [ref]$wpid)
+  if ($wpid -ne $p.Id) {{ return $true }}
+  if (-not [WinEnum]::IsWindowVisible($h)) {{ return $true }}
+  $sb = New-Object System.Text.StringBuilder 512
+  [void][WinEnum]::GetWindowText($h, $sb, 512)
+  $t = $sb.ToString()
+  if ($t -like '*Open an Account*') {{ return $true }}
+  if ($h -ne $p.MainWindowHandle) {{
+    $script:dialogHwnd = $h
+    return $false
+  }}
+  return $true
+}}, [IntPtr]::Zero) | Out-Null
+if ($dialogHwnd -ne [IntPtr]::Zero) {{ $focusHwnd = $dialogHwnd }}
+[W32]::SetForegroundWindow($focusHwnd) | Out-Null
 Start-Sleep -Milliseconds 450
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 Start-Sleep -Milliseconds 80
@@ -3292,12 +3323,12 @@ def wait_mt5_login_hybrid(
                     f"(ตรวจรหัสผ่าน + Server {server})"
                 )
             elif not joined:
-                hint = f"กำลังเปิด MT5 ({elapsed} วินาที)..."
+                hint = f"กำลังตรวจ Login จาก Journal MT5 ({elapsed} วิ)..."
             else:
                 hint = joined
             send_connect_result(
                 payload,
-                "starting" if elapsed < 6 else "checking",
+                "checking" if elapsed >= 8 else "starting",
                 hint,
                 port,
                 process_id=proc_pid,
@@ -3804,9 +3835,32 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         port,
         process_id=proc_pid,
     )
-    time.sleep(4.0)
+    time.sleep(5.0)
     dismiss_mt5_open_account_wizard(port_dir)
-    time.sleep(2.0)
+    time.sleep(1.0)
+    try:
+        kill_mt5_by_folder(port_dir)
+        stop_mt5_port_only(port, payload)
+        log("POST-WIZARD RESTART — kill MT5 แล้วเปิดใหม่ให้ startup.ini login")
+    except Exception as e:
+        log(f"POST-WIZARD KILL ERROR: {e}")
+    time.sleep(1.2)
+    proc = launch_mt5("post_wizard")
+    proc_pid = proc.pid if proc else proc_pid
+    journal_since = time.time()
+    send_connect_result(
+        payload,
+        "starting",
+        f"Login จาก startup.ini หลังปิด wizard — รอ Journal 30–90 วิ",
+        port,
+        process_id=proc_pid,
+    )
+    time.sleep(6.0)
+    dismiss_mt5_open_account_wizard(port_dir)
+    j0, _chunk0 = _quick_journal_probe(port_dir, login, journal_since, server)
+    ok0, _t0 = mt5_login_verified_by_window(port, payload)
+    if j0 is not True and not ok0:
+        automate_mt5_login_server_form(login, password, server, port_dir)
     sync_avelqua_data_exports(port_dir, force=True)
 
     journal_timeout = journal_timeout_sec(payload)
