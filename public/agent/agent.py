@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v60"
+AGENT_BUILD_ID = "2026-05-23-equity-login-v61"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -660,6 +660,12 @@ def _terminal_process_matches_port_dir(proc: Any, port_dir: Path) -> bool:
         cmd = _norm_port_path(" ".join(proc.info.get("cmdline") or []))
         if exe.startswith(root) or root in cmd:
             return True
+        port_token = _norm_port_path(port_dir.name)
+        if port_token and len(port_token) > 8 and port_token in cmd:
+            return True
+        ini_name = _norm_port_path(MT5_LOGIN_INI_NAME)
+        if ini_name and ini_name in cmd and root in cmd:
+            return True
         try:
             cwd = _norm_port_path(proc.cwd())
             if cwd.startswith(root) or root in cwd:
@@ -669,6 +675,89 @@ def _terminal_process_matches_port_dir(proc: Any, port_dir: Path) -> bool:
     except Exception:
         pass
     return False
+
+
+def _find_terminal_pid_powershell(port_dir: Path, login: str = "") -> Optional[int]:
+    """ค้นหา PID terminal64 ของ PORT นี้ (path หรือ login บน title) — กัน psutil match พลาด"""
+    if os.name != "nt":
+        return None
+    root = str(port_dir).replace("\\", "\\\\")
+    login_safe = str(login or "").replace("'", "''")
+    ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$root = '{root}'
+$login = '{login_safe}'
+Get-Process terminal64 -ErrorAction SilentlyContinue | ForEach-Object {{
+  $path = [string]$_.Path
+  $title = [string]$_.MainWindowTitle
+  $ok = $false
+  if ($path -like "*$root*") {{ $ok = $true }}
+  if ($login -and $title -match [regex]::Escape($login)) {{ $ok = $true }}
+  if ($ok) {{ Write-Output $_.Id; exit 0 }}
+}}
+"""
+    raw = _run_powershell(ps, timeout=8).strip()
+    try:
+        pid = int(raw.splitlines()[0].strip())
+        return pid if pid > 0 else None
+    except Exception:
+        return None
+
+
+def _discover_port_mt5_pid(
+    port: Any,
+    payload: Dict[str, Any],
+    port_dir: Path,
+    hint_pid: Any = None,
+    login: str = "",
+    timeout_sec: float = 18.0,
+) -> Optional[int]:
+    """รอจนเจอ process MT5 ของ PORT (launch อาจ spawn child คนละ PID)"""
+    deadline = time.time() + max(3.0, float(timeout_sec or 18.0))
+    while time.time() < deadline:
+        if _pid_is_running(hint_pid):
+            try:
+                proc = psutil.Process(int(hint_pid)) if psutil else None
+                if proc and _terminal_process_matches_port_dir(proc, port_dir):
+                    return int(hint_pid)
+            except Exception:
+                pass
+        procs = mt5_port_processes(port, payload)
+        if procs:
+            return int(procs[0].pid)
+        ps_pid = _find_terminal_pid_powershell(port_dir, login)
+        if ps_pid:
+            return ps_pid
+        time.sleep(0.35)
+    return None
+
+
+def _sync_equity_active_pid(
+    port: Any,
+    payload: Dict[str, Any],
+    port_dir: Path,
+    active_pid_ref: Optional[List[Any]],
+    login: str,
+) -> Optional[int]:
+    """อัปเดต active PID จาก process scan / PowerShell (ไม่ block นาน)"""
+    hint = active_pid_ref[0] if active_pid_ref else None
+    if _pid_is_running(hint) and psutil:
+        try:
+            proc = psutil.Process(int(hint))
+            if _terminal_process_matches_port_dir(proc, port_dir):
+                return int(hint)
+        except Exception:
+            pass
+    procs = mt5_port_processes(port, payload)
+    if procs:
+        pid = int(procs[0].pid)
+        if active_pid_ref is not None:
+            active_pid_ref[0] = pid
+        return pid
+    ps_pid = _find_terminal_pid_powershell(port_dir, login)
+    if ps_pid and active_pid_ref is not None:
+        active_pid_ref[0] = ps_pid
+    return ps_pid
 
 def stop_mt5_by_folder(folder_path):
     if not folder_path:
@@ -2067,27 +2156,63 @@ def wait_mt5_equity_login(
     timeout_sec: int,
     active_pid_ref: Optional[List[Any]] = None,
     since_ts: float = 0.0,
+    since_ts_ref: Optional[List[float]] = None,
+    relaunch_cb: Optional[Any] = None,
 ) -> Tuple[bool, str, Dict[str, Any]]:
     """เปิด MT5 แล้วรอ Equity ล่าสุด — ขึ้น=สำเร็จ, ไม่ขึ้น=ล้มเหลว+ปิด MT5"""
     wait_start = time.time()
-    equity_since = since_ts if since_ts > 0 else wait_start
+    equity_since = (
+        float(since_ts_ref[0])
+        if since_ts_ref and since_ts_ref[0]
+        else (since_ts if since_ts > 0 else wait_start)
+    )
     deadline = time.time() + max(40, int(timeout_sec or 75))
     last_progress = 0.0
     last_probe = 0.0
+    relaunch_done = False
     active_pid = active_pid_ref[0] if active_pid_ref else proc_pid
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
         now = time.time()
+        active_pid = _sync_equity_active_pid(port, payload, port_dir, active_pid_ref, login) or active_pid
         if active_pid_ref is not None and active_pid_ref[0]:
             active_pid = active_pid_ref[0]
 
+        if since_ts_ref and since_ts_ref[0]:
+            equity_since = float(since_ts_ref[0])
+
         _maybe_sync_equity_pulse(port_dir, min_interval_sec=1.2)
 
-        mt5_up = mt5_running_for_port_dir(port_dir, active_pid)
+        mt5_up = bool(active_pid and _pid_is_running(active_pid)) or mt5_running_for_port_dir(
+            port_dir, active_pid
+        )
         snap: Dict[str, Any] = {}
 
-        if mt5_up:
+        if (
+            not mt5_up
+            and not relaunch_done
+            and relaunch_cb
+            and elapsed >= 12
+            and not _port_journal_authorized(port_dir, login, equity_since)
+        ):
+            relaunch_done = True
+            log(f"EQUITY RELAUNCH WAIT PORT={port} LOGIN={login} elapsed={elapsed}s (no process)")
+            try:
+                new_proc = relaunch_cb("equity-wait-relaunch")
+                if new_proc and getattr(new_proc, "pid", None):
+                    active_pid = new_proc.pid
+                    if active_pid_ref is not None:
+                        active_pid_ref[0] = active_pid
+                    if since_ts_ref is not None:
+                        since_ts_ref[0] = time.time()
+                    equity_since = since_ts_ref[0] if since_ts_ref else time.time()
+                    _sync_equity_active_pid(port, payload, port_dir, active_pid_ref, login)
+            except Exception as e:
+                log(f"EQUITY RELAUNCH WAIT ERROR: {e}")
+
+        if now - last_probe >= 1.2 and elapsed >= 2:
+            last_probe = now
             file_snap = account_snapshot_equity_file(
                 port_dir, max_age_sec=30, since_ts=equity_since
             )
@@ -2095,14 +2220,12 @@ def wait_mt5_equity_login(
                 _send_equity_connected(payload, port, active_pid, login, file_snap)
                 return True, EQUITY_LOGIN_OK_MSG, file_snap
 
-            if now - last_probe >= 1.2:
-                last_probe = now
-                snap = _equity_login_probe(
-                    port, payload, port_dir, login, active_pid, equity_since
-                )
-                if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
-                    _send_equity_connected(payload, port, active_pid, login, snap)
-                    return True, EQUITY_LOGIN_OK_MSG, snap
+            snap = _equity_login_probe(
+                port, payload, port_dir, login, active_pid, equity_since
+            )
+            if _snap_has_equity(snap) and _equity_snapshot_login_matches(snap, login):
+                _send_equity_connected(payload, port, active_pid, login, snap)
+                return True, EQUITY_LOGIN_OK_MSG, snap
 
         if now - last_progress >= 2.0:
             eq = snap.get("equity")
@@ -2111,6 +2234,8 @@ def wait_mt5_equity_login(
                 hint += f" · Equity={eq}"
             elif not mt5_up:
                 hint += " · รอ MT5 เปิด..."
+            else:
+                hint += " · กำลังอ่าน Equity..."
             send_connect_result(
                 payload,
                 "checking",
@@ -2453,6 +2578,20 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
             try:
                 ps_one = (
                     f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).MainWindowTitle"
+                )
+                title = _sanitize_mt5_window_title(_run_powershell(ps_one, timeout=4))
+                if title:
+                    titles.append(title)
+            except Exception:
+                pass
+
+    if not titles:
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+        ps_pid = _find_terminal_pid_powershell(port_dir, login)
+        if ps_pid:
+            try:
+                ps_one = (
+                    f"(Get-Process -Id {ps_pid} -ErrorAction SilentlyContinue).MainWindowTitle"
                 )
                 title = _sanitize_mt5_window_title(_run_powershell(ps_one, timeout=4))
                 if title:
@@ -3936,6 +4075,25 @@ def _execute_equity_login(
     proc = launch_mt5("equity-initial")
     proc_pid = proc.pid if proc else None
     active_pid_ref[0] = proc_pid
+    discovered = _discover_port_mt5_pid(
+        port, payload, port_dir, hint_pid=proc_pid, login=login, timeout_sec=20.0
+    )
+    if discovered:
+        active_pid_ref[0] = discovered
+        proc_pid = discovered
+        log(f"EQUITY MT5 PID DISCOVERED PORT={port} pid={discovered}")
+    elif proc and proc.poll() is not None:
+        log(f"EQUITY MT5 EXIT EARLY — retry launch PORT={port}")
+        proc = launch_mt5("equity-retry-after-exit")
+        proc_pid = proc.pid if proc else None
+        active_pid_ref[0] = proc_pid
+        discovered = _discover_port_mt5_pid(
+            port, payload, port_dir, hint_pid=proc_pid, login=login, timeout_sec=15.0
+        )
+        if discovered:
+            active_pid_ref[0] = discovered
+            proc_pid = discovered
+            log(f"EQUITY MT5 PID DISCOVERED RETRY PORT={port} pid={discovered}")
     send_connect_result(
         payload,
         "starting",
@@ -3958,6 +4116,8 @@ def _execute_equity_login(
         eq_timeout,
         active_pid_ref=active_pid_ref,
         since_ts=equity_since_ref[0],
+        since_ts_ref=equity_since_ref,
+        relaunch_cb=launch_mt5,
     )
     proc_pid = active_pid_ref[0] or proc_pid
 
@@ -4503,6 +4663,15 @@ def mt5_port_processes(port: Any, payload: Optional[Dict[str, Any]] = None) -> L
         try:
             if _terminal_process_matches_port_dir(p, port_dir):
                 out.append(p)
+        except Exception:
+            pass
+    if out:
+        return out
+    login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+    ps_pid = _find_terminal_pid_powershell(port_dir, login)
+    if ps_pid and psutil:
+        try:
+            out.append(psutil.Process(ps_pid))
         except Exception:
             pass
     return out
