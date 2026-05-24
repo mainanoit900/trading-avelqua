@@ -94,8 +94,10 @@ def _journal_first_login_enabled() -> bool:
     return os.getenv("AVELQUA_JOURNAL_FIRST_LOGIN", "true").lower() not in ("0", "false", "no")
 
 
-def _mt5_login_form_enabled() -> bool:
-    """UIA กรอกฟอร์ม — ปิดเมื่อ journal-first (ใช้เฉพาะ fallback หลัง 14 วิ)"""
+def _mt5_login_form_enabled(other_terminals: int = 0) -> bool:
+    """UIA กรอกฟอร์ม — เปิดอัตโนมัติเมื่อ multi-port (terminal ที่ 2 มักโผล่ login form)"""
+    if int(other_terminals or 0) > 0:
+        return True
     if _journal_first_login_enabled():
         return os.getenv("AVELQUA_MT5_LOGIN_FORM", "false").lower() not in ("0", "false", "no")
     return os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no")
@@ -112,7 +114,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-journal-ref-v65"
+AGENT_BUILD_ID = "2026-05-23-journal-ref-v66"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4699,7 +4701,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 log(f"MT5 PID MISSING PORT={port} reason={reason} pid={proc.pid} — wait discover")
             else:
                 log(f"MT5 RUNNING PORT={port} pid={proc.pid}")
-        if proc and _mt5_login_form_enabled():
+        if proc and _mt5_login_form_enabled(other_mt5):
             time.sleep(0.9)
             automate_mt5_login_server_form(login, password, server, port_dir, proc.pid if proc else None)
         return proc
@@ -4733,10 +4735,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         port,
         process_id=proc_pid,
     )
-    if _journal_first_login_enabled():
+    if _journal_first_login_enabled() and other_mt5 == 0:
         sync_avelqua_data_exports(port_dir, force=True)
     else:
-        time.sleep(2.5)
+        if other_mt5 > 0:
+            time.sleep(2.0)
+            log(f"MULTI-PORT UIA LOGIN PORT={port} login={login} other={other_mt5}")
+        else:
+            time.sleep(2.5)
         automate_mt5_open_account_wizard(LOCKED_MT5_COMPANY, server)
         time.sleep(0.8)
         automate_mt5_login_server_form(login, password, server, port_dir, proc_pid)
