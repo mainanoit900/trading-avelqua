@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v52-post-wizard-restart"
+AGENT_BUILD_ID = "2026-05-24-agent-v53-force-relaunch"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2630,6 +2630,66 @@ def _ps_esc_path_for_powershell(path: Path) -> str:
     return str(path).replace("'", "''")
 
 
+def _wait_mt5_port_stopped(
+    port: Any, payload: Dict[str, Any], port_dir: Path, timeout_sec: float = 10.0
+) -> bool:
+    deadline = time.time() + max(1.0, float(timeout_sec or 10.0))
+    while time.time() < deadline:
+        if not mt5_running_for_port_dir(port_dir) and not mt5_port_processes(port, payload):
+            return True
+        time.sleep(0.25)
+    still = mt5_running_for_port_dir(port_dir)
+    log(f"WAIT MT5 STOP timeout still_running={still} port_dir={port_dir}")
+    return not still
+
+
+def automate_mt5_open_login_dialog(port_dir: Optional[Path] = None) -> bool:
+    """เปิดเมนู File → Login to Trade Account (EN/TH)"""
+    if port_dir:
+        dir_esc = _ps_esc_path_for_powershell(port_dir).lower()
+        proc_pick = f"""
+$portDir = '{dir_esc}'
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+  $_.MainWindowHandle -ne 0 -and $_.Path -and ($_.Path.ToLower().StartsWith($portDir))
+}} | Select-Object -First 1
+"""
+    else:
+        proc_pick = """
+$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object { $_.MainWindowHandle -ne 0 } | Select-Object -First 1
+"""
+    ps = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$ErrorActionPreference = "SilentlyContinue"
+{proc_pick}
+if (-not $p) {{ exit 0 }}
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}}
+"@
+[W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+[W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait("%f")
+Start-Sleep -Milliseconds 350
+[System.Windows.Forms.SendKeys]::SendWait("l")
+Start-Sleep -Milliseconds 250
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+exit 0
+"""
+    try:
+        _run_powershell(ps, timeout=10)
+        log(f"MT5 MENU LOGIN port_dir={port_dir or 'any'}")
+        return True
+    except Exception as e:
+        log(f"MT5 MENU LOGIN ERROR: {e}")
+        return False
+
+
 def dismiss_mt5_open_account_wizard(port_dir: Optional[Path] = None) -> bool:
     """ปิด wizard Open an Account — ไม่สร้างบัญชีใหม่ (ใช้ login ที่มีอยู่จาก startup.ini)"""
     dir_filter = ""
@@ -3021,10 +3081,11 @@ def _relaunch_mt5_for_login(
         log(f"RELAUNCH SKIP — no terminal64 reason={reason}")
         return None
     try:
+        kill_mt5_by_folder(port_dir)
         stop_mt5_port_only(port, payload)
     except Exception as e:
         log(f"RELAUNCH stop old: {e}")
-    time.sleep(0.4)
+    _wait_mt5_port_stopped(port, payload, port_dir, 10.0)
     write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
@@ -3067,6 +3128,8 @@ def wait_mt5_login_hybrid(
     last_wizard_at = 0.0
     last_heartbeat_at = 0.0
     last_relaunch_at = 0.0
+    last_broker_nudge_at = 0.0
+    form_attempts = 0
     early_sent: List[bool] = [False]
     api_skip_logged = False
     password = str(payload_get(payload, "mt5Password", "password") or "")
@@ -3192,13 +3255,37 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        if not ok_w and password and elapsed >= 12 and now - last_form_at >= 12.0:
+        if not ok_w and password and elapsed >= 10 and now - last_form_at >= 10.0:
             if not mt5_title_has_open_account_wizard(joined):
                 last_form_at = now
+                form_attempts += 1
                 try:
+                    if form_attempts == 1 or form_attempts % 3 == 0:
+                        automate_mt5_open_login_dialog(port_dir)
+                        time.sleep(0.6)
                     automate_mt5_login_server_form(login, password, server, port_dir)
                 except Exception as e:
                     log(f"LOGIN FORM RETRY: {e}")
+
+        if (
+            j_out is None
+            and not ok_w
+            and elapsed >= 22
+            and now - last_broker_nudge_at >= 22.0
+            and _journal_only_terminal_startup(j_chunk or "", login)
+        ):
+            last_broker_nudge_at = now
+            log(f"MT5 NO BROKER LOGIN ATTEMPT — force relaunch login={login}")
+            new_pid = _relaunch_mt5_for_login(
+                port, payload, port_dir, login, password, server, "no_broker_attempt"
+            )
+            if new_pid:
+                proc_pid = new_pid
+                journal_since = time.time() - 2
+            time.sleep(1.0)
+            automate_mt5_open_login_dialog(port_dir)
+            time.sleep(0.5)
+            automate_mt5_login_server_form(login, password, server, port_dir)
 
         fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
             port, payload, login, joined, window_ok_streak, j_out
@@ -3798,12 +3885,21 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             "terminal": str(terminal),
         }
 
-    def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
-        procs = mt5_port_processes(port, payload)
-        if procs or mt5_running_for_port_dir(port_dir):
-            pid = procs[0].pid if procs else None
-            log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
-            return procs[0] if procs else None
+    def launch_mt5(reason: str, force: bool = False) -> Optional[subprocess.Popen]:
+        if not force:
+            procs = mt5_port_processes(port, payload)
+            if procs or mt5_running_for_port_dir(port_dir):
+                pid = procs[0].pid if procs else None
+                log(f"LAUNCH SKIP — MT5 already running PORT={port} PID={pid} reason={reason}")
+                return procs[0] if procs else None
+        else:
+            try:
+                kill_mt5_by_folder(port_dir)
+                stop_mt5_port_only(port, payload)
+            except Exception as e:
+                log(f"FORCE STOP before launch reason={reason}: {e}")
+            if not _wait_mt5_port_stopped(port, payload, port_dir, 12.0):
+                log(f"FORCE LAUNCH WARN — MT5 still running after kill PORT={port} reason={reason}")
         try:
             stop_mt5_port_only(port, payload)
         except Exception as e:
@@ -3837,15 +3933,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     time.sleep(5.0)
     dismiss_mt5_open_account_wizard(port_dir)
-    time.sleep(1.0)
-    try:
-        kill_mt5_by_folder(port_dir)
-        stop_mt5_port_only(port, payload)
-        log("POST-WIZARD RESTART — kill MT5 แล้วเปิดใหม่ให้ startup.ini login")
-    except Exception as e:
-        log(f"POST-WIZARD KILL ERROR: {e}")
-    time.sleep(1.2)
-    proc = launch_mt5("post_wizard")
+    time.sleep(0.8)
+    log("POST-WIZARD RESTART — force relaunch MT5 with startup.ini login")
+    proc = launch_mt5("post_wizard", force=True)
+    if not proc:
+        log("POST-WIZARD LAUNCH FAILED — retry force launch")
+        proc = launch_mt5("post_wizard_retry", force=True)
     proc_pid = proc.pid if proc else proc_pid
     journal_since = time.time()
     send_connect_result(
@@ -3860,6 +3953,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     j0, _chunk0 = _quick_journal_probe(port_dir, login, journal_since, server)
     ok0, _t0 = mt5_login_verified_by_window(port, payload)
     if j0 is not True and not ok0:
+        automate_mt5_open_login_dialog(port_dir)
+        time.sleep(0.6)
         automate_mt5_login_server_form(login, password, server, port_dir)
     sync_avelqua_data_exports(port_dir, force=True)
 
