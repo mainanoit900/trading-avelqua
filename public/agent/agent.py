@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v54-wizard-finish"
+AGENT_BUILD_ID = "2026-05-24-agent-v55-wizard-finish-fix"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1825,9 +1825,14 @@ def _try_fast_login_confirm(
     if _snap_positive(snap):
         return True, snap, joined or wmsg
 
-    kind = _classify_mt5_login(login)
-    if kind in ("live", "demo") and window_ok_streak >= 2 and login and login in (joined or ""):
+    sock_ok, _ = mt5_socket_established(port, payload)
+    if sock_ok and login and login in (joined or ""):
         return True, snap, joined or wmsg
+
+    kind = _classify_mt5_login(login)
+    if kind in ("live", "demo") and window_ok_streak >= 1 and login and login in (joined or ""):
+        if "demo account" in (joined or "").lower() or "real account" in (joined or "").lower() or "hedge" in (joined or "").lower():
+            return True, snap, joined or wmsg
 
     return False, snap, joined or wmsg
 
@@ -2718,10 +2723,16 @@ def automate_mt5_wizard_existing_account_login(
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
-$dlg = Get-Process | Where-Object {{
-  $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Open an Account*"
-}} | Select-Object -First 1
-if (-not $dlg) {{ exit 0 }}
+$dlg = $null
+$deadline = (Get-Date).AddSeconds(20)
+while ((Get-Date) -lt $deadline) {{
+  $dlg = Get-Process | Where-Object {{
+    $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Open an Account*"
+  }} | Select-Object -First 1
+  if ($dlg) {{ break }}
+  Start-Sleep -Milliseconds 500
+}}
+if (-not $dlg) {{ Write-Output 'NO_WIZARD'; exit 0 }}
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -2732,46 +2743,53 @@ public class W32 {{
 "@
 [W32]::ShowWindow($dlg.MainWindowHandle, 9) | Out-Null
 [W32]::SetForegroundWindow($dlg.MainWindowHandle) | Out-Null
-Start-Sleep -Milliseconds 650
+Start-Sleep -Milliseconds 700
 $title = $dlg.MainWindowTitle
 if ($title -notmatch ":") {{
   [System.Windows.Forms.SendKeys]::SendWait("Mohicans")
-  Start-Sleep -Milliseconds 450
+  Start-Sleep -Milliseconds 500
   [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
-  Start-Sleep -Milliseconds 900
+  Start-Sleep -Milliseconds 1000
   [System.Windows.Forms.SendKeys]::SendWait("%n")
-  Start-Sleep -Milliseconds 900
+  Start-Sleep -Milliseconds 1000
+  [System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}")
+  Start-Sleep -Milliseconds 250
+}} else {{
+  Start-Sleep -Milliseconds 300
 }}
-# เลือก "Connect with an existing trade account"
-[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}")
-Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait("{login_esc}")
-Start-Sleep -Milliseconds 200
+Start-Sleep -Milliseconds 250
 [System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
-Start-Sleep -Milliseconds 150
+Start-Sleep -Milliseconds 180
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait("{pw_esc}")
-Start-Sleep -Milliseconds 200
+Start-Sleep -Milliseconds 250
 [System.Windows.Forms.SendKeys]::SendWait("{{TAB}}")
-Start-Sleep -Milliseconds 150
+Start-Sleep -Milliseconds 180
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait("{server_esc}")
-Start-Sleep -Milliseconds 350
+Start-Sleep -Milliseconds 450
 [System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
-Start-Sleep -Milliseconds 400
+Start-Sleep -Milliseconds 500
 [System.Windows.Forms.SendKeys]::SendWait("%f")
-Start-Sleep -Milliseconds 350
+Start-Sleep -Milliseconds 600
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+Start-Sleep -Milliseconds 300
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}{{TAB}}{{TAB}}{{TAB}}{{TAB}}{{ENTER}}")
+Write-Output 'WIZARD_OK'
 exit 0
 """
     try:
-        _run_powershell(ps, timeout=20)
+        out = _run_powershell(ps, timeout=24)
+        if "NO_WIZARD" in str(out or ""):
+            log(f"MT5 WIZARD EXISTING — no wizard window login={login}")
+            return False
         log(f"MT5 WIZARD EXISTING login={login} server={server} port_dir={port_dir or 'any'}")
         return True
     except Exception as e:
@@ -4024,21 +4042,20 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         port,
         process_id=proc_pid,
     )
-    time.sleep(5.0)
-    for wiz_try in range(2):
-        automate_mt5_wizard_existing_account_login(login, password, server, port_dir)
-        time.sleep(2.5)
+    time.sleep(7.0)
+    wizard_hit = False
+    for wiz_try in range(3):
+        if automate_mt5_wizard_existing_account_login(login, password, server, port_dir):
+            wizard_hit = True
+        time.sleep(4.0)
+        sync_avelqua_data_exports(port_dir, force=True)
         j_wiz, _ = _quick_journal_probe(port_dir, login, journal_since, server)
         ok_wiz, _ = mt5_login_verified_by_window(port, payload)
         if j_wiz is True or ok_wiz:
             log(f"MT5 WIZARD LOGIN OK try={wiz_try + 1} login={login}")
             break
-    j0, _chunk0 = _quick_journal_probe(port_dir, login, journal_since, server)
-    ok0, _t0 = mt5_login_verified_by_window(port, payload)
-    if j0 is not True and not ok0:
-        automate_mt5_open_login_dialog(port_dir)
-        time.sleep(0.6)
-        automate_mt5_login_server_form(login, password, server, port_dir)
+    if not wizard_hit:
+        log("MT5 WIZARD — window not found, skip menu/form until verify loop")
     sync_avelqua_data_exports(port_dir, force=True)
 
     journal_timeout = journal_timeout_sec(payload)
