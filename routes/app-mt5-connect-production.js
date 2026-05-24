@@ -65,6 +65,7 @@ const {
   releaseUserPackagePortSlot,
   forceStopPackagePortSlot,
   tryFastConnectConfirm,
+  tryFastJournalFail,
   verifyLoginFromCommand,
   extractJournalEvidence,
   hasLoginCommandInProgress,
@@ -1637,8 +1638,20 @@ async function handleMt5ConnectStatusProduction(req, res) {
       }
     }
 
-    const fastAfterMs = ['success', 'done'].includes(cmdStEarly) ? 2000 : 8000;
-    if (['connecting', 'starting', 'checking'].includes(statusFinal) && staleMs >= fastAfterMs) {
+    const fastAfterMs = ['success', 'done'].includes(cmdStEarly) ? 1500 : 3000;
+    if (['connecting', 'starting', 'checking'].includes(statusFinal) && staleMs >= 1000) {
+      const failEarly = await tryFastJournalFail(a).catch(() => ({ resolved: false }));
+      if (failEarly.resolved) {
+        statusFinal = failEarly.status || 'failed';
+        a.status = 'failed';
+        a.last_error = failEarly.message || MT5_FAIL_USER_MSG;
+        a.last_login_message = failEarly.message || MT5_FAIL_USER_MSG;
+      }
+    }
+    if (
+      ['connecting', 'starting', 'checking'].includes(statusFinal) &&
+      staleMs >= fastAfterMs
+    ) {
       const fastEarly = await tryFastConnectConfirm(a).catch(() => ({ resolved: false }));
       if (fastEarly.resolved) {
         statusFinal = fastEarly.status || statusFinal;

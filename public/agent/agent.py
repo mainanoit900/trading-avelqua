@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-equity-login-v63"
+AGENT_BUILD_ID = "2026-05-23-journal-ref-v64"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -554,15 +554,17 @@ def _count_mt5_terminals() -> int:
 
 def journal_timeout_sec(payload: Optional[Dict[str, Any]]) -> int:
     """รอ Journal — ช้าขึ้นเมื่อมี MT5 หลายตัวบน VPS (หลาย PORT พร้อมกัน)"""
-    env_default = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "150"))
-    cap = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_MAX_SEC", "240"))
+    env_default = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "45"))
+    cap = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_MAX_SEC", "180"))
     raw = payload_get(payload, "journalTimeoutSec", "journal_timeout_sec", default=str(env_default))
     try:
         n = int(raw)
     except Exception:
         n = env_default
-    extra = min(90, max(0, _count_mt5_terminals() - 1) * 25)
-    return max(120, min(n + extra, cap))
+    other = max(0, _count_mt5_terminals() - 1)
+    extra = min(90, other * 25)
+    floor = 28 if other == 0 else 60
+    return max(floor, min(n + extra, cap))
 
 
 def normalize_port(port: Any) -> int:
@@ -1945,7 +1947,9 @@ def _classify_mt5_login(login: str) -> str:
 
 
 def _login_uses_equity_verify(login: str) -> bool:
-    """Login ขึ้นต้น 8 (Demo) หรือ 2 (Live) — ยืนยันจาก Equity ล่าสุด ไม่รอ Journal"""
+    """ยืนยันจาก Equity — ปิดค่าเริ่มต้น (reference May-16 ใช้ Journal ทุก login)"""
+    if os.getenv("AVELQUA_EQUITY_LOGIN", "0").lower() not in ("1", "true", "yes"):
+        return False
     s = str(login or "").strip()
     return s.isdigit() and len(s) >= 6 and s[0] in ("8", "2")
 
@@ -4096,31 +4100,32 @@ def wait_mt5_login_hybrid(
         )
 
     if window_ok_streak >= 1 and j_out is not False:
-        titles = mt5_window_titles(port, payload)
-        joined = " | ".join(titles)
-        if mt5_login_verified_by_window(port, payload)[0]:
-            try:
-                enforce_login_no_trading(
-                    port_dir,
-                    port,
+        if os.getenv("AVELQUA_WINDOW_LOGIN_OK", "0").lower() in ("1", "true", "yes"):
+            titles = mt5_window_titles(port, payload)
+            joined = " | ".join(titles)
+            if mt5_login_verified_by_window(port, payload)[0]:
+                try:
+                    enforce_login_no_trading(
+                        port_dir,
+                        port,
+                        payload,
+                        login,
+                        str(payload_get(payload, "mt5Password", "password") or ""),
+                        server,
+                    )
+                except Exception:
+                    pass
+                send_connect_result(
                     payload,
-                    login,
-                    str(payload_get(payload, "mt5Password", "password") or ""),
-                    server,
+                    "connected",
+                    "เชื่อมต่อสำเร็จ (ยืนยันจากหน้าต่าง MT5) — ยังไม่เปิด BOT",
+                    port,
+                    process_id=proc_pid,
+                    journal_evidence=tail_evidence[-2000:],
+                    window_title=joined,
+                    window_verified=True,
                 )
-            except Exception:
-                pass
-            send_connect_result(
-                payload,
-                "connected",
-                "เชื่อมต่อสำเร็จ (ยืนยันจากหน้าต่าง MT5) — ยังไม่เปิด BOT",
-                port,
-                process_id=proc_pid,
-                journal_evidence=tail_evidence[-2000:],
-                window_title=joined,
-                window_verified=True,
-            )
-            return True, "window verified; journal slow", tail_evidence or joined
+                return True, "window verified; journal slow", tail_evidence or joined
 
     fail_hint = ""
     if _journal_only_terminal_startup(tail_evidence, login):
