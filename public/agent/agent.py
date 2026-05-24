@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v50-wizard-dismiss"
+AGENT_BUILD_ID = "2026-05-24-agent-v51-safe-dismiss"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -778,12 +778,24 @@ def clear_mt5_logs(port_dir: Path) -> None:
                     pass
 
 
-def clear_mt5_login_cache(port_dir: Path) -> None:
-    """ลบเฉพาะ cache บัญชี — เก็บ servers.dat/common.ini ไว้ให้ MT5 รู้ชื่อ Server"""
-    for rel in (
-        "config/accounts.dat",
-        "config/account.ini",
-    ):
+def clear_mt5_login_cache(port_dir: Path, login: str = "") -> None:
+    """ลบ cache บัญชี — accounts.dat เฉพาะเมื่อเปลี่ยน login (กัน wizard Open Account ทุกครั้ง)"""
+    marker = port_dir / ".avelqua_last_login"
+    prev = ""
+    try:
+        if marker.is_file():
+            prev = marker.read_text(encoding="utf-8", errors="ignore").strip()
+    except Exception:
+        pass
+    login_s = str(login or "").strip()
+    rels = ["config/account.ini"]
+    if login_s and login_s != prev:
+        rels.append("config/accounts.dat")
+        try:
+            marker.write_text(login_s, encoding="utf-8")
+        except Exception as e:
+            log(f"LOGIN MARKER WRITE ERROR: {e}")
+    for rel in rels:
         p = port_dir / rel
         if p.is_file():
             try:
@@ -2301,7 +2313,9 @@ def cleanup_mt5_after_login_fail(
         log(f"CLEANUP stop_mt5_port_only: {e}")
     try:
         remove_mt5_login_ini(port_dir)
-        clear_mt5_login_cache(port_dir)
+        clear_mt5_login_cache(
+            port_dir, str(payload_get(payload, "mt5Login", "login") or "")
+        )
     except Exception as e:
         log(f"CLEANUP clear ini/cache: {e}")
 
@@ -2642,27 +2656,10 @@ $wizards = Get-Process | Where-Object {{
 foreach ($dlg in $wizards) {{
   [W32]::ShowWindow($dlg.MainWindowHandle, 9) | Out-Null
   [W32]::SetForegroundWindow($dlg.MainWindowHandle) | Out-Null
+  Start-Sleep -Milliseconds 300
+  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
   Start-Sleep -Milliseconds 250
   [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
-  Start-Sleep -Milliseconds 200
-  [System.Windows.Forms.SendKeys]::SendWait("%c")
-  Start-Sleep -Milliseconds 200
-  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
-}}
-if ($portDir) {{
-  $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-    $_.Path -and ($_.Path.ToLower().StartsWith($portDir))
-  }} | Select-Object -First 1
-}} else {{
-  $p = Get-Process terminal64 -ErrorAction SilentlyContinue |
-    Where-Object {{ $_.MainWindowHandle -ne 0 }} |
-    Select-Object -First 1
-}}
-if ($p) {{
-  [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
-  [W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
-  Start-Sleep -Milliseconds 200
-  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}{{ESC}}")
 }}
 exit 0
 """
@@ -2704,16 +2701,28 @@ def automate_mt5_login_server_form(
         dir_esc = _ps_esc_path_for_powershell(port_dir).lower()
         proc_pick = f"""
 $portDir = '{dir_esc}'
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-  $_.MainWindowHandle -ne 0 -and $_.Path -and ($_.Path.ToLower().StartsWith($portDir))
-}} | Select-Object -First 1
+$p = $null
+$deadline = (Get-Date).AddSeconds(14)
+while ((Get-Date) -lt $deadline) {{
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $_.MainWindowHandle -ne 0 -and $_.Path -and ($_.Path.ToLower().StartsWith($portDir))
+  }} | Select-Object -First 1
+  if ($p) {{ break }}
+  Start-Sleep -Milliseconds 450
+}}
 """
     else:
         proc_pick = """
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
-  Where-Object { $_.MainWindowHandle -ne 0 } |
-  Sort-Object MainWindowTitle -Descending |
-  Select-Object -First 1
+$p = $null
+$deadline = (Get-Date).AddSeconds(14)
+while ((Get-Date) -lt $deadline) {
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue |
+    Where-Object { $_.MainWindowHandle -ne 0 } |
+    Sort-Object MainWindowTitle -Descending |
+    Select-Object -First 1
+  if ($p) { break }
+  Start-Sleep -Milliseconds 450
+}
 """
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
@@ -2966,6 +2975,38 @@ def _connect_on_api_verify(
     return True, api_detail
 
 
+def _relaunch_mt5_for_login(
+    port: Any,
+    payload: Dict[str, Any],
+    port_dir: Path,
+    login: str,
+    password: str,
+    server: str,
+    reason: str,
+) -> Optional[Any]:
+    """เปิด MT5 ใหม่เมื่อ process หายระหว่างรอ login"""
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.is_file():
+        log(f"RELAUNCH SKIP — no terminal64 reason={reason}")
+        return None
+    try:
+        stop_mt5_port_only(port, payload)
+    except Exception as e:
+        log(f"RELAUNCH stop old: {e}")
+    time.sleep(0.4)
+    write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+    write_avelqua_trading_gate(port_dir, False, payload)
+    patch_mt5_experts_config(port_dir, False)
+    clear_mt5_login_cache(port_dir, login)
+    cfg = mt5_startup_ini_path(port_dir)
+    args = [str(terminal), "/portable", f"/config:{cfg}"]
+    log(f"RELAUNCH MT5 reason={reason} login={login} args={args}")
+    proc = _popen_hidden(args, cwd=str(port_dir))
+    time.sleep(2.5)
+    dismiss_mt5_open_account_wizard(port_dir)
+    return proc.pid if proc else None
+
+
 def wait_mt5_login_hybrid(
     port: Any,
     payload: Dict[str, Any],
@@ -2994,6 +3035,7 @@ def wait_mt5_login_hybrid(
     last_broad_journal_at = 0.0
     last_wizard_at = 0.0
     last_heartbeat_at = 0.0
+    last_relaunch_at = 0.0
     early_sent: List[bool] = [False]
     api_skip_logged = False
     password = str(payload_get(payload, "mt5Password", "password") or "")
@@ -3035,14 +3077,26 @@ def wait_mt5_login_hybrid(
                 pass
             last_gate_at = now
 
-        if elapsed < 45 and (last_wizard_at <= wait_start or now - last_wizard_at >= 5.0):
-            try:
-                dismiss_mt5_open_account_wizard(port_dir)
-                if password:
-                    automate_mt5_login_server_form(login, password, server, port_dir)
-            except Exception as e:
-                log(f"LOGIN DISMISS/FORM burst: {e}")
-            last_wizard_at = now
+        if not mt5_running_for_port_dir(port_dir) and elapsed >= 6:
+            if now - last_relaunch_at >= 22:
+                new_pid = _relaunch_mt5_for_login(
+                    port, payload, port_dir, login, password, server, "process_died"
+                )
+                if new_pid:
+                    proc_pid = new_pid
+                    journal_since = time.time() - 3
+                last_relaunch_at = now
+
+        titles_probe = mt5_window_titles(port, payload)
+        joined_probe = " | ".join(titles_probe)
+
+        if mt5_title_has_open_account_wizard(joined_probe):
+            if last_wizard_at <= wait_start or now - last_wizard_at >= 6.0:
+                try:
+                    dismiss_mt5_open_account_wizard(port_dir)
+                except Exception as e:
+                    log(f"LOGIN WIZARD DISMISS: {e}")
+                last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since, server)
         if j_out is None and elapsed >= 25 and now - last_broad_journal_at >= 12.0:
@@ -3083,8 +3137,6 @@ def wait_mt5_login_hybrid(
             elif now - wizard_stuck_since >= 12:
                 try:
                     dismiss_mt5_open_account_wizard(port_dir)
-                    if password:
-                        automate_mt5_login_server_form(login, password, server, port_dir)
                 except Exception as e:
                     log(f"LOGIN WIZARD RETRY: {e}")
                 wizard_stuck_since = now
@@ -3109,13 +3161,13 @@ def wait_mt5_login_hybrid(
         else:
             window_ok_streak = 0
 
-        if not ok_w and password and elapsed >= 6 and now - last_form_at >= 6.0:
-            last_form_at = now
-            try:
-                dismiss_mt5_open_account_wizard(port_dir)
-                automate_mt5_login_server_form(login, password, server, port_dir)
-            except Exception as e:
-                log(f"LOGIN FORM RETRY: {e}")
+        if not ok_w and password and elapsed >= 12 and now - last_form_at >= 12.0:
+            if not mt5_title_has_open_account_wizard(joined):
+                last_form_at = now
+                try:
+                    automate_mt5_login_server_form(login, password, server, port_dir)
+                except Exception as e:
+                    log(f"LOGIN FORM RETRY: {e}")
 
         fast_ok, fast_snap, _fast_msg = _try_fast_login_confirm(
             port, payload, login, joined, window_ok_streak, j_out
@@ -3729,15 +3781,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
-        clear_mt5_login_cache(port_dir)
+        clear_mt5_login_cache(port_dir, login)
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
-        if proc and os.getenv("AVELQUA_MT5_LOGIN_FORM", "true").lower() not in ("0", "false", "no"):
-            time.sleep(0.9)
-            dismiss_mt5_open_account_wizard(port_dir)
-            automate_mt5_login_server_form(login, password, server, port_dir)
         return proc
 
     other_mt5 = _count_mt5_terminals()
@@ -3756,14 +3804,9 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         port,
         process_id=proc_pid,
     )
-    time.sleep(2.5)
+    time.sleep(4.0)
     dismiss_mt5_open_account_wizard(port_dir)
-    time.sleep(0.5)
-    automate_mt5_login_server_form(login, password, server, port_dir)
-    time.sleep(0.8)
-    dismiss_mt5_open_account_wizard(port_dir)
-    automate_mt5_login_server_form(login, password, server, port_dir)
-    time.sleep(1.0)
+    time.sleep(2.0)
     sync_avelqua_data_exports(port_dir, force=True)
 
     journal_timeout = journal_timeout_sec(payload)
@@ -3785,7 +3828,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             log(f"stop_mt5_port_only after failed login: {e}")
         remove_mt5_login_ini(port_dir)
-        clear_mt5_login_cache(port_dir)
+        clear_mt5_login_cache(port_dir, login)
         fail_user = msg or JOURNAL_TIMEOUT_MSG
         send_connect_result(
             payload,
