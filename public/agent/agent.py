@@ -112,7 +112,7 @@ JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จ�
 EQUITY_LOGIN_OK_MSG = "เชื่อมต่อสำเร็จ"
 EQUITY_LOGIN_FAIL_MSG = "เชื่อมต่อไม่สำเร็จ"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-23-journal-ref-v64"
+AGENT_BUILD_ID = "2026-05-23-journal-ref-v65"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3649,12 +3649,15 @@ def wait_mt5_login_hybrid(
     early_sent: List[bool] = [False]
     api_skip_logged = False
     password = str(payload_get(payload, "mt5Password", "password") or "")
-    no_mt5_threshold = 50 if other_terminals > 0 else 22
+    no_mt5_threshold = 100 if other_terminals > 0 else 22
     relaunch_attempts = 0
-    relaunch_max = 2 if other_terminals > 0 else 1
+    relaunch_max = 0 if other_terminals > 0 else 1
     active_pid = active_pid_ref if active_pid_ref is not None else [proc_pid]
 
     def _mt5_open_for_port() -> bool:
+        pid = _sync_equity_active_pid(port, payload, port_dir, active_pid, login)
+        if pid:
+            return True
         return mt5_running_for_port_dir(port_dir, active_pid[0] if active_pid else None)
 
     # MT5 ล็อกอินอยู่แล้ว (เปิดมือบน VPS) — อย่ารอ journal ใหม่ทั้งก้อน
@@ -3760,6 +3763,18 @@ def wait_mt5_login_hybrid(
             no_mt5_msg = (
                 f"MT5 ไม่เปิดบน PORT {port} — กรุณาตรวจ VPS แล้วกดเชื่อมต่อใหม่"
             )
+            if j_out is False or (j_chunk and login in j_chunk and "authorization" in j_chunk.lower() and "failed" in j_chunk.lower()):
+                fail_msg = JOURNAL_FAIL_MSG
+                cleanup_mt5_after_login_fail(port, payload, port_dir)
+                send_connect_result(
+                    payload,
+                    "failed",
+                    fail_msg,
+                    port,
+                    process_id=None,
+                    journal_evidence=j_chunk or "",
+                )
+                return False, fail_msg, j_chunk or ""
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
                 payload,
@@ -4663,15 +4678,25 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         if proc:
-            time.sleep(2.0)
+            time.sleep(3.0 if _count_mt5_terminals() > 0 else 2.0)
             exit_code = proc.poll()
-            if exit_code is not None:
+            discovered = _discover_port_mt5_pid(
+                port,
+                payload,
+                port_dir,
+                hint_pid=proc.pid,
+                login=str(payload_get(payload, "mt5Login", "login") or ""),
+                timeout_sec=8.0 if _count_mt5_terminals() > 0 else 4.0,
+            )
+            if discovered:
+                log(f"MT5 RUNNING PORT={port} pid={discovered} (discovered)")
+            elif exit_code is not None:
                 log(
-                    f"MT5 EXIT EARLY PORT={port} reason={reason} exit={exit_code} "
-                    f"cwd={port_dir}"
+                    f"MT5 LAUNCHER EXIT PORT={port} reason={reason} exit={exit_code} "
+                    f"cwd={port_dir} — child may still be starting"
                 )
             elif not _pid_is_running(proc.pid):
-                log(f"MT5 PID MISSING PORT={port} reason={reason} pid={proc.pid}")
+                log(f"MT5 PID MISSING PORT={port} reason={reason} pid={proc.pid} — wait discover")
             else:
                 log(f"MT5 RUNNING PORT={port} pid={proc.pid}")
         if proc and _mt5_login_form_enabled():
@@ -4693,6 +4718,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     proc = launch_mt5("initial")
     proc_pid = proc.pid if proc else None
     active_pid_ref[0] = proc_pid
+    discover_timeout = 40.0 if other_mt5 > 0 else 18.0
+    discovered = _discover_port_mt5_pid(
+        port, payload, port_dir, hint_pid=proc_pid, login=login, timeout_sec=discover_timeout
+    )
+    if discovered:
+        active_pid_ref[0] = discovered
+        proc_pid = discovered
+        log(f"MT5 PID DISCOVERED PORT={port} pid={discovered} multi={other_mt5}")
     send_connect_result(
         payload,
         "starting",
