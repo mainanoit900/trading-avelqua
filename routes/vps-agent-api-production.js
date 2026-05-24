@@ -624,6 +624,11 @@ router.get('/queue', async (req, res) => {
           WHEN s.other_pending_exists OR s.rn_same_key > 1 THEN 'cancelled'
           ELSE 'pending'
         END,
+        error = CASE
+          WHEN s.other_pending_exists OR s.rn_same_key > 1
+            THEN COALESCE(NULLIF(TRIM(c.error), ''), 'cancelled: duplicate pending')
+          ELSE c.error
+        END,
         locked_at = NULL,
         started_at = NULL,
         updated_at = NOW()

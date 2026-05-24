@@ -1129,11 +1129,6 @@ async function handleMt5ConnectProduction(req, res) {
         folder_path: retryPort.folder_path,
         port_slot: portSlot
       };
-      await cancelPendingLoginCommands({
-        portId: retryPort.port_id,
-        accountId: retryPort.account_id,
-        mt5Login
-      });
     } else {
       const existRes = await query(
         `
@@ -1267,11 +1262,6 @@ async function handleMt5ConnectProduction(req, res) {
       equityFast
     });
 
-    await cancelPendingLoginCommands({
-      portId: reservedPort.port_id,
-      accountId
-    });
-
     const connectStartedAt = new Date().toISOString();
     const payload = {
       ...buildMt5LoginPayload({
@@ -1357,7 +1347,7 @@ async function ensureActiveLoginCommandForPoll(account) {
     ? new Date(account.connect_started_at).getTime()
     : 0;
   if (!connectMs || Date.now() - connectMs > 8 * 60 * 1000) return { requeued: false };
-  if (Date.now() - connectMs < 2500) return { requeued: false };
+  if (Date.now() - connectMs < 800) return { requeued: false };
 
   const live = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
   if (live.ok) return { requeued: false, live: true };
@@ -1746,9 +1736,11 @@ async function handleMt5ConnectStatusProduction(req, res) {
     ) {
       const failMsg =
         cmdMeta.commandMessage ||
-        (/authorization|invalid account|user ผิด/i.test(String(a.last_login_message || ''))
-          ? MT5_FAIL_USER_MSG
-          : MT5_LOGIN_TIMEOUT_MSG);
+        (cmdSt === 'cancelled'
+          ? 'คำสั่ง login ถูกยกเลิก — กรุณากดเชื่อมต่อใหม่อีกครั้ง (กดครั้งเดียว อย่ากดซ้ำ)'
+          : /authorization|invalid account|user ผิด/i.test(String(a.last_login_message || ''))
+            ? MT5_FAIL_USER_MSG
+            : MT5_LOGIN_TIMEOUT_MSG);
       await failAccountFromJournal(a.id, a.port_id, failMsg, {
         vpsId: a.vps_id,
         portNo: a.assigned_port_no || a.port_slot,
@@ -1937,6 +1929,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
       commandId: cmdMeta.commandId || null,
       commandStatus: commandStatusOut,
       commandMessage: cmdMeta.commandMessage || '',
+      loginRequeued: !!requeueLogin.requeued,
+      loginRequeueCommandId: requeueLogin.commandId || null,
       agentOnline: agentMeta.agentOnline,
       agentMessage: agentMeta.agentMessage || ''
     });

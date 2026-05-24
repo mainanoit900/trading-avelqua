@@ -499,7 +499,19 @@ document.addEventListener('DOMContentLoaded', function () {
   }
 
   window.mt5PrepareConnectSubmit = async function () {
+    if (window.__mt5ConnectSubmitBusy) {
+      return false;
+    }
+    if (
+      sessionStorage.getItem('mt5ConnectInFlight') === '1' &&
+      window.__mt5ConnectTickStarted &&
+      Date.now() - window.__mt5ConnectTickStarted < 15000
+    ) {
+      return false;
+    }
+    window.__mt5ConnectSubmitBusy = true;
     if (packageExpired) {
+      window.__mt5ConnectSubmitBusy = false;
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
         'แพ็คเกจหมดอายุ กรุณาต่ออายุแพ็กเกจก่อนเชื่อมต่อ MT5'
@@ -518,6 +530,7 @@ document.addEventListener('DOMContentLoaded', function () {
           forceShow: true
         }
       );
+      window.__mt5ConnectSubmitBusy = false;
       return false;
     }
     let connectSlot = String((document.getElementById('mt5SelectedPortSlot') || {}).value || '').trim();
@@ -550,6 +563,7 @@ document.addEventListener('DOMContentLoaded', function () {
             ' เท่านั้น (1 PORT = 1 Login = 1 FolderPort ห้ามข้ามช่อง)',
           { forceShow: true, title: 'User นี้ใช้งานอยู่' }
         );
+        window.__mt5ConnectSubmitBusy = false;
         return false;
       }
     }
@@ -570,6 +584,7 @@ document.addEventListener('DOMContentLoaded', function () {
         'error',
         portPickErr
       );
+      window.__mt5ConnectSubmitBusy = false;
       return false;
     }
     const swapOldLogin = connectCard ? mt5PortCardLogin(connectSlot) : '';
@@ -592,13 +607,17 @@ document.addEventListener('DOMContentLoaded', function () {
           ' (ไม่ต้องลบ PORT) — ระบบจะปิด MT5 เดิมแล้ว login ใหม่',
         { title: 'สลับบัญชีบน PORT ' + connectSlot }
       );
-      if (!swapOk) return false;
+      if (!swapOk) {
+        window.__mt5ConnectSubmitBusy = false;
+        return false;
+      }
     }
     if (!connectSlot) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
         'error',
         'ไม่มี PORT ว่างในแพ็กเกจ — ลบพอร์ตที่ไม่ใช้หรือเพิ่มพอร์ตก่อน'
       );
+      window.__mt5ConnectSubmitBusy = false;
       return false;
     }
     let vpsOnline = window.__mt5PortsState ? Number(window.__mt5PortsState.vpsOnlineCount || 0) : -1;
@@ -627,6 +646,7 @@ document.addEventListener('DOMContentLoaded', function () {
         'ไม่มี VPS Windows ที่ Agent online' + detail + ' — ตรวจ /admin/vps แล้ว restart Agent',
         { forceShow: true, dedupeKey: 'vps-offline:' + vpsOnline }
       );
+      window.__mt5ConnectSubmitBusy = false;
       return false;
     }
     const slotInput = document.getElementById('mt5SelectedPortSlot');
@@ -780,6 +800,8 @@ document.addEventListener('DOMContentLoaded', function () {
       pop('error', msg);
       if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
       return false;
+    } finally {
+      window.__mt5ConnectSubmitBusy = false;
     }
   };
 
@@ -2301,8 +2323,11 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       if (cmdStFail === 'cancelled') {
-        if (inFlight && (data.pending || data.checking || ['connecting', 'checking', 'starting'].includes(stWait))) {
-          // คำสั่ง login ถูกยกเลิกจากรอบใหม่ — รอ poll รอบถัดไป
+        if (
+          inFlight &&
+          data.loginRequeued === true &&
+          (data.pending || data.checking || ['connecting', 'checking', 'starting'].includes(stWait))
+        ) {
           return;
         }
       }
