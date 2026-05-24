@@ -491,7 +491,8 @@ async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) 
     UPDATE vps_system.vps_agent_commands
     SET
       status = 'cancelled',
-      result_message = 'ยกเลิกเพราะมีคำสั่ง login ใหม่ (รหัสผ่านล่าสุด)',
+      error = COALESCE(error, 'cancelled: new login attempt'),
+      result_message = COALESCE(result_message, 'ยกเลิกเพราะมีคำสั่ง login ใหม่ (รหัสผ่านล่าสุด)'),
       updated_at = NOW(),
       finished_at = COALESCE(finished_at, NOW())
     WHERE command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
