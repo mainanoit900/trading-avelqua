@@ -825,13 +825,11 @@ async function resolveVpsAgentOnline(vpsId) {
   };
 }
 
-async function resolveLoginCommandMeta(accountId, vpsId) {
+async function resolveLoginCommandMeta(accountId, vpsId, sinceMs = 0) {
   const aid = num(accountId);
   const vid = num(vpsId);
   if (!aid || !vid) return {};
-  const inProg = await findLoginCommandInProgress(aid, vid);
-  const recent = inProg ? null : await findRecentTerminalLoginCommand(aid, vid);
-  const cmd = inProg || recent;
+  const cmd = await findRecentTerminalLoginCommand(aid, vid, sinceMs > 0 ? { sinceMs } : {});
   if (!cmd) return {};
   const st = String(cmd.status || '').toLowerCase();
   const res = cmd.result && typeof cmd.result === 'object' ? cmd.result : {};
@@ -1746,7 +1744,10 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
-    const cmdMetaEarly = await resolveLoginCommandMeta(a.id, a.vps_id);
+    const connectStartedMs = a.connect_started_at
+      ? new Date(a.connect_started_at).getTime()
+      : 0;
+    const cmdMetaEarly = await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
     const cmdStEarly = String(cmdMetaEarly.commandStatus || '').toLowerCase();
 
     if (
@@ -1879,7 +1880,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const previewPath = previewPublicPath(a.id);
     const cmdMeta = cmdMetaEarly.commandId != null || cmdMetaEarly.commandStatus
       ? cmdMetaEarly
-      : await resolveLoginCommandMeta(a.id, a.vps_id);
+      : await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
     const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(a, cmdMeta);
 
@@ -2191,7 +2192,7 @@ async function handleMt5AccountStatus(req, res) {
         : Date.now();
     const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
     let statusNow = String(acc.status || '').toLowerCase();
-    const cmdMeta = await resolveLoginCommandMeta(acc.id, acc.vps_id).catch(() => ({}));
+    const cmdMeta = await resolveLoginCommandMeta(acc.id, acc.vps_id, startedMs).catch(() => ({}));
     const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(acc, cmdMeta);
     if (neverPickedCurrentAttempt) {
       const failMsg =
