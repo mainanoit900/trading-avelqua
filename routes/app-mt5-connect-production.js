@@ -748,7 +748,9 @@ async function resolveLoginCommandMeta(accountId, vpsId, sinceMs = 0) {
   if (!cmd) return {};
   const st = String(cmd.status || '').toLowerCase();
   const res = cmd.result && typeof cmd.result === 'object' ? cmd.result : {};
-  let commandMessage = String(cmd.error || res.message || res.error || '').trim();
+  const rawCommandError = String(cmd.error || '').trim();
+  const rawCommandMessage = String(res.message || res.error || '').trim();
+  let commandMessage = String(rawCommandError || rawCommandMessage || '').trim();
   if (!commandMessage && st === 'failed') commandMessage = 'คำสั่ง login_mt5 ล้มเหลว';
   const loginHint = String(
     cmd.payload?.mt5Login || cmd.payload?.login || res.login || ''
@@ -757,22 +759,32 @@ async function resolveLoginCommandMeta(accountId, vpsId, sinceMs = 0) {
     return {
       commandId: cmd.id,
       commandStatus: 'processing',
-      commandMessage: 'Agent กำลังเปิด MT5 และรอ Equity ล่าสุด...'
+      commandMessage: 'Agent กำลังเปิด MT5 และรอ Equity ล่าสุด...',
+      rawCommandMessage,
+      rawCommandError
     };
   }
+  const blankCancelled = st === 'cancelled' && !rawCommandError && !rawCommandMessage;
   const resolvedCmd = resolveLoginFailUserMessage({
     login: loginHint,
-    evidence: extractJournalEvidence(res.journalEvidence, res.journal_evidence, res.message, commandMessage),
-    rawMessage: commandMessage,
-    cmdError: commandMessage
+    evidence: extractJournalEvidence(
+      res.journalEvidence,
+      res.journal_evidence,
+      rawCommandMessage,
+      rawCommandError
+    ),
+    rawMessage: rawCommandMessage || rawCommandError,
+    cmdError: rawCommandError || rawCommandMessage
   });
-  if (['failed', 'error', 'cancelled'].includes(st)) {
+  if (['failed', 'error', 'cancelled'].includes(st) && !blankCancelled) {
     commandMessage = resolvedCmd.message || commandMessage;
   }
   return {
     commandId: cmd.id,
     commandStatus: st,
     commandMessage,
+    rawCommandMessage,
+    rawCommandError,
     commandResult: res,
     commandCreatedAt: cmd.created_at || null,
     commandStartedAt: cmd.started_at || null,
@@ -797,7 +809,9 @@ function loginCommandNeverPickedForCurrentAttempt(account, cmdMeta) {
 function isTransientCancelledLoginMeta(cmdMeta) {
   const cmdSt = String(cmdMeta?.commandStatus || '').toLowerCase();
   if (cmdSt !== 'cancelled') return false;
-  const msg = String(cmdMeta?.commandMessage || '').trim();
+  const msg = String(
+    cmdMeta?.rawCommandError || cmdMeta?.rawCommandMessage || cmdMeta?.commandMessage || ''
+  ).trim();
   return !msg || /new login attempt|superseded|login takes priority/i.test(msg);
 }
 
