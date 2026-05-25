@@ -126,7 +126,7 @@ JOURNAL_FAIL_PATTERNS = [
 ]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v64-login-startup-chart"
+AGENT_BUILD_ID = "2026-05-25-agent-v65-login-layout-stable"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1460,8 +1460,6 @@ def enforce_login_no_trading(
             password,
             server,
             allow_expert_trading=False,
-            startup_symbol=mt5_login_surface_symbol(payload),
-            startup_period=mt5_login_surface_period(payload),
         )
     except Exception as e:
         log(f"enforce_login_no_trading ini: {e}")
@@ -2307,19 +2305,17 @@ def mt5_login_surface_period(payload: Optional[Dict[str, Any]] = None) -> str:
 def surface_mt5_login_ui(
     port: Any, payload: Optional[Dict[str, Any]] = None, timeout_sec: int = 12
 ) -> bool:
-    """หลัง login_only สำเร็จ ให้ MT5 เปิด toolbox/market watch/chart เพื่อไม่ให้จอเทาโล่ง."""
+    """หลัง login_only สำเร็จ ให้ MT5 จัด workspace หลักแบบใกล้เคียงเปิดด้วยมือ."""
     if os.name != "nt" or not mt5_window_should_be_visible(payload):
         return False
     payload = payload or {}
     port_dir = resolve_mt5_port_dir(port, payload)
     dir_esc = str(port_dir).replace("'", "''").lower()
-    symbol = mt5_login_surface_symbol(payload)
-    period = mt5_login_surface_period(payload)
-    symbol_esc = _escape_sendkeys_text(symbol)
-    period_keys = _mt5_period_sendkeys(period)
     wait_sec = max(4, min(int(timeout_sec or 12), 30))
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
 $ErrorActionPreference = "SilentlyContinue"
 $portDir = '{dir_esc}'
 $deadline = (Get-Date).AddSeconds({wait_sec})
@@ -2332,6 +2328,25 @@ public class W32 {{
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
 }}
 "@
+function Get-Mt5UiBlob([IntPtr]$handle) {{
+  try {{
+    $ae = [Windows.Automation.AutomationElement]::FromHandle($handle)
+    if (-not $ae) {{ return '' }}
+    $names = New-Object System.Collections.Generic.List[string]
+    $walker = [Windows.Automation.TreeWalker]::RawViewWalker
+    function Walk($el) {{
+      if (-not $el) {{ return }}
+      $n = $el.Current.Name
+      if ($n) {{ [void]$names.Add($n) }}
+      $ch = $walker.GetFirstChild($el)
+      while ($ch) {{ Walk $ch; $ch = $walker.GetNextSibling($ch) }}
+    }}
+    Walk $ae
+    return ($names -join ' ')
+  }} catch {{
+    return ''
+  }}
+}}
 while ((Get-Date) -lt $deadline) {{
   $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
     $_.MainWindowHandle -ne 0 -and $_.Path -and $_.Path.ToLower().StartsWith($portDir)
@@ -2343,26 +2358,31 @@ if (-not $p) {{ exit 0 }}
 [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
 [W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
 Start-Sleep -Milliseconds 700
-[System.Windows.Forms.SendKeys]::SendWait("^m")
-Start-Sleep -Milliseconds 180
-[System.Windows.Forms.SendKeys]::SendWait("^t")
-Start-Sleep -Milliseconds 240
-[System.Windows.Forms.SendKeys]::SendWait("%f")
-Start-Sleep -Milliseconds 220
-[System.Windows.Forms.SendKeys]::SendWait("n")
-Start-Sleep -Milliseconds 320
-[System.Windows.Forms.SendKeys]::SendWait("{symbol_esc}")
-Start-Sleep -Milliseconds 280
-[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
-Start-Sleep -Milliseconds 600
+$blob = Get-Mt5UiBlob $p.MainWindowHandle
+if ($blob -notmatch '(?i)Market Watch|Quotes') {{
+  [System.Windows.Forms.SendKeys]::SendWait("^m")
+  Start-Sleep -Milliseconds 240
+  $blob = Get-Mt5UiBlob $p.MainWindowHandle
+}}
+if ($blob -notmatch '(?i)Navigator') {{
+  [System.Windows.Forms.SendKeys]::SendWait("^n")
+  Start-Sleep -Milliseconds 240
+  $blob = Get-Mt5UiBlob $p.MainWindowHandle
+}}
+if ($blob -notmatch '(?i)Toolbox|Terminal') {{
+  [System.Windows.Forms.SendKeys]::SendWait("^t")
+  Start-Sleep -Milliseconds 260
+}}
 """
-    if period_keys:
-        ps += f'[System.Windows.Forms.SendKeys]::SendWait("{period_keys}")\nStart-Sleep -Milliseconds 220\n'
     ps += "Write-Output 'SURFACED'\nexit 0\n"
     out = _run_powershell(ps, timeout=wait_sec + 3)
     ok = "SURFACED" in str(out or "")
     if ok:
-        log(f"MT5 UI SURFACED PORT={payload_get(payload, 'port', 'portNumber', 'portSlot', default=str(port))} SYMBOL={symbol} PERIOD={period}")
+        log(
+            "MT5 UI SURFACED PORT="
+            f"{payload_get(payload, 'port', 'portNumber', 'portSlot', default=str(port))} "
+            "PANELS=market_watch,navigator,toolbox"
+        )
     return ok
 
 
@@ -4444,8 +4464,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 password,
                 server,
                 allow_expert_trading=False,
-                startup_symbol=mt5_login_surface_symbol(payload),
-                startup_period=mt5_login_surface_period(payload),
             )
             write_avelqua_trading_gate(port_dir, False, payload)
         except Exception as e:
