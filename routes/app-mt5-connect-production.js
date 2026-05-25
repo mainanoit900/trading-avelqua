@@ -197,6 +197,8 @@ async function ensureRuntimeColumns() {
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_balance NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_equity NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS connect_started_at TIMESTAMPTZ`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS login_verified BOOLEAN DEFAULT FALSE`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
 
   await query(`
@@ -409,12 +411,13 @@ async function reserveBestPort(userId, preferredSlot = 0) {
   if (slotHint > 0) {
     const slotReserve = await reservePortForPackageSlot(userId, slotHint);
     if (slotReserve.ok) return slotReserve;
-    return {
-      ok: false,
-      message:
-        `FolderPort P${String(slotHint).padStart(2, '0')} ไม่ว่างบน VPS — ปิด MT5 บนโฟลเดอร์นี้ก่อน ` +
-        `(1 PORT แพ็กเกจ = 1 FolderPort ห้ามข้ามช่อง)`
-    };
+    // ถ้า FolderPort ตามเลขช่องไม่ว่าง ให้ fallback ไปหา FolderPort ว่างตัวอื่น
+    // แต่ยังคง portSlot ของผู้ใช้เป็นช่องที่เลือกไว้ เพื่อให้หน้าเว็บเลือก PORT ได้ไม่ค้าง
+    console.warn('[MT5 CONNECT] package slot folder not available, fallback to best free folder', {
+      userId,
+      slotHint,
+      reason: slotReserve.message || 'slot folder unavailable'
+    });
   }
 
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -857,8 +860,25 @@ async function resolveLoginCommandMeta(accountId, vpsId) {
     commandId: cmd.id,
     commandStatus: st,
     commandMessage,
-    commandResult: res
+    commandResult: res,
+    commandCreatedAt: cmd.created_at || null,
+    commandStartedAt: cmd.started_at || null,
+    commandFinishedAt: cmd.finished_at || null
   };
+}
+
+function loginCommandNeverPickedForCurrentAttempt(account, cmdMeta) {
+  const cmdSt = String(cmdMeta?.commandStatus || '').toLowerCase();
+  if (!['cancelled', 'failed', 'error'].includes(cmdSt)) return false;
+  if (cmdMeta?.commandStartedAt) return false;
+  const connectMs = account?.connect_started_at
+    ? new Date(account.connect_started_at).getTime()
+    : 0;
+  const cmdCreatedMs = cmdMeta?.commandCreatedAt
+    ? new Date(cmdMeta.commandCreatedAt).getTime()
+    : 0;
+  if (!connectMs || !cmdCreatedMs) return false;
+  return cmdCreatedMs >= connectMs - 3000;
 }
 
 /** ยืนยัน Login จริง (journal/คำสั่ง) — ใช้ได้ทั้ง checking/connecting เมื่อคำสั่งสำเร็จแล้ว */
@@ -1861,10 +1881,28 @@ async function handleMt5ConnectStatusProduction(req, res) {
       ? cmdMetaEarly
       : await resolveLoginCommandMeta(a.id, a.vps_id);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
+    const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(a, cmdMeta);
+
+    if (neverPickedCurrentAttempt) {
+      const failMsg =
+        cmdMeta.commandMessage ||
+        'คำสั่ง login ยังไม่ถูก Agent รับงาน — กรุณากดเชื่อมต่อใหม่อีกครั้ง';
+      await failAccountFromJournal(a.id, a.port_id, failMsg, {
+        vpsId: a.vps_id,
+        portNo: a.assigned_port_no || a.port_slot,
+        folderPath: a.folder_path,
+        reason: 'login_cmd_not_picked'
+      }).catch(() => {});
+      statusFinal = 'failed';
+      a.status = 'failed';
+      a.last_error = failMsg;
+      a.last_login_message = failMsg;
+    }
 
     if (
       ['failed', 'error', 'cancelled'].includes(cmdSt) &&
-      ['connecting', 'starting', 'checking'].includes(statusFinal)
+      ['connecting', 'starting', 'checking'].includes(statusFinal) &&
+      !neverPickedCurrentAttempt
     ) {
       if (hasVerifiedMt5Snapshot(a)) {
         const runningVerified =
@@ -1894,7 +1932,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     if (
       ['failed', 'error', 'cancelled'].includes(cmdSt) &&
-      ['connecting', 'starting', 'checking'].includes(statusFinal)
+      ['connecting', 'starting', 'checking'].includes(statusFinal) &&
+      !neverPickedCurrentAttempt
     ) {
       const failMsg =
         cmdMeta.commandMessage ||
@@ -1916,7 +1955,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     const agentMeta = await resolveVpsAgentOnline(a.vps_id);
-    let loginVerified = await resolvePollLoginVerified(a, statusFinal, cmdMeta);
+    let loginVerified = neverPickedCurrentAttempt
+      ? false
+      : await resolvePollLoginVerified(a, statusFinal, cmdMeta);
     if (!loginVerified && statusFinal === 'connected' && hasVerifiedMt5Snapshot(a)) {
       loginVerified = true;
     }
@@ -2066,7 +2107,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
     let commandStatusOut = cmdMeta.commandStatus || '';
     if (
       loginVerified &&
-      ['cancelled', 'failed', 'error'].includes(String(commandStatusOut).toLowerCase())
+      ['cancelled', 'failed', 'error'].includes(String(commandStatusOut).toLowerCase()) &&
+      !neverPickedCurrentAttempt
     ) {
       commandStatusOut = 'success';
     }
@@ -2149,7 +2191,18 @@ async function handleMt5AccountStatus(req, res) {
         : Date.now();
     const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
     let statusNow = String(acc.status || '').toLowerCase();
-    if (statusNow === 'failed' && hasVerifiedMt5Snapshot(acc)) {
+    const cmdMeta = await resolveLoginCommandMeta(acc.id, acc.vps_id).catch(() => ({}));
+    const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(acc, cmdMeta);
+    if (neverPickedCurrentAttempt) {
+      const failMsg =
+        cmdMeta.commandMessage ||
+        'คำสั่ง login ยังไม่ถูก Agent รับงาน — กรุณากดเชื่อมต่อใหม่อีกครั้ง';
+      statusNow = 'failed';
+      acc.status = 'failed';
+      acc.last_error = failMsg;
+      acc.last_login_message = failMsg;
+    }
+    if (statusNow === 'failed' && hasVerifiedMt5Snapshot(acc) && !neverPickedCurrentAttempt) {
       const recoverCmd = await findRecentTerminalLoginCommand(acc.id, acc.vps_id).catch(() => null);
       const recoverRes = recoverCmd?.result && typeof recoverCmd.result === 'object' ? recoverCmd.result : {};
       const recoverCmdSuccess =
