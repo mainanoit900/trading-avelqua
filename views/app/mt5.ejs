@@ -186,7 +186,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
       <div class="mt5-login-port-pill" id="mt5LoginPortPill">
         ดู/จัดการ: <b id="mt5LoginPortLabel">คลิก PORT ด้านบน</b>
-        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">คลิก <b>PORT</b> ก่อนเชื่อมต่อ — ระบบเปิดเฉพาะ <b>FolderPort ของ PORT นั้น</b> (เช่น PORT 2 → P02) · Login ซ้ำข้ามช่องจะถูกปฏิเสธ</small>
+        <small id="mt5LoginPortHint" style="display:block;margin-top:6px;color:#94a3b8">คลิก <b>PORT</b> ก่อนเชื่อมต่อ — ระบบจะค้นหา <b>FolderPort ที่ว่าง</b> ให้อัตโนมัติจาก VPS โดยแยกอิสระแต่ละ PORT แพ็กเกจ</small>
       </div>
 
       <form method="POST" action="/app/mt5/connect" class="mt5-form" id="mt5ConnectForm" onsubmit="event.preventDefault(); window.mt5PrepareConnectSubmit(event); return false;">
@@ -492,6 +492,7 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function mt5CanFinishConnectSuccess(data) {
     if (!data || data.loginVerified !== true || data.connected !== true) return false;
+    if (!mt5ConnectInFlightNow()) return true;
     const step = data.progressStep != null ? Number(data.progressStep) : 0;
     const total = Number(data.progressTotal || 4) || 4;
     const cmdSt = String(data.commandStatus || '').toLowerCase();
@@ -1150,13 +1151,13 @@ document.addEventListener('DOMContentLoaded', function () {
           : p.accountId
             ? ' · MT5 ปิด'
             : '');
-    const fpNo = p.folderPortNo != null ? p.folderPortNo : p.slot;
-    const folderLine =
-      'FolderPort P' +
-      String(fpNo).padStart(2, '0') +
-      (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '') +
-      ' · ' +
-      mt5FolderPortState(p);
+    const folderLine = p.accountId && p.folderPortNo != null
+      ? 'FolderPort P' +
+        String(p.folderPortNo).padStart(2, '0') +
+        (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '') +
+        ' · ' +
+        mt5FolderPortState(p)
+      : 'FolderPort · ระบบค้นหาอัตโนมัติ · ' + mt5FolderPortState(p);
     return (
       '<small class="port-pkg-line">' +
       mt5Esc(loginLine) +
@@ -1178,7 +1179,7 @@ document.addEventListener('DOMContentLoaded', function () {
     });
     if (!p) {
       hint.textContent =
-        'PORT แพ็กเกจ ' + slot + ' → FolderPort P' + String(slot).padStart(2, '0') + ' บน VPS';
+        'PORT แพ็กเกจ ' + slot + ' → ระบบค้นหา FolderPort ว่างอัตโนมัติบน VPS';
       return;
     }
     if (p.accountId) {
@@ -1203,8 +1204,6 @@ document.addEventListener('DOMContentLoaded', function () {
       hint.textContent =
         'PORT ' +
         slot +
-        ' → FolderPort P' +
-        String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
         ' ถูกใช้โดย PORT ' +
         p.folderOwnedBySlot +
         ' แล้ว — เลือก PORT อื่นหรือไปที่ PORT ' +
@@ -1215,9 +1214,7 @@ document.addEventListener('DOMContentLoaded', function () {
       hint.innerHTML =
         'PORT แพ็กเกจ ' +
         slot +
-        ' → <span class="warn">FolderPort P' +
-        String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
-        ' — MT5 ยังเปิดบน VPS</span>' +
+        ' → <span class="warn">ยังมี FolderPort ที่ MT5 เปิดค้างบน VPS</span>' +
         (p.folderMt5Login ? ' (Login ' + mt5Esc(p.folderMt5Login) + ')' : '') +
         ' · <button type="button" class="mt5-btn mini" id="mt5ForceStopPortBtn" style="margin-left:6px">ปิด MT5 บน VPS</button>';
       return;
@@ -1225,8 +1222,7 @@ document.addEventListener('DOMContentLoaded', function () {
     hint.textContent =
       'PORT แพ็กเกจ ' +
       slot +
-      ' → FolderPort P' +
-      String(p.folderPortNo != null ? p.folderPortNo : slot).padStart(2, '0') +
+      ' → ระบบจะค้นหา FolderPort ว่างให้อัตโนมัติ' +
       (p.vpsNodeName ? ' · ' + mt5ShortVpsName(p.vpsNodeName) : '') +
       ' · ' +
       mt5FolderPortState(p) +

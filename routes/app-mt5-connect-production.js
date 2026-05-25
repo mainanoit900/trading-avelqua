@@ -81,10 +81,6 @@ const {
   queueEquityLoginVerify
 } = require('../lib/mt5LoginCommandVerify');
 const { cancelAgentCommandsForAccount } = require('../lib/vpsAgentCommandQueue');
-const {
-  listAllFolderPortsForConnect,
-  pickFolderPortForSlot
-} = require('../lib/mt5VpsFolderPorts');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -317,114 +313,9 @@ const {
   mt5LoginOnOtherPortMessage
 } = require('../lib/mt5LoginDuplicate');
 
-/** จอง Folder PORT ตามช่องแพ็กเกจ (PORT 1 → VPS-WIN-01-PORT-01) */
-async function reservePortForPackageSlot(userId, portSlot) {
-  const slot = num(portSlot);
-  if (!slot || slot < 1 || slot > 20) return { ok: false };
-
-  await clearExpiredLocks();
-
-  const portNos = [...new Set([slot, 100 + slot].filter((x) => x > 0))];
-  const client = await getClient();
-  try {
-    await client.query('BEGIN');
-    const r = await client.query(
-      `
-      SELECT
-        p.id AS port_id,
-        p.vps_id,
-        p.port_no,
-        p.folder_path,
-        COALESCE(n.node_code, '') AS node_code,
-        COALESCE(n.cpu_percent, 0) AS cpu_percent,
-        COALESCE(n.ram_percent, 0) AS ram_percent,
-        COALESCE(n.ping_ms, 0) AS ping_ms
-      FROM vps_system.vps_ports p
-      JOIN vps_system.vps_nodes n ON n.id = p.vps_id
-      WHERE p.port_no = ANY($1::int[])
-        AND LOWER(COALESCE(p.status, 'available')) IN ('available', 'free', 'idle', 'failed')
-        AND LOWER(COALESCE(p.status, '')) NOT IN ('disabled', 'off', 'deleted')
-        AND COALESCE(n.agent_enabled, TRUE) = TRUE
-        AND LOWER(COALESCE(n.status, '')) IN ('online', 'active', 'available', 'connected')
-        AND (
-          COALESCE(n.last_seen_at, n.last_heartbeat, n.updated_at) >
-            NOW() - ($3::text || ' seconds')::interval
-          OR EXISTS (
-            SELECT 1 FROM vps_system.vps_port_health h
-            WHERE h.node_id = n.id
-              AND h.updated_at > NOW() - ($3::text || ' seconds')::interval
-          )
-        )
-        AND COALESCE(n.cpu_percent, 0) <= COALESCE(n.max_cpu_percent, $4)
-        AND COALESCE(n.ram_percent, 0) <= COALESCE(n.max_ram_percent, $5)
-        AND COALESCE(n.ping_ms, 0) <= COALESCE(n.max_ping_ms, $6)
-        AND NOT EXISTS (
-          SELECT 1
-          FROM vps_system.mt5_accounts a
-          WHERE a.vps_id = p.vps_id
-            AND a.assigned_port_no = p.port_no
-            AND a.user_id <> $2
-            AND LOWER(COALESCE(a.status, '')) IN ('connecting', 'checking', 'connected', 'starting')
-        )
-      ORDER BY CASE WHEN p.port_no >= 100 THEN 0 ELSE 1 END, p.port_no ASC
-      FOR UPDATE OF p SKIP LOCKED
-      LIMIT 1
-    `,
-      [portNos, userId, String(AGENT_LAST_SEEN_MAX_SEC), MAX_CPU, MAX_RAM, MAX_PING]
-    );
-
-    const port = r.rows?.[0];
-    if (!port) {
-      await client.query('ROLLBACK');
-      return { ok: false };
-    }
-
-    await client.query(
-      `
-      UPDATE vps_system.vps_ports
-      SET status='locked',
-          locked_by_user_id=$1,
-          locked_until=NOW() + ($2::text || ' minutes')::interval,
-          last_error=NULL,
-          updated_at=NOW()
-      WHERE id=$3
-    `,
-      [userId, PORT_LOCK_MINUTES, port.port_id]
-    );
-
-    await client.query('COMMIT');
-    return {
-      ok: true,
-      port: {
-        ...port,
-        port_number: slot,
-        port_name: `PORT-${String(slot).padStart(2, '0')}`,
-        source: 'package_slot'
-      }
-    };
-  } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
-    throw e;
-  } finally {
-    client.release();
-  }
-}
-
 async function reserveBestPort(userId, preferredSlot = 0) {
   await clearExpiredLocks();
-
-  const slotHint = num(preferredSlot);
-  if (slotHint > 0) {
-    const slotReserve = await reservePortForPackageSlot(userId, slotHint);
-    if (slotReserve.ok) return slotReserve;
-    // ถ้า FolderPort ตามเลขช่องไม่ว่าง ให้ fallback ไปหา FolderPort ว่างตัวอื่น
-    // แต่ยังคง portSlot ของผู้ใช้เป็นช่องที่เลือกไว้ เพื่อให้หน้าเว็บเลือก PORT ได้ไม่ค้าง
-    console.warn('[MT5 CONNECT] package slot folder not available, fallback to best free folder', {
-      userId,
-      slotHint,
-      reason: slotReserve.message || 'slot folder unavailable'
-    });
-  }
+  void preferredSlot;
 
   const adminReserve = await reserveAdminPortForLogin(userId);
   if (adminReserve.ok) return adminReserve;
@@ -779,19 +670,13 @@ async function isUserPortSlotAvailable(userId, slot, totalPorts) {
   return !(r.rows || []).length;
 }
 
-/** เลือก PORT แพ็กเกจว่าง + โฟลเดอร์ VPS ตรง slot (เหมือน /admin/vps/ports) */
+/** เลือกเฉพาะ PORT แพ็กเกจว่าง; FolderPort ให้ระบบหาอัตโนมัติ */
 async function pickBestPackageSlotForConnect(userId, totalPorts, preferredSlot = 0) {
   const pref = num(preferredSlot);
-  const { nodes, folderPorts } = await listAllFolderPortsForConnect().catch(() => ({
-    nodes: [],
-    folderPorts: []
-  }));
 
   async function slotOk(slot) {
     if (slot < 1 || slot > totalPorts) return false;
     if (!(await isUserPortSlotAvailable(userId, slot, totalPorts))) return false;
-    const folder = pickFolderPortForSlot(folderPorts, slot, nodes);
-    if (folder && folder.available === false && folder.running) return false;
     return true;
   }
 
