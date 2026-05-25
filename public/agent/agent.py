@@ -1430,6 +1430,10 @@ def enforce_login_no_trading(
         )
     except Exception as e:
         log(f"avelqua_run.json login_only: {e}")
+    try:
+        surface_mt5_login_ui(port, payload)
+    except Exception as e:
+        log(f"surface_mt5_login_ui: {e}")
 
 
 def remove_mt5_login_ini(port_dir: Path) -> None:
@@ -2186,6 +2190,118 @@ exit 0
     ok = "VISIBLE" in str(out or "")
     if ok:
         log(f"MT5 WINDOW FOCUS PORT={payload_get(payload, 'port', 'portNumber', 'portSlot', default=str(port))}")
+    return ok
+
+
+def _escape_sendkeys_text(raw: str) -> str:
+    txt = str(raw or "")
+    for old, new in (
+        ("+", "{+}"),
+        ("^", "{^}"),
+        ("%", "{%}"),
+        ("~", "{~}"),
+        ("(", "{(}"),
+        (")", "{)}"),
+        ("{", "{{}"),
+        ("}", "{}}"),
+    ):
+        txt = txt.replace(old, new)
+    return txt
+
+
+def _mt5_period_sendkeys(period: str) -> str:
+    return {
+        "M1": "%1",
+        "M5": "%2",
+        "M15": "%3",
+        "M30": "%4",
+        "H1": "%5",
+        "H4": "%6",
+        "D1": "%7",
+        "W1": "%8",
+        "MN": "%9",
+        "MN1": "%9",
+    }.get(str(period or "").strip().upper(), "")
+
+
+def surface_mt5_login_ui(
+    port: Any, payload: Optional[Dict[str, Any]] = None, timeout_sec: int = 12
+) -> bool:
+    """หลัง login_only สำเร็จ ให้ MT5 เปิด toolbox/market watch/chart เพื่อไม่ให้จอเทาโล่ง."""
+    if os.name != "nt" or not mt5_window_should_be_visible(payload):
+        return False
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    dir_esc = str(port_dir).replace("'", "''").lower()
+    symbol = str(
+        payload_get(
+            payload,
+            "loginSurfaceSymbol",
+            "debugSymbol",
+            "symbol",
+            default=os.getenv("AVELQUA_MT5_LOGIN_SURFACE_SYMBOL", "XAUUSD"),
+        )
+        or "XAUUSD"
+    ).strip() or "XAUUSD"
+    period = str(
+        payload_get(
+            payload,
+            "loginSurfacePeriod",
+            "debugPeriod",
+            "chartPeriod",
+            "period",
+            default=os.getenv("AVELQUA_MT5_LOGIN_SURFACE_PERIOD", "H1"),
+        )
+        or "H1"
+    ).strip().upper() or "H1"
+    symbol_esc = _escape_sendkeys_text(symbol)
+    period_keys = _mt5_period_sendkeys(period)
+    wait_sec = max(4, min(int(timeout_sec or 12), 30))
+    ps = f"""
+Add-Type -AssemblyName System.Windows.Forms
+$ErrorActionPreference = "SilentlyContinue"
+$portDir = '{dir_esc}'
+$deadline = (Get-Date).AddSeconds({wait_sec})
+$p = $null
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}}
+"@
+while ((Get-Date) -lt $deadline) {{
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $_.MainWindowHandle -ne 0 -and $_.Path -and $_.Path.ToLower().StartsWith($portDir)
+  }} | Select-Object -First 1
+  if ($p) {{ break }}
+  Start-Sleep -Milliseconds 400
+}}
+if (-not $p) {{ exit 0 }}
+[W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+[W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+Start-Sleep -Milliseconds 700
+[System.Windows.Forms.SendKeys]::SendWait("^m")
+Start-Sleep -Milliseconds 180
+[System.Windows.Forms.SendKeys]::SendWait("^t")
+Start-Sleep -Milliseconds 240
+[System.Windows.Forms.SendKeys]::SendWait("%f")
+Start-Sleep -Milliseconds 220
+[System.Windows.Forms.SendKeys]::SendWait("n")
+Start-Sleep -Milliseconds 320
+[System.Windows.Forms.SendKeys]::SendWait("{symbol_esc}")
+Start-Sleep -Milliseconds 280
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+Start-Sleep -Milliseconds 600
+"""
+    if period_keys:
+        ps += f'[System.Windows.Forms.SendKeys]::SendWait("{period_keys}")\nStart-Sleep -Milliseconds 220\n'
+    ps += "Write-Output 'SURFACED'\nexit 0\n"
+    out = _run_powershell(ps, timeout=wait_sec + 3)
+    ok = "SURFACED" in str(out or "")
+    if ok:
+        log(f"MT5 UI SURFACED PORT={payload_get(payload, 'port', 'portNumber', 'portSlot', default=str(port))} SYMBOL={symbol} PERIOD={period}")
     return ok
 
 
