@@ -126,7 +126,7 @@ JOURNAL_FAIL_PATTERNS = [
 ]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v62-login-surface-chart"
+AGENT_BUILD_ID = "2026-05-25-agent-v63-login-restore-chart"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -139,6 +139,7 @@ SHOW_MT5_UI = os.getenv(
     os.getenv("AVELQUA_MT5_SHOW_WINDOW", "true"),
 ).lower() != "false"
 SHOW_MT5_WINDOW = SHOW_MT5_UI
+KEEP_MT5_CHARTS_ON_LOGIN = os.getenv("AVELQUA_MT5_KEEP_CHARTS_ON_LOGIN", "true").lower() != "false"
 
 AGENT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -1379,6 +1380,46 @@ def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
             log(f"QUARANTINE CHART SKIP {src}: {e}")
 
 
+def restore_latest_quarantined_chart_profile(port_dir: Path) -> bool:
+    """คืน chart profile ล่าสุดกลับมาเมื่อ login-only เปิด MT5 แล้วจอเทา."""
+    prof = port_dir / "MQL5" / "Profiles"
+    if not prof.exists():
+        return False
+    targets = ("Charts", "charts", "LastProfile.ini", "lastprofile.ini")
+    current_has_chart = any((prof / rel).exists() for rel in targets)
+    restored = False
+    quarantine_dirs = sorted(
+        [p for p in prof.glob("_avelqua_quarantine_*") if p.is_dir()],
+        key=lambda p: p.name,
+        reverse=True,
+    )
+    if not quarantine_dirs:
+        return False
+    for qdir in quarantine_dirs:
+        for rel in targets:
+            src = qdir / rel
+            dst = prof / rel
+            if not src.exists():
+                continue
+            if current_has_chart and dst.exists():
+                continue
+            try:
+                if dst.exists():
+                    if dst.is_dir():
+                        shutil.rmtree(dst, ignore_errors=True)
+                    else:
+                        dst.unlink()
+                shutil.move(str(src), str(dst))
+                restored = True
+                current_has_chart = True
+                log(f"RESTORE CHART PROFILE {src} -> {dst}")
+            except Exception as e:
+                log(f"RESTORE CHART PROFILE SKIP {src}: {e}")
+        if restored:
+            break
+    return restored
+
+
 def mt5_running_for_port_dir(port_dir: Path) -> bool:
     root = str(port_dir).rstrip("\\/").lower()
     for p in iter_terminal_processes():
@@ -1405,7 +1446,10 @@ def enforce_login_no_trading(
     patch_mt5_experts_config(port_dir, False)
     sync_avelqua_data_exports(port_dir, force=True)
     try:
-        quarantine_chart_profiles_with_ea(port_dir)
+        if KEEP_MT5_CHARTS_ON_LOGIN:
+            restore_latest_quarantined_chart_profile(port_dir)
+        else:
+            quarantine_chart_profiles_with_ea(port_dir)
     except Exception as e:
         log(f"enforce_login quarantine: {e}")
     try:
