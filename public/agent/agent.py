@@ -105,7 +105,7 @@ EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำล
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v55-wizard-finish-fix"
+AGENT_BUILD_ID = "2026-05-24-agent-v56-no-kill-logged-in"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3747,18 +3747,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         sock_ok_open, sock_info_open = mt5_socket_established(port, payload)
         journal_since_open = time.time() - 600
         j_open, j_chunk_open = _quick_journal_probe(port_dir, login, journal_since_open, server)
-        if not sock_ok_open and j_open is not True:
-            log(
-                f"MT5 OPEN BUT OFFLINE PORT={port} login={login} socket={sock_info_open} — relaunch"
-            )
-            try:
-                kill_mt5_by_folder(port_dir)
-                time.sleep(2)
-            except Exception as e:
-                log(f"OFFLINE RELAUNCH kill error: {e}")
-            mt5_already_open = False
-            procs_existing = []
-        elif j_open is True or ok_fast_open:
+        if j_open is True or ok_fast_open:
             enforce_login_no_trading(port_dir, port, payload, login, password, server)
             proc_pid_open = procs_existing[0].pid if procs_existing else None
             send_connect_result(
@@ -3767,7 +3756,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "เชื่อมต่อแล้ว — MT5 ยังเปิดอยู่ ยังไม่เปิด BOT",
                 port,
                 process_id=proc_pid_open,
-                journal_evidence=j_chunk_open,
+                journal_evidence=j_chunk_open or title_fast_open,
                 window_title=title_fast_open,
                 window_verified=ok_fast_open,
             )
@@ -3785,6 +3774,21 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "config": str(config_file),
                 "terminal": str(terminal),
             }
+        if not sock_ok_open and j_open is not True and not ok_fast_open:
+            log(
+                f"MT5 OPEN BUT OFFLINE PORT={port} login={login} socket={sock_info_open} — relaunch"
+            )
+            try:
+                kill_mt5_by_folder(port_dir)
+                time.sleep(2)
+            except Exception as e:
+                log(f"OFFLINE RELAUNCH kill error: {e}")
+            mt5_already_open = False
+            procs_existing = []
+        elif not sock_ok_open and j_open is not True:
+            log(
+                f"MT5 OPEN WAIT SOCKET PORT={port} login={login} socket={sock_info_open} — keep MT5"
+            )
     if mt5_already_open and procs_existing:
         proc_pid_open = procs_existing[0].pid
         log(f"LOGIN VERIFY ON OPEN MT5 PORT={port} PID={proc_pid_open}")
@@ -3900,6 +3904,31 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "terminal": str(terminal),
             }
         snap_reuse = account_snapshot(port, payload)
+        sock_reuse, sock_hint = mt5_socket_established(port, payload)
+        if sock_reuse and ok_fast:
+            enforce_login_no_trading(port_dir, port, payload, login, password, server)
+            send_connect_result(
+                payload,
+                "connected",
+                "เชื่อมต่อสำเร็จ — MT5 login แล้ว (socket verified)",
+                port,
+                window_title=title_fast,
+                window_verified=True,
+                journal_evidence=j_chunk_fast or title_fast or sock_hint,
+            )
+            log(f"LOGIN FAST REUSE PORT={port} LOGIN={login} (socket+title)")
+            return {
+                "action": "login_mt5",
+                "status": "connected",
+                "loginOnly": True,
+                "fastReuse": True,
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+            }
         if _snap_positive(snap_reuse) and mt5_login_verified_by_window(port, payload)[0]:
             enforce_login_no_trading(port_dir, port, payload, login, password, server)
             send_connect_result(
