@@ -1428,6 +1428,9 @@ async function ensureActiveLoginCommandForPoll(account) {
 
   const live = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
   if (live.ok) return { requeued: false, live: true };
+  if (status === 'connected' && hasVerifiedMt5Snapshot(account)) {
+    return { requeued: false, live: true, verifiedSnapshot: true };
+  }
 
   if (await hasLoginCommandInProgress(accountId, vpsId).catch(() => false)) {
     return { requeued: false };
@@ -1619,7 +1622,11 @@ async function handleMt5ConnectStatusProduction(req, res) {
               String(a.mt5_login || '').trim()
             ).catch(() => ({ ok: false }))
           : { ok: false };
-      if (runningVerified.ok || recoverCmdSuccess) {
+      const snapshotRecovered =
+        !a.port_id &&
+        !(a.assigned_port_no || a.port_slot) &&
+        hasVerifiedMt5Snapshot(a);
+      if (runningVerified.ok || recoverCmdSuccess || snapshotRecovered) {
         await promoteAccountConnected({
           accountId: a.id,
           portId: a.port_id,
@@ -1910,6 +1917,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     const agentMeta = await resolveVpsAgentOnline(a.vps_id);
     let loginVerified = await resolvePollLoginVerified(a, statusFinal, cmdMeta);
+    if (!loginVerified && statusFinal === 'connected' && hasVerifiedMt5Snapshot(a)) {
+      loginVerified = true;
+    }
     if (loginVerified && statusFinal !== 'connected') {
       await promoteAccountConnected({
         accountId: a.id,
@@ -2157,7 +2167,11 @@ async function handleMt5AccountStatus(req, res) {
               String(acc.mt5_login || '').trim()
             ).catch(() => ({ ok: false }))
           : { ok: false };
-      if (runningVerified.ok || recoverCmdSuccess) {
+      const snapshotRecovered =
+        !acc.port_id &&
+        !(acc.assigned_port_no || acc.port_slot) &&
+        hasVerifiedMt5Snapshot(acc);
+      if (runningVerified.ok || recoverCmdSuccess || snapshotRecovered) {
         await promoteAccountConnected({
           accountId: acc.id,
           portId: acc.port_id,
