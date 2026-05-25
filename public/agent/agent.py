@@ -126,7 +126,7 @@ JOURNAL_FAIL_PATTERNS = [
 ]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v63-login-restore-chart"
+AGENT_BUILD_ID = "2026-05-25-agent-v64-login-startup-chart"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -992,9 +992,10 @@ AllowLiveTrading={trade_flag}
 AllowDllImport=true
 Enabled={trade_flag}
 """
-    if startup_expert:
+    if startup_expert or startup_symbol or startup_period or startup_template or startup_expert_parameters:
         ini += "\n[StartUp]\n"
-        ini += f"Expert={startup_expert}\n"
+        if startup_expert:
+            ini += f"Expert={startup_expert}\n"
         if startup_symbol:
             ini += f"Symbol={startup_symbol}\n"
         if startup_period:
@@ -1453,7 +1454,15 @@ def enforce_login_no_trading(
     except Exception as e:
         log(f"enforce_login quarantine: {e}")
     try:
-        write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+        write_mt5_login_ini(
+            port_dir,
+            login,
+            password,
+            server,
+            allow_expert_trading=False,
+            startup_symbol=mt5_login_surface_symbol(payload),
+            startup_period=mt5_login_surface_period(payload),
+        )
     except Exception as e:
         log(f"enforce_login_no_trading ini: {e}")
     try:
@@ -2268,6 +2277,33 @@ def _mt5_period_sendkeys(period: str) -> str:
     }.get(str(period or "").strip().upper(), "")
 
 
+def mt5_login_surface_symbol(payload: Optional[Dict[str, Any]] = None) -> str:
+    return str(
+        payload_get(
+            payload or {},
+            "loginSurfaceSymbol",
+            "debugSymbol",
+            "symbol",
+            default=os.getenv("AVELQUA_MT5_LOGIN_SURFACE_SYMBOL", "XAUUSD"),
+        )
+        or "XAUUSD"
+    ).strip() or "XAUUSD"
+
+
+def mt5_login_surface_period(payload: Optional[Dict[str, Any]] = None) -> str:
+    return str(
+        payload_get(
+            payload or {},
+            "loginSurfacePeriod",
+            "debugPeriod",
+            "chartPeriod",
+            "period",
+            default=os.getenv("AVELQUA_MT5_LOGIN_SURFACE_PERIOD", "H1"),
+        )
+        or "H1"
+    ).strip().upper() or "H1"
+
+
 def surface_mt5_login_ui(
     port: Any, payload: Optional[Dict[str, Any]] = None, timeout_sec: int = 12
 ) -> bool:
@@ -2277,27 +2313,8 @@ def surface_mt5_login_ui(
     payload = payload or {}
     port_dir = resolve_mt5_port_dir(port, payload)
     dir_esc = str(port_dir).replace("'", "''").lower()
-    symbol = str(
-        payload_get(
-            payload,
-            "loginSurfaceSymbol",
-            "debugSymbol",
-            "symbol",
-            default=os.getenv("AVELQUA_MT5_LOGIN_SURFACE_SYMBOL", "XAUUSD"),
-        )
-        or "XAUUSD"
-    ).strip() or "XAUUSD"
-    period = str(
-        payload_get(
-            payload,
-            "loginSurfacePeriod",
-            "debugPeriod",
-            "chartPeriod",
-            "period",
-            default=os.getenv("AVELQUA_MT5_LOGIN_SURFACE_PERIOD", "H1"),
-        )
-        or "H1"
-    ).strip().upper() or "H1"
+    symbol = mt5_login_surface_symbol(payload)
+    period = mt5_login_surface_period(payload)
     symbol_esc = _escape_sendkeys_text(symbol)
     period_keys = _mt5_period_sendkeys(period)
     wait_sec = max(4, min(int(timeout_sec or 12), 30))
@@ -3584,7 +3601,15 @@ def _relaunch_mt5_for_login(
     except Exception as e:
         log(f"RELAUNCH stop old: {e}")
     _wait_mt5_port_stopped(port, payload, port_dir, 10.0)
-    write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+    write_mt5_login_ini(
+        port_dir,
+        login,
+        password,
+        server,
+        allow_expert_trading=False,
+        startup_symbol=mt5_login_surface_symbol(payload),
+        startup_period=mt5_login_surface_period(payload),
+    )
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
     clear_mt5_login_cache(port_dir, login)
@@ -4133,7 +4158,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     patch_mt5_experts_config(port_dir, False)
     sync_avelqua_data_exports(port_dir, force=True)
 
-    config_file = write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+    config_file = write_mt5_login_ini(
+        port_dir,
+        login,
+        password,
+        server,
+        allow_expert_trading=False,
+        startup_symbol=mt5_login_surface_symbol(payload),
+        startup_period=mt5_login_surface_period(payload),
+    )
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
 
@@ -4405,7 +4438,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     def result_ok(message: str, process_id: Any = None) -> Dict[str, Any]:
         try:
-            write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+            write_mt5_login_ini(
+                port_dir,
+                login,
+                password,
+                server,
+                allow_expert_trading=False,
+                startup_symbol=mt5_login_surface_symbol(payload),
+                startup_period=mt5_login_surface_period(payload),
+            )
             write_avelqua_trading_gate(port_dir, False, payload)
         except Exception as e:
             log(f"POST-LOGIN TRADING GATE OFF ERROR: {e}")
@@ -4442,7 +4483,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             log(f"STOP OLD MT5 ERROR: {e}")
         time.sleep(0.35)
-        write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=False)
+        write_mt5_login_ini(
+            port_dir,
+            login,
+            password,
+            server,
+            allow_expert_trading=False,
+            startup_symbol=mt5_login_surface_symbol(payload),
+            startup_period=mt5_login_surface_period(payload),
+        )
         write_avelqua_trading_gate(port_dir, False, payload)
         patch_mt5_experts_config(port_dir, False)
         clear_mt5_login_cache(port_dir, login)
