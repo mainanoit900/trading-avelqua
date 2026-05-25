@@ -67,6 +67,7 @@ const {
   findLoginCommandInProgress,
   findLoginCommandForAttempt,
   findRecentLoginCommand,
+  reconcileConnectedAccountLive,
   releaseUserPackagePortSlot,
   forceStopPackagePortSlot,
   tryFastConnectConfirm,
@@ -1139,7 +1140,18 @@ async function handleMt5ConnectProduction(req, res) {
       `,
         [userId, mt5Login, serverName, uiPreferredSlotEarly]
       ).catch(() => ({ rows: [] }));
-      const live = liveRes.rows?.[0];
+      let live = liveRes.rows?.[0];
+      if (live?.id) {
+        const reconciled = await reconcileConnectedAccountLive(
+          {
+            ...live,
+            mt5_login: mt5Login,
+            server_name: serverName
+          },
+          { allowDemote: true }
+        ).catch(() => ({ changed: false, account: live }));
+        live = reconciled.account || live;
+      }
       if (live?.vps_id) {
         const portNo = Number(live.assigned_port_no || uiPreferredSlotEarly);
         const run = await verifyPortRunningLogin(live.vps_id, portNo, mt5Login).catch(() => ({
@@ -1633,8 +1645,18 @@ async function handleMt5ConnectStatusProduction(req, res) {
       LIMIT 1
     `, params);
 
-    const a = r.rows?.[0];
+    let a = r.rows?.[0];
     if (!a) return res.json({ ok: true, connected: false, status: 'none', message: 'ยังไม่มีรายการเชื่อมต่อ' });
+
+    if (String(a.status || '').toLowerCase() === 'connected') {
+      const reconciled = await reconcileConnectedAccountLive(a, {
+        allowDemote: true
+      }).catch(() => ({ changed: false, account: a }));
+      a = reconciled.account || a;
+      if (reconciled.changed) {
+        a.updated_at = new Date().toISOString();
+      }
+    }
 
     const updatedAt = a.updated_at ? new Date(a.updated_at).getTime() : 0;
     const staleMs = Date.now() - updatedAt;
