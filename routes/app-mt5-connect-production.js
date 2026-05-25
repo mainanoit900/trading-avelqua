@@ -794,6 +794,13 @@ function loginCommandNeverPickedForCurrentAttempt(account, cmdMeta) {
   return cmdCreatedMs >= connectMs - 3000;
 }
 
+function isTransientCancelledLoginMeta(cmdMeta) {
+  const cmdSt = String(cmdMeta?.commandStatus || '').toLowerCase();
+  if (cmdSt !== 'cancelled') return false;
+  const msg = String(cmdMeta?.commandMessage || '').trim();
+  return !msg || /new login attempt|superseded|login takes priority/i.test(msg);
+}
+
 function shouldGraceNeverPickedLogin(account, cmdMeta) {
   if (!loginCommandNeverPickedForCurrentAttempt(account, cmdMeta)) return false;
   const connectMs = account?.connect_started_at
@@ -1658,7 +1665,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
       ? new Date(a.connect_started_at).getTime()
       : 0;
     const cmdMetaSeed = await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
-    const forceRequeueNeverPicked = shouldGraceNeverPickedLogin(a, cmdMetaSeed);
+    const transientCancelledSeed = isTransientCancelledLoginMeta(cmdMetaSeed);
+    const forceRequeueNeverPicked =
+      shouldGraceNeverPickedLogin(a, cmdMetaSeed) || transientCancelledSeed;
     const requeueLogin = await ensureActiveLoginCommandForPoll(a, {
       forceRequeue: forceRequeueNeverPicked
     }).catch(() => ({
@@ -1843,18 +1852,21 @@ async function handleMt5ConnectStatusProduction(req, res) {
       : await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
     const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(a, cmdMeta);
     const graceNeverPicked = shouldGraceNeverPickedLogin(a, cmdMeta);
+    const transientCancelledAttempt = isTransientCancelledLoginMeta(cmdMeta);
 
-    if (graceNeverPicked) {
+    if (graceNeverPicked || transientCancelledAttempt || requeueLogin.requeued) {
       cmdMeta.commandId = requeueLogin.commandId || cmdMeta.commandId || null;
       cmdMeta.commandStatus = requeueLogin.requeued ? 'pending' : '';
       cmdMeta.commandMessage = requeueLogin.requeued
         ? 'กำลังส่งคำสั่ง login_mt5 ใหม่ไป VPS...'
-        : 'กำลังส่งคำสั่ง login_mt5 ไป VPS...';
+        : transientCancelledAttempt
+          ? 'กำลังรอ Agent รับคำสั่ง login_mt5...'
+          : 'กำลังส่งคำสั่ง login_mt5 ไป VPS...';
     }
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
 
     if (neverPickedCurrentAttempt) {
-      if (graceNeverPicked) {
+      if (graceNeverPicked || transientCancelledAttempt) {
         statusFinal = ['connecting', 'starting', 'checking'].includes(statusFinal)
           ? statusFinal
           : 'connecting';
@@ -1881,7 +1893,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     if (
-      ['failed', 'error', 'cancelled'].includes(cmdSt) &&
+      (['failed', 'error'].includes(cmdSt) || (cmdSt === 'cancelled' && !transientCancelledAttempt)) &&
       ['connecting', 'starting', 'checking'].includes(statusFinal) &&
       !neverPickedCurrentAttempt
     ) {
@@ -2174,14 +2186,27 @@ async function handleMt5AccountStatus(req, res) {
     let statusNow = String(acc.status || '').toLowerCase();
     const cmdMeta = await resolveLoginCommandMeta(acc.id, acc.vps_id, startedMs).catch(() => ({}));
     const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(acc, cmdMeta);
+    const graceNeverPicked = shouldGraceNeverPickedLogin(acc, cmdMeta);
+    const transientCancelledAttempt = isTransientCancelledLoginMeta(cmdMeta);
     if (neverPickedCurrentAttempt) {
-      const failMsg =
-        cmdMeta.commandMessage ||
-        'คำสั่ง login ยังไม่ถูก Agent รับงาน — กรุณากดเชื่อมต่อใหม่อีกครั้ง';
-      statusNow = 'failed';
-      acc.status = 'failed';
-      acc.last_error = failMsg;
-      acc.last_login_message = failMsg;
+      if (graceNeverPicked || transientCancelledAttempt) {
+        statusNow = ['connecting', 'starting', 'checking'].includes(statusNow)
+          ? statusNow
+          : 'connecting';
+        acc.status = statusNow;
+        acc.last_error = null;
+        acc.last_login_message = transientCancelledAttempt
+          ? '① ส่งคำสั่ง login_mt5 แล้ว — รอ Agent รับงาน'
+          : '① ส่งคำสั่ง login_mt5 ใหม่แล้ว — รอ Agent รับงาน';
+      } else {
+        const failMsg =
+          cmdMeta.commandMessage ||
+          'คำสั่ง login ยังไม่ถูก Agent รับงาน — กรุณากดเชื่อมต่อใหม่อีกครั้ง';
+        statusNow = 'failed';
+        acc.status = 'failed';
+        acc.last_error = failMsg;
+        acc.last_login_message = failMsg;
+      }
     }
     if (statusNow === 'failed' && hasVerifiedMt5Snapshot(acc) && !neverPickedCurrentAttempt) {
       const recoverCmd = await findRecentTerminalLoginCommand(acc.id, acc.vps_id).catch(() => null);
