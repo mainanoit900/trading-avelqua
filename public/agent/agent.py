@@ -126,15 +126,19 @@ JOURNAL_FAIL_PATTERNS = [
 ]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v60-login-visible"
+AGENT_BUILD_ID = "2026-05-25-agent-v61-startupinfo-window"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
 _MT5_LOGIN_INI = os.getenv("AVELQUA_MT5_LOGIN_INI", "startup.ini").strip()
 MT5_LOGIN_INI_NAME = _MT5_LOGIN_INI if _MT5_LOGIN_INI else "startup.ini"
 LEGACY_MT5_LOGIN_INI = "avelqua-login.ini"
-# Windows: true = เปิด MT5 โชว์หน้าจอบน VPS (ตรวจรหัสผ่านได้จาก title bar / RDP)
-SHOW_MT5_WINDOW = os.getenv("AVELQUA_MT5_SHOW_WINDOW", "true").lower() != "false"
+# Windows debug flag: true = เปิด MT5 โชว์หน้าจอบน VPS
+SHOW_MT5_UI = os.getenv(
+    "AVELQUA_MT5_SHOW_UI",
+    os.getenv("AVELQUA_MT5_SHOW_WINDOW", "true"),
+).lower() != "false"
+SHOW_MT5_WINDOW = SHOW_MT5_UI
 
 AGENT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -2119,9 +2123,13 @@ def _popen_hidden(
     startupinfo = None
     if os.name == "nt":
         visible = SHOW_MT5_WINDOW if show_window is None else bool(show_window)
+        startupinfo = subprocess.STARTUPINFO()
+        startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
         if visible:
+            startupinfo.wShowWindow = 1
             creationflags = subprocess.CREATE_NEW_CONSOLE
         else:
+            startupinfo.wShowWindow = 0
             creationflags = subprocess.CREATE_NO_WINDOW
         return subprocess.Popen(
             args,
