@@ -488,8 +488,10 @@ async function fetchRunningSyncItems(nodeId) {
     SELECT bi.id AS "instanceId",
            bi.assigned_port_no AS port,
            bi.mt5_account_id AS "accountId",
-           bi.user_id AS "userId"
+           bi.user_id AS "userId",
+           COALESCE(bc.bot_code, bc.bot_name, '') AS "botCode"
     FROM vps_system.bot_instances bi
+    LEFT JOIN vps_system.bot_catalog bc ON bc.id = bi.bot_id
     WHERE bi.vps_id = $1
       AND bi.status IN ('running', 'pending', 'restarting', 'starting')
       AND bi.assigned_port_no IS NOT NULL
@@ -509,6 +511,7 @@ async function fetchRunningSyncItems(nodeId) {
       portSlot: port,
       accountId: r.accountId,
       userId: r.userId,
+      botCode: r.botCode || null,
       vpsFolderPath: folder,
       folder_path: folder
     };

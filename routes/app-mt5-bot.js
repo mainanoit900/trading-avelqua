@@ -4111,7 +4111,8 @@ router.get('/mt5/live-dashboard', async (req, res) => {
           userId: inst.user_id,
           vpsFolderPath: folder,
           folder_path: folder,
-          mt5Login: inst.mt5_login || null
+          mt5Login: inst.mt5_login || null,
+          botCode: inst.bot_code || inst.bot_name || null
         };
         await queueAccountSnapshot(vpsId, syncPayload, {
           agentVersion: inst.vps_agent_version
