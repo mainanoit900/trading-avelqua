@@ -247,6 +247,9 @@ async function ensureAgentTables() {
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_login_message TEXT`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_balance NUMERIC`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_equity NUMERIC`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS connect_started_at TIMESTAMPTZ`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS login_verified BOOLEAN DEFAULT FALSE`).catch(() => {});
+  await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS connected_at TIMESTAMPTZ`).catch(() => {});
   await query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS updated_at TIMESTAMPTZ DEFAULT NOW()`).catch(() => {});
   await ensureMt5PreviewColumns();
 
@@ -1022,7 +1025,9 @@ router.post('/connect-result', async (req, res) => {
         });
         await query(`
           UPDATE vps_system.mt5_accounts
-          SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity)
+          SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity),
+              status='connected', login_verified=TRUE, connected_at=COALESCE(connected_at, NOW()),
+              updated_at=NOW(), last_error=NULL
           WHERE id=$1
         `, [accountId, req.body.balance || null, req.body.equity || null]).catch(() => {});
         if (portId) {
@@ -1044,6 +1049,47 @@ router.post('/connect-result', async (req, res) => {
       const bodyBal = Number(req.body.balance || 0);
       const bodyEq = Number(req.body.equity || 0);
       const hasBodyMoney = bodyBal > 0 || bodyEq > 0;
+
+      if (loginVerified && journalVerdict !== 'failed' && hasBodyMoney) {
+        await patchAccountMt5Preview(accountId, {
+          message: message || MT5_SUCCESS_MSG,
+          windowTitle,
+          previewB64
+        });
+        await promoteAccountConnected({
+          accountId,
+          portId,
+          mt5Login: loginForJournal || mt5Login,
+          message: message || MT5_SUCCESS_MSG,
+          balance: req.body.balance || null,
+          equity: req.body.equity || null
+        });
+        await query(`
+          UPDATE vps_system.mt5_accounts
+          SET status='connected',
+              login_verified=TRUE,
+              connected_at=COALESCE(connected_at, NOW()),
+              updated_at=NOW(),
+              last_error=NULL,
+              last_balance=COALESCE($2,last_balance),
+              last_equity=COALESCE($3,last_equity)
+          WHERE id=$1
+        `, [accountId, req.body.balance || null, req.body.equity || null]).catch(() => {});
+        if (portId) {
+          await query(`
+            UPDATE vps_system.vps_ports
+            SET status='running', process_id=$2, last_pid=$2, mt5_login=$3, current_mt5_login=$3,
+                locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
+            WHERE id=$1
+          `, [portId, pid, loginForJournal || mt5Login]).catch(() => {});
+        }
+        await query(`
+          INSERT INTO vps_system.mt5_login_history
+          (account_id, vps_id, port_id, port_no, mt5_login, status, message)
+          VALUES ($1,$2,$3,$4,$5,'connected',$6)
+        `, [accountId, node.id, portId || null, portNo || null, loginForJournal || mt5Login, message || MT5_SUCCESS_MSG]).catch(() => {});
+        return res.json({ ok: true, connected: true, fastPath: 'balance_callback' });
+      }
 
       if (
         windowVerified &&
@@ -1226,7 +1272,13 @@ router.post('/connect-result', async (req, res) => {
 
       await query(`
         UPDATE vps_system.mt5_accounts
-        SET last_balance=COALESCE($2,last_balance), last_equity=COALESCE($3,last_equity)
+        SET status='connected',
+            login_verified=TRUE,
+            connected_at=COALESCE(connected_at, NOW()),
+            updated_at=NOW(),
+            last_error=NULL,
+            last_balance=COALESCE($2,last_balance),
+            last_equity=COALESCE($3,last_equity)
         WHERE id=$1
       `, [accountId, req.body.balance || null, req.body.equity || null]).catch(() => {});
 

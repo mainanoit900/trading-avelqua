@@ -271,13 +271,15 @@ await ensureMt5AccountRuntimeColumns().catch(() => {});
 
 await query(`
   INSERT INTO vps_system.mt5_accounts
-  (user_id, mt5_login, mt5_password, broker, server_name, account_name, status, port_slot, vps_id, assigned_port_no, last_balance, last_equity, updated_at)
-      VALUES ($1,$2,$3,'MH Markets',$4,$5,'connected',$6,$7,$8,$9,$10,NOW())
+  (user_id, mt5_login, mt5_password, broker, server_name, account_name, status, port_slot, vps_id, assigned_port_no, login_verified, last_error, last_balance, last_equity, updated_at)
+      VALUES ($1,$2,$3,'MH Markets',$4,$5,'connected',$6,$7,$8,TRUE,NULL,$9,$10,NOW())
       ON CONFLICT (user_id, mt5_login, server_name) DO UPDATE SET
         mt5_password=EXCLUDED.mt5_password,
         port_slot=EXCLUDED.port_slot,
         vps_id=EXCLUDED.vps_id,
         assigned_port_no=EXCLUDED.assigned_port_no,
+        login_verified=TRUE,
+        last_error=NULL,
         last_balance=COALESCE(EXCLUDED.last_balance, vps_system.mt5_accounts.last_balance),
         last_equity=COALESCE(EXCLUDED.last_equity, vps_system.mt5_accounts.last_equity),
         status='connected',
@@ -294,6 +296,17 @@ await query(`
       positiveMoney(req.body.balance),
       positiveMoney(req.body.equity)
     ]);
+
+await query(`
+  UPDATE vps_system.mt5_accounts
+  SET status='connected',
+      login_verified=TRUE,
+      updated_at=NOW(),
+      last_error=NULL
+  WHERE user_id=$1
+    AND mt5_login=$2
+    AND server_name=$3
+`, [userId, mt5Login, serverName || 'MohicansMarkets-Live']).catch(() => {});
 
     return res.json({
   ok: true,

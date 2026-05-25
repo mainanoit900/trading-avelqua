@@ -104,9 +104,29 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
+JOURNAL_SUCCESS_PATTERNS = [
+    "authorized",
+    "connected to",
+    "real account",
+    "login successful",
+    "common synchronized",
+]
+JOURNAL_FAIL_PATTERNS = [
+    "authorization failed",
+    "failed (invalid account)",
+    "failed [invalid account]",
+    "invalid account",
+    "invalid password",
+    "wrong password",
+    "login failed",
+    "not authorized",
+    "account disabled",
+    "no connection",
+    "failed connect",
+]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v58-auto-attach"
+AGENT_BUILD_ID = "2026-05-25-agent-v59-login-verify"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2380,16 +2400,11 @@ def cleanup_mt5_after_login_fail(
 
 
 def _journal_failed_words() -> List[str]:
-    return [
-        "authorization failed",
-        "failed (invalid account)",
-        "failed [invalid account]",
-        "invalid account",
-        "invalid password",
-        "wrong password",
-        "login failed",
-        "not authorized",
-    ]
+    return list(JOURNAL_FAIL_PATTERNS)
+
+
+def _journal_success_words() -> List[str]:
+    return list(JOURNAL_SUCCESS_PATTERNS)
 
 
 def validate_journal_folder(port_dir: Path) -> bool:
@@ -2490,6 +2505,10 @@ def _journal_outcome_flex(
             return False, server
         if ok_loose.search(line) and "failed" not in low:
             return True, server
+    low_all = text.lower()
+    if login.lower() in low_all:
+        if any(w in low_all for w in _journal_success_words()) and not any(w in low_all for w in words):
+            return True, server
     return None, server
 
 
@@ -2555,17 +2574,83 @@ def _collect_journal_log_files(port_dir: Path, since_ts: float = 0.0) -> List[Pa
 
 
 def _read_log_tail(path: Path, max_bytes: int = 262144) -> str:
+    def _decode_log_bytes(raw: bytes) -> str:
+        if not raw:
+            return ""
+        sample = raw[: min(len(raw), 4096)]
+        utf16_like = (
+            raw.startswith((b"\xff\xfe", b"\xfe\xff"))
+            or sample.count(b"\x00") > max(4, len(sample) // 8)
+        )
+        encodings: List[str] = []
+        if utf16_like:
+            encodings.extend(["utf-16", "utf-16-le", "utf-16-be"])
+        encodings.extend(["utf-8", "cp1252", "latin-1"])
+        for enc in encodings:
+            try:
+                text = raw.decode(enc)
+                if text:
+                    return text
+            except Exception:
+                continue
+        return raw.decode("utf-8", errors="ignore")
+
     try:
         with open(path, "rb") as fh:
+            probe = fh.read(4096)
             fh.seek(0, 2)
             size = fh.tell()
+            utf16_like = (
+                probe.startswith((b"\xff\xfe", b"\xfe\xff"))
+                or probe.count(b"\x00") > max(4, len(probe) // 8)
+            )
+            if utf16_like:
+                fh.seek(0)
+                return _decode_log_bytes(fh.read())
             fh.seek(max(0, size - max_bytes))
-            return fh.read().decode("utf-8", errors="ignore")
+            return _decode_log_bytes(fh.read())
     except Exception:
         try:
-            return path.read_text(errors="ignore")
+            return path.read_text(encoding="utf-16", errors="ignore")
         except Exception:
-            return ""
+            try:
+                return path.read_text(errors="ignore")
+            except Exception:
+                return ""
+
+
+def read_latest_journal_text(port_dir: Path, since_ts: float = 0.0) -> str:
+    uniq = _collect_journal_log_files(port_dir, since_ts)
+    if not uniq:
+        return ""
+    newest = uniq[0]
+    return _read_log_tail(newest)
+
+
+def verify_mt5_login(
+    port_dir: Path,
+    login: str,
+    timeout_sec: int = 120,
+    since_ts: float = 0.0,
+    server: str = MT5_LIVE_SERVER,
+) -> Dict[str, Any]:
+    start = time.time()
+    login = str(login or "").strip()
+    failed_words = _journal_failed_words()
+    while time.time() - start < max(0, int(timeout_sec or 0)):
+        txt = read_latest_journal_text(port_dir, since_ts)
+        if txt:
+            outcome, _srv = _journal_outcome_flex(txt, login, server, failed_words)
+            low = txt.lower()
+            if outcome is False:
+                matched = next((bad for bad in failed_words if bad in low), JOURNAL_FAIL_MSG)
+                return {"ok": False, "message": matched, "journal": txt[-12000:]}
+            if outcome is True:
+                matched = next((good for good in _journal_success_words() if good in low), JOURNAL_OK_MSG)
+                return {"ok": True, "message": matched, "journal": txt[-12000:]}
+        time.sleep(3)
+    txt = read_latest_journal_text(port_dir, since_ts)
+    return {"ok": False, "message": "verify timeout", "journal": txt[-12000:] if txt else ""}
 
 
 def _journal_outcome_for_login(
@@ -2600,14 +2685,16 @@ def _journal_outcome_for_login(
         low = line.lower()
         if login.lower() not in low:
             continue
-        if server.lower() not in low:
-            continue
-        if fail_rx.search(line):
-            return False
         if any(w in low for w in failed_words):
+            return False
+        if fail_rx.search(line):
             return False
         if "authorization on" in low and "failed" in low:
             return False
+        if any(w in low for w in _journal_success_words()) and "failed" not in low:
+            return True
+        if server.lower() not in low:
+            continue
         if ok_rx.search(line):
             return True
         if re.search(
@@ -2637,6 +2724,13 @@ def _journal_has_broker_login_attempt(text: str, login: str) -> bool:
         "login failed",
         "invalid account",
         "not authorized",
+        "connected to",
+        "login successful",
+        "common synchronized",
+        "real account",
+        "account disabled",
+        "no connection",
+        "failed connect",
     )
     return any(m in low for m in markers)
 
@@ -3621,11 +3715,14 @@ def wait_mt5_login_hybrid(
         return False, JOURNAL_FAIL_MSG, j_chunk
 
     remain = max(8, int(deadline - time.time()))
-    extra_ok, extra_msg, extra_chunk = check_mt5_journal_login_result(
+    verify = verify_mt5_login(
         port_dir, login, timeout_sec=remain, since_ts=journal_since, server=server
     )
+    extra_ok = bool(verify.get("ok"))
+    extra_msg = str(verify.get("message") or "")
+    extra_chunk = str(verify.get("journal") or "")
     if extra_ok:
-        return True, extra_msg, extra_chunk
+        return True, extra_msg or JOURNAL_OK_MSG, extra_chunk
 
     journal_files = _collect_journal_log_files(port_dir, journal_since)
     probe_tail = _read_log_tail(journal_files[0]) if journal_files else ""
