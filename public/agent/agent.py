@@ -104,8 +104,9 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 EARLY_CONNECT_MSG = "เชื่อมต่อสำเร็จ — กำลังเปิดหน้าจอ MT5..."
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
+MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-24-agent-v57-finish-button"
+AGENT_BUILD_ID = "2026-05-25-agent-v58-auto-attach"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -692,6 +693,7 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
     port_dir = resolve_mt5_port_dir(port, payload)
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
+    remove_mt5_startup_run_config(port_dir)
     try:
         files_dir = port_dir / "MQL5" / "Files"
         files_dir.mkdir(parents=True, exist_ok=True)
@@ -887,6 +889,11 @@ def write_mt5_login_ini(
     password: str,
     server: str,
     allow_expert_trading: bool = False,
+    startup_expert: str = "",
+    startup_symbol: str = "",
+    startup_period: str = "",
+    startup_template: str = "",
+    startup_expert_parameters: str = "",
 ) -> Path:
     """เขียน startUp.ini — ค่าเริ่มต้นไม่เปิดเทรดอัตโนมัติ (รอ Run BOT จากเว็บ)"""
     config_file = mt5_startup_ini_path(port_dir)
@@ -905,6 +912,11 @@ def write_mt5_login_ini(
         pw_line = f'Password="{safe_password}"'
     else:
         pw_line = f"Password={safe_password}"
+    startup_expert = str(startup_expert or "").strip()
+    startup_symbol = str(startup_symbol or "").strip()
+    startup_period = str(startup_period or "").strip().upper()
+    startup_template = str(startup_template or "").strip()
+    startup_expert_parameters = str(startup_expert_parameters or "").strip()
     ini = f"""[Common]
 Login={login}
 {pw_line}
@@ -920,6 +932,17 @@ AllowLiveTrading={trade_flag}
 AllowDllImport=true
 Enabled={trade_flag}
 """
+    if startup_expert:
+        ini += "\n[StartUp]\n"
+        ini += f"Expert={startup_expert}\n"
+        if startup_symbol:
+            ini += f"Symbol={startup_symbol}\n"
+        if startup_period:
+            ini += f"Period={startup_period}\n"
+        if startup_template:
+            ini += f"Template={startup_template}\n"
+        if startup_expert_parameters:
+            ini += f"ExpertParameters={startup_expert_parameters}\n"
     config_file.write_text(ini, encoding="utf-8", errors="replace")
     for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
         if alias.resolve() != config_file.resolve():
@@ -930,9 +953,40 @@ Enabled={trade_flag}
     write_mt5_common_login_config(port_dir, login, password, server)
     log(
         f"WRITE MT5 INI {config_file} LOGIN={login} SERVER={server} "
-        f"PW_LEN={len(password)} EXPERT_TRADING={trade_flag}"
+        f"PW_LEN={len(password)} EXPERT_TRADING={trade_flag} STARTUP_EXPERT={startup_expert or '-'}"
     )
     return config_file
+
+
+def remove_mt5_startup_run_config(port_dir: Path) -> None:
+    """ล้าง [StartUp] ออกจาก startup.ini — กัน Login เฉย ๆ แล้ว EA auto-attach เอง"""
+    for cfg in (mt5_startup_ini_path(port_dir), port_dir / "startup.ini", port_dir / "startUp.ini"):
+        if not cfg.is_file():
+            continue
+        try:
+            lines = cfg.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            continue
+        out: List[str] = []
+        in_startup = False
+        removed = False
+        for line in lines:
+            low = line.strip().lower()
+            if low == "[startup]":
+                in_startup = True
+                removed = True
+                continue
+            if in_startup and low.startswith("[") and low != "[startup]":
+                in_startup = False
+            if in_startup:
+                continue
+            out.append(line)
+        if removed:
+            try:
+                cfg.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8", errors="replace")
+                log(f"REMOVE STARTUP AUTO-RUN {cfg}")
+            except Exception as e:
+                log(f"REMOVE STARTUP AUTO-RUN ERROR {cfg}: {e}")
 
 
 def metaquotes_common_files_dir() -> Optional[Path]:
@@ -4560,6 +4614,51 @@ def _verify_ea_in_experts_dir(experts_dir: Path, bot_code: str) -> Dict[str, Any
     }
 
 
+def _pick_launchable_ea_file(ea_info: Dict[str, Any]) -> Optional[Path]:
+    found = ea_info.get("found") or []
+    for raw in found:
+        try:
+            p = Path(str(raw))
+            if p.suffix.lower() == ".ex5" and p.exists():
+                return p
+        except Exception:
+            continue
+    for raw in found:
+        try:
+            p = Path(str(raw))
+            if p.suffix.lower() == ".mq5":
+                ex5 = p.with_suffix(".ex5")
+                if ex5.exists():
+                    return ex5
+        except Exception:
+            continue
+    return None
+
+
+def _mt5_startup_expert_name(port_dir: Path, expert_file: Optional[Path]) -> str:
+    if not expert_file:
+        return ""
+    try:
+        experts_root = (port_dir / "MQL5" / "Experts").resolve()
+        rel = expert_file.resolve().relative_to(experts_root)
+        return str(rel).replace("/", "\\")
+    except Exception:
+        return expert_file.name
+
+
+def _ea_live_status_for_payload(port_dir: Path, payload: Optional[Dict[str, Any]], running: bool) -> str:
+    if not running:
+        return "stopped"
+    bot_code = str(payload_get(payload or {}, "botCode", "eaName", "bot_code") or "").strip()
+    rel = str(
+        payload_get(payload or {}, "expertsRelative", "experts_relative", default=r"MQL5\Experts\Trading Bot")
+        or r"MQL5\Experts\Trading Bot"
+    )
+    experts_dir = port_dir / Path(rel.replace("\\", os.sep))
+    ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
+    return "ready" if _pick_launchable_ea_file(ea_info) else "attach_required"
+
+
 def _is_modern_run_bot_payload(payload: Dict[str, Any]) -> bool:
     """Run BOT ผ่าน PORT เดิม (มี instanceId) — ไม่ใช่ start_mt5_bot แบบ login ใหม่"""
     if payload_get(payload, "instanceId", "instance_id"):
@@ -4570,8 +4669,8 @@ def _is_modern_run_bot_payload(payload: Dict[str, Any]) -> bool:
 
 def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     """
-    เปิด BOT บน PORT เดิม — ไม่ kill terminal64.exe
-    ถ้า MT5 เปิดอยู่แล้ว: เปิด gate/Experts + preset เท่านั้น (ไม่ relaunch)
+    เปิด BOT บน PORT เดิม
+    ถ้ามี EA .ex5 พร้อม จะเขียน [StartUp] แล้ว relaunch MT5 เพื่อ auto-attach EA + preset
     """
     port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
     if not port:
@@ -4589,7 +4688,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     experts_dir = port_dir / Path(rel.replace("\\", os.sep))
     ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
-    ea_missing = not ea_info["ok"]
+    launch_ea = _pick_launchable_ea_file(ea_info)
+    ea_missing = launch_ea is None
     if ea_missing:
         log(
             f"RUN BOT EA not in Experts (continue — attach manually): "
@@ -4603,6 +4703,11 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
     server = str(payload_get(payload, "serverName", "server") or LOCKED_MT5_SERVER).strip() or LOCKED_MT5_SERVER
+    symbol = str(payload_get(payload, "symbol", default="XAUUSD") or "XAUUSD").strip() or "XAUUSD"
+    period = str(payload_get(payload, "period", "chartPeriod", default=MT5_RUNBOT_PERIOD) or MT5_RUNBOT_PERIOD).strip().upper()
+    startup_expert = _mt5_startup_expert_name(port_dir, launch_ea)
+    startup_set = str(set_info.get("fileName") or "").strip() if set_info.get("ok") else ""
+    auto_attach = bool(startup_expert)
 
     procs = mt5_port_processes(port, payload)
     mt5_open = bool(procs) or mt5_running_for_port_dir(port_dir)
@@ -4633,24 +4738,45 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as e:
         log(f"avelqua_run.json bot_running: {e}")
 
-    if mt5_open:
+    if login and password:
+        try:
+            write_mt5_login_ini(
+                port_dir,
+                login,
+                password,
+                server,
+                allow_expert_trading=True,
+                startup_expert=startup_expert if auto_attach else "",
+                startup_symbol=symbol if auto_attach else "",
+                startup_period=period if auto_attach else "",
+                startup_expert_parameters=startup_set if auto_attach else "",
+            )
+        except Exception as e:
+            log(f"RUN BOT write startup ini skipped: {e}")
+
+    if mt5_open and auto_attach:
+        log(f"RUN BOT RESTART PORT={port} PID={proc_pid or '?'} — auto attach EA on launch")
+        stop_mt5_port_only(port, payload)
+        _wait_mt5_port_stopped(port, payload, port_dir, timeout_sec=12.0)
+        mt5_open = False
+        proc_pid = None
+    elif mt5_open:
         hot_run = True
         log(f"RUN BOT HOT PORT={port} PID={proc_pid or '?'} — MT5 stays open, trading gate ON")
-    else:
-        if login and password:
-            try:
-                write_mt5_login_ini(port_dir, login, password, server, allow_expert_trading=True)
-            except Exception as e:
-                log(f"RUN BOT enable expert trading in ini skipped: {e}")
+
+    if not mt5_open:
         cfg = mt5_startup_ini_path(port_dir)
         if not cfg.exists():
             raise RuntimeError("MT5 startup.ini missing — connect MT5 from web first")
         args = [str(terminal), "/portable", f"/config:{cfg}"]
-        log(f"RUN BOT launch MT5 PORT={port} cwd={port_dir} config={cfg}")
+        log(
+            f"RUN BOT launch MT5 PORT={port} cwd={port_dir} config={cfg} "
+            f"auto_attach={'yes' if auto_attach else 'no'} expert={startup_expert or '-'} set={startup_set or '-'}"
+        )
         proc = _popen_hidden(args, cwd=str(port_dir))
         launched = True
         proc_pid = proc.pid if proc else None
-        time.sleep(3)
+        time.sleep(4)
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -4689,6 +4815,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             if ea_missing
             else "BOT enabled — MT5 stayed open"
         )
+    elif auto_attach:
+        msg = f"BOT auto-attached on {symbol} ({period}) and preset loaded"
     else:
         msg = (
             "BOT ready — attach EA on XAUUSD and load preset"
@@ -4810,15 +4938,17 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         if not port:
             return
         instance_id = payload_get(payload, "instanceId")
+        port_dir = resolve_mt5_port_dir(port, payload)
         st = mt5_port_status_one(port, payload)
         snap = account_snapshot(port, payload)
         if st["running"]:
             enable_mt5_algo_trading_uia(port, payload)
+        ea_status = _ea_live_status_for_payload(port_dir, payload, bool(st["running"]))
         send_mt5_live_status(
             instance_id,
             port,
             "running" if st["running"] else "stopped",
-            st["status"],
+            ea_status,
             snap.get("balance"),
             snap.get("equity"),
             "",
