@@ -126,7 +126,7 @@ JOURNAL_FAIL_PATTERNS = [
 ]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v65-login-layout-stable"
+AGENT_BUILD_ID = "2026-05-25-agent-v66-login-restore-manual-layout"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -719,6 +719,10 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
     port_dir = resolve_mt5_port_dir(port, payload)
     root = str(port_dir).rstrip("\\/").lower()
     stopped: List[int] = []
+    try:
+        snapshot_current_chart_profile(port_dir)
+    except Exception as e:
+        log(f"SAVE CHART PROFILE BEFORE STOP ERROR PORT={port}: {e}")
     for p in list(iter_terminal_processes()):
         try:
             exe = (p.info.get("exe") or "").lower()
@@ -1381,6 +1385,72 @@ def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
             log(f"QUARANTINE CHART SKIP {src}: {e}")
 
 
+def snapshot_current_chart_profile(port_dir: Path) -> bool:
+    """เก็บ workspace ล่าสุดไว้ เพื่อให้เปิดรอบถัดไปใกล้เคียงเปิดมือ."""
+    prof = port_dir / "MQL5" / "Profiles"
+    if not prof.exists():
+        return False
+    saved_root = prof / "_avelqua_saved_layout"
+    copied = False
+    for rel in ("Charts", "charts", "LastProfile.ini", "lastprofile.ini"):
+        src = prof / rel
+        if not src.exists():
+            continue
+        dst = saved_root / rel
+        try:
+            saved_root.mkdir(parents=True, exist_ok=True)
+            if dst.exists():
+                if dst.is_dir():
+                    shutil.rmtree(dst, ignore_errors=True)
+                else:
+                    dst.unlink()
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            copied = True
+            log(f"SAVE CHART PROFILE {src} -> {dst}")
+        except Exception as e:
+            log(f"SAVE CHART PROFILE SKIP {src}: {e}")
+    return copied
+
+
+def restore_saved_chart_profile(port_dir: Path) -> bool:
+    """คืน workspace ล่าสุดที่เคยจัดไว้เองก่อน fallback ไป quarantine."""
+    prof = port_dir / "MQL5" / "Profiles"
+    saved_root = prof / "_avelqua_saved_layout"
+    if not prof.exists() or not saved_root.exists():
+        return False
+    targets = ("Charts", "charts", "LastProfile.ini", "lastprofile.ini")
+    current_has_chart = any((prof / rel).exists() for rel in targets)
+    restored = False
+    for rel in targets:
+        src = saved_root / rel
+        dst = prof / rel
+        if not src.exists():
+            continue
+        if current_has_chart and dst.exists():
+            continue
+        try:
+            if dst.exists():
+                if dst.is_dir():
+                    shutil.rmtree(dst, ignore_errors=True)
+                else:
+                    dst.unlink()
+            if src.is_dir():
+                shutil.copytree(src, dst)
+            else:
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src, dst)
+            restored = True
+            current_has_chart = True
+            log(f"RESTORE SAVED CHART PROFILE {src} -> {dst}")
+        except Exception as e:
+            log(f"RESTORE SAVED CHART PROFILE SKIP {src}: {e}")
+    return restored
+
+
 def restore_latest_quarantined_chart_profile(port_dir: Path) -> bool:
     """คืน chart profile ล่าสุดกลับมาเมื่อ login-only เปิด MT5 แล้วจอเทา."""
     prof = port_dir / "MQL5" / "Profiles"
@@ -1448,7 +1518,9 @@ def enforce_login_no_trading(
     sync_avelqua_data_exports(port_dir, force=True)
     try:
         if KEEP_MT5_CHARTS_ON_LOGIN:
-            restore_latest_quarantined_chart_profile(port_dir)
+            restored = restore_saved_chart_profile(port_dir)
+            if not restored:
+                restore_latest_quarantined_chart_profile(port_dir)
         else:
             quarantine_chart_profiles_with_ea(port_dir)
     except Exception as e:
