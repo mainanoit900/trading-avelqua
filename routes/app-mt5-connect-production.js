@@ -875,6 +875,31 @@ async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   const msg = String(account?.last_login_message || account?.last_error || '');
   if (messageIndicatesLoginFailed(msg, login)) return false;
 
+  const snapshotVerified =
+    account?.login_verified === true ||
+    positiveMoney(account?.last_balance) > 0 ||
+    positiveMoney(account?.last_equity) > 0;
+  if (snapshotVerified) {
+    if (portNo && (await isPortMt5Running(vpsId, portNo).catch(() => false))) {
+      const run = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
+      if (run.ok) return true;
+    }
+    const cmdStSnap = String(cmdMeta?.commandStatus || '').toLowerCase();
+    const cmdResSnap = cmdMeta?.commandResult && typeof cmdMeta.commandResult === 'object'
+      ? cmdMeta.commandResult
+      : {};
+    if (
+      ['success', 'done'].includes(cmdStSnap) &&
+      (
+        String(cmdResSnap.status || '').toLowerCase() === 'connected' ||
+        cmdResSnap.loginOnly === true ||
+        cmdResSnap.keepMt5Open === true
+      )
+    ) {
+      return true;
+    }
+  }
+
   if (st === 'connected') {
     if (portNo && (await isPortMt5Running(vpsId, portNo))) {
       const run = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
@@ -1577,6 +1602,15 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     if (status === 'failed' && hasVerifiedMt5Snapshot(a)) {
+      const recoverCmd = await findRecentTerminalLoginCommand(a.id, a.vps_id).catch(() => null);
+      const recoverRes = recoverCmd?.result && typeof recoverCmd.result === 'object' ? recoverCmd.result : {};
+      const recoverCmdSuccess =
+        ['success', 'done'].includes(String(recoverCmd?.status || '').toLowerCase()) &&
+        (
+          String(recoverRes.status || '').toLowerCase() === 'connected' ||
+          recoverRes.loginOnly === true ||
+          recoverRes.keepMt5Open === true
+        );
       const runningVerified =
         a.vps_id && (a.assigned_port_no || a.port_slot) && a.mt5_login
           ? await verifyPortRunningLogin(
@@ -1585,18 +1619,18 @@ async function handleMt5ConnectStatusProduction(req, res) {
               String(a.mt5_login || '').trim()
             ).catch(() => ({ ok: false }))
           : { ok: false };
-      if (runningVerified.ok) {
+      if (runningVerified.ok || recoverCmdSuccess) {
         await promoteAccountConnected({
           accountId: a.id,
           portId: a.port_id,
           mt5Login: a.mt5_login,
-          message: MT5_SUCCESS_MSG,
+          message: recoverRes.message || MT5_SUCCESS_MSG,
           balance: a.last_balance,
           equity: a.last_equity
         }).catch(() => {});
         a.status = 'connected';
         a.last_error = null;
-        a.last_login_message = MT5_SUCCESS_MSG;
+        a.last_login_message = recoverRes.message || MT5_SUCCESS_MSG;
         status = 'connected';
       }
     }
@@ -2106,6 +2140,15 @@ async function handleMt5AccountStatus(req, res) {
     const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
     let statusNow = String(acc.status || '').toLowerCase();
     if (statusNow === 'failed' && hasVerifiedMt5Snapshot(acc)) {
+      const recoverCmd = await findRecentTerminalLoginCommand(acc.id, acc.vps_id).catch(() => null);
+      const recoverRes = recoverCmd?.result && typeof recoverCmd.result === 'object' ? recoverCmd.result : {};
+      const recoverCmdSuccess =
+        ['success', 'done'].includes(String(recoverCmd?.status || '').toLowerCase()) &&
+        (
+          String(recoverRes.status || '').toLowerCase() === 'connected' ||
+          recoverRes.loginOnly === true ||
+          recoverRes.keepMt5Open === true
+        );
       const runningVerified =
         acc.vps_id && (acc.assigned_port_no || acc.port_slot) && acc.mt5_login
           ? await verifyPortRunningLogin(
@@ -2114,11 +2157,19 @@ async function handleMt5AccountStatus(req, res) {
               String(acc.mt5_login || '').trim()
             ).catch(() => ({ ok: false }))
           : { ok: false };
-      if (runningVerified.ok) {
+      if (runningVerified.ok || recoverCmdSuccess) {
+        await promoteAccountConnected({
+          accountId: acc.id,
+          portId: acc.port_id,
+          mt5Login: acc.mt5_login,
+          message: recoverRes.message || MT5_SUCCESS_MSG,
+          balance: acc.last_balance,
+          equity: acc.last_equity
+        }).catch(() => {});
         statusNow = 'connected';
         acc.status = 'connected';
         acc.last_error = null;
-        acc.last_login_message = MT5_SUCCESS_MSG;
+        acc.last_login_message = recoverRes.message || MT5_SUCCESS_MSG;
       }
     }
     let message = acc.last_login_message || acc.last_error || '';
