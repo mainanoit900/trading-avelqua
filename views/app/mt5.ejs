@@ -2709,9 +2709,6 @@ document.addEventListener('DOMContentLoaded', function () {
             return String(a.port_slot) === String(target);
           });
           if (acc && pollId && String(acc.id) === String(pollId) && mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS) {
-            sessionStorage.removeItem('mt5ConnectInFlight');
-            sessionStorage.removeItem('mt5PollAccountId');
-            if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
             if (typeof window.finishMt5ConnectSuccess === 'function') {
               window.finishMt5ConnectSuccess('PORT ' + target + ' เชื่อมต่ออยู่แล้ว', acc);
             }

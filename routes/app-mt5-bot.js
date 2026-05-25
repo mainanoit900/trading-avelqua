@@ -1906,9 +1906,13 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     const connectedAccounts = accountsForRunForm(accounts, []).map((a) => ({
       id: Number(a.id),
       port_slot: Number(a.port_slot),
+      status: a.status,
       mt5_login: a.mt5_login,
       last_balance: a.last_balance,
-      last_equity: a.last_equity
+      last_equity: a.last_equity,
+      connected_at: a.connected_at || null,
+      connect_started_at: a.connect_started_at || null,
+      updated_at: a.updated_at || null
     }));
 
     const bots = await loadProductionBots();
