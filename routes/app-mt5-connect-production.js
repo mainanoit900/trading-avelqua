@@ -50,7 +50,12 @@ const {
   reserveAdminPortForLogin,
   buildMt5LoginPayload
 } = require('../lib/adminVpsPortPicker');
-const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
+const {
+  setAdminAllocationStatus,
+  parsePortNumber,
+  releaseUserPortCompletely,
+  resolveSystemVpsId
+} = require('../lib/adminVpsBridge');
 const {
   clearOtherAccountsOnPortSlot,
   listAccountsToHandoffOnPortSlot,
@@ -579,6 +584,30 @@ async function findRetryPortForLogin(userId, mt5Login, serverName) {
     folder_path: row.folder_path,
     account_id: row.account_id
   };
+}
+
+async function releasePreviousLoginBindingIfMoved(existingRow, reservedPort, allocPortNo) {
+  if (!existingRow?.id || !reservedPort) return;
+  const oldVpsId = num(existingRow.vps_id);
+  const oldPortId = num(existingRow.port_id);
+  const oldPortNo = num(
+    existingRow.assigned_port_no || existingRow.windows_port_no || existingRow.port_no || existingRow.port_slot
+  );
+  const nextVpsId = num(reservedPort.vps_id);
+  const nextPortId = num(reservedPort.port_id);
+  const nextPortNo = num(allocPortNo || reservedPort.port_no || parsePortNumber(reservedPort));
+  if (!oldVpsId || !oldPortNo) return;
+  if (oldVpsId === nextVpsId && oldPortId === nextPortId && oldPortNo === nextPortNo) return;
+
+  const { adminNodeId } = await resolveSystemVpsId(oldVpsId).catch(() => ({ adminNodeId: 0 }));
+  await releaseUserPortCompletely({
+    systemVpsId: oldVpsId,
+    adminNodeId: adminNodeId || oldVpsId,
+    portNo: oldPortNo,
+    folderPath: existingRow.folder_path || '',
+    portId: oldPortId || null,
+    reason: 'rebind_login_new_port'
+  }).catch(() => {});
 }
 
 /** ปล่อยแถว mt5_accounts ที่ค้างบน vps+port เดียวกัน (กัน uq_mt5_running_vps_port ตอน INSERT) */
@@ -1193,23 +1222,16 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(mt5LoginInUseMessage(duplicate, uiPreferredSlot));
     }
 
-    const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
+    let retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
+    let existingLoginRow = null;
     let portSlot = 0;
+
+    if (retryPort?.port_slot && Number(retryPort.port_slot) !== uiPreferredSlot) {
+      retryPort = null;
+    }
 
     if (retryPort) {
       portSlot = uiPreferredSlot;
-      if (retryPort.port_slot && Number(retryPort.port_slot) !== uiPreferredSlot) {
-        throw new Error(
-          mt5LoginOnOtherPortMessage(
-            {
-              port_slot: retryPort.port_slot,
-              status: 'connected',
-              mt5_login: mt5Login
-            },
-            uiPreferredSlot
-          )
-        );
-      }
       reservedPort = {
         port_id: retryPort.port_id,
         vps_id: retryPort.vps_id,
@@ -1220,7 +1242,8 @@ async function handleMt5ConnectProduction(req, res) {
     } else {
       const existRes = await query(
         `
-        SELECT a.id, a.port_slot, a.port_id, a.vps_id, a.assigned_port_no, p.folder_path, p.port_no
+        SELECT a.id, a.port_slot, a.port_id, a.vps_id, a.assigned_port_no, a.windows_port_no,
+               a.status, a.updated_at, p.folder_path, p.port_no
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
         WHERE a.user_id = $1
@@ -1234,6 +1257,7 @@ async function handleMt5ConnectProduction(req, res) {
       ).catch(() => ({ rows: [] }));
 
       const exist = existRes.rows?.[0];
+      existingLoginRow = exist || null;
       portSlot = uiPreferredSlot;
 
       if (!portSlot || portSlot > totalPorts) {
@@ -1241,19 +1265,6 @@ async function handleMt5ConnectProduction(req, res) {
           portSlot > totalPorts
             ? `PORT ${portSlot} เกินแพ็กเกจ (${totalPorts} ช่อง)`
             : `PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`
-        );
-      }
-
-      if (exist?.id && exist.port_slot && Number(exist.port_slot) !== portSlot) {
-        throw new Error(
-          mt5LoginOnOtherPortMessage(
-            {
-              port_slot: exist.port_slot,
-              status: exist.status || 'connected',
-              mt5_login: mt5Login
-            },
-            portSlot
-          )
         );
       }
 
@@ -1293,6 +1304,12 @@ async function handleMt5ConnectProduction(req, res) {
     const allocPortNo = num(
       reservedPort.port_number || parsePortNumber(reservedPort) || portSlot
     );
+
+    await releasePreviousLoginBindingIfMoved(
+      existingLoginRow,
+      reservedPort,
+      allocPortNo
+    ).catch(() => {});
 
     await handoffPackagePortSlotForNewLogin(userId, portSlot, mt5Login, serverName);
 
