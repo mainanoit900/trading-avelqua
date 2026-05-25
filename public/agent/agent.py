@@ -126,7 +126,7 @@ JOURNAL_FAIL_PATTERNS = [
 ]
 MT5_RUNBOT_PERIOD = (os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1").strip() or "H1").upper()
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-25-agent-v59-login-verify"
+AGENT_BUILD_ID = "2026-05-25-agent-v60-login-visible"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -557,6 +557,41 @@ def payload_get(payload: Optional[Dict[str, Any]], *names: str, default: str = "
         if v is not None and str(v).strip() != "":
             return str(v)
     return default
+
+
+def _parse_bool_flag(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    txt = str(value or "").strip().lower()
+    if not txt:
+        return None
+    if txt in ("1", "true", "yes", "y", "on"):
+        return True
+    if txt in ("0", "false", "no", "n", "off"):
+        return False
+    return None
+
+
+def mt5_window_should_be_visible(payload: Optional[Dict[str, Any]] = None) -> bool:
+    payload = payload or {}
+    explicit = _parse_bool_flag(
+        payload_get(
+            payload,
+            "showMt5Window",
+            "showMT5Window",
+            "showWindow",
+            "visibleWindow",
+            default="",
+        )
+    )
+    if explicit is not None:
+        return explicit
+    action = payload_get(payload, "action", "commandType", default="").strip().lower()
+    if action in ("login_mt5", "connect_mt5"):
+        return True
+    if action in ("run_bot", "run_mt5_bot", "run_mt5", "restart_mt5_bot", "restart_mt5", "restart_ea"):
+        return False
+    return SHOW_MT5_WINDOW
 
 
 def _count_mt5_terminals() -> int:
@@ -2076,12 +2111,15 @@ def schedule_account_metrics_retry(payload: Dict[str, Any], port: Any, delays: T
 
 
 
-def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Popen:
-    """Start MT5 (terminal64). On Windows: AVELQUA_MT5_SHOW_WINDOW=true → new console (visible); else no extra console."""
+def _popen_hidden(
+    args: List[str], cwd: Optional[str] = None, show_window: Optional[bool] = None
+) -> subprocess.Popen:
+    """Start MT5 (terminal64). On Windows choose visible/hidden launch per command payload."""
     creationflags = 0
     startupinfo = None
     if os.name == "nt":
-        if SHOW_MT5_WINDOW:
+        visible = SHOW_MT5_WINDOW if show_window is None else bool(show_window)
+        if visible:
             creationflags = subprocess.CREATE_NEW_CONSOLE
         else:
             creationflags = subprocess.CREATE_NO_WINDOW
@@ -2100,6 +2138,47 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Pope
         stdin=subprocess.DEVNULL,
         close_fds=True,
     )
+
+
+def focus_mt5_window(
+    port: Any, payload: Optional[Dict[str, Any]] = None, timeout_sec: int = 10
+) -> bool:
+    """Try to surface the MT5 main window on the VPS desktop for manual login debugging."""
+    if os.name != "nt":
+        return False
+    port_dir = resolve_mt5_port_dir(port, payload)
+    dir_esc = str(port_dir).replace("'", "''").lower()
+    wait_sec = max(2, min(int(timeout_sec or 10), 30))
+    ps = f"""
+$portDir = '{dir_esc}'
+$deadline = (Get-Date).AddSeconds({wait_sec})
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class W32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
+}}
+"@
+while ((Get-Date) -lt $deadline) {{
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $_.MainWindowHandle -ne 0 -and $_.Path -and $_.Path.ToLower().StartsWith($portDir)
+  }} | Select-Object -First 1
+  if ($p) {{
+    [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
+    [W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
+    Write-Output 'VISIBLE'
+    exit 0
+  }}
+  Start-Sleep -Milliseconds 400
+}}
+exit 0
+"""
+    out = _run_powershell(ps, timeout=wait_sec + 2)
+    ok = "VISIBLE" in str(out or "")
+    if ok:
+        log(f"MT5 WINDOW FOCUS PORT={payload_get(payload, 'port', 'portNumber', 'portSlot', default=str(port))}")
+    return ok
 
 
 def _run_powershell(command: str, timeout: int = 8) -> str:
@@ -3344,8 +3423,11 @@ def _relaunch_mt5_for_login(
     cfg = mt5_startup_ini_path(port_dir)
     args = [str(terminal), "/portable", f"/config:{cfg}"]
     log(f"RELAUNCH MT5 reason={reason} login={login} args={args}")
-    proc = _popen_hidden(args, cwd=str(port_dir))
+    visible = mt5_window_should_be_visible(payload)
+    proc = _popen_hidden(args, cwd=str(port_dir), show_window=visible)
     time.sleep(2.5)
+    if visible:
+        focus_mt5_window(port, payload, timeout_sec=8)
     automate_mt5_wizard_existing_account_login(login, password, server, port_dir)
     return proc.pid if proc else None
 
@@ -4199,7 +4281,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} server={server} args={args} cwd={port_dir}")
-        proc = _popen_hidden(args, cwd=str(port_dir))
+        visible = mt5_window_should_be_visible(payload)
+        proc = _popen_hidden(args, cwd=str(port_dir), show_window=visible)
+        if visible:
+            focus_mt5_window(port, payload, timeout_sec=10)
         return proc
 
     other_mt5 = _count_mt5_terminals()
@@ -4214,7 +4299,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     send_connect_result(
         payload,
         "starting",
-        f"กำลังเปิด MT5 บน {server} — รอ Journal ประมาณ 30–90 วินาที",
+        f"กำลังเปิด MT5 บน {server} (โชว์หน้าจอที่ Windows VPS) — รอ Journal ประมาณ 30–90 วินาที",
         port,
         process_id=proc_pid,
     )
@@ -4870,7 +4955,11 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             f"RUN BOT launch MT5 PORT={port} cwd={port_dir} config={cfg} "
             f"auto_attach={'yes' if auto_attach else 'no'} expert={startup_expert or '-'} set={startup_set or '-'}"
         )
-        proc = _popen_hidden(args, cwd=str(port_dir))
+        proc = _popen_hidden(
+            args,
+            cwd=str(port_dir),
+            show_window=mt5_window_should_be_visible(payload),
+        )
         launched = True
         proc_pid = proc.pid if proc else None
         time.sleep(4)
