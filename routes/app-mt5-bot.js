@@ -78,8 +78,7 @@ const {
 const { folderPathForPortNo, vpsPortNameForNo } = require('../lib/mt5AccountPort');
 const {
   ensureRunBotAgent,
-  resolveLiveDashboardAgentNotice,
-  ensureAgentMaintenance,
+  ensureAgentUpToDate,
   hasRunBotMarker,
   hasAgentCapableMarker,
   REQUIRED_AGENT_VERSION,
@@ -90,6 +89,67 @@ const { applyMt5LiveStatus, recordEquityLog } = require('../lib/mt5LiveStatus');
 const { generateIntelReport } = require('../services/intelAi');
 
 const router = express.Router();
+
+async function ensureAgentMaintenance(vpsId) {
+  const id = Number(vpsId || 0);
+  if (!id) {
+    return { state: 'unknown', notice: '', maintenancePending: false, queueDeploy: false, recovering: false };
+  }
+
+  const upgradeState = await getAgentUpgradeState(id).catch(() => 'unknown');
+  const deployState = await ensureAgentUpToDate(id).catch(() => ({ action: 'skip', reason: 'ERROR' }));
+  const deployAction = String(deployState?.action || '').toLowerCase();
+
+  let state = upgradeState;
+  if (deployAction === 'queued' || deployAction === 'wait') {
+    state = 'deploying';
+  }
+
+  const maintenancePending =
+    state === 'deploying' ||
+    upgradeState === 'needs_restart' ||
+    deployAction === 'cooldown' ||
+    deployAction === 'wait';
+
+  return {
+    state,
+    notice: state === 'ready' ? '' : messageForUpgradeState(state),
+    maintenancePending,
+    queueDeploy: deployAction === 'queued',
+    recovering: deployAction === 'wait'
+  };
+}
+
+async function resolveLiveDashboardAgentNotice(instances) {
+  const vpsIds = [
+    ...new Set(
+      (instances || [])
+        .filter((i) =>
+          ['running', 'pending', 'restarting', 'starting'].includes(String(i.status || '').toLowerCase())
+        )
+        .map((i) => Number(i.vps_id || 0))
+        .filter((id) => id > 0)
+    )
+  ];
+
+  let notice = '';
+  let queueDeploy = false;
+  let maintenancePending = false;
+
+  for (const vpsId of vpsIds.slice(0, 3)) {
+    const maint = await ensureAgentMaintenance(vpsId).catch(() => ({
+      state: 'unknown',
+      notice: '',
+      maintenancePending: false,
+      queueDeploy: false
+    }));
+    if (!notice && maint.notice) notice = maint.notice;
+    queueDeploy = queueDeploy || maint.queueDeploy === true;
+    maintenancePending = maintenancePending || maint.maintenancePending === true;
+  }
+
+  return { notice, queueDeploy, maintenancePending };
+}
 
 async function cancelStaleRunBotCommands(vpsId, portId, instanceId) {
   const iid = instanceId != null && String(instanceId) !== '' ? String(instanceId) : null;
