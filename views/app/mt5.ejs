@@ -2819,6 +2819,15 @@ document.addEventListener('DOMContentLoaded', function () {
         if (window.mt5Checker) clearInterval(window.mt5Checker);
         window.mt5Checker = null;
         const slotNum = data.account.port_slot || slot;
+        const activeSlot =
+          slot ||
+          (function () {
+            try {
+              return localStorage.getItem('mt5ActivePortSlot') || '';
+            } catch (_) {
+              return '';
+            }
+          })();
         if (slotNum) {
           try { localStorage.setItem('mt5ActivePortSlot', String(slotNum)); } catch (_) {}
           if (!urlParams.get('port_slot') && window.location.pathname.indexOf('/app/mt5') >= 0) {
@@ -2827,6 +2836,17 @@ document.addEventListener('DOMContentLoaded', function () {
           }
         }
         if (typeof window.refreshMt5PortCards === 'function') await window.refreshMt5PortCards();
+        if (
+          mt5ShouldForceSuccessModal(data.account || null, {}) &&
+          (!activeSlot || !slotNum || String(activeSlot) === String(slotNum)) &&
+          typeof window.finishMt5ConnectSuccess === 'function'
+        ) {
+          window.finishMt5ConnectSuccess(
+            data.message || data.account.last_login_message || 'เชื่อมต่อสำเร็จ',
+            data.account || null,
+            { force: true }
+          );
+        }
       } else if (['connecting', 'starting', 'checking'].includes(st) && !window.mt5Checker) {
         if (typeof window.setMt5PollAccountId === 'function') {
           window.setMt5PollAccountId(data.account.id);
