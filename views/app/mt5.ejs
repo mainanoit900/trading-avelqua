@@ -500,6 +500,27 @@ document.addEventListener('DOMContentLoaded', function () {
     return mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS && stepReady;
   }
 
+  function mt5IsTransientCancelledLogin(data) {
+    if (!data || String(data.commandStatus || '').toLowerCase() !== 'cancelled') return false;
+    if (data.loginRequeued === true) return true;
+    const st = String((data.account && data.account.status) || data.status || '').toLowerCase();
+    const details = String(
+      [
+        data.commandMessage,
+        data.message,
+        data.account && data.account.last_error,
+        data.account && data.account.last_login_message
+      ]
+        .filter(Boolean)
+        .join(' ')
+    ).trim();
+    if (/user\s+ผิด|ไม่ถูกต้อง|authorization failed|invalid password|invalid account/i.test(details)) {
+      return false;
+    }
+    if (!details) return true;
+    return ['connecting', 'checking', 'starting'].includes(st) && mt5ConnectUiElapsedMs() < 15000;
+  }
+
   window.mt5PrepareConnectSubmit = async function () {
     if (window.__mt5ConnectSubmitBusy) {
       return false;
@@ -2386,9 +2407,21 @@ document.addEventListener('DOMContentLoaded', function () {
       if (cmdStFail === 'cancelled') {
         if (
           inFlight &&
-          data.loginRequeued === true &&
+          mt5IsTransientCancelledLogin(data) &&
           (data.pending || data.checking || ['connecting', 'checking', 'starting'].includes(stWait))
         ) {
+          if (typeof window.mt5UpdateConnectProgress === 'function') {
+            window.mt5UpdateConnectProgress(
+              Object.assign({}, data, {
+                status: ['connecting', 'checking', 'starting'].includes(stWait) ? stWait : 'connecting',
+                account: Object.assign({}, data.account || {}, {
+                  status: ['connecting', 'checking', 'starting'].includes(stWait) ? stWait : 'connecting'
+                }),
+                connectStep: data.connectStep || 'กำลังส่งคำสั่ง login_mt5 ใหม่ — รอ Agent',
+                commandStatus: data.loginRequeued === true ? 'pending' : 'cancelled'
+              })
+            );
+          }
           return;
         }
       }
@@ -2400,6 +2433,9 @@ document.addEventListener('DOMContentLoaded', function () {
         return;
       }
       if (cmdStFail === 'cancelled') {
+        if (inFlight && mt5IsTransientCancelledLogin(data)) {
+          return;
+        }
         await finishMt5ConnectFail(
           data.message || 'เชื่อมต่อไม่สำเร็จ — กรุณาลองใหม่',
           data.account
