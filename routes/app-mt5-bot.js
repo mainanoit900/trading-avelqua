@@ -84,8 +84,7 @@ const {
   hasAgentCapableMarker,
   REQUIRED_AGENT_VERSION,
   getAgentUpgradeState,
-  messageForUpgradeState,
-  pruneMetricsCommandBacklog
+  messageForUpgradeState
 } = require('../lib/agentDeploy');
 const { applyMt5LiveStatus, recordEquityLog } = require('../lib/mt5LiveStatus');
 const { generateIntelReport } = require('../services/intelAi');
@@ -3392,7 +3391,7 @@ router.post('/mt5/trading-reset', requireLogin, async (req, res) => {
         [inst.id]
       );
       if (inst.vps_id) {
-        await pruneMetricsCommandBacklog(inst.vps_id, { keep: 0 }).catch(() => {});
+        await cancelPendingEquitySnapshots(inst.vps_id).catch(() => {});
         const portNo = Number(inst.assigned_port_no || accountCtx.portNo || 0);
         const folderPath = folderPathForPortNo(portNo, inst.folder_path || accountCtx.folderPath || '');
         await cancelStaleRunBotCommands(inst.vps_id, accountCtx.portId, inst.id);
@@ -3633,7 +3632,7 @@ router.post('/mt5/run', requireLogin, async (req, res) => {
     };
 
     await cancelStaleRunBotCommands(accountCtx.vpsId, accountCtx.portId, instanceId);
-    await pruneMetricsCommandBacklog(accountCtx.vpsId, { keep: 0 }).catch(() => {});
+    await cancelPendingEquitySnapshots(accountCtx.vpsId).catch(() => {});
 
     const queued = await insertPendingAgentCommand({
       vpsId: accountCtx.vpsId,
