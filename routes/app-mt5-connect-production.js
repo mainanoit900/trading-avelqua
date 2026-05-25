@@ -908,6 +908,15 @@ function loginCommandNeverPickedForCurrentAttempt(account, cmdMeta) {
   return cmdCreatedMs >= connectMs - 3000;
 }
 
+function shouldGraceNeverPickedLogin(account, cmdMeta) {
+  if (!loginCommandNeverPickedForCurrentAttempt(account, cmdMeta)) return false;
+  const connectMs = account?.connect_started_at
+    ? new Date(account.connect_started_at).getTime()
+    : 0;
+  if (!connectMs) return false;
+  return Date.now() - connectMs < 15000;
+}
+
 /** ยืนยัน Login จริง (journal/คำสั่ง) — ใช้ได้ทั้ง checking/connecting เมื่อคำสั่งสำเร็จแล้ว */
 async function resolvePollLoginVerified(account, statusFinal, cmdMeta) {
   const st = String(statusFinal || '').toLowerCase();
@@ -1443,13 +1452,14 @@ async function handleMt5ConnectProduction(req, res) {
   }
 }
 
-async function ensureActiveLoginCommandForPoll(account) {
+async function ensureActiveLoginCommandForPoll(account, opts = {}) {
   const accountId = Number(account?.id || 0);
   const vpsId = Number(account?.vps_id || 0);
   const portSlot = Number(account?.port_slot || account?.assigned_port_no || 0);
   const portNo = Number(account?.assigned_port_no || account?.port_slot || 0);
   const login = String(account?.mt5_login || '').trim();
   const status = String(account?.status || '').toLowerCase();
+  const forceRequeue = opts?.forceRequeue === true;
   if (!accountId || !vpsId || !login || !portNo) return { requeued: false };
   if (!['connecting', 'starting', 'checking', 'connected'].includes(status)) {
     return { requeued: false };
@@ -1459,7 +1469,7 @@ async function ensureActiveLoginCommandForPoll(account) {
     ? new Date(account.connect_started_at).getTime()
     : 0;
   if (!connectMs || Date.now() - connectMs > 8 * 60 * 1000) return { requeued: false };
-  if (Date.now() - connectMs < 800) return { requeued: false };
+  if (Date.now() - connectMs < 800 && !forceRequeue) return { requeued: false };
 
   const live = await verifyPortRunningLogin(vpsId, portNo, login).catch(() => ({ ok: false }));
   if (live.ok) return { requeued: false, live: true };
@@ -1558,6 +1568,26 @@ async function ensureActiveLoginCommandForPoll(account) {
     commandType: 'login_mt5',
     payload
   }).catch(() => ({ id: 0 }));
+
+  if (queued.id) {
+    const message = forceRequeue
+      ? '① ส่งคำสั่ง login_mt5 ใหม่แล้ว — รอ Agent รับงาน'
+      : '① ส่งคำสั่ง login_mt5 แล้ว — รอ Agent รับงาน';
+    await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET status='connecting',
+          last_login_message=$2,
+          last_error=NULL,
+          updated_at=NOW()
+      WHERE id=$1
+    `,
+      [accountId, message]
+    ).catch(() => {});
+    account.status = 'connecting';
+    account.last_login_message = message;
+    account.last_error = null;
+  }
 
   return { requeued: !!queued.id, commandId: queued.id || null };
 }
@@ -1717,7 +1747,14 @@ async function handleMt5ConnectStatusProduction(req, res) {
         message: userMsg
       });
     }
-    const requeueLogin = await ensureActiveLoginCommandForPoll(a).catch(() => ({
+    const connectStartedMs = a.connect_started_at
+      ? new Date(a.connect_started_at).getTime()
+      : 0;
+    const cmdMetaSeed = await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
+    const forceRequeueNeverPicked = shouldGraceNeverPickedLogin(a, cmdMetaSeed);
+    const requeueLogin = await ensureActiveLoginCommandForPoll(a, {
+      forceRequeue: forceRequeueNeverPicked
+    }).catch(() => ({
       requeued: false
     }));
     if (requeueLogin.requeued) {
@@ -1761,10 +1798,9 @@ async function handleMt5ConnectStatusProduction(req, res) {
 
     let statusFinal = status;
     const windowHint = isLegacyWindowVerifiedMessage(a.last_login_message || '');
-    const connectStartedMs = a.connect_started_at
-      ? new Date(a.connect_started_at).getTime()
-      : 0;
-    const cmdMetaEarly = await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
+    const cmdMetaEarly = cmdMetaSeed.commandId != null || cmdMetaSeed.commandStatus
+      ? cmdMetaSeed
+      : await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
     const cmdStEarly = String(cmdMetaEarly.commandStatus || '').toLowerCase();
 
     if (
@@ -1898,23 +1934,43 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const cmdMeta = cmdMetaEarly.commandId != null || cmdMetaEarly.commandStatus
       ? cmdMetaEarly
       : await resolveLoginCommandMeta(a.id, a.vps_id, connectStartedMs);
-    const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
     const neverPickedCurrentAttempt = loginCommandNeverPickedForCurrentAttempt(a, cmdMeta);
+    const graceNeverPicked = shouldGraceNeverPickedLogin(a, cmdMeta);
+
+    if (graceNeverPicked) {
+      cmdMeta.commandId = requeueLogin.commandId || cmdMeta.commandId || null;
+      cmdMeta.commandStatus = requeueLogin.requeued ? 'pending' : '';
+      cmdMeta.commandMessage = requeueLogin.requeued
+        ? 'กำลังส่งคำสั่ง login_mt5 ใหม่ไป VPS...'
+        : 'กำลังส่งคำสั่ง login_mt5 ไป VPS...';
+    }
+    const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
 
     if (neverPickedCurrentAttempt) {
-      const failMsg =
-        cmdMeta.commandMessage ||
-        'คำสั่ง login ยังไม่ถูก Agent รับงาน — กรุณากดเชื่อมต่อใหม่อีกครั้ง';
-      await failAccountFromJournal(a.id, a.port_id, failMsg, {
-        vpsId: a.vps_id,
-        portNo: a.assigned_port_no || a.port_slot,
-        folderPath: a.folder_path,
-        reason: 'login_cmd_not_picked'
-      }).catch(() => {});
-      statusFinal = 'failed';
-      a.status = 'failed';
-      a.last_error = failMsg;
-      a.last_login_message = failMsg;
+      if (graceNeverPicked) {
+        statusFinal = ['connecting', 'starting', 'checking'].includes(statusFinal)
+          ? statusFinal
+          : 'connecting';
+        a.status = statusFinal;
+        a.last_error = null;
+        a.last_login_message = requeueLogin.requeued
+          ? '① ส่งคำสั่ง login_mt5 ใหม่แล้ว — รอ Agent รับงาน'
+          : '① ส่งคำสั่ง login_mt5 แล้ว — รอ Agent รับงาน';
+      } else {
+        const failMsg =
+          cmdMeta.commandMessage ||
+          'คำสั่ง login ยังไม่ถูก Agent รับงาน — กรุณากดเชื่อมต่อใหม่อีกครั้ง';
+        await failAccountFromJournal(a.id, a.port_id, failMsg, {
+          vpsId: a.vps_id,
+          portNo: a.assigned_port_no || a.port_slot,
+          folderPath: a.folder_path,
+          reason: 'login_cmd_not_picked'
+        }).catch(() => {});
+        statusFinal = 'failed';
+        a.status = 'failed';
+        a.last_error = failMsg;
+        a.last_login_message = failMsg;
+      }
     }
 
     if (
