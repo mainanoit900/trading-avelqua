@@ -4,8 +4,8 @@
   "symbol": "XAUUSD",
   "ea_file": "AK-SNIPER-VIP-VER4.0.ex5",
   "hardcoded_in_mq5": {
-    "allowed_accounts": [201200179, 201200180, 201200181, 201200182, 201200183, 201200184, 201200185],
-    "allow_any_account_if_zero_in_list": false,
+    "allowed_accounts": [0],
+    "allow_any_account_if_zero_in_list": true,
     "expiry_date": "2027-12-30",
     "brokers_substring": ["XM", "MOHICANS MARKETS LTD"],
     "default_magic_number": 2122025
@@ -35,5 +35,5 @@
     "InpUseTrendFilter",
     "InpUseNewsFilter"
   ],
-  "notes_th": "เลขบัญชีและโบรกเกอร์ล็อคในไฟล์ .ex5 — ตาราง admin ปรับได้เฉพาะ Lot / Trailing / Pip Step ผ่านไฟล์ .set"
+  "notes_th": "เปิดให้ทุกเลขบัญชีแล้วเมื่อ AllowedAccounts มี 0 — ตาราง admin ปรับ Lot / Trailing / Pip Step ผ่านไฟล์ .set และเว็บจะไม่บล็อกสิทธิ์บัญชี"
 }
