@@ -135,6 +135,19 @@ function num(v, def = 0) {
   return Number.isFinite(n) ? n : def;
 }
 
+function positiveMoney(v) {
+  const n = Number(v);
+  return Number.isFinite(n) && n > 0 ? n : 0;
+}
+
+function hasVerifiedMt5Snapshot(account) {
+  if (!account) return false;
+  if (account.login_verified === true) return true;
+  if (positiveMoney(account.last_balance) > 0) return true;
+  if (positiveMoney(account.last_equity) > 0) return true;
+  return false;
+}
+
 function userLockKey(userId, portSlot = 0) {
   return userPortLockKey(userId, portSlot);
 }
@@ -1502,6 +1515,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const r = await query(`
       SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
              a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+             a.login_verified, a.last_balance, a.last_equity,
              p.folder_path
       FROM vps_system.mt5_accounts a
       LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -1559,6 +1573,31 @@ async function handleMt5ConnectStatusProduction(req, res) {
           a.last_error = stuck.message;
           a.last_login_message = stuck.message;
         }
+      }
+    }
+
+    if (status === 'failed' && hasVerifiedMt5Snapshot(a)) {
+      const runningVerified =
+        a.vps_id && (a.assigned_port_no || a.port_slot) && a.mt5_login
+          ? await verifyPortRunningLogin(
+              a.vps_id,
+              Number(a.assigned_port_no || a.port_slot),
+              String(a.mt5_login || '').trim()
+            ).catch(() => ({ ok: false }))
+          : { ok: false };
+      if (runningVerified.ok) {
+        await promoteAccountConnected({
+          accountId: a.id,
+          portId: a.port_id,
+          mt5Login: a.mt5_login,
+          message: MT5_SUCCESS_MSG,
+          balance: a.last_balance,
+          equity: a.last_equity
+        }).catch(() => {});
+        a.status = 'connected';
+        a.last_error = null;
+        a.last_login_message = MT5_SUCCESS_MSG;
+        status = 'connected';
       }
     }
 
@@ -1664,6 +1703,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
         `
         SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+               a.login_verified, a.last_balance, a.last_equity,
                p.folder_path
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -1727,6 +1767,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
       const freshRow = await query(`
         SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
                a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+               a.login_verified, a.last_balance, a.last_equity,
                p.folder_path
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -1779,6 +1820,36 @@ async function handleMt5ConnectStatusProduction(req, res) {
       ? cmdMetaEarly
       : await resolveLoginCommandMeta(a.id, a.vps_id);
     const cmdSt = String(cmdMeta.commandStatus || '').toLowerCase();
+
+    if (
+      ['failed', 'error', 'cancelled'].includes(cmdSt) &&
+      ['connecting', 'starting', 'checking'].includes(statusFinal)
+    ) {
+      if (hasVerifiedMt5Snapshot(a)) {
+        const runningVerified =
+          a.vps_id && (a.assigned_port_no || a.port_slot) && a.mt5_login
+            ? await verifyPortRunningLogin(
+                a.vps_id,
+                Number(a.assigned_port_no || a.port_slot),
+                String(a.mt5_login || '').trim()
+              ).catch(() => ({ ok: false }))
+            : { ok: false };
+        if (runningVerified.ok) {
+          await promoteAccountConnected({
+            accountId: a.id,
+            portId: a.port_id,
+            mt5Login: a.mt5_login,
+            message: MT5_SUCCESS_MSG,
+            balance: a.last_balance,
+            equity: a.last_equity
+          }).catch(() => {});
+          statusFinal = 'connected';
+          a.status = 'connected';
+          a.last_error = null;
+          a.last_login_message = MT5_SUCCESS_MSG;
+        }
+      }
+    }
 
     if (
       ['failed', 'error', 'cancelled'].includes(cmdSt) &&
@@ -2004,7 +2075,7 @@ async function handleMt5AccountStatus(req, res) {
 
     const row = await query(
       `
-      SELECT id, status, last_error, last_login_message, last_equity, connect_started_at,
+      SELECT id, status, last_error, last_login_message, last_equity, last_balance, login_verified, connect_started_at,
              created_at, updated_at, mt5_login, assigned_port_no, port_slot, vps_id, port_id
       FROM vps_system.mt5_accounts
       WHERE id = $1 AND user_id = $2
@@ -2020,7 +2091,7 @@ async function handleMt5AccountStatus(req, res) {
     if (['connecting', 'starting', 'checking'].includes(st)) {
       await expireStuckLoginVerify(acc).catch(() => ({ expired: false }));
       const refreshed = await query(
-        `SELECT status, last_error, last_login_message, last_equity, updated_at
+        `SELECT status, last_error, last_login_message, last_equity, last_balance, login_verified, updated_at
          FROM vps_system.mt5_accounts WHERE id=$1 LIMIT 1`,
         [accountId]
       ).catch(() => ({ rows: [] }));
@@ -2033,7 +2104,23 @@ async function handleMt5AccountStatus(req, res) {
         ? new Date(acc.created_at).getTime()
         : Date.now();
     const elapsed = Math.max(0, Math.floor((Date.now() - startedMs) / 1000));
-    const statusNow = String(acc.status || '').toLowerCase();
+    let statusNow = String(acc.status || '').toLowerCase();
+    if (statusNow === 'failed' && hasVerifiedMt5Snapshot(acc)) {
+      const runningVerified =
+        acc.vps_id && (acc.assigned_port_no || acc.port_slot) && acc.mt5_login
+          ? await verifyPortRunningLogin(
+              acc.vps_id,
+              Number(acc.assigned_port_no || acc.port_slot),
+              String(acc.mt5_login || '').trim()
+            ).catch(() => ({ ok: false }))
+          : { ok: false };
+      if (runningVerified.ok) {
+        statusNow = 'connected';
+        acc.status = 'connected';
+        acc.last_error = null;
+        acc.last_login_message = MT5_SUCCESS_MSG;
+      }
+    }
     let message = acc.last_login_message || acc.last_error || '';
     if (statusNow === 'connected') message = message || MT5_SUCCESS_MSG;
     if (statusNow === 'failed') message = acc.last_error || acc.last_login_message || MT5_FAIL_USER_MSG;
