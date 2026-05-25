@@ -2751,9 +2751,7 @@ if ($title -notmatch ":") {{
   [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
   Start-Sleep -Milliseconds 1000
   [System.Windows.Forms.SendKeys]::SendWait("%n")
-  Start-Sleep -Milliseconds 1000
-  [System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}")
-  Start-Sleep -Milliseconds 250
+  Start-Sleep -Milliseconds 1300
 }} else {{
   Start-Sleep -Milliseconds 300
 }}
@@ -2774,14 +2772,12 @@ Start-Sleep -Milliseconds 180
 [System.Windows.Forms.SendKeys]::SendWait("^a")
 Start-Sleep -Milliseconds 80
 [System.Windows.Forms.SendKeys]::SendWait("{server_esc}")
-Start-Sleep -Milliseconds 450
-[System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
 Start-Sleep -Milliseconds 500
-[System.Windows.Forms.SendKeys]::SendWait("%f")
-Start-Sleep -Milliseconds 600
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 Start-Sleep -Milliseconds 300
-[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}{{TAB}}{{TAB}}{{TAB}}{{TAB}}{{ENTER}}")
+[System.Windows.Forms.SendKeys]::SendWait("{{TAB}}{{TAB}}{{ENTER}}")
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 Write-Output 'WIZARD_OK'
 exit 0
 """
