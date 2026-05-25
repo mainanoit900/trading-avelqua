@@ -2342,6 +2342,8 @@ router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
         `
         SELECT a.id, a.port_id, a.vps_id, a.assigned_port_no, a.port_slot,
                LOWER(COALESCE(a.status, '')) AS status,
+               a.login_verified,
+               a.connect_started_at,
                COALESCE(p.folder_path, '') AS port_folder
         FROM vps_system.mt5_accounts a
         LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
@@ -2352,8 +2354,18 @@ router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
       );
       const acc = accR.rows?.[0];
       if (acc) {
-        if (acc.status === 'connected') {
+        const connectStartedMs = acc.connect_started_at
+          ? new Date(acc.connect_started_at).getTime()
+          : 0;
+        if (acc.status === 'connected' || acc.login_verified === true) {
           return res.json({ ok: true, message: 'บัญชีเชื่อมต่ออยู่แล้ว — ไม่ต้องเคลียร์ PORT' });
+        }
+        if (
+          ['connecting', 'starting', 'checking'].includes(acc.status) &&
+          connectStartedMs > 0 &&
+          Date.now() - connectStartedMs < 15000
+        ) {
+          return res.json({ ok: true, message: 'คำสั่ง login ยังอยู่ระหว่างรอ Agent/ตรวจ Login — ยังไม่เคลียร์ PORT' });
         }
         if (!folderPath && acc.port_folder) folderPath = String(acc.port_folder).trim();
         if (!slot) slot = num(acc.port_slot || acc.assigned_port_no);
