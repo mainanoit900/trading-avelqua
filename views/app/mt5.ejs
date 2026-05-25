@@ -369,7 +369,7 @@ document.addEventListener('DOMContentLoaded', function () {
               : '-';
             const histActive = ['running','pending','starting','restarting'].includes(String(i.status||'').toLowerCase());
           %>
-            <tr data-mt5-history-row="1">
+            <tr data-mt5-history-row="1" data-instance-id="<%= i.id %>">
               <td><%= histDateStr %></td>
               <td><%= i.display_name || i.bot_name || i.bot_code %></td>
               <td><%= i.node_name || i.node_code || '-' %></td>
@@ -377,7 +377,7 @@ document.addEventListener('DOMContentLoaded', function () {
               <td><%= fundStr %></td>
               <td><%= i.lot_used || i.lot || '-' %></td>
               <td><%= typeof tradeLevelLabel === 'function' ? tradeLevelLabel(i.trade_level) : (i.trade_level || '-') %></td>
-              <td><span class="status <%= i.status %>"><%= i.status %></span></td>
+              <td><span class="status <%= i.status %>" data-history-status="1"><%= i.status %></span></td>
               <td class="mt5-row-actions">
                 <div class="mt5-action-dd">
                   <button type="button" class="mt5-action-dd-btn" aria-label="เมนูจัดการ" aria-haspopup="true" aria-expanded="false" onclick="mt5ToggleActionDd(event, this)">
@@ -3789,6 +3789,29 @@ function initMt5HistoryPager() {
   if (typeof mt5CloseAllActionDd === 'function') mt5CloseAllActionDd();
 }
 
+function syncMt5HistoryFromLiveDashboard(instances) {
+  const wrap = document.getElementById('mt5HistoryTableWrap');
+  if (!wrap || !Array.isArray(instances) || !instances.length) return;
+  const rows = Array.from(wrap.querySelectorAll('tbody tr[data-instance-id]'));
+  if (!rows.length) return;
+  const byId = new Map();
+  instances.forEach(function (inst) {
+    const id = Number(inst && inst.id);
+    if (id) byId.set(id, inst);
+  });
+  rows.forEach(function (row) {
+    const id = Number(row.getAttribute('data-instance-id') || 0);
+    if (!id || !byId.has(id)) return;
+    const inst = byId.get(id);
+    const st = String(inst.status || '').toLowerCase();
+    const badge = row.querySelector('[data-history-status]');
+    if (badge) {
+      badge.textContent = inst.status || '-';
+      badge.className = 'status ' + (st || '');
+    }
+  });
+}
+
 document.addEventListener('DOMContentLoaded', function () {
   initMt5HistoryPager();
 });
@@ -3928,6 +3951,7 @@ async function loadMt5LiveDashboard() {
     if (typeof window.syncPortLockFromLiveDashboard === 'function' && data && data.instances) {
       window.syncPortLockFromLiveDashboard(data.instances);
     }
+    syncMt5HistoryFromLiveDashboard(data.instances || []);
   } catch (e) {
     box.innerHTML = '<div class="mt5-empty">Live Dashboard Error: ' + e.message + '</div>';
   } finally {
