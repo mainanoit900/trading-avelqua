@@ -492,11 +492,13 @@ document.addEventListener('DOMContentLoaded', function () {
 
   function mt5CanFinishConnectSuccess(data) {
     if (!data || data.loginVerified !== true || data.connected !== true) return false;
+    const successToken = mt5SuccessModalToken((data && data.account) || data);
     if (!mt5ConnectInFlightNow()) return true;
     const step = data.progressStep != null ? Number(data.progressStep) : 0;
     const total = Number(data.progressTotal || 4) || 4;
     const cmdSt = String(data.commandStatus || '').toLowerCase();
     const stepReady = step >= total || ['success', 'done'].includes(cmdSt);
+    if (stepReady && successToken) return true;
     return mt5ConnectUiElapsedMs() >= MT5_CONNECT_MIN_UI_MS && stepReady;
   }
 
@@ -911,8 +913,8 @@ document.addEventListener('DOMContentLoaded', function () {
     return mt5PollAccountId;
   };
 
-  function mt5OutcomeStorageKey(kind, accountId) {
-    return String(kind || '') + ':' + String(accountId || '');
+  function mt5OutcomeStorageKey(kind, accountId, token) {
+    return String(kind || '') + ':' + String(accountId || '') + ':' + String(token || '');
   }
 
   function mt5OutcomeWasShown(key) {
@@ -1868,7 +1870,11 @@ document.addEventListener('DOMContentLoaded', function () {
     window.__mt5FinishSuccessRunning = true;
     const base = message || 'เชื่อมต่อสำเร็จ';
     const msg = base + ' — ยังไม่เปิด BOT กรุณาไปขั้นตอน 3) ตั้งค่า BOT แล้วกด ▶ เปิด BOT (ปิด Algo Trading จนกว่าจะเปิด BOT)';
-    const outcomeKey = mt5OutcomeStorageKey('ok', accId || 'port');
+    const outcomeKey = mt5OutcomeStorageKey(
+      'ok',
+      accId || 'port',
+      mt5SuccessModalToken(accountInfo || null)
+    );
     mt5MarkOutcomeShown(outcomeKey);
     if (accId) mt5MarkSuccessModalShown(accountInfo || { id: accId });
     mt5StopConnectPolling();
