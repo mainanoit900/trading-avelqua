@@ -807,6 +807,34 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
     }
 
 
+def should_clear_login_state_on_stop(payload: Optional[Dict[str, Any]] = None) -> bool:
+    reason = str(payload_get(payload or {}, "reason") or "").strip().lower()
+    if not reason:
+        return False
+    markers = (
+        "user_delete_port",
+        "release_port",
+        "login_fail",
+        "login_cmd",
+        "journal_",
+        "poll_journal_failed",
+        "connect_fail_cleanup",
+        "cleanup_ui",
+        "cancel_connect",
+        "force_stop_port",
+        "disable_port",
+        "delete_port",
+        "repair_failed_slot",
+        "connect_request_error",
+        "agent_reported_failed",
+        "agent_login_progress_fail",
+        "rebind_login",
+        "login_swap",
+        "result_other",
+    )
+    return any(marker in reason for marker in markers)
+
+
 def latest_log_text(port_dir: Path) -> Tuple[Optional[Path], str]:
     # MT5 may write logs in different folders depending on portable mode/version.
     log_dirs = [
@@ -844,7 +872,11 @@ def clear_mt5_logs(port_dir: Path) -> None:
                     pass
 
 
-def clear_mt5_login_cache(port_dir: Path, login: str = "") -> None:
+def clear_mt5_login_cache(
+    port_dir: Path,
+    login: str = "",
+    force_remove_accounts_dat: bool = False,
+) -> None:
     """ลบ cache บัญชี — accounts.dat เฉพาะเมื่อเปลี่ยน login (กัน wizard Open Account ทุกครั้ง)"""
     marker = port_dir / ".avelqua_last_login"
     prev = ""
@@ -855,12 +887,18 @@ def clear_mt5_login_cache(port_dir: Path, login: str = "") -> None:
         pass
     login_s = str(login or "").strip()
     rels = ["config/account.ini"]
-    if login_s and login_s != prev:
+    if force_remove_accounts_dat or (login_s and login_s != prev):
         rels.append("config/accounts.dat")
+    if login_s:
         try:
             marker.write_text(login_s, encoding="utf-8")
         except Exception as e:
             log(f"LOGIN MARKER WRITE ERROR: {e}")
+    elif force_remove_accounts_dat and marker.is_file():
+        try:
+            marker.unlink()
+        except Exception as e:
+            log(f"LOGIN MARKER REMOVE ERROR {marker}: {e}")
     for rel in rels:
         p = port_dir / rel
         if p.is_file():
@@ -869,6 +907,71 @@ def clear_mt5_login_cache(port_dir: Path, login: str = "") -> None:
                 log(f"CLEAR MT5 CACHE FILE {p}")
             except Exception as e:
                 log(f"CLEAR MT5 CACHE ERROR {p}: {e}")
+
+
+def clear_mt5_common_login_config(port_dir: Path) -> None:
+    """ล้าง Login/Password/Server ที่ค้างใน common.ini/settings.ini แต่คง setting อื่นไว้"""
+    for rel in ("config/common.ini", "config/settings.ini", "MQL5/config/common.ini"):
+        cfg = port_dir / Path(rel.replace("/", os.sep))
+        if not cfg.is_file():
+            continue
+        try:
+            lines = cfg.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            continue
+        out: List[str] = []
+        in_common = False
+        changed = False
+        for line in lines:
+            low = line.strip().lower()
+            if low == "[common]":
+                in_common = True
+                out.append(line)
+                continue
+            if in_common and low.startswith("[") and low != "[common]":
+                in_common = False
+            if in_common:
+                if low.startswith("login="):
+                    out.append("Login=")
+                    changed = True
+                    continue
+                if low.startswith("password="):
+                    out.append("Password=")
+                    changed = True
+                    continue
+                if low.startswith("server="):
+                    out.append("Server=")
+                    changed = True
+                    continue
+            out.append(line)
+        if changed:
+            try:
+                cfg.write_text("\n".join(out).rstrip() + "\n", encoding="utf-8", errors="replace")
+                log(f"CLEAR COMMON LOGIN CONFIG {cfg}")
+            except Exception as e:
+                log(f"CLEAR COMMON LOGIN CONFIG ERROR {cfg}: {e}")
+
+
+def clear_mt5_login_state(port_dir: Path, login: str = "") -> None:
+    """ล้าง login เก่าที่อาจทำให้ MT5 auto-login กลับเองหลัง stop/release"""
+    try:
+        remove_mt5_login_ini(port_dir)
+    except Exception as e:
+        log(f"CLEAR LOGIN STATE remove ini {port_dir}: {e}")
+    try:
+        clear_mt5_common_login_config(port_dir)
+    except Exception as e:
+        log(f"CLEAR LOGIN STATE common.ini {port_dir}: {e}")
+    try:
+        clear_mt5_login_cache(port_dir, login, force_remove_accounts_dat=True)
+    except Exception as e:
+        log(f"CLEAR LOGIN STATE cache {port_dir}: {e}")
+    try:
+        port_no = extract_port_no(str(port_dir))
+        if port_no:
+            _PORT_LOGIN_CACHE.pop(port_no, None)
+    except Exception:
+        pass
 
 
 def _patch_ini_common_login(
@@ -2747,8 +2850,7 @@ def cleanup_mt5_after_login_fail(
     except Exception as e:
         log(f"CLEANUP stop_mt5_port_only: {e}")
     try:
-        remove_mt5_login_ini(port_dir)
-        clear_mt5_login_cache(
+        clear_mt5_login_state(
             port_dir, str(payload_get(payload, "mt5Login", "login") or "")
         )
     except Exception as e:
@@ -5542,7 +5644,7 @@ def agent_reset_runtime(
                 continue
             try:
                 kill_mt5_by_folder(port_dir)
-                remove_mt5_login_ini(port_dir)
+                clear_mt5_login_state(port_dir)
                 stopped.append(port_dir.name)
             except Exception as e:
                 log(f"AGENT RESET stop MT5 {port_dir.name}: {e}")
@@ -5887,10 +5989,18 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, payload))
-            elif folder:
-                command_result(cmd_id, True, stop_mt5_by_folder(folder))
             else:
-                command_result(cmd_id, True, stop_mt5_port_only(port, payload))
+                port_ref = port or folder
+                result = stop_mt5_port_only(port_ref, payload)
+                if should_clear_login_state_on_stop(payload):
+                    try:
+                        clear_mt5_login_state(
+                            resolve_mt5_port_dir(port_ref, payload),
+                            str(payload_get(payload, "mt5Login", "login") or ""),
+                        )
+                    except Exception as clear_err:
+                        log(f"STOP MT5 CLEAR LOGIN STATE ERROR: {clear_err}")
+                command_result(cmd_id, True, result)
 
         elif ctype in ("dashboard", "watchdog"):
             command_result(cmd_id, True, mt5_ports_dashboard())
