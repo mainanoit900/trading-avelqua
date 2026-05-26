@@ -309,10 +309,12 @@
     packageDefaultLot: <%= typeof packageDefaultLot !== 'undefined' ? packageDefaultLot : packageLotMax %>,
     bots: <%- JSON.stringify((bots || []).map(function (b) { return { code: String(b.bot_code || b.bot_name || '').trim(), label: b.display_name || b.bot_name || b.bot_code || '' }; })) %>,
     presetTables: <%- JSON.stringify(runPresetTables || {}) %>,
-    connectedAccounts: <%- JSON.stringify(connectedRunAccounts || []) %>
+    connectedAccounts: <%- JSON.stringify(connectedRunAccounts || []) %>,
+    activeInstances: <%- JSON.stringify(activeRunInstances || []) %>
   };
   const mt5RunState = {
     connectedAccounts: Array.isArray(window.__mt5RunConfig.connectedAccounts) ? window.__mt5RunConfig.connectedAccounts.slice() : [],
+    activeInstances: Array.isArray(window.__mt5RunConfig.activeInstances) ? window.__mt5RunConfig.activeInstances.slice() : [],
     selectedAccountId: Number(sessionStorage.getItem('mt5RunAccountId') || 0)
   };
   window.mt5RunState = mt5RunState;
@@ -404,6 +406,15 @@
     return picked;
   }
 
+  function mt5SelectedRunInstance() {
+    const account = mt5SelectedRunAccount();
+    if (!account) return null;
+    const active = Array.isArray(mt5RunState.activeInstances) ? mt5RunState.activeInstances : [];
+    return active.find(function (row) {
+      return Number(row.mt5_account_id || 0) === Number(account.id);
+    }) || null;
+  }
+
   function mt5ComputeRunPreset(botCode, capital, manualLot, tradeLevel) {
     const cfg = window.__mt5RunConfig || {};
     const rows = (cfg.presetTables && cfg.presetTables[botCode]) || [];
@@ -468,6 +479,8 @@
     const lotMax = mt5Num(meta.packageLotMax, 0.05);
     const defaultLot = mt5Num(meta.packageDefaultLot, lotMax);
     const actualCapital = mt5RunAccountCapital(selected);
+    const activeInstance = mt5SelectedRunInstance();
+    const hasActiveInstance = !!activeInstance;
     const botOpts = (bots || []).map(function (b) {
       const code = mt5Esc(b.code || b.bot_code || b.bot_name || '');
       const label = mt5Esc(b.label || b.display_name || b.bot_name || b.bot_code || '');
@@ -490,7 +503,12 @@
       '<div class="mt5-form-row">' +
       '<div><label>เงินทุน (ขั้นต่ำ 100)</label><input type="number" step="0.01" min="100" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('ทุนจาก MT5 จริง: ' + mt5Esc(actualCapital) + ' / หรือพิมพ์เอง') : 'กรอกเงินทุนขั้นต่ำ 100') + '" value="' + (actualCapital >= 100 ? mt5Esc(actualCapital) : '') + '"><small style="color:#94a3b8;display:block;margin-top:4px">ถ้าแก้เอง ระบบจะใช้ค่าที่กรอกแทน Equity</small></div>' +
       '<div><label>Lot Size</label><input name="manual_lot" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(defaultLot)) + '"><small style="color:#94a3b8;display:block;margin-top:4px">ค่าเริ่มต้น ' + mt5Esc(mt5Fixed(defaultLot)) + ' / ปรับได้สูงสุด ' + mt5Esc(mt5Fixed(lotMax)) + '</small></div>' +
-      '<div class="run-action"><button type="submit" class="mt5-btn run"' + (expired ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : 'Run BOT') + '</button></div>' +
+      '<div class="run-action" style="display:flex;gap:10px;align-items:flex-end;justify-content:flex-end;flex-wrap:wrap">' +
+      '<button type="submit" class="mt5-btn run"' + ((expired || hasActiveInstance) ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
+      (hasActiveInstance
+        ? '<button class="mt5-btn mini delete" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยัน Stop BOT และออก MT5 ใช่ไหม?\')" style="min-width:150px;height:48px">Stop BOT</button>'
+        : '<button type="button" class="mt5-btn mini" disabled style="min-width:150px;height:48px;opacity:.45;cursor:not-allowed">Stop BOT</button>') +
+      '</div>' +
       '</div>' +
       '</form>'
     );
@@ -562,6 +580,9 @@
       accounts: (accounts || []).map(function (a) {
         return [a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.last_equity, a.last_balance];
       }),
+      activeInstances: (mt5RunState.activeInstances || []).map(function (row) {
+        return [row.id, row.mt5_account_id, row.status, row.assigned_port_no];
+      }),
       bots: (bots || []).map(function (b) {
         return [b.code || b.bot_code || '', b.label || b.display_name || b.bot_name || ''];
       })
@@ -601,8 +622,10 @@
       if (runPanel) {
         const cfg = window.__mt5RunConfig || {};
         cfg.connectedAccounts = Array.isArray(data.connectedAccounts) ? data.connectedAccounts : [];
+        cfg.activeInstances = Array.isArray(data.activeRunInstances) ? data.activeRunInstances : [];
         cfg.bots = Array.isArray(data.bots) && data.bots.length ? data.bots : (cfg.bots || []);
         window.__mt5RunConfig = cfg;
+        mt5RunState.activeInstances = Array.isArray(cfg.activeInstances) ? cfg.activeInstances.slice() : [];
         const nextSignature = mt5RunDataSignature(cfg.connectedAccounts, cfg.bots || []);
         if (nextSignature !== mt5RunRenderSignature || !document.getElementById('mt5RunForm')) {
           mt5RunRenderSignature = nextSignature;

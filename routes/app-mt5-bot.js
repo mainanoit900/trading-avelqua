@@ -1438,6 +1438,30 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         last_equity: a.last_equity
       }));
 
+    const activeInstances = await safeQuery(
+      `
+      SELECT id, mt5_account_id, status, assigned_port_no
+      FROM vps_system.bot_instances
+      WHERE user_id=$1
+        AND status IN ('running','pending','restarting')
+      ORDER BY id DESC
+    `,
+      [userId]
+    );
+    const seenActiveAccountIds = new Set();
+    const activeRunInstances = [];
+    for (const row of activeInstances || []) {
+      const accountId = Number(row.mt5_account_id || 0);
+      if (!accountId || seenActiveAccountIds.has(accountId)) continue;
+      seenActiveAccountIds.add(accountId);
+      activeRunInstances.push({
+        id: Number(row.id),
+        mt5_account_id: accountId,
+        status: String(row.status || ''),
+        assigned_port_no: Number(row.assigned_port_no || 0)
+      });
+    }
+
     const bots = (await safeQuery(
       `SELECT id, bot_code, display_name, bot_name FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`,
       []
@@ -1461,6 +1485,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       packageExpired: summary.packageExpired,
       ports,
       connectedAccounts,
+      activeRunInstances,
       bots: (bots || []).map((b) => ({
         id: Number(b.id),
         code: String(b.bot_code || b.bot_name || '').trim(),
@@ -1541,6 +1566,20 @@ router.get('/mt5', async (req, res) => {
     ORDER BY bi.id DESC
     LIMIT 20
   `, [userId]);
+  const seenActiveAccountIds = new Set();
+  const activeRunInstances = [];
+  for (const row of instances || []) {
+    if (!['running', 'pending', 'restarting'].includes(String(row.status || '').toLowerCase())) continue;
+    const accountId = Number(row.mt5_account_id || 0);
+    if (!accountId || seenActiveAccountIds.has(accountId)) continue;
+    seenActiveAccountIds.add(accountId);
+    activeRunInstances.push({
+      id: Number(row.id),
+      mt5_account_id: accountId,
+      status: String(row.status || ''),
+      assigned_port_no: Number(row.assigned_port_no || 0)
+    });
+  }
 
   const flashData = pullFlash(req);
 
@@ -1593,6 +1632,7 @@ router.get('/mt5', async (req, res) => {
     pendingConnectAccountId: pendingConnectAccount ? pendingConnectAccount.id : null,
     bots,
     connectedRunAccounts,
+    activeRunInstances,
     runPresetTables,
     runPackageGroup: runLotMeta.packageGroup,
     instances,
@@ -2393,7 +2433,7 @@ router.post('/mt5/stop/:id', async (req, res) => {
       ]);
     }
     await client.query('COMMIT');
-    flash(req, 'success', 'ส่งคำสั่งหยุด BOT แล้ว');
+    flash(req, 'success', 'ส่งคำสั่งหยุด BOT และออก MT5 แล้ว');
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     flash(req, 'error', e.message);
