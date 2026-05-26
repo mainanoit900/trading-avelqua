@@ -53,10 +53,26 @@ function sanitizeJournalText(text) {
     .slice(-8000);
 }
 
+function sanitizeResultValue(value, depth = 0) {
+  if (depth > 8) return null;
+  if (value == null) return value;
+  if (typeof value === 'string') return sanitizeJournalText(value);
+  if (Array.isArray(value)) return value.map((item) => sanitizeResultValue(item, depth + 1));
+  if (typeof value === 'object') {
+    const out = {};
+    for (const [key, item] of Object.entries(value)) {
+      if (typeof item === 'undefined') continue;
+      out[key] = sanitizeResultValue(item, depth + 1);
+    }
+    return out;
+  }
+  return value;
+}
+
 /** เก็บ result ลง jsonb โดยไม่ใส่ content ยาว (กัน PG error จาก null bytes / escape) */
 function prepareCommandResultForDb(result) {
   if (!result || typeof result !== 'object') return {};
-  const out = { ...result };
+  const out = sanitizeResultValue(result);
   if (typeof out.content === 'string') {
     out.journalEvidence = sanitizeJournalText(out.content);
     delete out.content;
@@ -768,7 +784,7 @@ router.post('/commands/:id/result', async (req, res) => {
     const pl = pay.rows?.[0]?.payload || {};
     const ctype = String(pay.rows?.[0]?.command_type || '').toLowerCase();
 
-    await query(`
+    const updateRes = await query(`
       UPDATE vps_system.vps_agent_commands
       SET status=$1,
           result_message=$2,
@@ -779,7 +795,28 @@ router.post('/commands/:id/result', async (req, res) => {
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
     `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId, node.id]);
 
-    await processCommandResultSideEffects(node, commandId, ctype, pl, result, ok, msg);
+    if (!updateRes.rowCount) {
+      await query(`
+        UPDATE vps_system.vps_agent_commands
+        SET status=$1,
+            result_message=$2,
+            result=$3::jsonb,
+            error=$4,
+            finished_at=NOW(),
+            updated_at=NOW()
+        WHERE id=$5
+      `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId]);
+    }
+
+    try {
+      await processCommandResultSideEffects(node, commandId, ctype, pl, result, ok, msg);
+    } catch (sideEffectError) {
+      console.error('[COMMAND RESULT SIDE EFFECT ERROR]', {
+        commandId,
+        commandType: ctype,
+        error: sideEffectError?.message || sideEffectError
+      });
+    }
     await ingestCommandResultEvent(node, {
       commandId,
       commandType: ctype,

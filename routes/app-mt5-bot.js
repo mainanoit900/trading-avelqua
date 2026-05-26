@@ -279,7 +279,37 @@ router.post('/mt5/test-release-port', async (req, res) => {
   }
 });
 
-router.use(requireLogin);
+async function requireAgentToken(req, res, next) {
+  try {
+    const token = String(
+      req.get('x-agent-token') || req.body?.agent_token || req.query?.token || ''
+    ).trim();
+    if (!token) return res.status(401).json({ ok: false, message: 'Unauthorized' });
+
+    const node = await query(`
+      SELECT id, node_code
+      FROM vps_system.vps_nodes
+      WHERE agent_token=$1 OR node_code=$1
+      LIMIT 1
+    `, [token]).catch(() => ({ rows: [] }));
+
+    if (!node.rows?.length) {
+      return res.status(401).json({ ok: false, message: 'Unauthorized' });
+    }
+
+    req.agentNode = node.rows[0];
+    return next();
+  } catch (e) {
+    return res.status(401).json({ ok: false, message: 'Unauthorized' });
+  }
+}
+
+router.use((req, res, next) => {
+  if (req.path === '/mt5/live-status' || req.path === '/mt5/account-metrics') {
+    return requireAgentToken(req, res, next);
+  }
+  return requireLogin(req, res, next);
+});
 
 // ===== VPS CACHE =====
 let VPS_CACHE = {
@@ -2676,6 +2706,62 @@ if (instanceId && equity !== undefined && equity !== null) {
     VALUES ($1, $2::numeric, NOW())
   `, [instanceId, equity]).catch(()=>{});
 }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+});
+
+router.post('/mt5/account-metrics', async (req, res) => {
+  try {
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0) || null;
+    const userId = Number(req.body?.userId || req.body?.user_id || 0) || null;
+    const portNumber = Number(req.body?.portNumber || req.body?.port || req.body?.port_no || 0) || null;
+    const balance = req.body?.balance ?? null;
+    const equity = req.body?.equity ?? null;
+
+    if (!accountId && !(userId && portNumber)) {
+      return res.json({ ok: false, message: 'accountId or userId+portNumber required' });
+    }
+
+    await query(`
+      WITH target AS (
+        SELECT id
+        FROM vps_system.mt5_accounts
+        WHERE ($1::bigint IS NOT NULL AND id = $1)
+           OR (
+             $2::bigint IS NOT NULL
+             AND $3::int IS NOT NULL
+             AND user_id = $2
+             AND (assigned_port_no = $3 OR port_slot = $3)
+           )
+        ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END, updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+      )
+      UPDATE vps_system.mt5_accounts a
+      SET last_balance = COALESCE($4::numeric, a.last_balance),
+          last_equity = COALESCE($5::numeric, a.last_equity),
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE a.id IN (SELECT id FROM target)
+    `, [accountId, userId, portNumber, balance, equity]);
+
+    await query(`
+      UPDATE vps_system.bot_instances bi
+      SET mt5_balance = COALESCE($2::numeric, bi.mt5_balance),
+          mt5_equity = COALESCE($3::numeric, bi.mt5_equity),
+          last_agent_ping = NOW(),
+          last_heartbeat = NOW(),
+          updated_at = NOW()
+      WHERE ($1::bigint IS NOT NULL AND bi.mt5_account_id = $1)
+         OR (
+           $4::bigint IS NOT NULL
+           AND $5::int IS NOT NULL
+           AND bi.user_id = $4
+           AND bi.assigned_port_no = $5
+         )
+    `, [accountId, balance, equity, userId, portNumber]).catch(() => {});
 
     return res.json({ ok: true });
   } catch (e) {
