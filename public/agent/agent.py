@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-interactive-fix-v36"
+AGENT_BUILD_ID = "2026-05-27-mt5-token-launch-v37"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1880,15 +1880,30 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
                     ctypes.byref(startup),
                     ctypes.byref(proc_info),
                 )
+                method = "CreateProcessAsUserW"
+                if (not ok) and ctypes.GetLastError() == 1314:
+                    ok = ctypes.windll.advapi32.CreateProcessWithTokenW(
+                        primary_token,
+                        0,
+                        None,
+                        cmd_buf,
+                        creation_flags,
+                        env if env and env.value else None,
+                        cwd_text,
+                        ctypes.byref(startup),
+                        ctypes.byref(proc_info),
+                    )
+                    method = "CreateProcessWithTokenW"
                 if ok:
                     pid = int(proc_info.dwProcessId or 0)
                     diag.update({
                         "success": True,
                         "sessionId": int(session_id),
                         "pid": pid,
+                        "method": method,
                     })
                     _set_mt5_launch_diag(cwd, diag)
-                    log(f"INTERACTIVE LAUNCH OK session={session_id} pid={pid} cmd={command_line}")
+                    log(f"INTERACTIVE LAUNCH OK session={session_id} pid={pid} method={method} cmd={command_line}")
                     return _SpawnedPidRef(pid)
                 raise ctypes.WinError()
             except Exception as session_err:
