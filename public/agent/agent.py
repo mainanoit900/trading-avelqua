@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-compile-ea-v22"
+AGENT_BUILD_ID = "2026-05-26-mt5-worker-payloadfile-v23"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1320,6 +1320,11 @@ def worker_log_path(port: Any, cmd_id: Any) -> Path:
     return LOG_DIR / f"worker-port-{port_no:02d}-cmd-{cmd_id}.log"
 
 
+def worker_payload_path(port: Any, cmd_id: Any) -> Path:
+    port_no = max(0, int(port or 0))
+    return WORKER_STATE_DIR / f"worker-port-{port_no:02d}-cmd-{cmd_id}.json"
+
+
 def write_worker_state(port: Any, info: Dict[str, Any]) -> None:
     try:
         worker_state_path(port).write_text(json.dumps(info, ensure_ascii=False, default=str), encoding="utf-8")
@@ -1408,8 +1413,15 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
                 break
         time.sleep(0.5)
 
-    payload_b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
-    args = [sys.executable, str(AGENT_FILE), "--worker-connect", str(cmd_id), str(ctype or ""), payload_b64]
+    payload_json = json.dumps(payload, ensure_ascii=False)
+    payload_file = None
+    if len(payload_json.encode("utf-8")) > 24000:
+        payload_file = worker_payload_path(port, cmd_id)
+        payload_file.write_text(payload_json, encoding="utf-8")
+        args = [sys.executable, str(AGENT_FILE), "--worker-connect-file", str(cmd_id), str(ctype or ""), str(payload_file)]
+    else:
+        payload_b64 = base64.b64encode(payload_json.encode("utf-8")).decode("ascii")
+        args = [sys.executable, str(AGENT_FILE), "--worker-connect", str(cmd_id), str(ctype or ""), payload_b64]
     log_file = worker_log_path(port, cmd_id)
     log_handle = log_file.open("ab")
     creationflags = 0
@@ -1437,6 +1449,7 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
         "command_type": ctype,
         "started_at": datetime.now().isoformat(),
         "log_file": str(log_file),
+        "payload_file": str(payload_file) if payload_file else "",
     })
     log(f"CONNECT WORKER SPAWNED port={port} pid={proc.pid} cmd_id={cmd_id} type={ctype}")
     return {
@@ -3771,6 +3784,13 @@ def main_entry() -> int:
             ctype = sys.argv[3]
             payload_raw = base64.b64decode(sys.argv[4].encode("ascii")).decode("utf-8", errors="ignore")
             payload = json.loads(payload_raw or "{}")
+            return run_connect_worker(cmd_id, ctype, payload)
+        if len(sys.argv) >= 5 and sys.argv[1] == "--worker-connect-file":
+            cmd_id = sys.argv[2]
+            ctype = sys.argv[3]
+            payload_path = Path(sys.argv[4])
+            payload = json.loads(payload_path.read_text(encoding="utf-8", errors="ignore") or "{}")
+            payload_path.unlink(missing_ok=True)
             return run_connect_worker(cmd_id, ctype, payload)
         main()
         return 0
