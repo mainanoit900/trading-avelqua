@@ -2362,15 +2362,41 @@ router.post('/mt5/run', async (req, res) => {
     if (!node) throw new Error('ไม่พบ Windows VPS ของ PORT ที่เลือก');
 
     const assignedPortNo = num(account.assigned_port_no);
+    const portCtxRows = await client.query(`
+      SELECT
+        vp.id,
+        vp.port_no,
+        NULLIF(TRIM(COALESCE(vp.folder_path, '')), '') AS folder_path
+      FROM vps_system.vps_ports vp
+      WHERE (vp.id = $1)
+         OR (vp.vps_id = $2 AND vp.port_no = $3)
+      ORDER BY CASE WHEN vp.id = $1 THEN 0 ELSE 1 END
+      LIMIT 1
+    `, [account.port_id || null, node.id, assignedPortNo]);
+    const portCtx = portCtxRows.rows[0] || {};
+    const folderPath = String(
+      portCtx.folder_path
+      || `C:\\MT5_PORTS\\${String(node.node_code || 'VPS-WIN-01').trim() || 'VPS-WIN-01'}-PORT-${String(assignedPortNo).padStart(2, '0')}`
+    ).trim();
+    const vpsPortName = String(
+      node.node_code && assignedPortNo
+        ? `${String(node.node_code).trim()}-PORT-${String(assignedPortNo).padStart(2, '0')}`
+        : ''
+    ).trim();
 
     const payload = {
       action: 'run_mt5_bot',
+      commandType: 'run_mt5_bot',
+      userId,
+      accountId: mt5AccountId,
       broker: 'MH Markets',
       serverName: FIXED_SERVER,
       mt5Login: account.mt5_login,
       mt5Password: account.mt5_password,
+      password: account.mt5_password,
       botCode: bot.bot_code,
       botName: bot.display_name || bot.bot_name,
+      eaName: bot.bot_code,
       symbol: 'XAUUSD',
       lot,
       lotPlus,
@@ -2386,9 +2412,25 @@ router.post('/mt5/run', async (req, res) => {
       runTimeMode,
       allowOpen24Hours: runTimeMode === '24h',
       useBotSchedule: runTimeMode === 'auto',
+      portId: portCtx.id || account.port_id || null,
+      vpsId: node.id,
+      nodeId: node.id,
+      nodeCode: node.node_code || '',
+      folderPath,
+      folder_path: folderPath,
+      vpsFolderPath: folderPath,
+      vpsPortName,
+      port_no: assignedPortNo,
+      portNo: assignedPortNo,
+      portNumber: assignedPortNo,
+      folderPort: assignedPortNo,
+      vpsPortNumber: assignedPortNo,
       expertsRelative: 'MQL5\\Experts\\Trading Bot',
+      experts_relative: 'MQL5\\Experts\\Trading Bot',
       port: assignedPortNo,
-      portSlot: account.port_slot || 1
+      portSlot: account.port_slot || 1,
+      keepMt5Open: true,
+      stopTradingOnly: false
     };
 
     const inst = await client.query(`

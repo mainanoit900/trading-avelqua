@@ -189,7 +189,71 @@ async function promoteConnectedFromLiveMetrics({ accountId, portId, mt5Login, me
   return metrics;
 }
 
-async function processCommandResultSideEffects(node, commandId, ctype, pl, result) {
+async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
+  const instanceId = Number(pl?.instanceId || pl?.instance_id || result?.instanceId || result?.instance_id || 0);
+  if (!instanceId) return;
+
+  const balance = positiveMoney(result?.balance ?? result?.mt5_balance ?? result?.mt5Balance);
+  const equity = positiveMoney(result?.equity ?? result?.mt5_equity ?? result?.mt5Equity);
+  const eaStatus = String(result?.eaStatus ?? result?.ea_status ?? '').trim();
+  const failMsg = String(message || result?.message || result?.error || 'run_mt5_bot failed').trim() || 'run_mt5_bot failed';
+
+  if (ok) {
+    await query(`
+      UPDATE vps_system.bot_instances
+      SET status='running',
+          ea_status=COALESCE(NULLIF($2::text, ''), 'ready'),
+          mt5_balance=COALESCE($3::numeric, mt5_balance),
+          mt5_equity=COALESCE($4::numeric, mt5_equity),
+          last_error=NULL,
+          last_agent_ping=NOW(),
+          last_heartbeat=NOW(),
+          updated_at=NOW()
+      WHERE id=$1
+    `, [instanceId, eaStatus, balance, equity]).catch(() => {});
+  } else {
+    await query(`
+      UPDATE vps_system.vps_nodes n
+      SET used_ports=GREATEST(0, COALESCE(n.used_ports,0) - COALESCE(bi.port_used,1)),
+          used_lot=GREATEST(0, COALESCE(n.used_lot,0) - COALESCE(bi.lot_used,0)),
+          status=CASE WHEN n.status='busy' THEN 'online' ELSE n.status END,
+          updated_at=NOW()
+      FROM vps_system.bot_instances bi
+      WHERE bi.id=$1
+        AND bi.vps_id=n.id
+        AND LOWER(TRIM(COALESCE(bi.status,''))) IN ('pending','restarting')
+    `, [instanceId]).catch(() => {});
+
+    await query(`
+      UPDATE vps_system.bot_instances
+      SET status='failed',
+          ea_status='error',
+          last_error=$2,
+          last_agent_ping=NOW(),
+          updated_at=NOW()
+      WHERE id=$1
+    `, [instanceId, failMsg]).catch(() => {});
+  }
+
+  const accountId = Number(pl?.accountId || pl?.account_id || 0);
+  if (accountId && (balance != null || equity != null)) {
+    await query(`
+      UPDATE vps_system.mt5_accounts
+      SET last_balance = COALESCE($2::numeric, last_balance),
+          last_equity = COALESCE($3::numeric, last_equity),
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE id = $1
+    `, [accountId, balance, equity]).catch(() => {});
+  }
+}
+
+async function processCommandResultSideEffects(node, commandId, ctype, pl, result, ok = true, message = '') {
+  if (ctype === 'run_mt5_bot' || ctype === 'run_mt5') {
+    await applyRunMt5BotCommandSideEffects(pl, result, ok, message);
+    return;
+  }
+
   const accountId = pl.accountId ?? pl.account_id;
   if (accountId == null || String(accountId) === '') return;
 
@@ -630,9 +694,7 @@ router.post('/command-result', async (req, res) => {
       node.id
     ]);
 
-    if (ok) {
-      await processCommandResultSideEffects(node, commandId, ctype, pl, result);
-    }
+    await processCommandResultSideEffects(node, commandId, ctype, pl, result, ok, req.body.message || '');
     await ingestCommandResultEvent(node, {
       commandId,
       commandType: ctype,
@@ -717,9 +779,7 @@ router.post('/commands/:id/result', async (req, res) => {
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
     `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId, node.id]);
 
-    if (ok) {
-      await processCommandResultSideEffects(node, commandId, ctype, pl, result);
-    }
+    await processCommandResultSideEffects(node, commandId, ctype, pl, result, ok, msg);
     await ingestCommandResultEvent(node, {
       commandId,
       commandType: ctype,
