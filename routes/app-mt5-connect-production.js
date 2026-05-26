@@ -420,7 +420,7 @@ async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) 
       updated_at = NOW(),
       finished_at = COALESCE(finished_at, NOW())
     WHERE command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
-      AND status IN ('pending', 'processing', 'picked')
+      AND status IN ('pending', 'queued')
       AND (
         ($1::bigint IS NOT NULL AND port_id = $1)
         OR ($2::bigint IS NOT NULL AND (payload->>'accountId')::bigint = $2)
@@ -429,6 +429,34 @@ async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) 
   `,
     [portId || null, accountId || null, mt5Login || null]
   ).catch(() => {});
+}
+
+async function findInFlightLoginCommand({ userId, mt5Login, serverName } = {}) {
+  if (!userId || !mt5Login) return null;
+  const r = await query(
+    `
+    SELECT
+      id,
+      status,
+      payload->>'accountId' AS account_id,
+      payload->>'portId' AS port_id,
+      payload->>'portNo' AS port_no,
+      payload->>'portSlot' AS port_slot,
+      payload->>'vpsId' AS vps_id,
+      payload->>'serverName' AS server_name
+    FROM vps_system.vps_agent_commands
+    WHERE command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
+      AND LOWER(COALESCE(status, '')) IN ('pending', 'queued', 'processing', 'picked', 'running')
+      AND COALESCE(payload->>'userId', '') = $1::text
+      AND TRIM(COALESCE(payload->>'mt5Login', '')) = $2
+      AND ($3::text = '' OR COALESCE(payload->>'serverName', '') = $3)
+      AND created_at > NOW() - INTERVAL '5 minutes'
+    ORDER BY id DESC
+    LIMIT 1
+  `,
+    [String(userId), String(mt5Login), String(serverName || '')]
+  ).catch(() => ({ rows: [] }));
+  return r.rows?.[0] || null;
 }
 
 async function findRetryPortForLogin(userId, mt5Login, serverName) {
@@ -610,6 +638,21 @@ async function handleMt5ConnectProduction(req, res) {
     const duplicate = await findMt5LoginInUse(mt5Login, serverName, userId);
     if (duplicate) {
       throw new Error(mt5LoginInUseMessage(duplicate));
+    }
+
+    const inFlight = await findInFlightLoginCommand({ userId, mt5Login, serverName });
+    if (inFlight?.id) {
+      return res.json({
+        ok: true,
+        status: 'queued',
+        accountId: Number(inFlight.account_id || 0) || null,
+        commandId: Number(inFlight.id || 0) || null,
+        vpsId: Number(inFlight.vps_id || 0) || null,
+        portId: Number(inFlight.port_id || 0) || null,
+        portNo: Number(inFlight.port_no || 0) || null,
+        portSlot: Number(inFlight.port_slot || 0) || null,
+        message: 'ระบบกำลังเปิด MT5 อยู่ กรุณารอสักครู่...'
+      });
     }
 
     await cancelPendingLoginCommands({ mt5Login });
