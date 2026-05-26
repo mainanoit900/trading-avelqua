@@ -71,7 +71,7 @@
     %>
   </b>
 </div>
-        <div><small>พอร์ตว่าง</small><b id="mt5ConnectedCount"><%= packageExpired ? '0' : (typeof availablePortCount !== 'undefined' ? availablePortCount : connectedCount) %> PORT</b> <small>/ <%= packageExpired ? '0' : totalPorts %> ช่อง</small></div>
+        <div><small>พอร์ตว่าง</small><b id="mt5ConnectedCount"><%= packageExpired ? '0' : (typeof availablePortCount !== 'undefined' ? availablePortCount : connectedCount) %> ช่องว่าง</b></div>
       </div>
     </div>
   </section>
@@ -419,8 +419,7 @@
       const cntEl = document.getElementById('mt5ConnectedCount');
       if (cntEl) {
         const avail = data.availablePortCount != null ? data.availablePortCount : data.connectedCount;
-        const total = data.totalPorts || data.createdPortCount || '';
-        cntEl.innerHTML = String(avail || 0) + ' PORT' + (total ? ' <small>/ ' + total + ' ช่อง</small>' : '');
+        cntEl.textContent = String(avail || 0) + ' ช่องว่าง';
       }
       const tempBtn = document.querySelector('#mt5AddPortMenu form input[name="port_type"][value="temporary"]');
       if (tempBtn) {

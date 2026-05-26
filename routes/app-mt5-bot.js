@@ -551,7 +551,7 @@ async function getPackage(userId) {
              NULLIF(to_jsonb(p)->>'port_limit','')::int,
              1
            ) AS max_ports,
-           COALESCE(to_jsonb(p)->>'name_th', to_jsonb(p)->>'name', to_jsonb(p)->>'name_en', to_jsonb(us)->>'package_name_snapshot', 'แพ็กเกจปัจจุบัน') AS package_name,
+           COALESCE(to_jsonb(us)->>'package_name_snapshot', to_jsonb(p)->>'name_th', to_jsonb(p)->>'name', to_jsonb(p)->>'name_en', 'แพ็กเกจปัจจุบัน') AS package_name,
            UPPER(COALESCE(to_jsonb(p)->>'group_name', to_jsonb(p)->>'package_group', to_jsonb(p)->>'package_code', to_jsonb(us)->>'package_group_snapshot', '')) AS package_group,
            COALESCE(NULLIF(to_jsonb(p)->>'duration_days','')::int, NULLIF(to_jsonb(p)->>'days','')::int, NULLIF(to_jsonb(p)->>'package_days','')::int, 0) AS duration_days,
            COALESCE(NULLIF(to_jsonb(p)->>'lot_min','')::numeric, NULLIF(to_jsonb(p)->>'min_lot','')::numeric, NULLIF(to_jsonb(p)->>'lot_from','')::numeric, 0.01) AS lot_min,
@@ -588,25 +588,55 @@ async function getPackage(userId) {
     coupon_code: ''
   };
 
+  if (!pkg.package_group) {
+    const nameUpper = String(pkg.package_name || pkg.package_name_snapshot || '').toUpperCase();
+    if (nameUpper.includes('ADVANCED')) pkg.package_group = 'ADVANCED';
+    else if (nameUpper.includes('PRO')) pkg.package_group = 'PRO';
+    else if (nameUpper.includes('BASIC')) pkg.package_group = 'BASIC';
+  }
   pkg.is_expired = !pkg.subscription_id || pkg.status !== 'active' || (!!pkg.end_at && new Date(pkg.end_at).getTime() <= Date.now());
   return pkg;
 }
 
-async function getPackagePaymentDetail(userId, subscriptionId) {
+function packageTierFromText(text) {
+  const upper = String(text || '').trim().toUpperCase();
+  if (upper.includes('ADVANCED')) return 'ADVANCED';
+  if (upper.includes('PRO')) return 'PRO';
+  if (upper.includes('BASIC')) return 'BASIC';
+  return upper;
+}
+
+async function getPackagePaymentDetail(userId, pkg = null) {
   const rows = await safeQuery(`
     SELECT id, payment_method, payment_status, package_name_snapshot,
-           amount, discount_amount, final_amount, currency_code,
+           amount, discount_amount, final_amount, currency_code, package_id,
            coupon_id, coupon_code_snapshot, coupon_code, created_at, updated_at
     FROM payments
     WHERE user_id=$1
-      AND payment_status IN ('paid','pending')
-    ORDER BY CASE WHEN payment_status='paid' THEN 0 ELSE 1 END, updated_at DESC, id DESC
-    LIMIT 1
+      AND payment_status='paid'
+    ORDER BY updated_at DESC, id DESC
+    LIMIT 30
   `, [userId], []);
-  return rows[0] || null;
+  if (!rows.length) return null;
+  const targetPackageId = Number(pkg?.package_id || 0);
+  const targetTier = packageTierFromText(pkg?.package_name || pkg?.package_group || '');
+  const startMs = pkg?.start_at ? new Date(pkg.start_at).getTime() : 0;
+  const scored = rows.map((row, idx) => {
+    let score = idx * 0.001;
+    if (targetPackageId && Number(row.package_id || 0) !== targetPackageId) score += 1000;
+    const rowTier = packageTierFromText(row.package_name_snapshot);
+    if (targetTier && rowTier && rowTier !== targetTier) score += 100;
+    const rowMs = row.updated_at ? new Date(row.updated_at).getTime() : 0;
+    if (startMs && rowMs) score += Math.min(Math.abs(rowMs - startMs) / 1000, 86400);
+    return { row, score };
+  });
+  scored.sort((a, b) => a.score - b.score || Number(b.row.id) - Number(a.row.id));
+  return scored[0]?.row || rows[0] || null;
 }
 
-async function getCouponDetails(userId, subscriptionId) {
+async function getCouponDetails(userId, paymentDetail = null) {
+  const paymentId = Number(paymentDetail?.id || 0);
+  if (!paymentId) return [];
   const rows = await safeQuery(`
     SELECT c.coupon_code,
            c.coupon_name,
@@ -620,9 +650,10 @@ async function getCouponDetails(userId, subscriptionId) {
     FROM coupon_usages cu
     LEFT JOIN coupons c ON c.id=cu.coupon_id
     WHERE cu.user_id=$1
+      AND cu.payment_id=$2
     ORDER BY cu.used_at DESC NULLS LAST, cu.id DESC
     LIMIT 5
-  `, [userId], []);
+  `, [userId, paymentId], []);
   return rows || [];
 }
 
@@ -863,8 +894,8 @@ if (packageExpired) {
   }
 
   const portStats = await getUserPortSlotStats(userId, totalPorts);
-  const paymentDetail = await getPackagePaymentDetail(userId, pkg.subscription_id);
-  const couponDetails = await getCouponDetails(userId, pkg.subscription_id);
+  const paymentDetail = await getPackagePaymentDetail(userId, pkg);
+  const couponDetails = await getCouponDetails(userId, paymentDetail);
 
   return buildPortSummaryResult({
     pkg,
@@ -990,8 +1021,8 @@ async function getPortSummaryReadOnly(userId) {
     : computePortEntitlement(packageMaxPorts, extraPortRows, group);
 
   const portStats = await getUserPortSlotStats(userId, entitlement.totalPorts);
-  const paymentDetail = await getPackagePaymentDetail(userId, pkg.subscription_id);
-  const couponDetails = await getCouponDetails(userId, pkg.subscription_id);
+  const paymentDetail = await getPackagePaymentDetail(userId, pkg);
+  const couponDetails = await getCouponDetails(userId, paymentDetail);
 
   return buildPortSummaryResult({
     pkg,
@@ -1525,22 +1556,19 @@ router.get('/mt5', async (req, res) => {
   const couponDiscountAmount = latestCoupon ? num(latestCoupon.discount_amount) : 0;
   const couponFreeDays = latestCoupon ? num(latestCoupon.free_days) : 0;
   const isCouponFreePackage = !!latestCoupon && couponDiscountPercent <= 0 && couponDiscountAmount <= 0;
+  const isCouponPackage = String(summary.paymentDetail?.payment_method || '').toLowerCase() === 'free_coupon'
+    || !!summary.paymentDetail?.coupon_id
+    || !!latestCoupon;
 
-  let packageTypeText = 'ชำระเงินซื้อแพ็กเกจ';
-  if (latestCoupon) {
-    if (couponDiscountPercent > 0) {
-      packageTypeText = `ใช้คูปอง ส่วนลด ${couponDiscountPercent}%`;
-    } else if (couponDiscountAmount > 0) {
-      packageTypeText = `ใช้คูปอง ส่วนลด ${couponDiscountAmount} บาท`;
-    } else {
-      packageTypeText = 'ใช้คูปอง ฟรี';
-    }
-  }
+  const packageTypeText = isCouponPackage ? 'ใช้คูปอง' : 'ซื้อแพ็กเกจ';
 
-  // ใช้แสดงหน้าเว็บเท่านั้น: ถ้าคูปองฟรี 1 วัน ให้โชว์ 1 วันตามคูปอง ไม่ fallback เป็นแพ็กเกจเดิม 7 วัน
-  const displayPackageName = isCouponFreePackage
-    ? (latestCoupon.free_package_group || latestCoupon.coupon_name || summary.pkg.package_name || 'แพ็กเกจคูปองฟรี')
-    : (summary.pkg.package_name || 'แพ็กเกจปัจจุบัน');
+  const displayPackageName = packageTierFromText(
+    summary.pkg.package_name_snapshot
+    || summary.paymentDetail?.package_name_snapshot
+    || summary.pkg.package_name
+    || summary.pkg.package_group
+    || 'แพ็กเกจปัจจุบัน'
+  ) || 'แพ็กเกจปัจจุบัน';
   const displayPackageDays = isCouponFreePackage && couponFreeDays > 0
     ? couponFreeDays
     : num(summary.pkg.duration_days || summary.pkg.days || summary.pkg.package_days, 0);
