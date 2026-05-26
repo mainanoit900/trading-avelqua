@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-worker-payloadfile-v23"
+AGENT_BUILD_ID = "2026-05-26-mt5-enable-autotrading-v24"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -541,6 +541,121 @@ def latest_log_text(port_dir: Path) -> Tuple[Optional[Path], str]:
         return latest, "\n".join(data.splitlines()[-300:])
     except Exception:
         return latest, ""
+
+
+def enable_mt5_algo_trading_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> bool:
+    """Try to enable MT5 Algo Trading from the live terminal window."""
+    if os.name != "nt":
+        return False
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        root = str(port_dir).replace("\\", "\\\\").replace("'", "''")
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip().replace("'", "''")
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+$root = '{root}'
+$login = '{login}'
+$proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+  $p = $_.Path
+  if (-not $p) {{ return $false }}
+  if ($p -like "*$root*") {{ return $true }}
+  if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+  return $false
+}} | Select-Object -First 1
+if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {{
+  @{{ ok = $false; reason = 'no_window' }} | ConvertTo-Json -Compress
+  exit 0
+}}
+[void][AvqW32]::ShowWindow($proc.MainWindowHandle, 9)
+Start-Sleep -Milliseconds 300
+[void][AvqW32]::SetForegroundWindow($proc.MainWindowHandle)
+Start-Sleep -Milliseconds 600
+$button = $null
+$buttonName = ''
+$method = 'none'
+$state = 'unknown'
+$win = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+if ($win) {{
+  $cond = New-Object Windows.Automation.PropertyCondition(
+    [Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [Windows.Automation.ControlType]::Button
+  )
+  $buttons = $win.FindAll([Windows.Automation.TreeScope]::Descendants, $cond)
+  foreach ($b in $buttons) {{
+    $name = [string]($b.Current.Name)
+    if ($name -match '(?i)algo\\s*trading|auto\\s*trading') {{
+      $button = $b
+      $buttonName = $name
+      break
+    }}
+  }}
+}}
+if ($button) {{
+  try {{
+    $tpObj = $button.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+    if ($tpObj) {{
+      $tp = [Windows.Automation.TogglePattern]$tpObj
+      $state = [string]$tp.Current.ToggleState
+      if ($state -ne 'On') {{
+        $tp.Toggle()
+        $method = 'toggle'
+        Start-Sleep -Milliseconds 500
+        $state = [string]$tp.Current.ToggleState
+      }} else {{
+        $method = 'already_on'
+      }}
+    }}
+  }} catch {{}}
+  if ($method -eq 'none') {{
+    try {{
+      $ipObj = $button.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+      if ($ipObj) {{
+        $ip = [Windows.Automation.InvokePattern]$ipObj
+        $ip.Invoke()
+        $method = 'invoke'
+        Start-Sleep -Milliseconds 500
+      }}
+    }} catch {{}}
+  }}
+}}
+if ($method -eq 'none') {{
+  [System.Windows.Forms.SendKeys]::SendWait("^(e)")
+  $method = 'ctrl_e'
+  Start-Sleep -Milliseconds 700
+}}
+@{{ ok = $true; method = $method; state = $state; button = $buttonName }} | ConvertTo-Json -Compress
+"""
+        raw = _run_powershell(ps, timeout=20).strip()
+        if raw and raw.startswith("{"):
+            data = json.loads(raw)
+            ok = bool(data.get("ok"))
+            log(
+                f"ENABLE ALGO TRADING port={port} ok={ok} "
+                f"method={data.get('method')} state={data.get('state')} button={data.get('button')}"
+            )
+            return ok
+    except Exception as e:
+        log(f"ENABLE ALGO TRADING ERROR port={port}: {e}")
+    return False
+
+
+def mt5_log_has_auto_trading_disabled(port_dir: Path) -> bool:
+    try:
+        _, text = latest_log_text(port_dir)
+        return "auto trading disabled by client" in str(text or "").lower()
+    except Exception:
+        return False
 
 
 def _parse_money_token(raw: Any) -> Optional[float]:
@@ -3170,6 +3285,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
     time.sleep(5)
+    algo_enabled = enable_mt5_algo_trading_uia(port, payload)
+    time.sleep(1)
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -3195,7 +3312,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     send_account_metrics(payload, bal, eq, snap.get("currency", ""))
     schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
-    threading.Thread(target=lambda: (time.sleep(2), enable_mt5_algo_trading_uia(port, payload)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(4), enable_mt5_algo_trading_uia(port, payload)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(12), enable_mt5_algo_trading_uia(port, payload)), daemon=True).start()
     threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
 
     return {
@@ -3219,6 +3337,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "eaSet": set_info,
         "eaSource": source_sync,
         "eaCompile": compile_info,
+        "algoEnabled": algo_enabled,
         "instanceId": instance_id,
     }
 
@@ -3316,6 +3435,8 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         instance_id = payload_get(payload, "instanceId")
         st = mt5_port_status_one(port, payload)
         port_dir = resolve_mt5_port_dir(port, payload)
+        if bool(st.get("running")) and mt5_log_has_auto_trading_disabled(port_dir):
+            enable_mt5_algo_trading_uia(port, payload)
         snap = account_snapshot(port, payload)
         bal = float(snap.get("balance") or 0)
         eq = float(snap.get("equity") or 0)
