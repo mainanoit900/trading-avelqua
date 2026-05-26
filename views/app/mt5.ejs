@@ -597,6 +597,9 @@ document.addEventListener('DOMContentLoaded', function () {
     if (/user\s+ผิด|ไม่ถูกต้อง|authorization failed|invalid password|invalid account/i.test(details)) {
       return false;
     }
+    if (/รอ\s*agent|ส่งคำสั่ง\s*login_mt5|superseded|new login attempt|login takes priority/i.test(details)) {
+      return true;
+    }
     if (!details) return true;
     return ['connecting', 'checking', 'starting'].includes(st) && mt5ConnectUiElapsedMs() < 15000;
   }

@@ -1730,7 +1730,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
     const needsStaleWatch = ['connecting', 'starting', 'checking'].includes(dbStatusEarly);
     if (needsStaleWatch && staleMs > staleLimitMs) {
       const loginStillBusy = await hasLoginCommandInProgress(a.id, a.vps_id).catch(() => false);
-      if (!loginStillBusy) {
+      if (!loginStillBusy && !forceRequeueNeverPicked) {
         const staleMsg = 'หมดเวลารอการเชื่อมต่อ — กรุณากรอก Login แล้วกดเชื่อมต่อใหม่';
         await failAccountFromJournal(a.id, a.port_id, staleMsg, {
           vpsId: a.vps_id,
@@ -2416,16 +2416,56 @@ router.post('/mt5/connect-fail-cleanup', requireLogin, async (req, res) => {
         const connectStartedMs = acc.connect_started_at
           ? new Date(acc.connect_started_at).getTime()
           : 0;
+        const recentCmdRow = await query(
+          `
+          SELECT status, started_at, error, result_message, result, created_at, finished_at
+          FROM vps_system.vps_agent_commands
+          WHERE command_type IN ('login_mt5', 'connect_mt5')
+            AND (payload->>'accountId')::text = $1::text
+            AND created_at > NOW() - INTERVAL '15 minutes'
+          ORDER BY id DESC
+          LIMIT 1
+        `,
+          [String(acc.id)]
+        ).catch(() => ({ rows: [] }));
+        const recentCmd = recentCmdRow.rows?.[0] || null;
+        const recentCmdMsg = String(
+          [
+            recentCmd?.error,
+            recentCmd?.result_message,
+            recentCmd?.result?.message
+          ]
+            .filter(Boolean)
+            .join(' ')
+        ).trim();
+        const recentBlankCancelled =
+          String(recentCmd?.status || '').toLowerCase() === 'cancelled' &&
+          !recentCmd?.started_at &&
+          (!recentCmdMsg || /new login attempt|superseded|login takes priority/i.test(recentCmdMsg));
+        const recentConnected =
+          ['success', 'done'].includes(String(recentCmd?.status || '').toLowerCase()) &&
+          (
+            String(recentCmd?.result?.status || '').toLowerCase() === 'connected' ||
+            recentCmd?.result?.loginVerified === true ||
+            recentCmd?.result?.journalVerified === true ||
+            recentCmd?.result?.windowVerified === true
+          );
         const cmdMeta = await resolveLoginCommandMeta(acc.id, acc.vps_id, connectStartedMs).catch(
           () => ({})
         );
         const graceNeverPicked = shouldGraceNeverPickedLogin(acc, cmdMeta);
         const transientCancelledAttempt = isTransientCancelledLoginMeta(cmdMeta);
-        if (graceNeverPicked || transientCancelledAttempt) {
+        if (recentConnected) {
+          return res.json({
+            ok: true,
+            message: 'คำสั่ง login สำเร็จแล้ว — ไม่ต้องเคลียร์ PORT'
+          });
+        }
+        if (recentBlankCancelled || graceNeverPicked || transientCancelledAttempt) {
           const pendingStatus = ['connecting', 'starting', 'checking'].includes(acc.status)
             ? acc.status
             : 'connecting';
-          const pendingMessage = transientCancelledAttempt
+          const pendingMessage = (recentBlankCancelled || transientCancelledAttempt)
             ? '① ส่งคำสั่ง login_mt5 แล้ว — รอ Agent รับงาน'
             : '① ส่งคำสั่ง login_mt5 ใหม่แล้ว — รอ Agent รับงาน';
           await persistConnectingAttempt(userId, acc.id, pendingStatus, pendingMessage);
