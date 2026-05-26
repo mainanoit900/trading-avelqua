@@ -343,12 +343,6 @@
     return mt5Num(account.last_equity, mt5Num(account.last_balance, 0));
   }
 
-  function mt5RunExpertsPath(account) {
-    const rawNo = Number(account?.assigned_port_no || account?.port_slot || 1);
-    const suffix = String(Math.max(1, rawNo)).padStart(2, '0');
-    return 'C:\\MT5_PORTS\\VPS-WIN-01-PORT-' + suffix + '\\MQL5\\Experts\\Trading Bot';
-  }
-
   function mt5NormalizeTradeLevel(level) {
     const value = String(level || '').trim().toLowerCase();
     if (value === 'high' || value === 'fast') return 'high';
@@ -484,13 +478,9 @@
       '<label>เลือก PORT ที่จะ Run</label>' +
       '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">' + portButtons + '</div>' +
       '</div>' +
-      '<div id="mt5RunSelectedMeta" style="margin-bottom:14px;padding:12px;border-radius:16px;background:#0b1220;border:1px solid #1e3a5f;color:#e2e8f0">' +
-      '<div style="font-size:14px;font-weight:800">PORT ' + mt5Esc(selected.port_slot) + '</div>' +
-      '<div style="font-size:13px;color:#cbd5e1;margin-top:4px">Login: ' + mt5Esc(selected.mt5_login) + (actualCapital > 0 ? ' / Equity: ' + mt5Esc(actualCapital) : '') + '</div>' +
-      '<div style="font-size:12px;color:#94a3b8;margin-top:6px">EA Path: ' + mt5Esc(mt5RunExpertsPath(selected)) + '</div>' +
-      '</div>' +
+      '<div id="mt5RunSelectedMeta" style="display:none"></div>' +
       '<div class="mt5-form-row">' +
-      '<div><label>BOT</label><select name="bot_code" required>' + botOpts + '</select><small style="color:#94a3b8;display:block;margin-top:4px">ไฟล์ EA อยู่ใน ' + mt5Esc(mt5RunExpertsPath(selected)) + '</small></div>' +
+      '<div><label>BOT</label><select name="bot_code" required>' + botOpts + '</select></div>' +
       '<div><label>ระดับการเทรด</label><select name="trade_level">' +
       '<option value="low">เสี่ยงต่ำ</option><option value="medium" selected>เสี่ยงกลาง</option><option value="high">เสี่ยงสูง</option>' +
       '</select></div>' +
@@ -512,7 +502,6 @@
     function applyPresetDefaults() {
       const selected = mt5SelectedRunAccount();
       const hidden = form.querySelector('#mt5RunAccountId');
-      const metaBox = form.querySelector('#mt5RunSelectedMeta');
       const capitalInput = form.querySelector('input[name="capital_manual"]');
       const lotInput = form.querySelector('input[name="manual_lot"]');
       const botSelect = form.querySelector('select[name="bot_code"]');
@@ -525,12 +514,6 @@
       capitalInput.placeholder = actualCapital > 0
         ? 'ทุนจาก MT5 จริง: ' + actualCapital + ' / หรือพิมพ์เอง'
         : 'กรอกเงินทุนขั้นต่ำ 100';
-      if (metaBox) {
-        metaBox.innerHTML =
-          '<div style="font-size:14px;font-weight:800">PORT ' + mt5Esc(selected.port_slot) + '</div>' +
-          '<div style="font-size:13px;color:#cbd5e1;margin-top:4px">Login: ' + mt5Esc(selected.mt5_login) + (actualCapital > 0 ? ' / Equity: ' + mt5Esc(actualCapital) : '') + '</div>' +
-          '<div style="font-size:12px;color:#94a3b8;margin-top:6px">EA Path: ' + mt5Esc(mt5RunExpertsPath(selected)) + '</div>';
-      }
 
       const cfg = window.__mt5RunConfig || {};
       lotInput.min = String(mt5Num(cfg.packageLotMin, 0.01));
@@ -540,8 +523,6 @@
       const manualLot = mt5Clamp(lotInput.value || cfg.packageLotMax, cfg.packageLotMin, cfg.packageLotMax);
       lotInput.value = mt5Fixed(manualLot);
       mt5ComputeRunPreset(botSelect.value, capital, manualLot, levelSelect.value);
-      const botHelp = botSelect.parentElement ? botSelect.parentElement.querySelector('small') : null;
-      if (botHelp) botHelp.textContent = 'ไฟล์ EA อยู่ใน ' + mt5RunExpertsPath(selected);
     }
 
     form.querySelectorAll('.mt5-run-port-btn').forEach(function (btn) {
