@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-compile-fallback-v29"
+AGENT_BUILD_ID = "2026-05-27-mt5-compile-tempdir-v30"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3193,6 +3193,16 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_file = logs_dir / f"metaeditor-{mq5_path.stem}-{stamp}.log"
     ex5_path = mq5_path.with_suffix(".ex5")
+    compile_dir = port_dir / "MQL5" / "Experts" / "_avelqua_compile"
+    compile_dir.mkdir(parents=True, exist_ok=True)
+    compile_mq5 = compile_dir / mq5_path.name
+    compile_ex5 = compile_mq5.with_suffix(".ex5")
+    try:
+        compile_mq5.write_text(mq5_path.read_text(encoding="utf-8", errors="ignore"), encoding="utf-8", errors="ignore")
+        if compile_ex5.exists():
+            compile_ex5.unlink()
+    except Exception as e:
+        return {"ok": False, "reason": "compile_stage_failed", "message": str(e), "sourceFile": str(mq5_path)}
     backup_ex5 = None
     if ex5_path.exists():
         backup_ex5 = ex5_path.with_suffix(ex5_path.suffix + f".bak-{stamp}")
@@ -3208,7 +3218,7 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
 
     try:
         proc = subprocess.run(
-            [str(metaeditor), f"/compile:{mq5_path}", f"/log:{log_file}"],
+            [str(metaeditor), f"/compile:{compile_mq5}", f"/log:{log_file}"],
             cwd=str(port_dir),
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -3231,19 +3241,28 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
     stdout_tail = str(getattr(proc, "stdout", "") or "")[-4000:]
 
     compiled = False
-    if ex5_path.exists():
+    if compile_ex5.exists():
         try:
-            ex5_stat = ex5_path.stat()
+            ex5_stat = compile_ex5.stat()
             compiled = ex5_stat.st_size > 0
         except Exception:
-            compiled = ex5_path.stat().st_size > 0
+            compiled = compile_ex5.stat().st_size > 0
+
+    if compiled:
+        try:
+            shutil.copy2(compile_ex5, ex5_path)
+        except Exception as copy_err:
+            compiled = False
+            stdout_tail = (stdout_tail + f"\nCOPY_EX5_BACK_ERROR: {copy_err}").strip()
 
     if not compiled and "0 error(s), 0 warning(s)" in log_tail.lower():
-        compiled = ex5_path.exists()
+        compiled = compile_ex5.exists() and ex5_path.exists()
 
     result = {
         "ok": compiled,
         "sourceFile": str(mq5_path),
+        "compiledSourceFile": str(compile_mq5),
+        "compiledEx5File": str(compile_ex5),
         "ex5File": str(ex5_path),
         "logFile": str(log_file),
         "exitCode": getattr(proc, "returncode", None),
