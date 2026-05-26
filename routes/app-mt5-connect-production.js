@@ -327,9 +327,7 @@ async function clearExpiredLocks() {
 
 const {
   findMt5LoginInUse,
-  findUserActivePortInUse,
-  mt5LoginInUseMessage,
-  mt5UserPortInUseMessage
+  mt5LoginInUseMessage
 } = require('../lib/mt5LoginDuplicate');
 
 async function reserveBestPort(userId) {
@@ -612,11 +610,6 @@ async function handleMt5ConnectProduction(req, res) {
     const duplicate = await findMt5LoginInUse(mt5Login, serverName, userId);
     if (duplicate) {
       throw new Error(mt5LoginInUseMessage(duplicate));
-    }
-
-    const userActivePort = await findUserActivePortInUse(userId);
-    if (userActivePort) {
-      throw new Error(mt5UserPortInUseMessage(userActivePort));
     }
 
     await cancelPendingLoginCommands({ mt5Login });

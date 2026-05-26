@@ -692,20 +692,15 @@ async function stopAndExpireMt5Accounts(userId, reason = 'package_expired') {
   SELECT 
     a.id,
     a.port_slot,
+    a.port_id,
     a.vps_id,
     a.assigned_port_no,
     a.windows_port_no,
-    COALESCE(p.folder_path, '') AS folder_path,
-    COALESCE(p.port_name, p.port_number::text, '') AS port_name
+    COALESCE(vp.folder_path, '') AS folder_path
   FROM vps_system.mt5_accounts a
-  LEFT JOIN vps_allocations p
-    ON p.node_id = a.vps_id
-   AND COALESCE(
-      NULLIF(regexp_replace(COALESCE(p.port_name, p.port_number::text, ''), '[^0-9]', '', 'g'), '')::int,
-      NULLIF(regexp_replace(COALESCE(p.port_number::text, ''), '[^0-9]', '', 'g'), '')::int
-   ) = COALESCE(a.assigned_port_no, a.windows_port_no, a.port_slot)
+  LEFT JOIN vps_system.vps_ports vp ON vp.id = a.port_id
   WHERE a.user_id=$1
-    AND LOWER(TRIM(COALESCE(a.status,'ready'))) IN ('ready','connected','checking','failed')
+    AND LOWER(TRIM(COALESCE(a.status,'ready'))) IN ('ready','connected','checking','connecting','starting','failed')
 `, [userId], []);
 
 
@@ -715,33 +710,51 @@ async function stopAndExpireMt5Accounts(userId, reason = 'package_expired') {
     if (stopNodeId && stopPortNo) {
       await query(`
         INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, command_type, payload, status, created_at)
-        VALUES ($1, $1, 'stop_mt5', $2::jsonb, 'pending', NOW())
-      `, [stopNodeId, JSON.stringify({
-  port: stopPortNo,
-  portSlot: a.port_slot,
-  assignedPortNo: a.assigned_port_no,
-  windowsPortNo: a.windows_port_no,
-vpsPortName: `VPS-WIN-01-PORT-${String(stopPortNo).padStart(2, '0')}`,
-vpsFolderPath: `C:\\MT5_PORTS\\VPS-WIN-01-PORT-${String(stopPortNo).padStart(2, '0')}`,
-  reason
-})]).catch(() => {});
-      await query(`
-        UPDATE vps_system.vps_ports
-        SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
-        WHERE vps_id=$1 AND port_no=$2
-      `, [stopNodeId, stopPortNo]).catch(() => {});
+        (vps_id, node_id, port_id, command_type, payload, status, created_at)
+        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
+      `, [stopNodeId, a.port_id || null, JSON.stringify({
+        port: stopPortNo,
+        portSlot: a.port_slot,
+        assignedPortNo: a.assigned_port_no,
+        windowsPortNo: a.windows_port_no,
+        folder_path: a.folder_path || null,
+        vpsFolderPath: a.folder_path || null,
+        reason
+      })]).catch(() => {});
+      if (a.port_id) {
+        await query(`
+          UPDATE vps_system.vps_ports
+          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
+          WHERE id=$1
+        `, [a.port_id]).catch(() => {});
+      } else {
+        await query(`
+          UPDATE vps_system.vps_ports
+          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
+          WHERE vps_id=$1 AND port_no=$2
+        `, [stopNodeId, stopPortNo]).catch(() => {});
+      }
     }
   }
 
   if (rows.length) {
     await query(`
       UPDATE vps_system.mt5_accounts
-      SET status='expired', assigned_port_no=NULL, windows_port_no=NULL, vps_id=NULL, updated_at=NOW()
+      SET status='expired', assigned_port_no=NULL, windows_port_no=NULL, vps_id=NULL, port_id=NULL, updated_at=NOW()
       WHERE user_id=$1
-        AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','failed')
+        AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','connecting','starting','failed')
     `, [userId]).catch(() => {});
   }
+
+  await query(`
+    UPDATE vps_system.bot_instances
+    SET status='stopped',
+        stopped_at=COALESCE(stopped_at, NOW()),
+        updated_at=NOW(),
+        last_error=$2
+    WHERE user_id=$1
+      AND status IN ('running','pending','restarting')
+  `, [userId, reason]).catch(() => {});
 }
 
 
@@ -749,10 +762,10 @@ async function stopPortsAboveEntitlement(userId, totalPorts, reason = 'port_enti
   await ensureMt5AccountRuntimeColumns().catch(() => {});
   const limit = Math.max(0, num(totalPorts));
   const rows = await safeQuery(`
-    SELECT id, port_slot, vps_id, assigned_port_no, windows_port_no
+    SELECT id, port_slot, port_id, vps_id, assigned_port_no, windows_port_no
     FROM vps_system.mt5_accounts
     WHERE user_id=$1
-      AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','failed')
+      AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','connecting','starting','failed')
       AND COALESCE(port_slot,0) > $2
   `, [userId, limit], []);
 
@@ -762,24 +775,31 @@ async function stopPortsAboveEntitlement(userId, totalPorts, reason = 'port_enti
     if (stopNodeId && stopPortNo) {
       await query(`
         INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, command_type, payload, status, created_at)
-        VALUES ($1, $1, 'stop_mt5', $2::jsonb, 'pending', NOW())
-      `, [stopNodeId, JSON.stringify({
+        (vps_id, node_id, port_id, command_type, payload, status, created_at)
+        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
+      `, [stopNodeId, a.port_id || null, JSON.stringify({
         port: stopPortNo,
         portSlot: a.port_slot,
         assignedPortNo: a.assigned_port_no,
         windowsPortNo: a.windows_port_no,
         reason
       })]).catch(() => {});
+      if (a.port_id) {
+        await query(`
+          UPDATE vps_system.vps_ports
+          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
+          WHERE id=$1
+        `, [a.port_id]).catch(() => {});
+      }
     }
   }
 
   if (rows.length) {
     await query(`
       UPDATE vps_system.mt5_accounts
-      SET status='expired', assigned_port_no=NULL, windows_port_no=NULL, vps_id=NULL, updated_at=NOW()
+      SET status='expired', assigned_port_no=NULL, windows_port_no=NULL, vps_id=NULL, port_id=NULL, updated_at=NOW()
       WHERE user_id=$1
-        AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','failed')
+        AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','connecting','starting','failed')
         AND COALESCE(port_slot,0) > $2
     `, [userId, limit]).catch(() => {});
   }
@@ -1595,17 +1615,11 @@ console.log('[MT5 CONNECT START]', {
 
     const {
       findMt5LoginInUse,
-      findUserActivePortInUse,
-      mt5LoginInUseMessage,
-      mt5UserPortInUseMessage
+      mt5LoginInUseMessage
     } = require('../lib/mt5LoginDuplicate');
     const dupLogin = await findMt5LoginInUse(mt5Login, FIXED_SERVER, userId);
     if (dupLogin) {
       throw new Error(mt5LoginInUseMessage(dupLogin));
-    }
-    const userActivePort = await findUserActivePortInUse(userId);
-    if (userActivePort) {
-      throw new Error(mt5UserPortInUseMessage(userActivePort));
     }
 
     const usedSlots = await safeQuery(`
