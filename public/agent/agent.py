@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-chart-algo-v31"
+AGENT_BUILD_ID = "2026-05-27-mt5-chart-algo-v32"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -725,6 +725,10 @@ if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {{
 Start-Sleep -Milliseconds 300
 [void][AvqW32]::SetForegroundWindow($proc.MainWindowHandle)
 Start-Sleep -Milliseconds 700
+$main = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+if ($main) {{
+  try {{ $main.SetFocus() }} catch {{}}
+}}
 [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
 Start-Sleep -Milliseconds 150
 [System.Windows.Forms.SendKeys]::SendWait("{{F7}}")
@@ -760,52 +764,81 @@ while ((Get-Date) -lt $dlgDeadline) {{
   Start-Sleep -Milliseconds 350
 }}
 if (-not $dlg) {{
-  @{{ ok = $false; reason = 'no_dialog' }} | ConvertTo-Json -Compress
-  exit 0
-}}
 $tabCond = New-Object Windows.Automation.PropertyCondition(
   [Windows.Automation.AutomationElement]::ControlTypeProperty,
   [Windows.Automation.ControlType]::TabItem
 )
-$tabs = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $tabCond)
-foreach ($tab in $tabs) {{
-  $name = [string]($tab.Current.Name)
-  if ($name -match '(?i)^common$|ทั่วไป') {{
-    try {{
-      $spObj = $tab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
-      if ($spObj) {{
-        $sp = [Windows.Automation.SelectionItemPattern]$spObj
-        $sp.Select()
-      }} else {{
-        $ipObj = $tab.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-        if ($ipObj) {{
-          $ip = [Windows.Automation.InvokePattern]$ipObj
-          $ip.Invoke()
-        }}
-      }}
-    }} catch {{}}
-    Start-Sleep -Milliseconds 250
-    break
-  }}
-}}
 $checkCond = New-Object Windows.Automation.PropertyCondition(
   [Windows.Automation.AutomationElement]::ControlTypeProperty,
   [Windows.Automation.ControlType]::CheckBox
 )
-$checks = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $checkCond)
+$btnCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button
+)
 $target = $null
 $targetName = ''
-foreach ($c in $checks) {{
-  $name = [string]($c.Current.Name)
-  if ($name -match '(?i)allow.*(algo|live).*trading|algo.*trading|live.*trading') {{
-    $target = $c
-    $targetName = $name
+$okButton = $null
+$scope = ''
+$scopeName = ''
+$roots = @()
+if ($dlg) {{
+  $roots += @{{ label = 'dialog'; element = $dlg; name = $dlgName }}
+}}
+if ($main) {{
+  $roots += @{{ label = 'main_window'; element = $main; name = [string]($main.Current.Name) }}
+}}
+foreach ($rootInfo in $roots) {{
+  $rootEl = $rootInfo.element
+  if (-not $rootEl) {{ continue }}
+  $tabs = $rootEl.FindAll([Windows.Automation.TreeScope]::Descendants, $tabCond)
+  foreach ($tab in $tabs) {{
+    $name = [string]($tab.Current.Name)
+    if ($name -match '(?i)^common$|ทั่วไป') {{
+      try {{
+        $spObj = $tab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+        if ($spObj) {{
+          $sp = [Windows.Automation.SelectionItemPattern]$spObj
+          $sp.Select()
+        }} else {{
+          $ipObj = $tab.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+          if ($ipObj) {{
+            $ip = [Windows.Automation.InvokePattern]$ipObj
+            $ip.Invoke()
+          }}
+        }}
+      }} catch {{}}
+      Start-Sleep -Milliseconds 250
+      break
+    }}
+  }}
+
+  $checks = $rootEl.FindAll([Windows.Automation.TreeScope]::Descendants, $checkCond)
+  foreach ($c in $checks) {{
+    $name = [string]($c.Current.Name)
+    if ($name -match '(?i)allow.*(algo|live).*trading|algo.*trading|live.*trading') {{
+      $target = $c
+      $targetName = $name
+      $scope = [string]$rootInfo.label
+      $scopeName = [string]$rootInfo.name
+      break
+    }}
+  }}
+  if ($target) {{
+    $buttons = $rootEl.FindAll([Windows.Automation.TreeScope]::Descendants, $btnCond)
+    foreach ($b in $buttons) {{
+      $name = [string]($b.Current.Name)
+      if ($name -match '(?i)^ok$|ตกลง') {{
+        $okButton = $b
+        break
+      }}
+    }}
     break
   }}
 }}
 if (-not $target) {{
   [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
-  @{{ ok = $false; reason = 'no_checkbox'; dialog = $dlgName }} | ConvertTo-Json -Compress
+  @{{ ok = $false; reason = ($dlg ? 'no_checkbox' : 'no_dialog_or_checkbox'); dialog = $dlgName; scope = $scope; scopeName = $scopeName }} | ConvertTo-Json -Compress
   exit 0
 }}
 $method = 'none'
@@ -844,19 +877,6 @@ if ($method -eq 'none') {{
     Start-Sleep -Milliseconds 350
   }} catch {{}}
 }}
-$btnCond = New-Object Windows.Automation.PropertyCondition(
-  [Windows.Automation.AutomationElement]::ControlTypeProperty,
-  [Windows.Automation.ControlType]::Button
-)
-$buttons = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $btnCond)
-$okButton = $null
-foreach ($b in $buttons) {{
-  $name = [string]($b.Current.Name)
-  if ($name -match '(?i)^ok$|ตกลง') {{
-    $okButton = $b
-    break
-  }}
-}}
 if ($okButton) {{
   try {{
     $ipObj = $okButton.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
@@ -872,7 +892,7 @@ if ($okButton) {{
 }} else {{
   [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 }}
-@{{ ok = $true; method = $method; state = $state; checkbox = $targetName; dialog = $dlgName }} | ConvertTo-Json -Compress
+@{{ ok = $true; method = $method; state = $state; checkbox = $targetName; dialog = $dlgName; scope = $scope; scopeName = $scopeName }} | ConvertTo-Json -Compress
 """
             raw = _run_powershell(ps, timeout=30).strip()
             last_raw = raw
@@ -883,6 +903,7 @@ if ($okButton) {{
                     f"ENABLE CHART ALGO port={port} attempt={attempt}/{max_attempts} ok={ok} "
                     f"method={data.get('method')} state={data.get('state')} "
                     f"checkbox={data.get('checkbox')} dialog={data.get('dialog')} "
+                    f"scope={data.get('scope')} scope_name={data.get('scopeName')} "
                     f"reason={data.get('reason')}"
                 )
                 if ok:
