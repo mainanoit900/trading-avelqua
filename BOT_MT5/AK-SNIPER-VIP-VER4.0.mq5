@@ -100,6 +100,7 @@ string gv_dd_money_name = "";
 string gv_dd_pct_name = "";
 
 datetime last_trade_time = 0; // เก็บเวลาที่เปิดไม้ล่าสุด เพื่อป้องกันการเบิ้ลไม้ระดับ Local
+datetime last_diag_log_time = 0; // หน่วง log diagnostic ไม่ให้ spam Experts/Journal
 
 // ตัวแปรเก็บสถิติคำสั่ง Server
 int daily_command_count = 0;
@@ -227,7 +228,11 @@ void OnTick()
    if(CheckDailyProfitLoss()) return;
    
    // ถ้าใช้โควต้าคำสั่งรายวันหมดแล้ว ให้ EA หยุดทำงานไปเลย เพื่อกันโดนโบรกเกอร์แบน
-   if(daily_command_count >= InpMaxDailyCommands) return;
+   if(daily_command_count >= InpMaxDailyCommands)
+   {
+      LogTradeInfo("DAILY_LIMIT", POSITION_TYPE_BUY, "daily command limit reached");
+      return;
+   }
 
    ManageGrid(POSITION_TYPE_BUY);
    CheckTakeProfitAverage(POSITION_TYPE_BUY);
@@ -406,6 +411,15 @@ void LogTradeFailure(string tag, ENUM_POSITION_TYPE type, double lot, double pri
    );
 }
 
+void LogTradeInfo(string tag, ENUM_POSITION_TYPE type, string message)
+{
+   datetime now = TimeCurrent();
+   if(now - last_diag_log_time < 60)
+      return;
+   last_diag_log_time = now;
+   Print("TRADE INFO [", tag, "] ", EnumToString(type), " ", message);
+}
+
 //+------------------------------------------------------------------+
 //| ฟังก์ชันตรวจสอบ Sideway (อนุญาตให้ออกไม้แรก)                          |
 //+------------------------------------------------------------------+
@@ -530,15 +544,28 @@ void ManageGrid(ENUM_POSITION_TYPE type)
    // ถ้า "ไม่มี" ไม้ค้างอยู่เลย ถึงจะยอมให้เปิด Initial Trade ได้ (เริ่มชุดใหม่)
    if(count == 0)
      {
-      if(InpSoftClose) return;
+      if(InpSoftClose)
+      {
+         LogTradeInfo("SKIP", type, "soft close active");
+         return;
+      }
 
-      if(InpUseTimeFilter && !IsAnySessionActive()) return;
-      if(!IsSidewayCondition()) return;
+      if(InpUseTimeFilter && !IsAnySessionActive())
+      {
+         LogTradeInfo("SKIP", type, "outside active session");
+         return;
+      }
+      if(!IsSidewayCondition())
+      {
+         LogTradeInfo("SKIP", type, "sideway condition rejected");
+         return;
+      }
       
       // --- ระบบ News Filter ป้องกันการเปิดไม้แรก ---
       if(InpUseNewsFilter && IsNewsRestricted())
         {
          is_news_pausing = true;
+         LogTradeInfo("SKIP", type, "news filter paused first entry");
          return; // สั่งหยุด ไม่ให้เปิดไม้แรก
         }
       else
@@ -553,6 +580,7 @@ void ManageGrid(ENUM_POSITION_TYPE type)
       weekly_command_count++; 
       
       // เมื่อเปิดชุดใหม่ ใช้ค่า InpLotSize ตามที่คุณเพิ่งตั้งใน Input
+      LogTradeInfo("INITIAL_ATTEMPT", type, "trying first order");
       ResetLastError();
       if(type == POSITION_TYPE_BUY) is_success = trade.Buy(InpLotSize, _Symbol, current_ask, 0, 0, "Initial Buy");
       else is_success = trade.Sell(InpLotSize, _Symbol, current_bid, 0, 0, "Initial Sell");
@@ -560,6 +588,7 @@ void ManageGrid(ENUM_POSITION_TYPE type)
       if(is_success) 
       {
          last_trade_time = TimeCurrent();
+         Print("ORDER OK [INITIAL] ", EnumToString(type), " order=", IntegerToString((int)trade.ResultOrder()));
       }
       else
       {
@@ -573,7 +602,11 @@ void ManageGrid(ENUM_POSITION_TYPE type)
    // ถ้า "มี" ไม้ค้างอยู่ (ชุดเก่า) -> บังคับให้ดูแลชุดเก่าต่อให้จบ ไม่อนุญาตให้เริ่มไม้ 1 ซ้อน
    else
      {
-      if(InpUseTrendFilter && IsTrendTooStrongToGrid()) return; 
+      if(InpUseTrendFilter && IsTrendTooStrongToGrid())
+      {
+         LogTradeInfo("SKIP_GRID", type, "trend too strong");
+         return;
+      }
 
       // คำนวณ Lot ไม้ต่อไป โดยดูจาก Max Lot ของไม้ที่ค้างอยู่จริงในตลาด บวกด้วย InpLotPlus
       double next_lot = NormalizeDouble(max_lot + InpLotPlus, 2);
@@ -587,6 +620,7 @@ void ManageGrid(ENUM_POSITION_TYPE type)
          if(trade.Buy(next_lot, _Symbol, current_ask, 0, 0, "Grid Buy " + (string)count))
          {
             last_trade_time = TimeCurrent();
+            Print("ORDER OK [GRID] ", EnumToString(type), " order=", IntegerToString((int)trade.ResultOrder()));
          }
          else
          {
@@ -602,6 +636,7 @@ void ManageGrid(ENUM_POSITION_TYPE type)
          if(trade.Sell(next_lot, _Symbol, current_bid, 0, 0, "Grid Sell " + (string)count))
          {
             last_trade_time = TimeCurrent();
+            Print("ORDER OK [GRID] ", EnumToString(type), " order=", IntegerToString((int)trade.ResultOrder()));
          }
          else
          {
