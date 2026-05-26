@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-compile-proof-v28"
+AGENT_BUILD_ID = "2026-05-26-mt5-compile-fallback-v29"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3315,8 +3315,21 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if source_sync.get("requested"):
         compile_info = _compile_ea_source(port_dir, Path(source_sync["sourceFile"]))
         if not compile_info.get("ok"):
-            detail = str(compile_info.get("logTail") or compile_info.get("message") or compile_info.get("reason") or "").strip()
-            raise RuntimeError(f"EA compile failed for {bot_code}: {detail[:500]}")
+            restored_ex5 = str(compile_info.get("restoredBackup") or "").strip()
+            if restored_ex5 and Path(str(compile_info.get("ex5File") or "")).exists():
+                log(
+                    f"EA SOURCE COMPILE FALLBACK mq5={source_sync['sourceFile']} "
+                    f"using_backup={restored_ex5}"
+                )
+            else:
+                detail = str(
+                    compile_info.get("stdoutTail")
+                    or compile_info.get("logTail")
+                    or compile_info.get("message")
+                    or compile_info.get("reason")
+                    or ""
+                ).strip()
+                raise RuntimeError(f"EA compile failed for {bot_code}: {detail[:500]}")
     ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
     launch_ea = _pick_launchable_ea_file(ea_info)
     if launch_ea is None:
