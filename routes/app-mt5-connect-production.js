@@ -525,7 +525,7 @@ async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) 
         updated_at=NOW()
     WHERE vps_id=$1
       AND assigned_port_no=$2
-      AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting')
+      AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting', 'connected', 'ready')
   `;
   if (keepAccountId) {
     params.push(keepAccountId);
