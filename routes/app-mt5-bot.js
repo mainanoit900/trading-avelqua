@@ -1890,11 +1890,13 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
 
     // STEP 1: ดึงค่า PORT/VPS เดิมก่อนล้างค่า
     const old = await query(`
-      SELECT port_slot, vps_id, assigned_port_no, windows_port_no
+      SELECT ma.port_slot, ma.vps_id, ma.port_id, ma.assigned_port_no, ma.windows_port_no,
+             NULLIF(TRIM(COALESCE(vp.folder_path, '')), '') AS folder_path
       FROM vps_system.mt5_accounts
-      WHERE id=$1
-        AND user_id=$2
-        AND LOWER(TRIM(COALESCE(status,'ready'))) <> 'deleted'
+      LEFT JOIN vps_system.vps_ports vp ON vp.id = ma.port_id
+      WHERE ma.id=$1
+        AND ma.user_id=$2
+        AND LOWER(TRIM(COALESCE(ma.status,'ready'))) <> 'deleted'
       LIMIT 1
     `, [id, userId]);
 
@@ -1908,23 +1910,34 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
       num(oldPort.assigned_port_no) ||
       num(oldPort.windows_port_no) ||
       num(oldPort.port_slot);
+    const folderPath = oldPort.folder_path || null;
 
     // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน
     if (stopNodeId && stopPortNo) {
       await query(`
         INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, command_type, payload, status, created_at)
-        VALUES ($1, $1, 'stop_mt5', $2::jsonb, 'pending', NOW())
+        (vps_id, node_id, port_id, command_type, payload, status, created_at)
+        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
       `, [
         stopNodeId,
+        oldPort.port_id || null,
         JSON.stringify({
           port: stopPortNo,
           portSlot: oldPort.port_slot,
           assignedPortNo: oldPort.assigned_port_no,
           windowsPortNo: oldPort.windows_port_no,
+          folder_path: folderPath,
+          vpsFolderPath: folderPath,
           reason: 'user_cancel_port_before_clear'
         })
       ]);
+      if (oldPort.port_id) {
+        await query(`
+          UPDATE vps_system.vps_ports
+          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
+          WHERE id=$1
+        `, [oldPort.port_id]).catch(() => {});
+      }
     }
 
     // STEP 3: ค่อยล้างค่าใน DB
@@ -1934,6 +1947,7 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
           assigned_port_no=NULL,
           windows_port_no=NULL,
           vps_id=NULL,
+          port_id=NULL,
           updated_at=NOW()
       WHERE id=$1
         AND user_id=$2
