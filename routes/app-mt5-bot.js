@@ -1600,6 +1600,7 @@ router.get('/mt5', async (req, res) => {
     fmtDateView: fmtDate,
     packageLotMin: runLotMeta.lotMin,
     packageLotMax: runLotMeta.lotMax,
+    packageDefaultLot: runLotMeta.defaultLot,
     vpsProbe,
     vpsProbeText: vpsProbeText(vpsProbe)
   });
