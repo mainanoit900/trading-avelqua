@@ -197,60 +197,10 @@
     </div>
 
     <div id="mt5RunPanel">
-    <% if (!accounts || accounts.length === 0) { %>
+    <% if (!connectedRunAccounts || connectedRunAccounts.length === 0) { %>
       <div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน แล้วระบบจะแสดงตัวเลือก Run BOT</div>
     <% } else { %>
-      <form method="POST" action="/app/mt5/run" class="mt5-run-form">
-        <div class="mt5-form-row">
-          <div>
-            <label>บัญชี / PORT</label>
-            <select name="mt5_account_id" required>
-              <% accounts.filter(a => String(a.status || '').toLowerCase() === 'connected').forEach(function(a){ %>
-                <option value="<%= a.id %>" data-balance="<%= a.last_balance || '' %>" data-equity="<%= a.last_equity || '' %>">PORT <%= a.port_slot %> / Login <%= a.mt5_login %><%= (a.last_equity || a.last_balance) ? ' / Equity ' + (a.last_equity || a.last_balance) : '' %></option>
-              <% }) %>
-            </select>
-          </div>
-          <div>
-            <label>BOT</label>
-            <select name="bot_id" required>
-              <% bots.forEach(function(b){ %>
-                <option value="<%= b.id %>"><%= b.display_name || b.bot_name %></option>
-              <% }) %>
-            </select>
-          </div>
-          <div>
-            <label>ระดับการเทรด</label>
-            <select name="trade_level">
-              <option value="safe">Safe</option>
-              <option value="medium">Medium</option>
-              <option value="fast">Fast</option>
-            </select>
-          </div>
-        </div>
-
-        <div class="mt5-form-row">
-          <div>
-            <label>เงินทุนจาก MT5 / ใส่เอง</label>
-            <input
-  type="number"
-  step="0.01"
-  min="0"
-  name="capital_manual"
-  id="capital_manual"
-  class="form-control"
-  placeholder="ว่างไว้ = ใช้ค่าจาก MT5 / หรือพิมพ์เอง"
-  value=""
->
-          </div>
-          <div>
-            <label>Lot ตั้งเอง</label>
-            <input name="manual_lot" type="number" step="0.01" min="0" placeholder="ว่างไว้ = คำนวณจากตาราง">
-          </div>
-          <div class="run-action">
-            <button type="submit" class="mt5-btn run" <%= packageExpired ? 'disabled' : '' %> onclick="return confirm('ยืนยัน Run BOT ใช่ไหม?')"><%= packageExpired ? 'แพ็คเกจหมดอายุ' : 'Run BOT' %></button>
-          </div>
-        </div>
-      </form>
+      <div class="mt5-empty">กำลังเตรียมฟอร์ม Run BOT...</div>
     <% } %>
     </div>
   </section>
@@ -285,7 +235,7 @@
               <td><%= i.node_name || i.node_code || '-' %></td>
               <td><%= i.assigned_port_no || '-' %></td>
               <td><%= i.lot_used || '-' %></td>
-              <td><%= i.trade_level || '-' %></td>
+              <td><%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %></td>
               <td><span class="status <%= i.status %>"><%= i.status %></span></td>
               <td>
                 <% if (['running','pending'].includes(i.status)) { %>
@@ -348,6 +298,19 @@
     packageLotMin: <%= packageLotMin %>,
     packageLotMax: <%= packageLotMax %>
   };
+  window.__mt5RunConfig = {
+    packageExpired: <%= packageExpired ? 'true' : 'false' %>,
+    packageGroup: <%- JSON.stringify(runPackageGroup || 'BASIC') %>,
+    packageLotMin: <%= packageLotMin %>,
+    packageLotMax: <%= packageLotMax %>,
+    bots: <%- JSON.stringify((bots || []).map(function (b) { return { code: String(b.bot_code || b.bot_name || '').trim(), label: b.display_name || b.bot_name || b.bot_code || '' }; })) %>,
+    presetTables: <%- JSON.stringify(runPresetTables || {}) %>,
+    connectedAccounts: <%- JSON.stringify(connectedRunAccounts || []) %>
+  };
+  const mt5RunState = {
+    connectedAccounts: Array.isArray(window.__mt5RunConfig.connectedAccounts) ? window.__mt5RunConfig.connectedAccounts.slice() : [],
+    selectedAccountId: Number(sessionStorage.getItem('mt5RunAccountId') || 0)
+  };
 
   function mt5Esc(s) {
     return String(s || '')
@@ -355,6 +318,122 @@
       .replace(/</g, '&lt;')
       .replace(/>/g, '&gt;')
       .replace(/"/g, '&quot;');
+  }
+
+  function mt5Num(v, d) {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : (d == null ? 0 : d);
+  }
+
+  function mt5Fixed(v) {
+    return mt5Num(v, 0).toFixed(2);
+  }
+
+  function mt5Clamp(v, min, max) {
+    const lo = mt5Num(min, 0.01);
+    const hi = Math.max(lo, mt5Num(max, lo));
+    let out = mt5Num(v, lo);
+    if (out < lo) out = lo;
+    if (out > hi) out = hi;
+    return Number(out.toFixed(2));
+  }
+
+  function mt5RunAccountCapital(account) {
+    if (!account) return 0;
+    return mt5Num(account.last_equity, mt5Num(account.last_balance, 0));
+  }
+
+  function mt5RunExpertsPath(account) {
+    const rawNo = Number(account?.assigned_port_no || account?.port_slot || 1);
+    const suffix = String(Math.max(1, rawNo)).padStart(2, '0');
+    return 'C:\\MT5_PORTS\\VPS-WIN-01-PORT-' + suffix + '\\MQL5\\Experts\\Trading Bot';
+  }
+
+  function mt5NormalizeTradeLevel(level) {
+    const value = String(level || '').trim().toLowerCase();
+    if (value === 'high' || value === 'fast') return 'high';
+    if (value === 'medium') return 'medium';
+    if (value === 'low' || value === 'safe') return 'low';
+    return 'medium';
+  }
+
+  function mt5TradeLevelLabel(level) {
+    const value = mt5NormalizeTradeLevel(level);
+    if (value === 'high') return 'เสี่ยงสูง';
+    if (value === 'medium') return 'เสี่ยงกลาง';
+    return 'เสี่ยงต่ำ';
+  }
+
+  function mt5NearestPresetRow(rows, capital) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const target = mt5Num(capital, 0);
+    let best = rows[0];
+    let bestDiff = Math.abs(mt5Num(best.capital_recommend, 0) - target);
+    rows.forEach(function (row) {
+      const diff = Math.abs(mt5Num(row.capital_recommend, 0) - target);
+      if (diff < bestDiff) {
+        best = row;
+        bestDiff = diff;
+      }
+    });
+    return best;
+  }
+
+  function mt5NearestPresetRowByLot(rows, lot) {
+    if (!Array.isArray(rows) || !rows.length) return null;
+    const target = mt5Num(lot, 0);
+    let best = rows[0];
+    let bestDiff = Math.abs(mt5Num(best.lot_size, 0) - target);
+    rows.forEach(function (row) {
+      const diff = Math.abs(mt5Num(row.lot_size, 0) - target);
+      if (diff < bestDiff) {
+        best = row;
+        bestDiff = diff;
+      }
+    });
+    return best;
+  }
+
+  function mt5SelectedRunAccount() {
+    const connected = Array.isArray(mt5RunState.connectedAccounts) ? mt5RunState.connectedAccounts : [];
+    let picked = connected.find(function (a) { return Number(a.id) === Number(mt5RunState.selectedAccountId); }) || null;
+    if (!picked && connected.length) {
+      picked = connected[0];
+      mt5RunState.selectedAccountId = Number(picked.id);
+      sessionStorage.setItem('mt5RunAccountId', String(picked.id));
+    }
+    return picked;
+  }
+
+  function mt5ComputeRunPreset(botCode, capital, manualLot, tradeLevel) {
+    const cfg = window.__mt5RunConfig || {};
+    const rows = (cfg.presetTables && cfg.presetTables[botCode]) || [];
+    const lotMin = mt5Num(cfg.packageLotMin, 0.01);
+    const lotMax = mt5Num(cfg.packageLotMax, 0.05);
+    const lot = mt5Clamp(manualLot || lotMax, lotMin, lotMax);
+    const preset = mt5NearestPresetRowByLot(rows, lot) || mt5NearestPresetRow(rows, capital) || null;
+    const level = mt5NormalizeTradeLevel(tradeLevel);
+    let tStart = 0;
+    let tStop = 0;
+    if (preset) {
+      if (level === 'high') {
+        tStart = mt5Num(preset.t_start, 0);
+        tStop = mt5Num(preset.t_stop, 0);
+      } else if (level === 'medium') {
+        tStart = mt5Num(preset.medium_t_start || preset.t_start, 0);
+        tStop = mt5Num(preset.medium_t_stop || preset.t_stop, 0);
+      } else {
+        tStart = mt5Num(preset.fast_t_start || preset.medium_t_start || preset.t_start, 0);
+        tStop = mt5Num(preset.fast_t_stop || preset.medium_t_stop || preset.t_stop, 0);
+      }
+    }
+    return {
+      preset: preset,
+      lot: lot,
+      lotPlus: mt5Clamp(preset ? mt5Num(preset.lot_plus, lot) : lot, lotMin, lotMax),
+      tStart: tStart,
+      tStop: tStop
+    };
   }
 
   function renderPortItemHtml(p) {
@@ -375,31 +454,159 @@
   }
 
   function renderMt5RunFormHtml(connected, bots) {
-    const meta = window.__mt5PageMeta || {};
+    mt5RunState.connectedAccounts = Array.isArray(connected) ? connected.slice() : [];
+    const meta = window.__mt5RunConfig || {};
     const expired = !!meta.packageExpired;
-    const opts = (connected || []).map(function (a) {
-      const eq = a.last_equity != null && a.last_equity !== '' ? a.last_equity : a.last_balance;
-      const eqTxt = eq != null && eq !== '' ? ' / Equity ' + eq : '';
-      return '<option value="' + a.id + '">PORT ' + a.port_slot + ' / Login ' + mt5Esc(a.mt5_login) + eqTxt + '</option>';
+    const selected = mt5SelectedRunAccount();
+    if (!selected) {
+      return '<div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน แล้วระบบจะแสดงตัวเลือก Run BOT</div>';
+    }
+    const lotMin = mt5Num(meta.packageLotMin, 0.01);
+    const lotMax = mt5Num(meta.packageLotMax, 0.05);
+    const actualCapital = mt5RunAccountCapital(selected);
+    const portButtons = (connected || []).map(function (a) {
+      const eq = mt5RunAccountCapital(a);
+      const active = Number(a.id) === Number(selected.id);
+      return '<button type="button" class="mt5-run-port-btn' + (active ? ' active' : '') + '" data-account-id="' + a.id + '" style="border:1px solid ' + (active ? 'rgba(56,189,248,.75)' : 'rgba(71,85,105,.9)') + ';background:' + (active ? 'rgba(14,116,144,.28)' : 'rgba(15,23,42,.75)') + ';color:#e2e8f0;border-radius:14px;padding:10px 12px;cursor:pointer;text-align:left;min-width:170px">' +
+        '<b style="display:block;font-size:14px">PORT ' + mt5Esc(a.port_slot) + '</b>' +
+        '<small style="display:block;color:#94a3b8;margin-top:4px">Login: ' + mt5Esc(a.mt5_login) + (eq > 0 ? ' / Equity: ' + mt5Esc(eq) : '') + '</small>' +
+        '</button>';
     }).join('');
     const botOpts = (bots || []).map(function (b) {
-      return '<option value="' + b.id + '">' + mt5Esc(b.label) + '</option>';
+      const code = mt5Esc(b.code || b.bot_code || b.bot_name || '');
+      const label = mt5Esc(b.label || b.display_name || b.bot_name || b.bot_code || '');
+      return '<option value="' + code + '">' + label + '</option>';
     }).join('');
     return (
-      '<form method="POST" action="/app/mt5/run" class="mt5-run-form">' +
+      '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
+      '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
+      '<div style="margin-bottom:14px">' +
+      '<label>เลือก PORT ที่จะ Run</label>' +
+      '<div style="display:flex;gap:10px;flex-wrap:wrap;margin-top:8px">' + portButtons + '</div>' +
+      '</div>' +
+      '<div id="mt5RunSelectedMeta" style="margin-bottom:14px;padding:12px;border-radius:16px;background:#0b1220;border:1px solid #1e3a5f;color:#e2e8f0">' +
+      '<div style="font-size:14px;font-weight:800">PORT ' + mt5Esc(selected.port_slot) + '</div>' +
+      '<div style="font-size:13px;color:#cbd5e1;margin-top:4px">Login: ' + mt5Esc(selected.mt5_login) + (actualCapital > 0 ? ' / Equity: ' + mt5Esc(actualCapital) : '') + '</div>' +
+      '<div style="font-size:12px;color:#94a3b8;margin-top:6px">EA Path: ' + mt5Esc(mt5RunExpertsPath(selected)) + '</div>' +
+      '</div>' +
       '<div class="mt5-form-row">' +
-      '<div><label>บัญชี / PORT</label><select name="mt5_account_id" required>' + opts + '</select></div>' +
-      '<div><label>BOT</label><select name="bot_id" required>' + botOpts + '</select></div>' +
+      '<div><label>BOT</label><select name="bot_code" required>' + botOpts + '</select><small style="color:#94a3b8;display:block;margin-top:4px">ไฟล์ EA อยู่ใน ' + mt5Esc(mt5RunExpertsPath(selected)) + '</small></div>' +
       '<div><label>ระดับการเทรด</label><select name="trade_level">' +
-      '<option value="safe">Safe</option><option value="medium">Medium</option><option value="fast">Fast</option>' +
-      '</select></div></div>' +
+      '<option value="low">เสี่ยงต่ำ</option><option value="medium" selected>เสี่ยงกลาง</option><option value="high">เสี่ยงสูง</option>' +
+      '</select></div>' +
+      '<div><label>เวลาเปิดออเดอร์</label><select name="run_time_mode"><option value="auto" selected>Auto อิงจากเวลา Bot</option><option value="24h">สามารถเปิด 24ชม.</option></select></div>' +
+      '</div>' +
       '<div class="mt5-form-row">' +
-      '<div><label>เงินทุนจาก MT5 / ใส่เอง</label><input type="number" step="0.01" min="0" name="capital_manual" class="form-control" placeholder="ว่างไว้ = ใช้ค่าจาก MT5 / หรือพิมพ์เอง"></div>' +
-      '<div><label>Lot ตั้งเอง</label><input name="manual_lot" type="number" step="0.01" min="0" placeholder="ว่างไว้ = คำนวณจากตาราง"></div>' +
-      '<div class="run-action"><button type="submit" class="mt5-btn run"' + (expired ? ' disabled' : '') +
-      ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : 'Run BOT') + '</button></div>' +
-      '</div></form>'
+      '<div><label>เงินทุน (ขั้นต่ำ 100)</label><input type="number" step="0.01" min="100" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('ทุนจาก MT5 จริง: ' + mt5Esc(actualCapital) + ' / หรือพิมพ์เอง') : 'กรอกเงินทุนขั้นต่ำ 100') + '" value="' + (actualCapital >= 100 ? mt5Esc(actualCapital) : '') + '"><small style="color:#94a3b8;display:block;margin-top:4px">ถ้าแก้เอง ระบบจะใช้ค่าที่กรอกแทน Equity</small></div>' +
+      '<div><label>Lot Size</label><input name="manual_lot" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(lotMax)) + '"><small style="color:#94a3b8;display:block;margin-top:4px">แพ็กเกจ ' + mt5Esc(meta.packageGroup || 'BASIC') + ' ใส่ได้สูงสุด ' + mt5Esc(mt5Fixed(lotMax)) + '</small></div>' +
+      '<div><label>Lot Plus</label><input name="lot_plus" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(lotMax)) + '"></div>' +
+      '</div>' +
+      '<div class="mt5-form-row">' +
+      '<div><label>Trailing Start (T START)</label><input name="t_start" type="number" step="0.01" min="0" value="0"></div>' +
+      '<div><label>Trailing Stop (T STOP)</label><input name="t_stop" type="number" step="0.01" min="0" value="0"></div>' +
+      '<div class="run-action"><button type="submit" class="mt5-btn run"' + (expired ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : 'Run BOT') + '</button></div>' +
+      '</div>' +
+      '</form>'
     );
+  }
+
+  function bindMt5RunForm() {
+    const form = document.getElementById('mt5RunForm');
+    if (!form) return;
+
+    function applyPresetDefaults() {
+      const selected = mt5SelectedRunAccount();
+      const hidden = form.querySelector('#mt5RunAccountId');
+      const metaBox = form.querySelector('#mt5RunSelectedMeta');
+      const capitalInput = form.querySelector('input[name="capital_manual"]');
+      const lotInput = form.querySelector('input[name="manual_lot"]');
+      const lotPlusInput = form.querySelector('input[name="lot_plus"]');
+      const tStartInput = form.querySelector('input[name="t_start"]');
+      const tStopInput = form.querySelector('input[name="t_stop"]');
+      const botSelect = form.querySelector('select[name="bot_code"]');
+      const levelSelect = form.querySelector('select[name="trade_level"]');
+      if (!selected || !hidden || !capitalInput || !lotInput || !lotPlusInput || !tStartInput || !tStopInput || !botSelect || !levelSelect) return;
+
+      hidden.value = String(selected.id);
+      const actualCapital = mt5RunAccountCapital(selected);
+      capitalInput.min = '100';
+      capitalInput.placeholder = actualCapital > 0
+        ? 'ทุนจาก MT5 จริง: ' + actualCapital + ' / หรือพิมพ์เอง'
+        : 'กรอกเงินทุนขั้นต่ำ 100';
+      if (metaBox) {
+        metaBox.innerHTML =
+          '<div style="font-size:14px;font-weight:800">PORT ' + mt5Esc(selected.port_slot) + '</div>' +
+          '<div style="font-size:13px;color:#cbd5e1;margin-top:4px">Login: ' + mt5Esc(selected.mt5_login) + (actualCapital > 0 ? ' / Equity: ' + mt5Esc(actualCapital) : '') + '</div>' +
+          '<div style="font-size:12px;color:#94a3b8;margin-top:6px">EA Path: ' + mt5Esc(mt5RunExpertsPath(selected)) + '</div>';
+      }
+
+      const cfg = window.__mt5RunConfig || {};
+      lotInput.min = String(mt5Num(cfg.packageLotMin, 0.01));
+      lotInput.max = String(mt5Num(cfg.packageLotMax, 0.05));
+      if (!lotInput.value) lotInput.value = mt5Fixed(cfg.packageLotMax || 0.05);
+      const capital = mt5Num(capitalInput.value, actualCapital);
+      const manualLot = mt5Clamp(lotInput.value || cfg.packageLotMax, cfg.packageLotMin, cfg.packageLotMax);
+      lotInput.value = mt5Fixed(manualLot);
+      const calc = mt5ComputeRunPreset(botSelect.value, capital, manualLot, levelSelect.value);
+      lotPlusInput.min = String(mt5Num(cfg.packageLotMin, 0.01));
+      lotPlusInput.max = String(mt5Num(cfg.packageLotMax, 0.05));
+      lotPlusInput.value = mt5Fixed(calc.lotPlus);
+      tStartInput.value = String(calc.tStart || 0);
+      tStopInput.value = String(calc.tStop || 0);
+      const botHelp = botSelect.parentElement ? botSelect.parentElement.querySelector('small') : null;
+      if (botHelp) botHelp.textContent = 'ไฟล์ EA อยู่ใน ' + mt5RunExpertsPath(selected);
+    }
+
+    form.querySelectorAll('.mt5-run-port-btn').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        mt5RunState.selectedAccountId = Number(btn.getAttribute('data-account-id') || 0);
+        sessionStorage.setItem('mt5RunAccountId', String(mt5RunState.selectedAccountId || ''));
+        const panel = document.getElementById('mt5RunPanel');
+        if (panel) {
+          panel.innerHTML = renderMt5RunFormHtml(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
+          bindMt5RunForm();
+        }
+      });
+    });
+
+    ['change', 'input'].forEach(function (eventName) {
+      ['select[name="bot_code"]', 'select[name="trade_level"]', 'input[name="capital_manual"]', 'input[name="manual_lot"]'].forEach(function (selector) {
+        const field = form.querySelector(selector);
+        if (field) field.addEventListener(eventName, applyPresetDefaults);
+      });
+    });
+
+    form.addEventListener('submit', function (e) {
+      const selected = mt5SelectedRunAccount();
+      const capitalInput = form.querySelector('input[name="capital_manual"]');
+      const capital = mt5Num(capitalInput ? capitalInput.value : 0, mt5RunAccountCapital(selected));
+      if (!selected) {
+        e.preventDefault();
+        alert('กรุณาเลือก PORT ที่เชื่อมต่อแล้วก่อน Run BOT');
+        return false;
+      }
+      if (capital < 100) {
+        e.preventDefault();
+        alert('เงินทุนต้องไม่ต่ำกว่า 100');
+        return false;
+      }
+      return true;
+    });
+
+    applyPresetDefaults();
+  }
+
+  let mt5RunRenderSignature = '';
+
+  function mt5RunDataSignature(accounts, bots) {
+    return JSON.stringify({
+      accounts: (accounts || []).map(function (a) {
+        return [a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.last_equity, a.last_balance];
+      }),
+      bots: (bots || []).map(function (b) {
+        return [b.code || b.bot_code || '', b.label || b.display_name || b.bot_name || ''];
+      })
+    });
   }
 
   async function refreshMt5PortCards() {
@@ -432,8 +639,17 @@
         if (btn) btn.disabled = !!(data.packageExpired || data.canAddPermanent === false);
       }
       const runPanel = document.getElementById('mt5RunPanel');
-      if (runPanel && (data.connectedAccounts || []).length > 0) {
-        runPanel.innerHTML = renderMt5RunFormHtml(data.connectedAccounts, data.bots || []);
+      if (runPanel) {
+        const cfg = window.__mt5RunConfig || {};
+        cfg.connectedAccounts = Array.isArray(data.connectedAccounts) ? data.connectedAccounts : [];
+        cfg.bots = Array.isArray(data.bots) && data.bots.length ? data.bots : (cfg.bots || []);
+        window.__mt5RunConfig = cfg;
+        const nextSignature = mt5RunDataSignature(cfg.connectedAccounts, cfg.bots || []);
+        if (nextSignature !== mt5RunRenderSignature || !document.getElementById('mt5RunForm')) {
+          mt5RunRenderSignature = nextSignature;
+          runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
+          bindMt5RunForm();
+        }
       }
     } catch (_) {}
   }
@@ -492,6 +708,12 @@
     window.history.replaceState({}, '', '/app/mt5');
   }
   clearLegacyMt5QueryState();
+  const initialRunPanel = document.getElementById('mt5RunPanel');
+  if (initialRunPanel) {
+    mt5RunRenderSignature = mt5RunDataSignature(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
+    initialRunPanel.innerHTML = renderMt5RunFormHtml(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
+    bindMt5RunForm();
+  }
   refreshMt5PortCards();
   const mt5PortCardRefreshTimer = window.setInterval(refreshMt5PortCards, 5000);
 
@@ -854,34 +1076,6 @@ setInterval(loadMt5LiveDashboard, 3000);
 .mt5-lux-card.error button{background:linear-gradient(135deg,#ef4444,#f97316);box-shadow:0 12px 28px rgba(239,68,68,.35)}
 @keyframes mt5LuxPop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
 </style>
-
-<script>
-document.addEventListener('DOMContentLoaded', function () {
-  const accountSelect = document.querySelector('select[name="mt5_account_id"]');
-  const capitalInput = document.querySelector('input[name="capital_manual"]');
-
-  if (!accountSelect || !capitalInput) return;
-
-  function updateCapitalPlaceholder() {
-    const opt = accountSelect.options[accountSelect.selectedIndex];
-    const equity = opt?.getAttribute('data-equity') || '';
-    const balance = opt?.getAttribute('data-balance') || '';
-    const capital = equity || balance || '';
-
-    if (capital && Number(capital) > 0) {
-      capitalInput.placeholder = 'ทุนจาก MT5 จริง: ' + capital + ' / หรือพิมพ์เอง';
-      capitalInput.dataset.mt5Capital = capital;
-    } else {
-      capitalInput.placeholder = 'ยังไม่มีค่าทุนจาก MT5 / พิมพ์เองได้';
-      capitalInput.dataset.mt5Capital = '';
-    }
-  }
-
-  accountSelect.addEventListener('change', updateCapitalPlaceholder);
-  updateCapitalPlaceholder();
-});
-</script>
-
 
 <style>
 .mt5-buy-single{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}.mt5-add-port-menu{position:relative;display:inline-block}.mt5-add-port-main{min-width:170px;justify-content:center}.mt5-add-port-dropdown{display:none;position:absolute;left:0;top:calc(100% + 10px);z-index:50;width:min(360px,88vw);padding:10px;border-radius:22px;background:linear-gradient(145deg,rgba(15,23,42,.98),rgba(2,6,23,.98));border:1px solid rgba(250,204,21,.25);box-shadow:0 24px 70px rgba(0,0,0,.48),inset 0 1px 0 rgba(255,255,255,.06)}.mt5-add-port-menu.open .mt5-add-port-dropdown{display:grid;gap:8px}.mt5-port-choice{width:100%;text-align:left;border:1px solid rgba(148,163,184,.18);border-radius:17px;padding:14px 15px;cursor:pointer;color:#f8fafc;background:rgba(255,255,255,.05);transition:.18s}.mt5-port-choice:hover{transform:translateY(-1px);border-color:rgba(250,204,21,.45);background:rgba(250,204,21,.10)}.mt5-port-choice.permanent{background:linear-gradient(135deg,rgba(250,204,21,.13),rgba(59,130,246,.08))}.mt5-port-choice b{display:block;font-size:16px;font-weight:900}.mt5-port-choice small{display:block;margin-top:4px;color:#cbd5e1;line-height:1.45}.mt5-buy-note{color:#94a3b8;font-size:13px}.mt5-buy-note b{color:#fde68a}

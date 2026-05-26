@@ -13,6 +13,17 @@ const { query, getClient, repairVpsAgentCommandSequences } = require('../config/
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
 const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
 const {
+  packageLotLimits,
+  presetSlugForBot,
+  readPresetRows,
+  normalizeTradeLevel,
+  tradeLevelLabel,
+  clampLot,
+  computePresetForBot,
+  isProductionBot,
+  validateRunCapital
+} = require('../lib/mt5BotPresets');
+const {
   PACKAGE_PORT_MAP,
   packagePortCapForGroup,
   packagePortRangeLabel,
@@ -1073,10 +1084,10 @@ async function ensureBotCatalog() {
   await query(`
     INSERT INTO vps_system.bot_catalog (bot_code, bot_name, display_name, symbol, required_ports, default_lot, max_lot, is_demo, sort_order, is_active)
     VALUES
-    ('AK-SNIPER','AK-SNIPER','AK-SNIPER ตัวจริง','XAUUSD',1,0.01,50,FALSE,10,TRUE),
-    ('PA-SNIPER','PA-SNIPER','PA-SNIPER ตัวจริง','XAUUSD',1,0.01,50,FALSE,20,TRUE),
-    ('5PA-SNIPER','5PA-SNIPER','5PA-SNIPER ตัวจริง','XAUUSD',1,0.01,50,FALSE,30,TRUE),
-    ('SNIPER-DEMO','SNIPER-DEMO','SNIPER-DEMO ทดสอบบอท','XAUUSD',1,0.01,50,TRUE,40,TRUE)
+    ('AK-SNIPER-VIP-VER4.0','AK-SNIPER-VIP-VER4.0','AK-SNIPER-VIP-VER4.0','XAUUSD',1,0.01,50,FALSE,10,TRUE),
+    ('5PA-SNIPER','5PA-SNIPER','5PA-SNIPER','XAUUSD',1,0.01,50,FALSE,20,TRUE),
+    ('PA-SNIPER-VER2.0','PA-SNIPER-VER2.0','PA-SNIPER-VER2.0','XAUUSD',1,0.01,50,FALSE,30,TRUE),
+    ('SNIPER-DEMO','SNIPER-DEMO','sniper-demo','XAUUSD',1,0.01,50,TRUE,40,TRUE)
     ON CONFLICT (bot_code) DO UPDATE SET
       bot_name=EXCLUDED.bot_name,
       display_name=EXCLUDED.display_name,
@@ -1090,37 +1101,6 @@ async function ensureBotCatalog() {
       updated_at=NOW()
   `).catch(() => {});
 }
-
-async function nearestPreset(client, capital) {
-  const rows = await client.query(`
-    SELECT * FROM vps_system.lot_presets
-    ORDER BY ABS(capital_recommend - $1::numeric) ASC, capital_recommend ASC
-    LIMIT 1
-  `, [num(capital)]);
-  return rows.rows[0] || null;
-}
-
-function settingFromPreset(preset, level) {
-  if (!preset) return { trade_level: level || 'safe', t_start: 0, t_stop: 0 };
-  const l = clean(level) || 'safe';
-  if (l === 'fast') return { trade_level: 'fast', t_start: num(preset.fast_t_start || preset.medium_t_start || preset.t_start), t_stop: num(preset.fast_t_stop || preset.medium_t_stop || preset.t_stop) };
-  if (l === 'medium') return { trade_level: 'medium', t_start: num(preset.medium_t_start || preset.t_start), t_stop: num(preset.medium_t_stop || preset.t_stop) };
-  return { trade_level: 'safe', t_start: num(preset.t_start), t_stop: num(preset.t_stop) };
-}
-
-async function findFreePortNo(client, nodeId, maxPorts) {
-  const used = await client.query(`
-    SELECT assigned_port_no
-    FROM vps_system.bot_instances
-    WHERE vps_id=$1 AND status IN ('running','pending') AND assigned_port_no IS NOT NULL
-  `, [nodeId]);
-  const set = new Set(used.rows.map(r => num(r.assigned_port_no)));
-  for (let i = 1; i <= Math.max(1, num(maxPorts, 20)); i += 1) {
-    if (!set.has(i)) return i;
-  }
-  return null;
-}
-
 
 router.get('/mt5/check-port', async (req, res) => {
   try {
@@ -1415,7 +1395,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     const summary = await getPortSummaryReadOnly(userId);
     const accounts = await safeQuery(
       `
-      SELECT a.id, a.port_slot, a.mt5_login, a.status, a.last_balance, a.last_equity
+      SELECT a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.status, a.last_balance, a.last_equity
       FROM vps_system.mt5_accounts a
       WHERE a.user_id=$1
         AND a.port_slot IS NOT NULL
@@ -1452,15 +1432,16 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       .map((a) => ({
         id: Number(a.id),
         port_slot: Number(a.port_slot),
+        assigned_port_no: Number(a.assigned_port_no || 0),
         mt5_login: a.mt5_login,
         last_balance: a.last_balance,
         last_equity: a.last_equity
       }));
 
-    const bots = await safeQuery(
-      `SELECT id, display_name, bot_name FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`,
+    const bots = (await safeQuery(
+      `SELECT id, bot_code, display_name, bot_name FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`,
       []
-    );
+    )).filter((b) => isProductionBot(b));
 
     return res.json({
       ok: true,
@@ -1482,6 +1463,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       connectedAccounts,
       bots: (bots || []).map((b) => ({
         id: Number(b.id),
+        code: String(b.bot_code || b.bot_name || '').trim(),
         label: b.display_name || b.bot_name || `BOT ${b.id}`
       }))
     });
@@ -1530,7 +1512,24 @@ router.get('/mt5', async (req, res) => {
     ['checking', 'connecting', 'starting'].includes(String(row.status || '').toLowerCase())
   );
 
-  const bots = await safeQuery(`SELECT * FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`, []);
+  const connectedRunAccounts = (accounts || [])
+    .filter((row) => String(row.status || '').toLowerCase() === 'connected')
+    .map((row) => ({
+      id: Number(row.id),
+      port_slot: Number(row.port_slot || 0),
+      assigned_port_no: Number(row.assigned_port_no || 0),
+      mt5_login: row.mt5_login,
+      last_balance: row.last_balance,
+      last_equity: row.last_equity,
+      running_bots: Number(row.running_bots || 0)
+    }));
+
+  const bots = (await safeQuery(`SELECT * FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`, []))
+    .filter((row) => isProductionBot(row));
+  const runLotMeta = packageLotLimits(summary);
+  const runPresetTables = Object.fromEntries(
+    (bots || []).map((bot) => [String(bot.bot_code || '').trim(), readPresetRows(presetSlugForBot(bot))])
+  );
   const vpsProbe = await findAvailableVpsPort();
 
   const instances = await safeQuery(`
@@ -1593,11 +1592,14 @@ router.get('/mt5', async (req, res) => {
     pickAccountForPortSlot,
     pendingConnectAccountId: pendingConnectAccount ? pendingConnectAccount.id : null,
     bots,
+    connectedRunAccounts,
+    runPresetTables,
+    runPackageGroup: runLotMeta.packageGroup,
     instances,
     packageExpireText: summary.packageExpired ? 'แพ็คเกจหมดอายุ' : fmtDate(summary.pkg.end_at),
     fmtDateView: fmtDate,
-    packageLotMin: num(summary.pkg.lot_min, 0.01),
-    packageLotMax: num(summary.pkg.lot_max, num(summary.pkg.lot_min, 0.01)),
+    packageLotMin: runLotMeta.lotMin,
+    packageLotMax: runLotMeta.lotMax,
     vpsProbe,
     vpsProbeText: vpsProbeText(vpsProbe)
   });
@@ -2232,50 +2234,68 @@ router.post('/mt5/run', async (req, res) => {
       throw new Error('⏳ ระบบกำลัง Run BOT อยู่...');
     }
     const mt5AccountId = num(req.body.mt5_account_id);
-    const botId = num(req.body.bot_id);
+    const botCode = clean(req.body.bot_code).toUpperCase();
     const capitalManual = num(req.body.capital_manual);
     const manualLot = num(req.body.manual_lot);
-    const tradeLevel = ['safe', 'medium', 'fast'].includes(req.body.trade_level) ? req.body.trade_level : 'safe';
+    const lotPlusInput = num(req.body.lot_plus);
+    const tStartInput = req.body.t_start === '' || req.body.t_start == null ? null : num(req.body.t_start);
+    const tStopInput = req.body.t_stop === '' || req.body.t_stop == null ? null : num(req.body.t_stop);
+    const tradeLevel = normalizeTradeLevel(req.body.trade_level);
+    const runTimeMode = String(req.body.run_time_mode || 'auto').toLowerCase() === '24h' ? '24h' : 'auto';
 
     if (!mt5AccountId) throw new Error('กรุณาเลือก PORT/บัญชี MT5');
-    if (!botId) throw new Error('กรุณาเลือก BOT');
+    if (!botCode) throw new Error('กรุณาเลือก BOT');
 
     await client.query('BEGIN');
 
     const summary = await getPortSummary(userId);
+    const lotMeta = packageLotLimits(summary);
     const running = await client.query(`SELECT COUNT(*)::int c FROM vps_system.bot_instances WHERE user_id=$1 AND status IN ('running','pending')`, [userId]);
     if (num(running.rows[0]?.c) >= summary.totalPorts) throw new Error(`จำนวน BOT ที่รันเต็มแล้ว ตามสิทธิ์ ${summary.totalPorts} PORT`);
 
     const accountRows = await client.query(`SELECT * FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 FOR UPDATE`, [mt5AccountId, userId]);
     const account = accountRows.rows[0];
     if (!account) throw new Error('ไม่พบบัญชี MT5 ของคุณ');
+    if (String(account.status || '').toLowerCase() !== 'connected') throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
+    if (!num(account.vps_id) || !num(account.assigned_port_no)) throw new Error('PORT นี้ยังไม่มีข้อมูล VPS/PORT ที่พร้อมรัน');
 
     const dup = await client.query(`SELECT id FROM vps_system.bot_instances WHERE mt5_account_id=$1 AND status IN ('running','pending') LIMIT 1`, [mt5AccountId]);
     if (dup.rows[0]) throw new Error('PORT นี้กำลังรัน BOT อยู่แล้ว กรุณาหยุดก่อน');
 
-    const botRows = await client.query(`SELECT * FROM vps_system.bot_catalog WHERE id=$1 AND is_active=TRUE`, [botId]);
+    const botRows = await client.query(`SELECT * FROM vps_system.bot_catalog WHERE UPPER(bot_code)=UPPER($1) AND is_active=TRUE LIMIT 1`, [botCode]);
     const bot = botRows.rows[0];
     if (!bot) throw new Error('ไม่พบ BOT ที่เลือก');
+    if (!isProductionBot(bot)) throw new Error('BOT นี้ไม่ได้เปิดให้ใช้งานบนหน้าเว็บนี้');
 
     const capital = capitalManual > 0 ? capitalManual : num(account.last_equity || account.last_balance || account.capital_override, 0);
-    const preset = await nearestPreset(client, capital || 30);
-    const lot = manualLot > 0 ? manualLot : num(preset?.lot_size, num(bot.default_lot, 0.01));
-    const trade = settingFromPreset(preset, tradeLevel);
+    const capitalCheck = validateRunCapital(capital);
+    if (!capitalCheck.ok) throw new Error(capitalCheck.message);
 
-    const bestVps = await findAvailableVpsPort();
-    if (!bestVps) throw new Error('ไม่มี Windows VPS/PORT ที่พร้อมใช้งาน ระบบ AI fallback หาแล้วไม่พบ');
+    const calc = computePresetForBot(
+      bot,
+      capitalCheck.capital,
+      tradeLevel,
+      manualLot,
+      lotMeta.lotMin,
+      lotMeta.lotMax,
+      lotMeta.defaultLot
+    );
+    const lot = manualLot > 0 ? calc.lot : calc.packageDefaultLot;
+    const trade = calc.trade;
+    const lotPlus = clampLot(lotPlusInput > 0 ? lotPlusInput : calc.lotPlus, lotMeta.lotMin, lotMeta.lotMax);
+    const tStart = tStartInput == null ? num(trade.t_start) : tStartInput;
+    const tStop = tStopInput == null ? num(trade.t_stop) : tStopInput;
 
     const nodeRows = await client.query(`
       SELECT *
       FROM vps_system.vps_nodes
       WHERE id=$1
       FOR UPDATE
-    `, [bestVps.node_id]);
+    `, [account.vps_id]);
     const node = nodeRows.rows[0];
-    if (!node) throw new Error('ไม่พบ Windows VPS ที่ระบบเลือก');
+    if (!node) throw new Error('ไม่พบ Windows VPS ของ PORT ที่เลือก');
 
-    const assignedPortNo = num(bestVps.port_number) || await findFreePortNo(client, node.id, node.max_ports || 20);
-    if (!assignedPortNo) throw new Error('PORT บน Windows VPS เต็มแล้ว');
+    const assignedPortNo = num(account.assigned_port_no);
 
     const payload = {
       action: 'run_mt5_bot',
@@ -2287,12 +2307,21 @@ router.post('/mt5/run', async (req, res) => {
       botName: bot.display_name || bot.bot_name,
       symbol: 'XAUUSD',
       lot,
-      capital,
+      lotPlus,
+      capital: capitalCheck.capital,
+      capitalUsed: capitalCheck.capital,
       tradeLevel: trade.trade_level,
-      tStart: trade.t_start,
-      tStop: trade.t_stop,
-      presetId: preset?.id || null,
-      port: req.body.port || assignedPortNo,
+      riskLabel: tradeLevelLabel(trade.trade_level),
+      tStart,
+      tStop,
+      presetId: calc.preset?.id || null,
+      presetSlug: calc.presetSlug || null,
+      presetRow: calc.preset || null,
+      runTimeMode,
+      allowOpen24Hours: runTimeMode === '24h',
+      useBotSchedule: runTimeMode === 'auto',
+      expertsRelative: 'MQL5\\Experts\\Trading Bot',
+      port: assignedPortNo,
       portSlot: account.port_slot || 1
     };
 
@@ -2301,7 +2330,7 @@ router.post('/mt5/run', async (req, res) => {
       (user_id, mt5_account_id, bot_id, vps_id, status, lot_used, port_used, assigned_port_no, preset_id, run_payload, started_at, trade_level, capital_used, updated_at)
       VALUES ($1,$2,$3,$4,'pending',$5,1,$6,$7,$8::jsonb,NOW(),$9,$10,NOW())
       RETURNING *
-    `, [userId, mt5AccountId, botId, node.id, lot, assignedPortNo, preset?.id || null, JSON.stringify(payload), trade.trade_level, capital]);
+    `, [userId, mt5AccountId, bot.id, node.id, lot, assignedPortNo, calc.preset?.id || null, JSON.stringify(payload), trade.trade_level, capitalCheck.capital]);
 
     const cmd = await client.query(`
       INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, command_type, payload, status, created_at)
