@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-chart-cleanup-v25"
+AGENT_BUILD_ID = "2026-05-26-mt5-algo-retry-v26"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -543,7 +543,12 @@ def latest_log_text(port_dir: Path) -> Tuple[Optional[Path], str]:
         return latest, ""
 
 
-def enable_mt5_algo_trading_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> bool:
+def enable_mt5_algo_trading_uia(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    attempts: int = 3,
+    wait_between_sec: float = 2.0,
+) -> bool:
     """Try to enable MT5 Algo Trading from the live terminal window."""
     if os.name != "nt":
         return False
@@ -551,7 +556,10 @@ def enable_mt5_algo_trading_uia(port: Any, payload: Optional[Dict[str, Any]] = N
         port_dir = resolve_mt5_port_dir(port, payload)
         root = str(port_dir).replace("\\", "\\\\").replace("'", "''")
         login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip().replace("'", "''")
-        ps = f"""
+        max_attempts = max(1, int(attempts or 1))
+        last_raw = ""
+        for attempt in range(1, max_attempts + 1):
+            ps = f"""
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
 Add-Type -AssemblyName UIAutomationTypes
@@ -566,13 +574,19 @@ public class AvqW32 {{
 "@
 $root = '{root}'
 $login = '{login}'
-$proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-  $p = $_.Path
-  if (-not $p) {{ return $false }}
-  if ($p -like "*$root*") {{ return $true }}
-  if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
-  return $false
-}} | Select-Object -First 1
+$deadline = (Get-Date).AddSeconds(10)
+$proc = $null
+while ((Get-Date) -lt $deadline) {{
+  $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $p = $_.Path
+    if (-not $p) {{ return $false }}
+    if ($p -like "*$root*") {{ return $true }}
+    if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+    return $false
+  }} | Select-Object -First 1
+  if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {{ break }}
+  Start-Sleep -Milliseconds 500
+}}
 if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {{
   @{{ ok = $false; reason = 'no_window' }} | ConvertTo-Json -Compress
   exit 0
@@ -636,17 +650,26 @@ if ($method -eq 'none') {{
 }}
 @{{ ok = $true; method = $method; state = $state; button = $buttonName }} | ConvertTo-Json -Compress
 """
-        raw = _run_powershell(ps, timeout=20).strip()
-        if raw and raw.startswith("{"):
-            data = json.loads(raw)
-            ok = bool(data.get("ok"))
-            log(
-                f"ENABLE ALGO TRADING port={port} ok={ok} "
-                f"method={data.get('method')} state={data.get('state')} button={data.get('button')}"
-            )
-            return ok
+            raw = _run_powershell(ps, timeout=25).strip()
+            last_raw = raw
+            if raw and raw.startswith("{"):
+                data = json.loads(raw)
+                ok = bool(data.get("ok"))
+                log(
+                    f"ENABLE ALGO TRADING port={port} attempt={attempt}/{max_attempts} ok={ok} "
+                    f"method={data.get('method')} state={data.get('state')} "
+                    f"button={data.get('button')} reason={data.get('reason')}"
+                )
+                if ok:
+                    return True
+            else:
+                log(f"ENABLE ALGO TRADING port={port} attempt={attempt}/{max_attempts} raw={raw[:400]}")
+            if attempt < max_attempts:
+                time.sleep(max(0.25, float(wait_between_sec or 0)))
     except Exception as e:
         log(f"ENABLE ALGO TRADING ERROR port={port}: {e}")
+    if 'last_raw' in locals() and last_raw:
+        log(f"ENABLE ALGO TRADING FAILED port={port} last_raw={last_raw[:400]}")
     return False
 
 
@@ -3202,7 +3225,8 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
     compiled = False
     if ex5_path.exists():
         try:
-            compiled = ex5_path.stat().st_size > 0 and ex5_path.stat().st_mtime >= prev_mtime
+            ex5_stat = ex5_path.stat()
+            compiled = ex5_stat.st_size > 0 and (prev_mtime <= 0 or ex5_stat.st_mtime > prev_mtime)
         except Exception:
             compiled = ex5_path.stat().st_size > 0
 
@@ -3324,7 +3348,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
     time.sleep(5)
-    algo_enabled = enable_mt5_algo_trading_uia(port, payload)
+    algo_enabled = enable_mt5_algo_trading_uia(port, payload, attempts=4, wait_between_sec=2.5)
     time.sleep(1)
 
     snap = account_snapshot(port, payload)
@@ -3351,8 +3375,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     send_account_metrics(payload, bal, eq, snap.get("currency", ""))
     schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
-    threading.Thread(target=lambda: (time.sleep(4), enable_mt5_algo_trading_uia(port, payload)), daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(12), enable_mt5_algo_trading_uia(port, payload)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(8), enable_mt5_algo_trading_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(20), enable_mt5_algo_trading_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(35), enable_mt5_algo_trading_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
     threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
 
     return {
