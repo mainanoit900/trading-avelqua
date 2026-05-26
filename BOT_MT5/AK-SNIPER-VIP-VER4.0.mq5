@@ -211,24 +211,6 @@ void OnDeinit(const int reason)
   }
 
 //+------------------------------------------------------------------+
-//| Avelqua: เทรดได้เมื่อกด Run BOT จากเว็บ (ไฟล์ใน MQL5/Files)              |
-//+------------------------------------------------------------------+
-bool IsAvelquaTradingEnabled()
-  {
-   int h = FileOpen("avelqua_trading_enabled.txt", FILE_READ|FILE_TXT|FILE_COMMON);
-   if(h == INVALID_HANDLE)
-      return false;
-   string s = FileReadString(h);
-   FileClose(h);
-   StringTrimLeft(s);
-   StringTrimRight(s);
-   if(s == "1") return true;
-   string u = s;
-   StringToUpper(u);
-   return (StringFind(u, "TRUE") >= 0 || StringFind(u, "ON") >= 0);
-  }
-
-//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick()
@@ -240,9 +222,6 @@ void OnTick()
    
    // อัปเดต Dashboard ทุกๆ Tick เพื่อให้ตัวเลขวิ่งแบบ Real-time
    UpdateDashboard();
-
-   if(!IsAvelquaTradingEnabled())
-      return;
 
    if(CheckCutLoss()) return;
    if(CheckDailyProfitLoss()) return;
@@ -414,6 +393,19 @@ void CreateLabel(string name, string text, int x, int y, color clr, int size=10)
    ObjectSetInteger(0, name, OBJPROP_CORNER, CORNER_LEFT_UPPER); // ยึดมุมซ้ายบน
 }
 
+void LogTradeFailure(string tag, ENUM_POSITION_TYPE type, double lot, double price)
+{
+   Print(
+      "ORDER FAIL [", tag, "] ",
+      EnumToString(type),
+      " lot=", DoubleToString(lot, 2),
+      " price=", DoubleToString(price, _Digits),
+      " retcode=", IntegerToString((int)trade.ResultRetcode()),
+      " desc=", trade.ResultRetcodeDescription(),
+      " lasterr=", IntegerToString(GetLastError())
+   );
+}
+
 //+------------------------------------------------------------------+
 //| ฟังก์ชันตรวจสอบ Sideway (อนุญาตให้ออกไม้แรก)                          |
 //+------------------------------------------------------------------+
@@ -561,12 +553,17 @@ void ManageGrid(ENUM_POSITION_TYPE type)
       weekly_command_count++; 
       
       // เมื่อเปิดชุดใหม่ ใช้ค่า InpLotSize ตามที่คุณเพิ่งตั้งใน Input
+      ResetLastError();
       if(type == POSITION_TYPE_BUY) is_success = trade.Buy(InpLotSize, _Symbol, current_ask, 0, 0, "Initial Buy");
       else is_success = trade.Sell(InpLotSize, _Symbol, current_bid, 0, 0, "Initial Sell");
       
       if(is_success) 
       {
          last_trade_time = TimeCurrent();
+      }
+      else
+      {
+         LogTradeFailure("INITIAL", type, InpLotSize, (type == POSITION_TYPE_BUY ? current_ask : current_bid));
       }
 
       // รีเซ็ตค่า Trailing เมื่อชุดก่อนหน้าปิดจบหมดจริงๆ
@@ -586,9 +583,14 @@ void ManageGrid(ENUM_POSITION_TYPE type)
          daily_command_count++; 
          weekly_command_count++; 
          
+         ResetLastError();
          if(trade.Buy(next_lot, _Symbol, current_ask, 0, 0, "Grid Buy " + (string)count))
          {
             last_trade_time = TimeCurrent();
+         }
+         else
+         {
+            LogTradeFailure("GRID", type, next_lot, current_ask);
          }
         }
       else if(type == POSITION_TYPE_SELL && current_bid >= last_price + (InpPipStep * _Point))
@@ -596,9 +598,14 @@ void ManageGrid(ENUM_POSITION_TYPE type)
          daily_command_count++; 
          weekly_command_count++; 
          
+         ResetLastError();
          if(trade.Sell(next_lot, _Symbol, current_bid, 0, 0, "Grid Sell " + (string)count))
          {
             last_trade_time = TimeCurrent();
+         }
+         else
+         {
+            LogTradeFailure("GRID", type, next_lot, current_bid);
          }
         }
      }
