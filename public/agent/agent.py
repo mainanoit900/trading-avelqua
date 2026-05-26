@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-inline-deploy-v27"
+AGENT_BUILD_ID = "2026-05-26-mt5-compile-proof-v28"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3193,7 +3193,14 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
     stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     log_file = logs_dir / f"metaeditor-{mq5_path.stem}-{stamp}.log"
     ex5_path = mq5_path.with_suffix(".ex5")
-    prev_mtime = ex5_path.stat().st_mtime if ex5_path.exists() else 0.0
+    backup_ex5 = None
+    if ex5_path.exists():
+        backup_ex5 = ex5_path.with_suffix(ex5_path.suffix + f".bak-{stamp}")
+        try:
+            shutil.copy2(ex5_path, backup_ex5)
+            ex5_path.unlink()
+        except Exception as e:
+            log(f"EA SOURCE BACKUP/UNLINK ERROR ex5={ex5_path}: {e}")
 
     creationflags = 0
     if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
@@ -3221,12 +3228,13 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
             log_tail = _read_log_tail(log_file, max_bytes=32768)
         except Exception:
             log_tail = ""
+    stdout_tail = str(getattr(proc, "stdout", "") or "")[-4000:]
 
     compiled = False
     if ex5_path.exists():
         try:
             ex5_stat = ex5_path.stat()
-            compiled = ex5_stat.st_size > 0 and (prev_mtime <= 0 or ex5_stat.st_mtime > prev_mtime)
+            compiled = ex5_stat.st_size > 0
         except Exception:
             compiled = ex5_path.stat().st_size > 0
 
@@ -3240,10 +3248,17 @@ def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
         "logFile": str(log_file),
         "exitCode": getattr(proc, "returncode", None),
         "logTail": log_tail[-4000:],
+        "stdoutTail": stdout_tail,
     }
     if compiled:
         log(f"EA SOURCE COMPILED mq5={mq5_path} ex5={ex5_path} exit_code={proc.returncode}")
     else:
+        if backup_ex5 and backup_ex5.exists() and not ex5_path.exists():
+            try:
+                shutil.copy2(backup_ex5, ex5_path)
+                result["restoredBackup"] = str(backup_ex5)
+            except Exception as restore_err:
+                log(f"EA SOURCE RESTORE BACKUP ERROR ex5={ex5_path}: {restore_err}")
         log(f"EA SOURCE COMPILE FAILED mq5={mq5_path} exit_code={proc.returncode} log={log_file}")
     return result
 
