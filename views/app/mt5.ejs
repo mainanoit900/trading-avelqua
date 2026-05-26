@@ -172,7 +172,8 @@
   </div>
 
         <label>MT5 Login</label>
-        <input name="mt5_login" placeholder="เช่น 12345678" required>
+        <input name="mt5_login" id="mt5LoginInput" placeholder="เช่น 234567890 หรือ 81234567" inputmode="numeric" maxlength="9" required>
+        <small style="color:#94a3b8;display:block;margin-top:4px">ใช้ได้เฉพาะเลขขึ้นต้น <b>2</b> จำนวน <b>9</b> หลัก หรือขึ้นต้น <b>8</b> จำนวน <b>8</b> หลัก</small>
 
         <label>Password</label>
         <input name="mt5_password" type="password" placeholder="รหัสผ่าน MT5" required>
@@ -645,6 +646,16 @@
 
 const mt5ConnectForm = document.getElementById('mt5ConnectForm');
 const mt5SelectedPortSlot = document.getElementById('mt5SelectedPortSlot');
+const mt5LoginInput = document.getElementById('mt5LoginInput');
+
+function isAllowedMt5LoginUser(login) {
+  const value = String(login || '').trim();
+  return /^2\d{8}$/.test(value) || /^8\d{7}$/.test(value);
+}
+
+function mt5LoginUserValidationMessage() {
+  return 'Userไม่ถูกต้อง - ใช้ได้เฉพาะเลขขึ้นต้น 2 จำนวน 9 หลัก หรือขึ้นต้น 8 จำนวน 8 หลัก';
+}
 
 function mt5SelectPortSlot(slot) {
   const n = Number(slot || 0);
@@ -675,6 +686,12 @@ if (mt5ConnectForm) {
 
     if (packageExpired) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)('error', 'แพ็คเกจหมดอายุ กรุณาต่ออายุแพ็กเกจก่อนเชื่อมต่อ MT5');
+      return false;
+    }
+
+    const mt5LoginValue = String(mt5LoginInput?.value || '').trim();
+    if (!isAllowedMt5LoginUser(mt5LoginValue)) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)('error', mt5LoginUserValidationMessage());
       return false;
     }
 

@@ -48,6 +48,15 @@ function num(v, def = 0) {
   return Number.isFinite(n) ? n : def;
 }
 
+function isAllowedMt5LoginUser(login) {
+  const value = clean(login);
+  return /^2\d{8}$/.test(value) || /^8\d{7}$/.test(value);
+}
+
+function mt5LoginUserValidationMessage() {
+  return 'Userไม่ถูกต้อง - ใช้ได้เฉพาะเลขขึ้นต้น 2 จำนวน 9 หลัก หรือขึ้นต้น 8 จำนวน 8 หลัก';
+}
+
 function positiveMoney(v) {
   if (v == null || v === '') return null;
   const n = Number(v);
@@ -611,6 +620,7 @@ async function handleMt5ConnectProduction(req, res) {
     const serverName = normalizeLockedServer(clean(req.body.server_name || req.body.serverName));
 
     if (!mt5Login) throw new Error('กรุณากรอก Login MT5');
+    if (!isAllowedMt5LoginUser(mt5Login)) throw new Error(mt5LoginUserValidationMessage());
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
     lockKey = userLockKey(userId);
