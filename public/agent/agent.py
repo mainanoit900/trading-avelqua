@@ -18,6 +18,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 
+if os.name == "nt":
+    import ctypes
+    from ctypes import wintypes
+
 
 def load_env_file(path: Path) -> None:
     try:
@@ -69,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-preview-v33"
+AGENT_BUILD_ID = "2026-05-27-mt5-interactive-launch-v34"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1672,11 +1676,211 @@ def schedule_connect_metrics_retry(
 
 
 
-def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Popen:
-    """Start MT5 (terminal64). On Windows: AVELQUA_MT5_SHOW_WINDOW=true → new console (visible); else no extra console."""
+class _SpawnedPidRef:
+    def __init__(self, pid: int):
+        self.pid = int(pid or 0)
+
+
+def _windows_enable_privilege(name: str) -> None:
+    if os.name != "nt":
+        return
+    TOKEN_ADJUST_PRIVILEGES = 0x20
+    TOKEN_QUERY = 0x0008
+    SE_PRIVILEGE_ENABLED = 0x00000002
+
+    class LUID(ctypes.Structure):
+        _fields_ = [("LowPart", wintypes.DWORD), ("HighPart", wintypes.LONG)]
+
+    class LUID_AND_ATTRIBUTES(ctypes.Structure):
+        _fields_ = [("Luid", LUID), ("Attributes", wintypes.DWORD)]
+
+    class TOKEN_PRIVILEGES(ctypes.Structure):
+        _fields_ = [("PrivilegeCount", wintypes.DWORD), ("Privileges", LUID_AND_ATTRIBUTES)]
+
+    token = wintypes.HANDLE()
+    if not ctypes.windll.advapi32.OpenProcessToken(
+        ctypes.windll.kernel32.GetCurrentProcess(),
+        TOKEN_ADJUST_PRIVILEGES | TOKEN_QUERY,
+        ctypes.byref(token),
+    ):
+        raise ctypes.WinError()
+    try:
+        luid = LUID()
+        if not ctypes.windll.advapi32.LookupPrivilegeValueW(None, name, ctypes.byref(luid)):
+            raise ctypes.WinError()
+        tp = TOKEN_PRIVILEGES()
+        tp.PrivilegeCount = 1
+        tp.Privileges = LUID_AND_ATTRIBUTES(luid, SE_PRIVILEGE_ENABLED)
+        if not ctypes.windll.advapi32.AdjustTokenPrivileges(token, False, ctypes.byref(tp), 0, None, None):
+            raise ctypes.WinError()
+    finally:
+        ctypes.windll.kernel32.CloseHandle(token)
+
+
+def _windows_active_session_ids() -> List[int]:
+    if os.name != "nt":
+        return []
+
+    class WTS_SESSION_INFOW(ctypes.Structure):
+        _fields_ = [
+            ("SessionId", wintypes.DWORD),
+            ("pWinStationName", wintypes.LPWSTR),
+            ("State", wintypes.DWORD),
+        ]
+
+    WTS_ACTIVE = 0
+    sessions_ptr = ctypes.POINTER(WTS_SESSION_INFOW)()
+    count = wintypes.DWORD(0)
+    out: List[int] = []
+    if ctypes.windll.wtsapi32.WTSEnumerateSessionsW(None, 0, 1, ctypes.byref(sessions_ptr), ctypes.byref(count)):
+        try:
+            for idx in range(int(count.value or 0)):
+                item = sessions_ptr[idx]
+                if int(item.State) == WTS_ACTIVE:
+                    sid = int(item.SessionId)
+                    if sid not in out:
+                        out.append(sid)
+        finally:
+            ctypes.windll.wtsapi32.WTSFreeMemory(sessions_ptr)
+    fallback_sid = int(ctypes.windll.kernel32.WTSGetActiveConsoleSessionId())
+    if fallback_sid not in out and fallback_sid != 0xFFFFFFFF:
+        out.append(fallback_sid)
+    return out
+
+
+def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = None) -> Optional[_SpawnedPidRef]:
+    if os.name != "nt":
+        return None
+
+    CREATE_NEW_CONSOLE = 0x00000010
+    CREATE_NO_WINDOW = 0x08000000
+    CREATE_UNICODE_ENVIRONMENT = 0x00000400
+    STARTF_USESHOWWINDOW = 0x00000001
+    SW_SHOWNORMAL = 1
+    SW_HIDE = 0
+    SecurityImpersonation = 2
+    TokenPrimary = 1
+
+    class STARTUPINFOW(ctypes.Structure):
+        _fields_ = [
+            ("cb", wintypes.DWORD),
+            ("lpReserved", wintypes.LPWSTR),
+            ("lpDesktop", wintypes.LPWSTR),
+            ("lpTitle", wintypes.LPWSTR),
+            ("dwX", wintypes.DWORD),
+            ("dwY", wintypes.DWORD),
+            ("dwXSize", wintypes.DWORD),
+            ("dwYSize", wintypes.DWORD),
+            ("dwXCountChars", wintypes.DWORD),
+            ("dwYCountChars", wintypes.DWORD),
+            ("dwFillAttribute", wintypes.DWORD),
+            ("dwFlags", wintypes.DWORD),
+            ("wShowWindow", wintypes.WORD),
+            ("cbReserved2", wintypes.WORD),
+            ("lpReserved2", ctypes.POINTER(ctypes.c_byte)),
+            ("hStdInput", wintypes.HANDLE),
+            ("hStdOutput", wintypes.HANDLE),
+            ("hStdError", wintypes.HANDLE),
+        ]
+
+    class PROCESS_INFORMATION(ctypes.Structure):
+        _fields_ = [
+            ("hProcess", wintypes.HANDLE),
+            ("hThread", wintypes.HANDLE),
+            ("dwProcessId", wintypes.DWORD),
+            ("dwThreadId", wintypes.DWORD),
+        ]
+
+    try:
+        for priv_name in ("SeTcbPrivilege", "SeIncreaseQuotaPrivilege", "SeAssignPrimaryTokenPrivilege"):
+            try:
+                _windows_enable_privilege(priv_name)
+            except Exception as priv_err:
+                log(f"INTERACTIVE PRIVILEGE WARN {priv_name}: {priv_err}")
+
+        session_ids = _windows_active_session_ids()
+        if not session_ids:
+            log("INTERACTIVE LAUNCH SKIP no active session")
+            return None
+
+        command_line = subprocess.list2cmdline(args)
+        creation_flags = CREATE_UNICODE_ENVIRONMENT | (CREATE_NEW_CONSOLE if SHOW_MT5_WINDOW else CREATE_NO_WINDOW)
+
+        for session_id in session_ids:
+            user_token = wintypes.HANDLE()
+            primary_token = wintypes.HANDLE()
+            env = ctypes.c_void_p()
+            proc_info = PROCESS_INFORMATION()
+            try:
+                if not ctypes.windll.wtsapi32.WTSQueryUserToken(session_id, ctypes.byref(user_token)):
+                    raise ctypes.WinError()
+                if not ctypes.windll.advapi32.DuplicateTokenEx(
+                    user_token,
+                    0xF01FF,
+                    None,
+                    SecurityImpersonation,
+                    TokenPrimary,
+                    ctypes.byref(primary_token),
+                ):
+                    raise ctypes.WinError()
+                if not ctypes.windll.userenv.CreateEnvironmentBlock(ctypes.byref(env), primary_token, False):
+                    env = ctypes.c_void_p()
+
+                startup = STARTUPINFOW()
+                startup.cb = ctypes.sizeof(STARTUPINFOW)
+                startup.lpDesktop = "winsta0\\default"
+                startup.dwFlags = STARTF_USESHOWWINDOW
+                startup.wShowWindow = SW_SHOWNORMAL if SHOW_MT5_WINDOW else SW_HIDE
+                cmd_buf = ctypes.create_unicode_buffer(command_line)
+                cwd_text = str(cwd or "") or None
+
+                ok = ctypes.windll.advapi32.CreateProcessAsUserW(
+                    primary_token,
+                    None,
+                    cmd_buf,
+                    None,
+                    None,
+                    False,
+                    creation_flags,
+                    env.value if env else None,
+                    cwd_text,
+                    ctypes.byref(startup),
+                    ctypes.byref(proc_info),
+                )
+                if ok:
+                    pid = int(proc_info.dwProcessId or 0)
+                    log(f"INTERACTIVE LAUNCH OK session={session_id} pid={pid} cmd={command_line}")
+                    return _SpawnedPidRef(pid)
+                raise ctypes.WinError()
+            except Exception as session_err:
+                log(f"INTERACTIVE LAUNCH FAIL session={session_id}: {session_err}")
+            finally:
+                if proc_info.hThread:
+                    ctypes.windll.kernel32.CloseHandle(proc_info.hThread)
+                if proc_info.hProcess:
+                    ctypes.windll.kernel32.CloseHandle(proc_info.hProcess)
+                if env:
+                    try:
+                        ctypes.windll.userenv.DestroyEnvironmentBlock(env)
+                    except Exception:
+                        pass
+                if primary_token:
+                    ctypes.windll.kernel32.CloseHandle(primary_token)
+                if user_token:
+                    ctypes.windll.kernel32.CloseHandle(user_token)
+    except Exception as e:
+        log(f"INTERACTIVE LAUNCH ERROR: {e}")
+    return None
+
+
+def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
+    """Start MT5 (terminal64). Prefer active user session on Windows for UI automation."""
     creationflags = 0
     startupinfo = None
     if os.name == "nt":
+        interactive_proc = _spawn_windows_interactive_process(args, cwd=cwd)
+        if interactive_proc:
+            return interactive_proc
         if SHOW_MT5_WINDOW:
             creationflags = subprocess.CREATE_NEW_CONSOLE
         else:
