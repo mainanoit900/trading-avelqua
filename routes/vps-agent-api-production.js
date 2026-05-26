@@ -633,8 +633,8 @@ router.get('/queue', async (req, res) => {
           AND COALESCE(status, '') NOT IN ('success', 'failed', 'cancelled', 'expired')
         ORDER BY
           CASE
+            WHEN command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN -1
             WHEN command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5') THEN 0
-            WHEN command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN 2
             ELSE 1
           END,
           id ASC
