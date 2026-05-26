@@ -22,7 +22,8 @@ const {
   tryApplyPendingJournalRead,
   queueJournalReadVerify,
   queueStopMt5ForAccount,
-  failAccountFromJournal
+  failAccountFromJournal,
+  syncJournalFromLatestCommand
 } = require('../lib/mt5LoginCommandVerify');
 const { ensureMt5PreviewColumns } = require('../lib/mt5Preview');
 const {
@@ -918,6 +919,7 @@ router.post('/connect-result', async (req, res) => {
       }
 
       let failMsg = message || MT5_FAIL_USER_MSG;
+      const timeoutLike = /ทันเวลา|timeout/i.test(String(failMsg));
       if (/ทันเวลา|timeout/i.test(String(failMsg))) {
         failMsg = 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่';
       } else {
@@ -939,6 +941,33 @@ router.post('/connect-result', async (req, res) => {
       ).catch(() => ({ rows: [] }));
       const failFolder = failMeta.rows?.[0]?.folder_path || '';
       const failPortId = Number(failMeta.rows?.[0]?.port_id || portId || 0);
+
+      if (timeoutLike && failFolder) {
+        const syncRes = await syncJournalFromLatestCommand(
+          accountId,
+          node.id,
+          String(mt5Login || '').trim(),
+          failFolder,
+          portNo
+        ).catch(() => ({ applied: false, action: 'error' }));
+
+        if (syncRes?.applied) {
+          return res.json({ ok: true, connected: true, recoveredFrom: 'timeout_journal_sync' });
+        }
+
+        if (['queued', 'requeued', 'waiting'].includes(String(syncRes?.action || ''))) {
+          await query(`
+            UPDATE vps_system.mt5_accounts
+            SET status='checking',
+                last_error=NULL,
+                last_login_message='กำลังตรวจสอบ Login MT5 จาก Journal...',
+                updated_at=NOW()
+            WHERE id=$1
+          `, [accountId]).catch(() => {});
+          return res.json({ ok: true, pending: true, reason: 'JOURNAL_RECHECK' });
+        }
+      }
+
       await failAccountFromJournal(accountId, failPortId, failMsg, {
         vpsId: node.id,
         portNo,
