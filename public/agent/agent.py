@@ -12,6 +12,7 @@ import shutil
 import subprocess
 import sys
 import signal
+import threading
 import time
 from datetime import datetime
 from pathlib import Path
@@ -67,7 +68,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-16-mt5-mohicans-v8"
+AGENT_BUILD_ID = "2026-05-26-mt5-snapshot-force-v12"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -526,6 +527,146 @@ def latest_log_text(port_dir: Path) -> Tuple[Optional[Path], str]:
         return latest, ""
 
 
+def _parse_money_token(raw: Any) -> Optional[float]:
+    if raw is None or raw == "":
+        return None
+    s = str(raw).strip().replace(" ", "").replace(",", "")
+    s = re.sub(r"[^0-9.\-]", "", s)
+    if not s or s in ("-", ".", "-."):
+        return None
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def _snap_positive(snap: Dict[str, Any]) -> bool:
+    try:
+        bal = snap.get("balance")
+        eq = snap.get("equity")
+        return (bal is not None and float(bal) > 0) or (eq is not None and float(eq) > 0)
+    except Exception:
+        return False
+
+
+def account_snapshot_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Read Balance/Equity from live MT5 window via UIAutomation."""
+    if os.name != "nt":
+        return {}
+    out: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        root = str(port_dir).replace("\\", "\\\\")
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqWin {{
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+$root = '{root}'
+$login = '{login}'
+$proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+  $p = $_.Path
+  if (-not $p) {{ return $false }}
+  if ($p -like "*$root*") {{ return $true }}
+  if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+  return $false
+}} | Select-Object -First 1
+if (-not $proc) {{ Write-Output '{{}}'; exit 0 }}
+if ($proc.MainWindowHandle -ne [IntPtr]::Zero) {{
+  [void][AvqWin]::ShowWindow($proc.MainWindowHandle, 9)
+  Start-Sleep -Milliseconds 300
+}}
+$ae = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+if (-not $ae) {{ Write-Output '{{}}'; exit 0 }}
+$names = New-Object System.Collections.Generic.List[string]
+$walker = [Windows.Automation.TreeWalker]::RawViewWalker
+function Walk($el) {{
+  if (-not $el) {{ return }}
+  $n = $el.Current.Name
+  if ($n) {{ [void]$names.Add($n) }}
+  $ch = $walker.GetFirstChild($el)
+  while ($ch) {{ Walk $ch; $ch = $walker.GetNextSibling($ch) }}
+}}
+Walk $ae
+$blob = ($names -join ' ')
+$bal = $null; $eq = $null
+if ($blob -match '(?i)Balance[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{ $bal = ($matches[1] -replace '\\s','') }}
+if ($blob -match '(?i)Equity[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{ $eq = ($matches[1] -replace '\\s','') }}
+if (-not $eq -and $bal -and $blob -match '(?i)(?:Profit|Floating|P/L)[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{
+  $pr = ($matches[1] -replace '\\s','')
+  try {{ $eq = [string]([decimal]$bal + [decimal]$pr) }} catch {{ }}
+}}
+@{{ balance = $bal; equity = $eq }} | ConvertTo-Json -Compress
+"""
+        raw = _run_powershell(ps, timeout=12).strip()
+        if raw and raw.startswith("{"):
+            data = json.loads(raw)
+            out["balance"] = _parse_money_token(data.get("balance"))
+            out["equity"] = _parse_money_token(data.get("equity"))
+            if _snap_positive(out):
+                log(f"MT5 SNAPSHOT UIA PORT={port} BALANCE={out.get('balance')} EQUITY={out.get('equity')}")
+    except Exception as e:
+        log(f"MT5 SNAPSHOT UIA ERROR PORT={port}: {e}")
+    return out
+
+
+def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Read Balance/Equity via MetaTrader5 Python API when available."""
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
+        return {}
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {}
+    login_hint = 0
+    try:
+        login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
+    except Exception:
+        login_hint = 0
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            return {}
+        ai = mt5.account_info()
+        if ai is None and login_hint:
+            try:
+                mt5.login(login_hint)
+                ai = mt5.account_info()
+            except Exception:
+                ai = None
+        mt5.shutdown()
+        if ai is None:
+            return {}
+        if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
+            return {}
+        out = {
+            "balance": float(ai.balance),
+            "equity": float(ai.equity),
+            "currency": str(ai.currency or ""),
+        }
+        if _snap_positive(out):
+            log(f"MT5 API SNAPSHOT path={port_dir.name} BALANCE={out['balance']} EQUITY={out['equity']}")
+        return out
+    except Exception as e:
+        log(f"MT5 API SNAPSHOT ERROR: {e}")
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        return {}
+
+
 def clear_mt5_logs(port_dir: Path) -> None:
     for d in [
         port_dir / "Logs",
@@ -703,21 +844,107 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
     snap = {"balance": None, "equity": None, "currency": ""}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
+        for metric_file in (
+            port_dir / "MQL5" / "Files" / "avelqua_account.json",
+            port_dir / "MQL5" / "Files" / "avelqua_account.txt",
+        ):
+            if not metric_file.exists():
+                continue
+            try:
+                raw = metric_file.read_text(encoding="utf-8", errors="ignore").strip()
+                if not raw:
+                    continue
+                if metric_file.suffix.lower() == ".json":
+                    data = json.loads(raw)
+                    for key in ("balance", "equity"):
+                        val = data.get(key)
+                        if val is None or val == "":
+                            continue
+                        num = float(str(val).replace(",", "").replace(" ", ""))
+                        snap[key] = num if num > 0 else None
+                    snap["currency"] = str(data.get("currency") or "").upper()
+                else:
+                    kv: Dict[str, str] = {}
+                    for line in raw.splitlines():
+                        if "=" not in line:
+                            continue
+                        k, v = line.split("=", 1)
+                        kv[k.strip().lower()] = v.strip()
+                    for key in ("balance", "equity"):
+                        val = kv.get(key)
+                        if not val:
+                            continue
+                        num = float(str(val).replace(",", "").replace(" ", ""))
+                        snap[key] = num if num > 0 else None
+                    snap["currency"] = str(kv.get("currency") or "").upper()
+                if snap["balance"] is not None or snap["equity"] is not None:
+                    log(
+                        f"MT5 SNAPSHOT FILE PORT={port} BALANCE={snap['balance']} "
+                        f"EQUITY={snap['equity']} FILE={metric_file.name}"
+                    )
+                    return snap
+            except Exception as e:
+                log(f"MT5 SNAPSHOT FILE ERROR PORT={port} FILE={metric_file.name}: {e}")
+        api_snap = account_snapshot_mt5_api(port_dir, payload)
+        if _snap_positive(api_snap):
+            snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+            return snap
+        uia_snap = account_snapshot_uia(port, payload)
+        if _snap_positive(uia_snap):
+            snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
+            return snap
         latest, text = latest_log_text(port_dir)
         if text:
-            mb = re.search(r"(?i)balance\s*[:= ]\s*([0-9]+(?:\.[0-9]+)?)", text)
-            me = re.search(r"(?i)equity\s*[:= ]\s*([0-9]+(?:\.[0-9]+)?)", text)
+            mb = re.search(r"(?i)balance\s*[:= ]\s*([0-9][0-9,.\s]*)", text)
+            me = re.search(r"(?i)equity\s*[:= ]\s*([0-9][0-9,.\s]*)", text)
             mc = re.search(r"(?i)currency\s*[:= ]\s*([A-Z]{3})", text)
             if mb:
-                snap["balance"] = float(mb.group(1))
+                snap["balance"] = float(mb.group(1).replace(",", "").replace(" ", ""))
             if me:
-                snap["equity"] = float(me.group(1))
+                snap["equity"] = float(me.group(1).replace(",", "").replace(" ", ""))
             if mc:
                 snap["currency"] = mc.group(1)
             log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap['balance']} EQUITY={snap['equity']} LOG={latest}")
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
+
+
+def schedule_connect_metrics_retry(
+    payload: Dict[str, Any],
+    port: Any,
+    message: str,
+    process_id: Any = None,
+    journal_evidence: str = "",
+    window_title: str = "",
+    delays: Tuple[int, ...] = (6, 12, 20, 35, 60),
+) -> None:
+    def _worker(delay_sec: int) -> None:
+        try:
+            time.sleep(delay_sec)
+            snap = account_snapshot(port, payload)
+            if snap.get("balance") is None and snap.get("equity") is None:
+                log(f"CONNECT METRICS RETRY MISS PORT={port} delay={delay_sec}")
+                return
+            log(
+                f"CONNECT METRICS RETRY HIT PORT={port} delay={delay_sec} "
+                f"BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}"
+            )
+            send_connect_result(
+                payload,
+                "connected",
+                message,
+                port,
+                process_id=process_id,
+                journal_evidence=journal_evidence,
+                window_title=window_title,
+                schedule_metric_retry=False,
+            )
+        except Exception as e:
+            log(f"CONNECT METRICS RETRY ERROR PORT={port} delay={delay_sec}: {e}")
+
+    for delay_sec in delays:
+        threading.Thread(target=_worker, args=(delay_sec,), daemon=True).start()
 
 
 
@@ -949,6 +1176,7 @@ def send_connect_result(
     window_title: str = "",
     preview_b64: str = "",
     window_verified: bool = False,
+    schedule_metric_retry: bool = True,
 ) -> None:
     try:
         callback = payload_get(payload, "callbackUrl", default=DEFAULT_CALLBACK_URL)
@@ -989,6 +1217,20 @@ def send_connect_result(
             body["accountCurrency"] = snap.get("currency", "")
         api("POST", callback, body)
         log(f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} login={body['mt5Login']} port={port}")
+        if (
+            status == "connected"
+            and schedule_metric_retry
+            and body.get("balance") is None
+            and body.get("equity") is None
+        ):
+            schedule_connect_metrics_retry(
+                payload,
+                port,
+                message,
+                process_id=process_id,
+                journal_evidence=journal_evidence,
+                window_title=window_title,
+            )
     except Exception as e:
         log(f"CONNECT CALLBACK ERROR: {e}")
 
@@ -1361,6 +1603,8 @@ def wait_mt5_login_hybrid(
     last_preview_at = 0.0
     last_wizard_at = 0.0
     last_title = ""
+    window_ok_streak = 0
+    saw_window_verified = False
     wait_start = time.time()
 
     while time.time() < deadline:
@@ -1407,6 +1651,11 @@ def wait_mt5_login_hybrid(
             return False, JOURNAL_FAIL_MSG, joined
 
         ok_w, _wmsg = mt5_login_verified_by_window(port, payload)
+        if ok_w:
+            window_ok_streak += 1
+            saw_window_verified = True
+        else:
+            window_ok_streak = 0
         preview_b64 = ""
         now = time.time()
         if now - last_preview_at >= 2.5:
@@ -1429,7 +1678,22 @@ def wait_mt5_login_hybrid(
                 )
                 if ok2:
                     return True, JOURNAL_OK_MSG, chunk2 or j_chunk
-                if ok2 is False:
+                journal_outcome = _journal_outcome_for_login(
+                    chunk2 or j_chunk,
+                    login,
+                    [
+                        "authorization failed",
+                        "failed (invalid account)",
+                        "failed [invalid account]",
+                        "invalid account",
+                        "invalid password",
+                        "wrong password",
+                        "login failed",
+                        "not authorized",
+                    ],
+                    LOCKED_MT5_SERVER,
+                )
+                if ok2 is False and journal_outcome is False:
                     cleanup_mt5_after_login_fail(port, payload, port_dir)
                     send_connect_result(
                         payload,
@@ -1440,6 +1704,19 @@ def wait_mt5_login_hybrid(
                         journal_evidence=chunk2 or j_chunk,
                     )
                     return False, JOURNAL_FAIL_MSG, chunk2 or j_chunk
+            if elapsed >= 6 and (window_ok_streak >= 2 or saw_window_verified):
+                send_connect_result(
+                    payload,
+                    "connected",
+                    f"window verified: {login} on {resolve_mt5_server(payload)} — waiting equity sync",
+                    port,
+                    process_id=proc_pid,
+                    journal_evidence=j_chunk or joined,
+                    window_title=joined,
+                    preview_b64=preview_b64,
+                    window_verified=True,
+                )
+                return True, "window verified", j_chunk or joined
 
         hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
         send_connect_result(
@@ -1468,6 +1745,8 @@ def wait_mt5_login_hybrid(
             journal_evidence=j_chunk,
         )
         return False, JOURNAL_FAIL_MSG, j_chunk
+    if saw_window_verified:
+        return True, "window verified", last_title or chunk
     return False, JOURNAL_TIMEOUT_MSG, chunk
 
 
@@ -1651,10 +1930,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             raise RuntimeError(fail_final)
         journal_final = journal_chunk2 or journal_final
 
+    success_message = msg if "window verified" in (msg or "").lower() else JOURNAL_OK_MSG
     send_connect_result(
         payload,
         "connected",
-        JOURNAL_OK_MSG,
+        success_message,
         port,
         process_id=proc_pid,
         journal_evidence=journal_final,
@@ -1662,7 +1942,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         preview_b64=preview_final,
         window_verified=True,
     )
-    log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={JOURNAL_OK_MSG}")
+    log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message}")
     return {
         "action": "run_mt5_bot",
         "status": "started",
@@ -2266,6 +2546,16 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             else:
                 port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
                 command_result(cmd_id, True, stop_mt5_port_only(port, payload))
+
+        elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
+            port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+            snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
+            try:
+                snap = account_snapshot(port, payload)
+            except Exception as sync_err:
+                log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
+                snap["error"] = str(sync_err)[:500]
+            command_result(cmd_id, True, {"action": ctype, "snapshot": snap, **snap})
 
         elif ctype in ("dashboard", "watchdog"):
             command_result(cmd_id, True, mt5_ports_dashboard())
