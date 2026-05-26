@@ -2971,8 +2971,12 @@ document.addEventListener('DOMContentLoaded', function () {
         if (slotNum) {
           try { localStorage.setItem('mt5ActivePortSlot', String(slotNum)); } catch (_) {}
           if (!urlParams.get('port_slot') && window.location.pathname.indexOf('/app/mt5') >= 0) {
-            window.location.replace('/app/mt5?port_slot=' + encodeURIComponent(slotNum));
-            return;
+            urlParams.set('port_slot', String(slotNum));
+            if (window.history && window.history.replaceState) {
+              window.history.replaceState({}, '', '/app/mt5?port_slot=' + encodeURIComponent(slotNum));
+            }
+            const selectedPortInput = document.getElementById('mt5SelectedPortSlot');
+            if (selectedPortInput) selectedPortInput.value = String(slotNum);
           }
         }
         if (typeof window.refreshMt5PortCards === 'function') await window.refreshMt5PortCards();
