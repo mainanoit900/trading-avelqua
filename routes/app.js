@@ -296,12 +296,21 @@ async function activatePackagePayment(paymentId, webhookPayload = {}) {
         endDate.setDate(endDate.getDate() + Number(pkg.days || 0));
         if (oldSub) {
           await client.query(
-            `UPDATE user_subscriptions SET package_id=$1, package_name_snapshot=$2, start_at=$3, end_at=$4, updated_at=NOW() WHERE id=$5`,
+            `UPDATE user_subscriptions
+             SET package_id=$1,
+                 package_name_snapshot=$2,
+                 start_at=$3,
+                 end_at=$4,
+                 status='active',
+                 updated_at=NOW()
+             WHERE id=$5`,
             [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]
           );
         } else {
           await client.query(
-            `INSERT INTO user_subscriptions (user_id, package_id, package_name_snapshot, start_at, end_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,NOW(),NOW())`,
+            `INSERT INTO user_subscriptions
+             (user_id, package_id, package_name_snapshot, start_at, end_at, status, created_at, updated_at)
+             VALUES ($1,$2,$3,$4,$5,'active',NOW(),NOW())`,
             [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]
           );
         }
@@ -345,9 +354,24 @@ async function activatePackageAfterPaid({ client, paymentRow }) {
   endDate.setDate(endDate.getDate() + Number(pkg.days || 0));
 
   if (oldSub) {
-    await client.query(`UPDATE user_subscriptions SET package_id=$1, package_name_snapshot=$2, start_at=$3, end_at=$4, updated_at=NOW() WHERE id=$5`, [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]);
+    await client.query(
+      `UPDATE user_subscriptions
+       SET package_id=$1,
+           package_name_snapshot=$2,
+           start_at=$3,
+           end_at=$4,
+           status='active',
+           updated_at=NOW()
+       WHERE id=$5`,
+      [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]
+    );
   } else {
-    await client.query(`INSERT INTO user_subscriptions (user_id, package_id, package_name_snapshot, start_at, end_at, created_at, updated_at) VALUES ($1,$2,$3,$4,$5,NOW(),NOW())`, [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]);
+    await client.query(
+      `INSERT INTO user_subscriptions
+       (user_id, package_id, package_name_snapshot, start_at, end_at, status, created_at, updated_at)
+       VALUES ($1,$2,$3,$4,$5,'active',NOW(),NOW())`,
+      [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]
+    );
   }
   return { package: pkg, startDate, endDate };
 }
