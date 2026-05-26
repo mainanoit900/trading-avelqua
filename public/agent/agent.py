@@ -57,6 +57,7 @@ MT5_ROOT = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
 LOG_DIR = AGENT_DIR / "logs"
 LOG_FILE = AGENT_DIR / "agent.log"
 STOP_FLAG = AGENT_DIR / "agent.disabled"
+LOGIN_UI_LOCK_FILE = AGENT_DIR / "login-ui.lock"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
@@ -68,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-port-window-target-v13"
+AGENT_BUILD_ID = "2026-05-26-mt5-login-ui-lock-v14"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -974,6 +975,56 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> subprocess.Pope
     )
 
 
+def acquire_login_ui_lock(timeout_sec: int = 180, stale_sec: int = 420) -> str:
+    """Cross-process lock for MT5 SendKeys/UI automation on the shared Windows desktop."""
+    deadline = time.time() + max(5, int(timeout_sec))
+    token = f"{os.getpid()}:{time.time()}"
+    while time.time() < deadline:
+        try:
+            fd = os.open(str(LOGIN_UI_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, token.encode("utf-8", errors="ignore"))
+            finally:
+                os.close(fd)
+            log(f"LOGIN UI LOCK ACQUIRED token={token}")
+            return token
+        except FileExistsError:
+            try:
+                age = time.time() - LOGIN_UI_LOCK_FILE.stat().st_mtime
+                if age > stale_sec:
+                    LOGIN_UI_LOCK_FILE.unlink(missing_ok=True)
+                    log(f"LOGIN UI LOCK STALE REMOVED age_sec={int(age)}")
+                    continue
+            except Exception:
+                pass
+        time.sleep(0.5)
+    raise RuntimeError("มีคำสั่ง Login MT5 อื่นกำลังใช้งานจอบน VPS กรุณารอสักครู่แล้วลองใหม่")
+
+
+def release_login_ui_lock(token: str) -> None:
+    try:
+        if not LOGIN_UI_LOCK_FILE.exists():
+            return
+        current = LOGIN_UI_LOCK_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+        if current == token:
+            LOGIN_UI_LOCK_FILE.unlink(missing_ok=True)
+            log(f"LOGIN UI LOCK RELEASED token={token}")
+    except Exception as e:
+        log(f"LOGIN UI LOCK RELEASE ERROR: {e}")
+
+
+def release_login_ui_lock_for_current_process() -> None:
+    try:
+        if not LOGIN_UI_LOCK_FILE.exists():
+            return
+        current = LOGIN_UI_LOCK_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+        if current.startswith(f"{os.getpid()}:"):
+            LOGIN_UI_LOCK_FILE.unlink(missing_ok=True)
+            log(f"LOGIN UI LOCK FORCE RELEASE pid={os.getpid()}")
+    except Exception as e:
+        log(f"LOGIN UI LOCK FORCE RELEASE ERROR: {e}")
+
+
 def _run_powershell(command: str, timeout: int = 8) -> str:
     try:
         return subprocess.check_output(
@@ -1383,6 +1434,9 @@ public class W32 {{
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
 }}
 "@
+[void]($items | ForEach-Object {{
+  if ($_.Id -ne $p.Id) {{ [W32]::ShowWindow($_.MainWindowHandle, 6) | Out-Null }}
+}})
 [W32]::ShowWindow($p.MainWindowHandle, 9) | Out-Null
 [W32]::SetForegroundWindow($p.MainWindowHandle) | Out-Null
 Start-Sleep -Milliseconds 400
@@ -1456,6 +1510,9 @@ public class W32 {{
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int n);
 }}
 "@
+[void]((Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{ $_.MainWindowHandle -ne 0 }}) | ForEach-Object {{
+  if ($_.Id -ne $dlg.Id) {{ [W32]::ShowWindow($_.MainWindowHandle, 6) | Out-Null }}
+}})
 [W32]::ShowWindow($dlg.MainWindowHandle, 9) | Out-Null
 [W32]::SetForegroundWindow($dlg.MainWindowHandle) | Out-Null
 Start-Sleep -Milliseconds 500
@@ -1815,6 +1872,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     config_file = mt5_startup_ini_path(port_dir)
     if not terminal.exists():
         raise RuntimeError(f"terminal64.exe not found: {terminal}")
+    login_ui_lock_token = acquire_login_ui_lock()
 
     log(f"USING PORT DIR={port_dir}")
     log(f"MT5 TERMINAL={terminal}")
@@ -1865,6 +1923,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                     f"MT5 login={login} กำลังทำงานอยู่ใน PORT อื่น กรุณาปิดก่อน",
                     port,
                 )
+                release_login_ui_lock(login_ui_lock_token)
                 raise RuntimeError(f"MT5 login already running on another port login={login}")
 
         except RuntimeError:
@@ -1944,6 +2003,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             window_title=titles,
             preview_b64=preview_final,
         )
+        release_login_ui_lock(login_ui_lock_token)
         raise RuntimeError(msg)
 
     journal_final = journal_chunk or ""
@@ -1969,6 +2029,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 window_title=titles,
                 preview_b64=preview_final,
             )
+            release_login_ui_lock(login_ui_lock_token)
             raise RuntimeError(fail_final)
         journal_final = journal_chunk2 or journal_final
 
@@ -1985,6 +2046,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         window_verified=True,
     )
     log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message}")
+    release_login_ui_lock(login_ui_lock_token)
     return {
         "action": "run_mt5_bot",
         "status": "started",
@@ -2642,6 +2704,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
     except Exception as e:
         log(f"COMMAND ERROR ID={cmd_id}: {e}")
         if ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
+            release_login_ui_lock_for_current_process()
             try:
                 send_connect_result(payload, "failed", str(e))
             except Exception:
