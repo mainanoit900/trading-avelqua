@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-master-worker-v16"
+AGENT_BUILD_ID = "2026-05-26-mt5-strict-window-v17"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -112,7 +112,17 @@ def mt5_existing_login_config(port_dir: Path) -> Optional[Path]:
 
 def log(msg: str) -> None:
     text = f"{datetime.now():%Y-%m-%d %H:%M:%S} - {msg}"
-    print(text, flush=True)
+    try:
+        if hasattr(sys.stdout, "buffer") and sys.stdout.buffer:
+            sys.stdout.buffer.write((text + "\n").encode("utf-8", errors="replace"))
+            sys.stdout.flush()
+        else:
+            print(text, flush=True)
+    except Exception:
+        try:
+            print(text.encode("ascii", errors="replace").decode("ascii"), flush=True)
+        except Exception:
+            pass
     try:
         with LOG_FILE.open("a", encoding="utf-8") as f:
             f.write(text + "\n")
@@ -1544,6 +1554,7 @@ Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
 $pidHint = {pid_hint}
 $root = '{root_esc}'
+$strict = ($pidHint -gt 0) -or [bool]$root
 $items = Get-Process terminal64 -ErrorAction SilentlyContinue |
   Where-Object {{ $_.MainWindowHandle -ne 0 }}
 $p = $null
@@ -1556,10 +1567,10 @@ if ((-not $p) -and $root) {{
     Sort-Object Id -Descending |
     Select-Object -First 1
 }}
-if (-not $p) {{
+if ((-not $p) -and (-not $strict)) {{
   $p = $items | Sort-Object MainWindowTitle -Descending | Select-Object -First 1
 }}
-if (-not $p) {{ exit 0 }}
+if (-not $p) {{ Write-Output "TARGET_FOUND=0"; exit 0 }}
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -1589,10 +1600,14 @@ Start-Sleep -Milliseconds 350
 [System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+Write-Output "TARGET_FOUND=1"
 exit 0
 """
     try:
-        _run_powershell(ps, timeout=14)
+        out = _run_powershell(ps, timeout=14)
+        if "TARGET_FOUND=1" not in out:
+            log(f"MT5 LOGIN FORM TARGET MISS pid_hint={pid_hint} root={port_dir}")
+            return False
         log(f"MT5 LOGIN FORM server={server} login={login} pid_hint={pid_hint} root={port_dir}")
         return True
     except Exception as e:
@@ -1619,6 +1634,7 @@ Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
 $pidHint = {pid_hint}
 $root = '{root_esc}'
+$strict = ($pidHint -gt 0) -or [bool]$root
 $items = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
   $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Open an Account*"
 }}
@@ -1632,10 +1648,10 @@ if ((-not $dlg) -and $root) {{
     Sort-Object Id -Descending |
     Select-Object -First 1
 }}
-if (-not $dlg) {{
+if ((-not $dlg) -and (-not $strict)) {{
   $dlg = $items | Select-Object -First 1
 }}
-if (-not $dlg) {{ exit 0 }}
+if (-not $dlg) {{ Write-Output "TARGET_FOUND=0"; exit 0 }}
 Add-Type @"
 using System;
 using System.Runtime.InteropServices;
@@ -1661,10 +1677,14 @@ Start-Sleep -Milliseconds 400
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 Start-Sleep -Milliseconds 500
 [System.Windows.Forms.SendKeys]::SendWait("%n")
+Write-Output "TARGET_FOUND=1"
 exit 0
 """
     try:
-        _run_powershell(ps, timeout=18)
+        out = _run_powershell(ps, timeout=18)
+        if "TARGET_FOUND=1" not in out:
+            log(f"MT5 WIZARD TARGET MISS pid_hint={pid_hint} root={port_dir}")
+            return False
         log(f"MT5 WIZARD AUTO company={company} server={server} pid_hint={pid_hint} root={port_dir}")
         return True
     except Exception as e:
