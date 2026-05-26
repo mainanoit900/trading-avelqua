@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-worker-wait-v21"
+AGENT_BUILD_ID = "2026-05-26-mt5-compile-ea-v22"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2976,6 +2976,89 @@ def _pick_launchable_ea_file(ea_info: Dict[str, Any]) -> Optional[Path]:
     return None
 
 
+def _sync_ea_source_file(experts_dir: Path, payload: Dict[str, Any], bot_code: str) -> Dict[str, Any]:
+    content = str(payload_get(payload, "eaSourceContent", "ea_source_content") or "")
+    if not content.strip():
+        return {"requested": False, "ok": True}
+
+    file_name = str(payload_get(payload, "eaSourceFileName", "ea_source_file_name") or "").strip()
+    if not file_name:
+        safe_bot = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(bot_code or "BOT")).strip("-") or "BOT"
+        file_name = f"{safe_bot}.mq5"
+    if not file_name.lower().endswith(".mq5"):
+        file_name = f"{file_name}.mq5"
+
+    target = experts_dir / file_name
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8", errors="ignore")
+    log(f"EA SOURCE WRITTEN {target}")
+    return {"requested": True, "ok": True, "sourceFile": str(target), "fileName": file_name}
+
+
+def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
+    metaeditor = port_dir / "MetaEditor64.exe"
+    if not metaeditor.exists():
+        return {"ok": False, "reason": "metaeditor_missing", "metaeditor": str(metaeditor)}
+
+    logs_dir = port_dir / "logs"
+    logs_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_file = logs_dir / f"metaeditor-{mq5_path.stem}-{stamp}.log"
+    ex5_path = mq5_path.with_suffix(".ex5")
+    prev_mtime = ex5_path.stat().st_mtime if ex5_path.exists() else 0.0
+
+    creationflags = 0
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    try:
+        proc = subprocess.run(
+            [str(metaeditor), f"/compile:{mq5_path}", f"/log:{log_file}"],
+            cwd=str(port_dir),
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="ignore",
+            timeout=120,
+            creationflags=creationflags,
+        )
+    except Exception as e:
+        return {"ok": False, "reason": "compile_exec_failed", "message": str(e), "logFile": str(log_file)}
+
+    time.sleep(1)
+    log_tail = ""
+    if log_file.exists():
+        try:
+            log_tail = _read_log_tail(log_file, max_bytes=32768)
+        except Exception:
+            log_tail = ""
+
+    compiled = False
+    if ex5_path.exists():
+        try:
+            compiled = ex5_path.stat().st_size > 0 and ex5_path.stat().st_mtime >= prev_mtime
+        except Exception:
+            compiled = ex5_path.stat().st_size > 0
+
+    if not compiled and "0 error(s), 0 warning(s)" in log_tail.lower():
+        compiled = ex5_path.exists()
+
+    result = {
+        "ok": compiled,
+        "sourceFile": str(mq5_path),
+        "ex5File": str(ex5_path),
+        "logFile": str(log_file),
+        "exitCode": getattr(proc, "returncode", None),
+        "logTail": log_tail[-4000:],
+    }
+    if compiled:
+        log(f"EA SOURCE COMPILED mq5={mq5_path} ex5={ex5_path} exit_code={proc.returncode}")
+    else:
+        log(f"EA SOURCE COMPILE FAILED mq5={mq5_path} exit_code={proc.returncode} log={log_file}")
+    return result
+
+
 def _mt5_startup_expert_name(port_dir: Path, expert_file: Optional[Path]) -> str:
     if not expert_file:
         return ""
@@ -3023,6 +3106,13 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         or r"MQL5\Experts\Trading Bot"
     )
     experts_dir = port_dir / Path(rel.replace("\\", os.sep))
+    source_sync = _sync_ea_source_file(experts_dir, payload, bot_code)
+    compile_info = None
+    if source_sync.get("requested"):
+        compile_info = _compile_ea_source(port_dir, Path(source_sync["sourceFile"]))
+        if not compile_info.get("ok"):
+            detail = str(compile_info.get("logTail") or compile_info.get("message") or compile_info.get("reason") or "").strip()
+            raise RuntimeError(f"EA compile failed for {bot_code}: {detail[:500]}")
     ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
     launch_ea = _pick_launchable_ea_file(ea_info)
     if launch_ea is None:
@@ -3114,6 +3204,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "expertsPath": str(experts_dir),
         "eaFiles": ea_info,
         "eaSet": set_info,
+        "eaSource": source_sync,
+        "eaCompile": compile_info,
         "instanceId": instance_id,
     }
 

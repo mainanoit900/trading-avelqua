@@ -1,3 +1,5 @@
+const fs = require('fs');
+const path = require('path');
 const express = require('express');
 // ===== REDIS QUEUE =====
 const Redis = require('ioredis');
@@ -31,6 +33,29 @@ const {
 } = require('../lib/mt5PortEntitlement');
 
 const router = express.Router();
+
+function readBotMq5Source(botCode) {
+  const code = String(botCode || '').trim();
+  if (!code) return {};
+
+  const candidates = [
+    path.join(process.cwd(), 'BOT_MT5', `${code}.mq5`),
+    path.join(process.cwd(), 'BOT_MT5', `${code.replace(/-/g, '_')}.mq5`)
+  ];
+
+  for (const filePath of candidates) {
+    try {
+      if (!fs.existsSync(filePath)) continue;
+      return {
+        eaSourceFileName: path.basename(filePath),
+        eaSourceContent: fs.readFileSync(filePath, 'utf8'),
+        eaForceCompile: true
+      };
+    } catch (_) {}
+  }
+
+  return {};
+}
 
 router.post('/mt5/connect-result', async (req, res) => {
   try {
@@ -2427,6 +2452,7 @@ router.post('/mt5/run', async (req, res) => {
       vpsPortNumber: assignedPortNo,
       expertsRelative: 'MQL5\\Experts\\Trading Bot',
       experts_relative: 'MQL5\\Experts\\Trading Bot',
+      ...readBotMq5Source(bot.bot_code),
       port: assignedPortNo,
       portSlot: account.port_slot || 1,
       keepMt5Open: true,
