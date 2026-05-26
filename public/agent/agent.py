@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-chart-algo-v32"
+AGENT_BUILD_ID = "2026-05-27-mt5-preview-v33"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4144,6 +4144,27 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
                 snap["error"] = str(sync_err)[:500]
             command_result(cmd_id, True, {"action": ctype, "snapshot": snap, **snap})
+
+        elif ctype in ("mt5_preview", "capture_mt5_window", "capture_mt5_preview"):
+            port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+            preview_b64 = ""
+            titles: List[str] = []
+            try:
+                titles = mt5_window_titles(port, payload)
+            except Exception as title_err:
+                log(f"MT5 PREVIEW TITLE ERROR: {title_err}")
+            try:
+                preview_b64 = capture_mt5_window_base64(port, payload)
+            except Exception as preview_err:
+                log(f"MT5 PREVIEW CAPTURE ERROR: {preview_err}")
+            command_result(cmd_id, True, {
+                "action": ctype,
+                "port": port,
+                "windowTitles": titles,
+                "window_titles": titles,
+                "previewImage": (preview_b64 or "")[:2_400_000],
+                "mt5PreviewImage": (preview_b64 or "")[:2_400_000],
+            })
 
         elif ctype in ("dashboard", "watchdog"):
             command_result(cmd_id, True, mt5_ports_dashboard())
