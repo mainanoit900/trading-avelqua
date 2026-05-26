@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-login-ui-lock-v14"
+AGENT_BUILD_ID = "2026-05-26-mt5-login-parallel-v15"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -84,6 +84,8 @@ LOG_DIR.mkdir(parents=True, exist_ok=True)
 
 # ตัวอย่าง bytes_sent/recv ครั้งก่อน — คำนวณ Mbps ระหว่าง heartbeat
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
+ACTIVE_CONNECT_THREADS: Dict[str, threading.Thread] = {}
+ACTIVE_CONNECT_THREADS_LOCK = threading.Lock()
 
 
 def has_journal_gate_marker(version_or_build: str) -> bool:
@@ -1025,6 +1027,24 @@ def release_login_ui_lock_for_current_process() -> None:
         log(f"LOGIN UI LOCK FORCE RELEASE ERROR: {e}")
 
 
+def run_login_ui_automation(
+    login: str,
+    password: str,
+    server: str,
+    port_dir: Path,
+    process_id: Any = None,
+    with_wizard: bool = False,
+    timeout_sec: int = 45,
+) -> None:
+    token = acquire_login_ui_lock(timeout_sec=timeout_sec)
+    try:
+        if with_wizard:
+            automate_mt5_open_account_wizard(server=server, port_dir=port_dir, process_id=process_id)
+        automate_mt5_login_server_form(login, password, server, port_dir=port_dir, process_id=process_id)
+    finally:
+        release_login_ui_lock(token)
+
+
 def _run_powershell(command: str, timeout: int = 8) -> str:
     try:
         return subprocess.check_output(
@@ -1713,8 +1733,15 @@ def wait_mt5_login_hybrid(
         if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
             server = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
-            automate_mt5_open_account_wizard(server=server, port_dir=port_dir, process_id=proc_pid)
-            automate_mt5_login_server_form(login, pw, server, port_dir=port_dir, process_id=proc_pid)
+            run_login_ui_automation(
+                login,
+                pw,
+                server,
+                port_dir,
+                process_id=proc_pid,
+                with_wizard=True,
+                timeout_sec=45,
+            )
             last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
@@ -1872,7 +1899,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     config_file = mt5_startup_ini_path(port_dir)
     if not terminal.exists():
         raise RuntimeError(f"terminal64.exe not found: {terminal}")
-    login_ui_lock_token = acquire_login_ui_lock()
 
     log(f"USING PORT DIR={port_dir}")
     log(f"MT5 TERMINAL={terminal}")
@@ -1923,7 +1949,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                     f"MT5 login={login} กำลังทำงานอยู่ใน PORT อื่น กรุณาปิดก่อน",
                     port,
                 )
-                release_login_ui_lock(login_ui_lock_token)
                 raise RuntimeError(f"MT5 login already running on another port login={login}")
 
         except RuntimeError:
@@ -1957,9 +1982,19 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
-        proc = _popen_hidden(args, cwd=str(port_dir))
-        time.sleep(0.9)
-        automate_mt5_login_server_form(login, password, server, port_dir=port_dir, process_id=(proc.pid if proc else None))
+        token = acquire_login_ui_lock(timeout_sec=45)
+        try:
+            proc = _popen_hidden(args, cwd=str(port_dir))
+            time.sleep(0.9)
+            automate_mt5_login_server_form(
+                login,
+                password,
+                server,
+                port_dir=port_dir,
+                process_id=(proc.pid if proc else None),
+            )
+        finally:
+            release_login_ui_lock(token)
         return proc
 
     journal_since = time.time()
@@ -2003,7 +2038,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             window_title=titles,
             preview_b64=preview_final,
         )
-        release_login_ui_lock(login_ui_lock_token)
         raise RuntimeError(msg)
 
     journal_final = journal_chunk or ""
@@ -2029,7 +2063,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 window_title=titles,
                 preview_b64=preview_final,
             )
-            release_login_ui_lock(login_ui_lock_token)
             raise RuntimeError(fail_final)
         journal_final = journal_chunk2 or journal_final
 
@@ -2046,7 +2079,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         window_verified=True,
     )
     log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message}")
-    release_login_ui_lock(login_ui_lock_token)
     return {
         "action": "run_mt5_bot",
         "status": "started",
@@ -2640,7 +2672,21 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, delete_file(payload))
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
-            command_result(cmd_id, True, start_mt5_bot(payload))
+            key = str(cmd_id)
+            with ACTIVE_CONNECT_THREADS_LOCK:
+                prev = ACTIVE_CONNECT_THREADS.get(key)
+                if prev and prev.is_alive():
+                    log(f"CONNECT COMMAND ALREADY RUNNING ID={cmd_id}")
+                    return
+                worker = threading.Thread(
+                    target=_run_connect_command_async,
+                    args=(cmd_id, ctype, payload),
+                    daemon=True,
+                )
+                ACTIVE_CONNECT_THREADS[key] = worker
+            log(f"CONNECT COMMAND BACKGROUND ID={cmd_id} TYPE={ctype}")
+            worker.start()
+            return
 
         elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port"):
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
@@ -2710,6 +2756,24 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             except Exception:
                 pass
         command_result(cmd_id, False, {}, str(e))
+
+
+def _run_connect_command_async(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> None:
+    key = str(cmd_id)
+    try:
+        command_result(cmd_id, True, start_mt5_bot(payload))
+    except Exception as e:
+        log(f"COMMAND ERROR ID={cmd_id}: {e}")
+        release_login_ui_lock_for_current_process()
+        try:
+            send_connect_result(payload, "failed", str(e))
+        except Exception:
+            pass
+        command_result(cmd_id, False, {}, str(e))
+    finally:
+        release_login_ui_lock_for_current_process()
+        with ACTIVE_CONNECT_THREADS_LOCK:
+            ACTIVE_CONNECT_THREADS.pop(key, None)
 
 def main() -> None:
     log(f"PYTHON AGENT START Service={SERVICE_NAME} Computer={platform.node()} Server={SERVER_URL}")
