@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-enable-autotrading-v24"
+AGENT_BUILD_ID = "2026-05-26-mt5-chart-cleanup-v25"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -829,6 +829,43 @@ def clear_mt5_login_cache(port_dir: Path) -> None:
                 log(f"CLEAR MT5 CACHE FILE {p}")
             except Exception as e:
                 log(f"CLEAR MT5 CACHE ERROR {p}: {e}")
+
+
+def clear_mt5_chart_state(port_dir: Path) -> None:
+    """ล้าง workspace/chart state เก่าก่อนรันใหม่ เพื่อไม่ให้กราฟกองเพิ่มทุกครั้ง."""
+    chart_dirs = (
+        port_dir / "Profiles" / "Charts",
+        port_dir / "profiles" / "Charts",
+        port_dir / "profiles" / "charts",
+        port_dir / "config" / "Profiles" / "Charts",
+        port_dir / "config" / "profiles" / "charts",
+        port_dir / "MQL5" / "Profiles" / "Charts",
+        port_dir / "MQL5" / "profiles" / "charts",
+    )
+    for d in chart_dirs:
+        if not d.exists():
+            continue
+        try:
+            shutil.rmtree(d, ignore_errors=False)
+            log(f"CLEAR MT5 CHART DIR {d}")
+        except Exception as e:
+            log(f"CLEAR MT5 CHART DIR ERROR {d}: {e}")
+
+    chart_files = (
+        port_dir / "Profiles" / "lastprofile.ini",
+        port_dir / "profiles" / "lastprofile.ini",
+        port_dir / "config" / "terminal.ini",
+        port_dir / "config" / "profiles.ini",
+        port_dir / "config" / "workspace.ini",
+    )
+    for p in chart_files:
+        if not p.is_file():
+            continue
+        try:
+            p.unlink()
+            log(f"CLEAR MT5 CHART FILE {p}")
+        except Exception as e:
+            log(f"CLEAR MT5 CHART FILE ERROR {p}: {e}")
 
 
 def resolve_mt5_server(payload: Optional[Dict[str, Any]] = None) -> str:
@@ -3277,6 +3314,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if mt5_running_for_port_dir(port_dir):
         stop_mt5_port_only(port, payload)
         time.sleep(2)
+
+    clear_mt5_chart_state(port_dir)
 
     cfg = mt5_startup_ini_path(port_dir)
     if not cfg.exists():
