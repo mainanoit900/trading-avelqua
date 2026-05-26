@@ -534,11 +534,15 @@
       '<div class="mt5-form-row">' +
       '<div><label>เงินทุน (ขั้นต่ำ 100)</label><input type="number" step="0.01" min="100" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('ทุนจาก MT5 จริง: ' + mt5Esc(actualCapital) + ' / หรือพิมพ์เอง') : 'กรอกเงินทุนขั้นต่ำ 100') + '" value="' + (actualCapital >= 100 ? mt5Esc(actualCapital) : '') + '"><small style="color:#94a3b8;display:block;margin-top:4px">ถ้าแก้เอง ระบบจะใช้ค่าที่กรอกแทน Equity</small></div>' +
       '<div><label>Lot Size</label><input name="manual_lot" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(defaultLot)) + '"><small style="color:#94a3b8;display:block;margin-top:4px">ค่าเริ่มต้น ' + mt5Esc(mt5Fixed(defaultLot)) + ' / ปรับได้สูงสุด ' + mt5Esc(mt5Fixed(lotMax)) + '</small></div>' +
-      '<div class="run-action" style="display:flex;gap:10px;align-items:flex-end;justify-content:flex-end;flex-wrap:wrap">' +
-      '<button type="submit" class="mt5-btn run"' + ((expired || hasActiveInstance) ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
+      '<div class="mt5-run-action-box">' +
+      '<label>คำสั่ง BOT</label>' +
+      '<div class="mt5-run-action-buttons">' +
+      '<button type="submit" class="mt5-btn run mt5-run-primary"' + ((expired || hasActiveInstance) ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
       (hasActiveInstance
-        ? '<button class="mt5-btn mini delete" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยัน Stop BOT และออก MT5 ใช่ไหม?\')" style="min-width:150px;height:48px">Stop BOT</button>'
-        : '<button type="button" class="mt5-btn mini" disabled style="min-width:150px;height:48px;opacity:.45;cursor:not-allowed">Stop BOT</button>') +
+        ? '<button class="mt5-btn mt5-run-secondary" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยัน Stop BOT และออก MT5 ใช่ไหม?\')">Stop BOT</button>'
+        : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
+      '</div>' +
+      '<small class="mt5-run-action-note">' + (hasActiveInstance ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
       '</div>' +
       '</div>' +
       '</form>'
@@ -1308,6 +1312,17 @@ setInterval(loadMt5LiveDashboard, 3000);
 </script>
 
 <style>
+.mt5-run-action-box{display:grid;gap:10px;height:100%;padding:14px;border-radius:18px;background:linear-gradient(180deg,rgba(15,23,42,.96),rgba(2,6,23,.92));border:1px solid rgba(148,163,184,.16);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.mt5-run-action-box label{margin:0;color:#cbd5e1;font-weight:800;font-size:13px}
+.mt5-run-action-buttons{display:grid;gap:10px}
+.mt5-run-action-buttons .mt5-btn{width:100%;min-height:54px;border-radius:16px;font-size:15px;font-weight:900;letter-spacing:.01em;box-shadow:0 14px 28px rgba(2,6,23,.24)}
+.mt5-run-primary{background:linear-gradient(135deg,#22c55e,#16a34a)!important;color:#052e16!important}
+.mt5-run-primary:hover{filter:brightness(1.04)!important;box-shadow:0 18px 34px rgba(34,197,94,.22)}
+.mt5-run-secondary{background:linear-gradient(135deg,#ef4444,#b91c1c)!important;color:#fff!important}
+.mt5-run-secondary:hover{filter:brightness(1.05)!important;box-shadow:0 18px 34px rgba(239,68,68,.22)}
+.mt5-run-secondary-disabled{background:linear-gradient(135deg,rgba(71,85,105,.85),rgba(51,65,85,.85))!important;color:#cbd5e1!important;box-shadow:none!important}
+.mt5-run-action-note{display:block;color:#94a3b8;font-size:12px;line-height:1.45}
+@media(max-width:900px){.mt5-run-action-box{margin-top:2px}}
 .mt5-manage-menu{position:relative}
 .mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;min-width:104px;padding:9px 14px;border-radius:14px;cursor:pointer;color:#e2e8f0;font-weight:900;background:linear-gradient(135deg,rgba(30,41,59,.95),rgba(15,23,42,.95));border:1px solid rgba(148,163,184,.18);box-shadow:0 14px 28px rgba(0,0,0,.22)}
 .mt5-manage-menu summary::-webkit-details-marker{display:none}
