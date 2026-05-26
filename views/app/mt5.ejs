@@ -499,11 +499,6 @@
       '<div class="mt5-form-row">' +
       '<div><label>เงินทุน (ขั้นต่ำ 100)</label><input type="number" step="0.01" min="100" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('ทุนจาก MT5 จริง: ' + mt5Esc(actualCapital) + ' / หรือพิมพ์เอง') : 'กรอกเงินทุนขั้นต่ำ 100') + '" value="' + (actualCapital >= 100 ? mt5Esc(actualCapital) : '') + '"><small style="color:#94a3b8;display:block;margin-top:4px">ถ้าแก้เอง ระบบจะใช้ค่าที่กรอกแทน Equity</small></div>' +
       '<div><label>Lot Size</label><input name="manual_lot" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(lotMax)) + '"><small style="color:#94a3b8;display:block;margin-top:4px">แพ็กเกจ ' + mt5Esc(meta.packageGroup || 'BASIC') + ' ใส่ได้สูงสุด ' + mt5Esc(mt5Fixed(lotMax)) + '</small></div>' +
-      '<div><label>Lot Plus</label><input name="lot_plus" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(lotMax)) + '"></div>' +
-      '</div>' +
-      '<div class="mt5-form-row">' +
-      '<div><label>Trailing Start (T START)</label><input name="t_start" type="number" step="0.01" min="0" value="0"></div>' +
-      '<div><label>Trailing Stop (T STOP)</label><input name="t_stop" type="number" step="0.01" min="0" value="0"></div>' +
       '<div class="run-action"><button type="submit" class="mt5-btn run"' + (expired ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : 'Run BOT') + '</button></div>' +
       '</div>' +
       '</form>'
@@ -520,12 +515,9 @@
       const metaBox = form.querySelector('#mt5RunSelectedMeta');
       const capitalInput = form.querySelector('input[name="capital_manual"]');
       const lotInput = form.querySelector('input[name="manual_lot"]');
-      const lotPlusInput = form.querySelector('input[name="lot_plus"]');
-      const tStartInput = form.querySelector('input[name="t_start"]');
-      const tStopInput = form.querySelector('input[name="t_stop"]');
       const botSelect = form.querySelector('select[name="bot_code"]');
       const levelSelect = form.querySelector('select[name="trade_level"]');
-      if (!selected || !hidden || !capitalInput || !lotInput || !lotPlusInput || !tStartInput || !tStopInput || !botSelect || !levelSelect) return;
+      if (!selected || !hidden || !capitalInput || !lotInput || !botSelect || !levelSelect) return;
 
       hidden.value = String(selected.id);
       const actualCapital = mt5RunAccountCapital(selected);
@@ -547,12 +539,7 @@
       const capital = mt5Num(capitalInput.value, actualCapital);
       const manualLot = mt5Clamp(lotInput.value || cfg.packageLotMax, cfg.packageLotMin, cfg.packageLotMax);
       lotInput.value = mt5Fixed(manualLot);
-      const calc = mt5ComputeRunPreset(botSelect.value, capital, manualLot, levelSelect.value);
-      lotPlusInput.min = String(mt5Num(cfg.packageLotMin, 0.01));
-      lotPlusInput.max = String(mt5Num(cfg.packageLotMax, 0.05));
-      lotPlusInput.value = mt5Fixed(calc.lotPlus);
-      tStartInput.value = String(calc.tStart || 0);
-      tStopInput.value = String(calc.tStop || 0);
+      mt5ComputeRunPreset(botSelect.value, capital, manualLot, levelSelect.value);
       const botHelp = botSelect.parentElement ? botSelect.parentElement.querySelector('small') : null;
       if (botHelp) botHelp.textContent = 'ไฟล์ EA อยู่ใน ' + mt5RunExpertsPath(selected);
     }
