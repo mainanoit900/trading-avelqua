@@ -210,7 +210,7 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>📡 Live MT5 Dashboard</h2>
-      <span>แสดง 5 รายการล่าสุด</span>
+      <span>แสดง 5 รายการล่าสุด · อัปเดตทุก 20 วินาที</span>
     </div>
 
     <div id="mt5LiveDashboard" class="mt5-table-wrap">
@@ -1418,7 +1418,7 @@ async function loadMt5LiveDashboard(page) {
 }
 
 loadMt5LiveDashboard();
-setInterval(loadMt5LiveDashboard, 3000);
+setInterval(loadMt5LiveDashboard, 20000);
 </script>
 
 <style>
