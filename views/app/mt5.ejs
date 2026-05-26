@@ -713,7 +713,7 @@
       if (!data.ok) {
         if (data.message && /column.*does not exist/i.test(String(data.message))) {
           const btn = document.getElementById('mt5ConnectBtn');
-          if (btn) btn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
+          if (btn) btn.innerHTML = 'กำลังเชื่อมต่อ';
         }
         return;
       }
@@ -738,8 +738,6 @@
       }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
         const btn = document.getElementById('mt5ConnectBtn');
-        const sec = data.elapsedSec != null ? data.elapsedSec : '';
-        const waitMsg = data.message || 'กำลังเปิดหน้าจอ MT5...';
         const previewBox = document.getElementById('mt5LoginPreview');
         const previewImg = document.getElementById('mt5PreviewImg');
         const previewTitle = document.getElementById('mt5PreviewTitle');
@@ -751,11 +749,11 @@
         if (previewTitle) {
           previewTitle.textContent = data.windowTitle
             ? 'Title bar: ' + data.windowTitle
-            : (sec !== '' ? 'รอหน้าต่าง MT5... (' + sec + ' วินาที)' : '');
+            : 'รอหน้าต่าง MT5...';
         }
         updateMt5ConnectMeta(data);
         if (btn) {
-          btn.innerHTML = waitMsg + (sec !== '' ? ' (' + sec + ' วินาที)' : '');
+          btn.innerHTML = 'กำลังเชื่อมต่อ';
         }
         return;
       }
@@ -802,7 +800,7 @@
     const pendingBtn = document.getElementById('mt5ConnectBtn');
     if (pendingBtn) {
       pendingBtn.disabled = true;
-      pendingBtn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
+      pendingBtn.innerHTML = 'กำลังเชื่อมต่อ';
     }
   }
 
@@ -911,7 +909,7 @@ if (mt5ConnectForm) {
     if (mt5ConnectBtn) {
       mt5ConnectBtn.disabled = true;
       mt5ConnectBtn.dataset.originalText = mt5ConnectBtn.innerHTML;
-      mt5ConnectBtn.innerHTML = 'กำลังตรวจสอบ Login MT5 (รอสักครู่)...';
+      mt5ConnectBtn.innerHTML = 'กำลังเชื่อมต่อ';
       mt5ConnectBtn.style.opacity = '0.6';
       mt5ConnectBtn.style.pointerEvents = 'none';
     }
