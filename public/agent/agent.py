@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-login-parallel-v15"
+AGENT_BUILD_ID = "2026-05-26-mt5-master-worker-v16"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -81,11 +81,13 @@ SHOW_MT5_WINDOW = os.getenv("AVELQUA_MT5_SHOW_WINDOW", "true").lower() != "false
 
 AGENT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+WORKER_STATE_DIR = AGENT_DIR / "workers"
+WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 
 # ตัวอย่าง bytes_sent/recv ครั้งก่อน — คำนวณ Mbps ระหว่าง heartbeat
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
-ACTIVE_CONNECT_THREADS: Dict[str, threading.Thread] = {}
-ACTIVE_CONNECT_THREADS_LOCK = threading.Lock()
+ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
+ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
 
 
 def has_journal_gate_marker(version_or_build: str) -> bool:
@@ -1027,6 +1029,64 @@ def release_login_ui_lock_for_current_process() -> None:
         log(f"LOGIN UI LOCK FORCE RELEASE ERROR: {e}")
 
 
+def _worker_port_num(payload: Dict[str, Any]) -> int:
+    try:
+        return int(payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort") or 0)
+    except Exception:
+        return 0
+
+
+def worker_state_path(port: Any) -> Path:
+    port_no = max(0, int(port or 0))
+    return WORKER_STATE_DIR / f"port-{port_no:02d}.json"
+
+
+def worker_log_path(port: Any, cmd_id: Any) -> Path:
+    port_no = max(0, int(port or 0))
+    return LOG_DIR / f"worker-port-{port_no:02d}-cmd-{cmd_id}.log"
+
+
+def write_worker_state(port: Any, info: Dict[str, Any]) -> None:
+    try:
+        worker_state_path(port).write_text(json.dumps(info, ensure_ascii=False, default=str), encoding="utf-8")
+    except Exception as e:
+        log(f"WORKER STATE WRITE ERROR port={port}: {e}")
+
+
+def clear_worker_state(port: Any, pid: Any = None) -> None:
+    try:
+        path = worker_state_path(port)
+        if not path.exists():
+            return
+        if pid is not None:
+            try:
+                raw = json.loads(path.read_text(encoding="utf-8", errors="ignore") or "{}")
+                if int(raw.get("pid") or 0) != int(pid or 0):
+                    return
+            except Exception:
+                pass
+        path.unlink(missing_ok=True)
+    except Exception as e:
+        log(f"WORKER STATE CLEAR ERROR port={port}: {e}")
+
+
+def reap_connect_workers() -> None:
+    with ACTIVE_CONNECT_WORKERS_LOCK:
+        for key, proc in list(ACTIVE_CONNECT_WORKERS.items()):
+            try:
+                rc = proc.poll()
+            except Exception:
+                rc = None
+            if rc is None:
+                continue
+            ACTIVE_CONNECT_WORKERS.pop(key, None)
+            try:
+                clear_worker_state(int(key), getattr(proc, "pid", None))
+            except Exception:
+                pass
+            log(f"CONNECT WORKER EXIT port={key} pid={getattr(proc, 'pid', '')} exit_code={rc}")
+
+
 def run_login_ui_automation(
     login: str,
     password: str,
@@ -1043,6 +1103,60 @@ def run_login_ui_automation(
         automate_mt5_login_server_form(login, password, server, port_dir=port_dir, process_id=process_id)
     finally:
         release_login_ui_lock(token)
+
+
+def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+    port = _worker_port_num(payload)
+    if not port:
+        raise RuntimeError("payload.port is required for worker dispatch")
+
+    reap_connect_workers()
+    key = str(port)
+
+    with ACTIVE_CONNECT_WORKERS_LOCK:
+        prev = ACTIVE_CONNECT_WORKERS.get(key)
+        if prev and prev.poll() is None:
+            raise RuntimeError(f"PORT {port} มี worker กำลังทำงานอยู่ กรุณารอสักครู่")
+        ACTIVE_CONNECT_WORKERS.pop(key, None)
+
+    payload_b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
+    args = [sys.executable, str(AGENT_FILE), "--worker-connect", str(cmd_id), str(ctype or ""), payload_b64]
+    log_file = worker_log_path(port, cmd_id)
+    log_handle = log_file.open("ab")
+    creationflags = 0
+    if os.name == "nt" and hasattr(subprocess, "CREATE_NO_WINDOW"):
+        creationflags = subprocess.CREATE_NO_WINDOW
+
+    proc = subprocess.Popen(
+        args,
+        cwd=str(AGENT_DIR),
+        stdin=subprocess.DEVNULL,
+        stdout=log_handle,
+        stderr=subprocess.STDOUT,
+        creationflags=creationflags,
+        close_fds=(os.name != "nt"),
+    )
+    log_handle.close()
+
+    with ACTIVE_CONNECT_WORKERS_LOCK:
+        ACTIVE_CONNECT_WORKERS[key] = proc
+
+    write_worker_state(port, {
+        "pid": proc.pid,
+        "port": port,
+        "command_id": cmd_id,
+        "command_type": ctype,
+        "started_at": datetime.now().isoformat(),
+        "log_file": str(log_file),
+    })
+    log(f"CONNECT WORKER SPAWNED port={port} pid={proc.pid} cmd_id={cmd_id} type={ctype}")
+    return {
+        "action": "spawn_connect_worker",
+        "status": "started",
+        "port": port,
+        "worker_pid": proc.pid,
+        "log_file": str(log_file),
+    }
 
 
 def _run_powershell(command: str, timeout: int = 8) -> str:
@@ -2672,20 +2786,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, delete_file(payload))
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
-            key = str(cmd_id)
-            with ACTIVE_CONNECT_THREADS_LOCK:
-                prev = ACTIVE_CONNECT_THREADS.get(key)
-                if prev and prev.is_alive():
-                    log(f"CONNECT COMMAND ALREADY RUNNING ID={cmd_id}")
-                    return
-                worker = threading.Thread(
-                    target=_run_connect_command_async,
-                    args=(cmd_id, ctype, payload),
-                    daemon=True,
-                )
-                ACTIVE_CONNECT_THREADS[key] = worker
-            log(f"CONNECT COMMAND BACKGROUND ID={cmd_id} TYPE={ctype}")
-            worker.start()
+            spawn_connect_worker(cmd_id, ctype, payload)
             return
 
         elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port"):
@@ -2758,22 +2859,25 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         command_result(cmd_id, False, {}, str(e))
 
 
-def _run_connect_command_async(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> None:
-    key = str(cmd_id)
+def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
+    port = _worker_port_num(payload)
     try:
+        log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
         command_result(cmd_id, True, start_mt5_bot(payload))
+        return 0
     except Exception as e:
-        log(f"COMMAND ERROR ID={cmd_id}: {e}")
+        log(f"CONNECT WORKER ERROR port={port} cmd_id={cmd_id}: {e}")
         release_login_ui_lock_for_current_process()
         try:
             send_connect_result(payload, "failed", str(e))
         except Exception:
             pass
         command_result(cmd_id, False, {}, str(e))
+        return 1
     finally:
         release_login_ui_lock_for_current_process()
-        with ACTIVE_CONNECT_THREADS_LOCK:
-            ACTIVE_CONNECT_THREADS.pop(key, None)
+        clear_worker_state(port, os.getpid())
+        log(f"CONNECT WORKER STOP port={port} cmd_id={cmd_id} pid={os.getpid()}")
 
 def main() -> None:
     log(f"PYTHON AGENT START Service={SERVICE_NAME} Computer={platform.node()} Server={SERVER_URL}")
@@ -2786,6 +2890,7 @@ def main() -> None:
     while True:
         try:
             clean_old_logs()
+            reap_connect_workers()
 
             disabled = STOP_FLAG.exists()
             now = time.time()
@@ -2819,11 +2924,24 @@ def main() -> None:
         except Exception as e:
             log(f"MAIN LOOP ERROR: {e}")
             time.sleep(int(os.getenv("AVELQUA_LOOP_SECONDS", "1")))
-if __name__ == "__main__":
+
+def main_entry() -> int:
     try:
+        if len(sys.argv) >= 5 and sys.argv[1] == "--worker-connect":
+            cmd_id = sys.argv[2]
+            ctype = sys.argv[3]
+            payload_raw = base64.b64decode(sys.argv[4].encode("ascii")).decode("utf-8", errors="ignore")
+            payload = json.loads(payload_raw or "{}")
+            return run_connect_worker(cmd_id, ctype, payload)
         main()
+        return 0
     except KeyboardInterrupt:
         log("PYTHON AGENT STOP KeyboardInterrupt")
+        return 0
     except Exception as exc:
         log(f"PYTHON AGENT FATAL: {exc}")
-        sys.exit(1)
+        return 1
+
+
+if __name__ == "__main__":
+    sys.exit(main_entry())
