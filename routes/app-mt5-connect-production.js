@@ -15,7 +15,9 @@ const { query, getClient } = require('../config/database');
 const {
   resolveStuckLoginAccount,
   syncJournalFromLatestCommand,
-  failAccountFromJournal
+  failAccountFromJournal,
+  tryApplyPendingJournalRead,
+  findLoginCommandInProgress
 } = require('../lib/mt5LoginCommandVerify');
 const { previewPublicPath, windowTitleFromMessage } = require('../lib/mt5Preview');
 const { normalizeLockedServer, MT5_LOCKED_SERVER, MT5_SUCCESS_MSG } = require('../lib/mt5Server');
@@ -953,6 +955,46 @@ async function handleMt5ConnectStatusProduction(req, res) {
       }
     }
 
+    const failedMsg = String(a.last_error || a.last_login_message || '');
+    const recoverableFail = statusFinal === 'failed'
+      && staleMs < 90 * 1000
+      && /authorized|journal|worker|timeout|ทันเวลา|รอสักครู่/i.test(failedMsg);
+
+    if (recoverableFail) {
+      await syncJournalFromLatestCommand(
+        a.id,
+        a.vps_id,
+        a.mt5_login,
+        a.folder_path,
+        a.assigned_port_no
+      ).catch(() => {});
+      const recovered = await tryApplyPendingJournalRead(a.id, a.vps_id).catch(() => false);
+      const inProgressCmd = a.vps_id
+        ? await findLoginCommandInProgress(a.id, a.vps_id).catch(() => null)
+        : null;
+      const freshRow = await query(`
+        SELECT a.id, a.status, a.last_error, a.last_login_message, a.vps_id, a.port_id,
+               a.port_slot, a.assigned_port_no, a.mt5_login, a.server_name, a.updated_at,
+               a.connect_started_at, a.last_balance, a.last_equity,
+               p.folder_path
+        FROM vps_system.mt5_accounts a
+        LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+        WHERE a.id=$1 AND a.user_id=$2
+        LIMIT 1
+      `, [a.id, userId]).catch(() => ({ rows: [] }));
+      if (freshRow.rows?.[0]) {
+        Object.assign(a, freshRow.rows[0]);
+        status = String(a.status || status).toLowerCase();
+        statusFinal = status;
+      }
+      if (statusFinal !== 'connected' && (recovered || inProgressCmd)) {
+        statusFinal = 'checking';
+        a.status = 'checking';
+        a.last_error = null;
+        a.last_login_message = 'กำลังตรวจสอบ Login MT5 จาก Journal...';
+      }
+    }
+
     if (['connecting', 'starting', 'checking'].includes(statusFinal)) {
       const resolved = await resolveStuckLoginAccount(a).catch(() => ({ resolved: false }));
       if (resolved.resolved) {
@@ -1004,12 +1046,12 @@ async function handleMt5ConnectStatusProduction(req, res) {
     }
 
     const inProgress = statusFinal === 'connecting' || statusFinal === 'checking' || statusFinal === 'starting';
-    const failedMsg = a.last_error || a.last_login_message || '';
+    const failedMsgFinal = a.last_error || a.last_login_message || '';
     const elapsedSec = Math.max(0, Math.floor(staleMs / 1000));
     let userMessage = statusFinal === 'connected'
       ? MT5_SUCCESS_MSG
       : statusFinal === 'failed'
-        ? (failedMsg || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด')
+        ? (failedMsgFinal || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด')
         : (a.last_login_message || a.last_error || statusFinal);
     if (inProgress) {
       const waitEquity = statusFinal === 'checking' && !metricsReady;
