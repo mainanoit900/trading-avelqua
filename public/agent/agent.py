@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-attempt-verifier-v19"
+AGENT_BUILD_ID = "2026-05-26-mt5-runbot-restore-v20"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -78,6 +78,7 @@ MT5_LOGIN_INI_NAME = _MT5_LOGIN_INI if _MT5_LOGIN_INI else "startup.ini"
 LEGACY_MT5_LOGIN_INI = "avelqua-login.ini"
 # Windows: true = เปิด MT5 โชว์หน้าจอบน VPS (ตรวจรหัสผ่านได้จาก title bar / RDP)
 SHOW_MT5_WINDOW = os.getenv("AVELQUA_MT5_SHOW_WINDOW", "true").lower() != "false"
+MT5_RUNBOT_PERIOD = str(os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1") or "H1").strip().upper() or "H1"
 
 AGENT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -800,7 +801,18 @@ def write_mt5_common_login_config(port_dir: Path, login: str, password: str, ser
             log(f"PATCH COMMON LOGIN server={server} file={p}")
 
 
-def write_mt5_login_ini(port_dir: Path, login: str, password: str, server: str) -> Path:
+def write_mt5_login_ini(
+    port_dir: Path,
+    login: str,
+    password: str,
+    server: str,
+    allow_expert_trading: bool = True,
+    startup_expert: str = "",
+    startup_symbol: str = "",
+    startup_period: str = "",
+    startup_template: str = "",
+    startup_expert_parameters: str = "",
+) -> Path:
     """เขียน startUp.ini ใหม่ทุกครั้ง พร้อม patch common.ini ให้ lock server ตรงกัน"""
     config_file = mt5_startup_ini_path(port_dir)
     for stale in (port_dir / LEGACY_MT5_LOGIN_INI, port_dir / "startup.ini", port_dir / "avelqua-login.ini"):
@@ -817,6 +829,12 @@ def write_mt5_login_ini(port_dir: Path, login: str, password: str, server: str) 
         pw_line = f'Password="{safe_password}"'
     else:
         pw_line = f"Password={safe_password}"
+    trade_flag = "true" if allow_expert_trading else "false"
+    startup_expert = str(startup_expert or "").strip()
+    startup_symbol = str(startup_symbol or "").strip()
+    startup_period = str(startup_period or "").strip().upper()
+    startup_template = str(startup_template or "").strip()
+    startup_expert_parameters = str(startup_expert_parameters or "").strip()
     ini = f"""[Common]
 Login={login}
 {pw_line}
@@ -826,10 +844,21 @@ ProxyEnable=false
 CertInstall=0
 
 [Experts]
-AllowLiveTrading=true
+AllowLiveTrading={trade_flag}
 AllowDllImport=true
-Enabled=true
+Enabled={trade_flag}
 """
+    if startup_expert:
+        ini += "\n[StartUp]\n"
+        ini += f"Expert={startup_expert}\n"
+        if startup_symbol:
+            ini += f"Symbol={startup_symbol}\n"
+        if startup_period:
+            ini += f"Period={startup_period}\n"
+        if startup_template:
+            ini += f"Template={startup_template}\n"
+        if startup_expert_parameters:
+            ini += f"ExpertParameters={startup_expert_parameters}\n"
     config_file.write_text(ini, encoding="utf-8", errors="replace")
     for alias in (port_dir / "startup.ini", port_dir / "startUp.ini"):
         if alias.resolve() != config_file.resolve():
@@ -838,8 +867,159 @@ Enabled=true
             except Exception:
                 pass
     write_mt5_common_login_config(port_dir, login, password, server)
-    log(f"WRITE MT5 INI {config_file} LOGIN={login} SERVER={server} PW_LEN={len(password)}")
+    log(
+        f"WRITE MT5 INI {config_file} LOGIN={login} SERVER={server} "
+        f"PW_LEN={len(password)} EXPERT_TRADING={trade_flag} STARTUP_EXPERT={startup_expert or '-'}"
+    )
     return config_file
+
+
+def metaquotes_common_files_dir() -> Optional[Path]:
+    for base in (os.getenv("APPDATA"), os.getenv("LOCALAPPDATA")):
+        if not base:
+            continue
+        p = Path(base) / "MetaQuotes" / "Terminal" / "Common" / "Files"
+        try:
+            p.mkdir(parents=True, exist_ok=True)
+            return p
+        except Exception:
+            continue
+    return None
+
+
+def avelqua_gate_target_dirs(port_dir: Path) -> List[Path]:
+    seen = set()
+    out: List[Path] = []
+
+    def add(p: Path) -> None:
+        key = str(p).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        out.append(p)
+
+    add(port_dir / "MQL5" / "Files")
+    for rel in ("Terminal/Common/Files", "terminal/Common/Files"):
+        p = port_dir / Path(rel.replace("/", os.sep))
+        if p.parent.exists():
+            add(p)
+    common = metaquotes_common_files_dir()
+    if common:
+        add(common)
+    return out
+
+
+def write_avelqua_trading_gate(port_dir: Path, enabled: bool, payload: Optional[Dict[str, Any]] = None) -> None:
+    flag = "1" if enabled else "0"
+    body = {
+        "tradingEnabled": bool(enabled),
+        "allowExpertTrading": bool(enabled),
+        "updatedAt": datetime.now().isoformat(timespec="seconds"),
+    }
+    if payload:
+        body["instanceId"] = payload_get(payload, "instanceId", "instance_id")
+        body["botCode"] = payload_get(payload, "botCode", "eaName", "bot_code")
+    body_json = json.dumps(body, ensure_ascii=False, indent=2)
+    for files_dir in avelqua_gate_target_dirs(port_dir):
+        try:
+            files_dir.mkdir(parents=True, exist_ok=True)
+            (files_dir / "avelqua_trading_gate.json").write_text(body_json, encoding="utf-8")
+            (files_dir / "avelqua_trading_enabled.txt").write_text(flag, encoding="ascii")
+            log(f"TRADING GATE {'ON' if enabled else 'OFF'} {files_dir}")
+        except Exception as e:
+            log(f"TRADING GATE WRITE ERROR {files_dir}: {e}")
+
+
+MT5_PORT_INI_REL_PATHS = (
+    "config/common.ini",
+    "config/settings.ini",
+    "config/terminal.ini",
+    "config/trade.ini",
+    "config/history.ini",
+    "config/experts.ini",
+    "config/journal.ini",
+    "MQL5/config/common.ini",
+    "MQL5/config/experts.ini",
+)
+
+
+def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
+    if not path.parent.exists():
+        return False
+    trade = "true" if enabled else "false"
+    flag = "1" if enabled else "0"
+    try:
+        text = path.read_text(encoding="utf-8", errors="ignore") if path.is_file() else ""
+    except Exception:
+        text = ""
+    lines = text.splitlines() if text else []
+    out: List[str] = []
+    in_exp = False
+    seen_allow = seen_en = seen_dll = False
+    for line in lines:
+        low = line.strip().lower()
+        if low == "[experts]":
+            in_exp = True
+            out.append(line)
+            continue
+        if in_exp and low.startswith("[") and low != "[experts]":
+            in_exp = False
+        if in_exp:
+            if low.startswith("allowlivetrading="):
+                out.append(f"AllowLiveTrading={trade}")
+                seen_allow = True
+                continue
+            if low.startswith("enabled="):
+                out.append(f"Enabled={flag}")
+                seen_en = True
+                continue
+            if low.startswith("allowdllimport="):
+                out.append("AllowDllImport=true")
+                seen_dll = True
+                continue
+        out.append(line)
+    if not any(l.strip().lower() == "[experts]" for l in out):
+        if out and out[-1].strip():
+            out.append("")
+        out.extend(["[Experts]", f"AllowLiveTrading={trade}", "AllowDllImport=true", f"Enabled={flag}"])
+    else:
+        idx = max(i for i, l in enumerate(out) if l.strip().lower() == "[experts]")
+        insert: List[str] = []
+        if not seen_allow:
+            insert.append(f"AllowLiveTrading={trade}")
+        if not seen_dll:
+            insert.append("AllowDllImport=true")
+        if not seen_en:
+            insert.append(f"Enabled={flag}")
+        if insert:
+            out[idx + 1 : idx + 1] = insert
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text("\n".join(out) + "\n", encoding="ascii", errors="ignore")
+        return True
+    except Exception as e:
+        log(f"PATCH INI EXPERTS ERROR {path}: {e}")
+        return False
+
+
+def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> None:
+    for rel in MT5_PORT_INI_REL_PATHS:
+        p = port_dir / Path(rel.replace("/", os.sep))
+        if _patch_ini_experts_section(p, enabled):
+            log(f"PATCH EXPERTS enabled={enabled} file={p}")
+
+
+def mt5_running_for_port_dir(port_dir: Path) -> bool:
+    root = str(port_dir).rstrip("\\/").lower()
+    for p in iter_terminal_processes():
+        try:
+            exe = (p.info.get("exe") or "").lower()
+            cmd = " ".join(p.info.get("cmdline") or []).lower()
+            if exe.startswith(root) or root in cmd:
+                return True
+        except Exception:
+            pass
+    return False
 
 
 def remove_mt5_login_ini(port_dir: Path) -> None:
@@ -930,6 +1110,83 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
+
+
+def _metric_value(v: Any) -> Any:
+    try:
+        if v is None or v == "":
+            return None
+        n = float(v)
+        return n if n > 0 else None
+    except Exception:
+        return None
+
+
+def _profit_value(v: Any) -> Any:
+    try:
+        if v is None or v == "":
+            return None
+        n = float(v)
+        return n if n == n else None
+    except Exception:
+        return None
+
+
+def send_account_metrics(
+    payload: Dict[str, Any],
+    balance: Any = None,
+    equity: Any = None,
+    currency: str = "",
+) -> None:
+    account_id = payload_get(payload, "accountId", "account_id")
+    user_id = payload_get(payload, "userId", "user_id")
+    if not account_id and not user_id:
+        return
+    balance = _metric_value(balance)
+    equity = _metric_value(equity)
+    if balance is None and equity is None:
+        return
+    try:
+        url = os.getenv(
+            "AVELQUA_ACCOUNT_METRICS_URL",
+            "https://trading.avelqua.com/app/mt5/account-metrics",
+        )
+        body = {
+            "accountId": account_id,
+            "userId": user_id,
+            "portNumber": payload_get(payload, "port", "portNumber", "port_no", "portSlot"),
+            "balance": balance,
+            "equity": equity,
+            "currency": currency or "",
+        }
+        api("POST", url, body)
+        log(f"ACCOUNT METRICS SENT accountId={account_id} balance={balance} equity={equity}")
+    except Exception as e:
+        log(f"ACCOUNT METRICS ERROR: {e}")
+
+
+def schedule_account_metrics_retry(
+    payload: Dict[str, Any],
+    port: Any,
+    delays: Tuple[int, ...] = (5, 12, 25, 45, 90),
+) -> None:
+    def _worker(delay_sec: int) -> None:
+        try:
+            time.sleep(delay_sec)
+            snap = account_snapshot(port, payload)
+            if snap.get("balance") is None and snap.get("equity") is None:
+                return
+            send_account_metrics(
+                payload,
+                snap.get("balance"),
+                snap.get("equity"),
+                snap.get("currency", ""),
+            )
+        except Exception as e:
+            log(f"ACCOUNT METRICS RETRY ERROR delay={delay_sec}: {e}")
+
+    for d in delays:
+        threading.Thread(target=_worker, args=(d,), daemon=True).start()
 
 
 def schedule_connect_metrics_retry(
@@ -2488,6 +2745,368 @@ def port_delete_file(payload: Dict[str, Any]) -> Dict[str, Any]:
     return {"action": "port_delete_file", "port": port, "file_path": str(full), "status": "deleted"}
 
 
+def _ea_file_candidates(bot_code: str) -> List[str]:
+    code = str(bot_code or "").strip()
+    names: List[str] = []
+    if not code:
+        return names
+    aliases = {
+        "SNIPER-DEMO": ["sniper-demo.ex5", "sniper_demo.ex5", "BOT.ex5", "BOT.mq5"],
+        "SNIPER_DEMO": ["sniper-demo.ex5", "sniper_demo.ex5", "BOT.ex5"],
+        "BOT_TEST": ["BOT_Test.ex5", "BOT.ex5", "BOT.mq5", "sniper-demo.ex5"],
+        "AK-SNIPER-VIP-VER4.0": ["AK-SNIPER-VIP-VER4.0.ex5", "AK_SNIPER_VIP_VER4.0.ex5"],
+        "AK-SNIPER": ["AK-SNIPER-VIP-VER4.0.ex5"],
+        "PA-SNIPER-VER2.0": ["PA-SNIPER-VER2.0.ex5", "PA_SNIPER_VER2.0.ex5"],
+        "PA-SNIPER": ["PA-SNIPER-VER2.0.ex5"],
+        "5PA-SNIPER": ["5PA-SNIPER.ex5", "5PA_SNIPER.ex5"],
+    }
+    key = code.upper().replace(" ", "")
+    for alt in aliases.get(key, []):
+        names.append(alt)
+    names.append(f"{code}.ex5")
+    names.append(f"{code}.mq5")
+    if "." not in code:
+        names.append(f"{code.replace('-', '_')}.ex5")
+    out: List[str] = []
+    for n in names:
+        if n not in out:
+            out.append(n)
+    return out
+
+
+def _ea_num(v: Any, default: float = 0.0) -> float:
+    try:
+        n = float(v)
+        return n if n == n else default
+    except Exception:
+        return default
+
+
+def _ea_fmt(v: Any) -> str:
+    n = _ea_num(v, 0.0)
+    if abs(n - round(n)) < 1e-9:
+        return str(int(round(n)))
+    return f"{n:.2f}".rstrip("0").rstrip(".")
+
+
+def _ea_magic_number(payload: Dict[str, Any]) -> int:
+    base = 2122000
+    bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "").strip().upper()
+    checksum = sum(ord(ch) for ch in bot_code[:24])
+    inst = int(_ea_num(payload_get(payload, "instanceId", "instance_id"), 0))
+    return base + ((checksum + inst) % 700000)
+
+
+def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str]:
+    preset = payload_get(payload, "presetRow", "preset_row") or {}
+    runtime = payload_get(payload, "eaRuntime", "ea_runtime") or {}
+    if not isinstance(preset, dict):
+        preset = {}
+    if not isinstance(runtime, dict):
+        runtime = {}
+    bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "BOT").strip() or "BOT"
+    trade_level = str(payload_get(payload, "tradeLevel", "trade_level") or "medium").strip().lower() or "medium"
+    capital = int(round(_ea_num(payload_get(payload, "capitalUsed", "capital"), 0)))
+    file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
+    if not file_name:
+        safe_bot = re.sub(r"[^A-Za-z0-9_.-]+", "-", bot_code).strip("-") or "BOT"
+        file_name = f"Avelqua_{safe_bot}_{trade_level}_{capital or 0}.set"
+    if not file_name.lower().endswith(".set"):
+        file_name = f"{file_name}.set"
+
+    lot = _ea_num(payload_get(payload, "lot"), _ea_num(preset.get("lot_size"), 0.01))
+    lot_plus = _ea_num(payload_get(payload, "lotPlus"), _ea_num(preset.get("lot_plus"), lot))
+    t_start = _ea_num(payload_get(payload, "tStart"), _ea_num(preset.get("t_start"), 0))
+    t_stop = _ea_num(payload_get(payload, "tStop"), _ea_num(preset.get("t_stop"), 0))
+    pip_step = _ea_num(payload_get(payload, "pipStep"), _ea_num(preset.get("pip_step"), 345))
+    tp_avg = _ea_num(payload_get(payload, "takeProfitAverage"), _ea_num(preset.get("take_profit_average"), 100))
+    cut_loss_pct = _ea_num(runtime.get("cutLossPct"), 100)
+
+    lines = [
+        "; Avelqua - auto-generated EA preset",
+        f"; bot={bot_code} level={trade_level} capital={capital or 0}",
+        f"InpSoftClose=0||0||0||1||1||N",
+        f"InpLotSize={_ea_fmt(lot)}||0.02||0.01||100||0.01||N",
+        f"InpLotPlus={_ea_fmt(lot_plus)}||0.02||0.01||100||0.01||N",
+        f"InpPipStep={_ea_fmt(pip_step)}||345||10||2000||1||N",
+        f"InpTakeProfitAverage={_ea_fmt(tp_avg)}||100||10||5000||1||N",
+        f"InpTrailingStartMoney={_ea_fmt(t_start)}||8||0||500||0.1||N",
+        f"InpTrailingStopMoney={_ea_fmt(t_stop)}||5||0||500||0.1||N",
+        f"InpCutLossPct={_ea_fmt(cut_loss_pct)}||100||1||100||1||N",
+        f"InpMagicNumber={_ea_magic_number(payload)}||{_ea_magic_number(payload)}||1||999999999||1||N",
+    ]
+    if runtime:
+        lines.extend([
+            f"InpDailyProfitTarget={_ea_fmt(runtime.get('dailyProfitTarget', 0))}||0||0||100000||1||N",
+            f"InpDailyLossLimit={_ea_fmt(runtime.get('dailyLossLimit', 0))}||0||0||100000||1||N",
+            f"InpMaxDailyCommands={_ea_fmt(runtime.get('maxDailyCommands', 30000))}||30000||100||100000||1||N",
+        ])
+    return file_name, "\r\n".join(lines) + "\r\n"
+
+
+def _write_ea_preset_files(port_dir: Path, payload: Dict[str, Any], experts_dir: Path) -> Dict[str, Any]:
+    content = str(payload_get(payload, "eaSetContent", "ea_set_content") or "").strip()
+    file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
+    if not content or not file_name:
+        file_name, content = _default_ea_set_payload(payload)
+    if not content or not file_name:
+        return {"ok": False, "reason": "no_ea_set_content"}
+
+    rel_paths = payload_get(payload, "eaSetPaths", "ea_set_paths") or []
+    if not isinstance(rel_paths, list):
+        rel_paths = []
+
+    default_targets = [
+        port_dir / "MQL5" / "Presets" / file_name,
+        port_dir / "MQL5" / "Presets" / "Experts" / file_name,
+        experts_dir / file_name,
+        port_dir / "MQL5" / "Profiles" / file_name,
+    ]
+    written: List[str] = []
+    seen = set()
+
+    def _write_one(target: Path) -> None:
+        key = str(target).lower()
+        if key in seen:
+            return
+        seen.add(key)
+        try:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content, encoding="utf-8", errors="ignore")
+            written.append(str(target))
+            log(f"EA SET WRITTEN {target}")
+        except Exception as e:
+            log(f"EA SET WRITE ERROR {target}: {e}")
+
+    for rel in rel_paths:
+        try:
+            rel_s = str(rel).replace("/", os.sep).strip()
+            if rel_s:
+                _write_one(port_dir / rel_s)
+        except Exception:
+            pass
+    for t in default_targets:
+        _write_one(t)
+
+    try:
+        run_json = {
+            "instanceId": payload_get(payload, "instanceId", "instance_id"),
+            "accountId": payload_get(payload, "accountId", "account_id"),
+            "botCode": payload_get(payload, "botCode", "eaName", "bot_code"),
+            "symbol": payload_get(payload, "symbol", default="XAUUSD"),
+            "eaSetFileName": file_name,
+            "eaAttachHint": payload_get(payload, "eaAttachHint", "ea_attach_hint"),
+            "tradeLevel": payload_get(payload, "tradeLevel", "trade_level"),
+            "lot": payload_get(payload, "lot"),
+            "capitalUsed": payload_get(payload, "capitalUsed", "capital"),
+            "writtenAt": datetime.now().isoformat(timespec="seconds"),
+        }
+        files_dir = port_dir / "MQL5" / "Files"
+        files_dir.mkdir(parents=True, exist_ok=True)
+        (files_dir / "avelqua_run.json").write_text(
+            json.dumps(run_json, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        written.append(str(files_dir / "avelqua_run.json"))
+    except Exception as e:
+        log(f"avelqua_run.json write error: {e}")
+
+    return {"ok": len(written) > 0, "fileName": file_name, "written": written}
+
+
+def _verify_ea_in_experts_dir(experts_dir: Path, bot_code: str) -> Dict[str, Any]:
+    experts_dir = Path(experts_dir)
+    experts_dir.mkdir(parents=True, exist_ok=True)
+    found: List[str] = []
+    missing: List[str] = []
+    code = str(bot_code or "").strip()
+    for name in _ea_file_candidates(code):
+        p = experts_dir / name
+        if p.exists():
+            found.append(str(p))
+        else:
+            missing.append(name)
+    if not found and code and experts_dir.is_dir():
+        want = code.lower()
+        for ex5 in experts_dir.glob("*.ex5"):
+            if ex5.stem.lower() == want:
+                found.append(str(ex5))
+                break
+    return {
+        "experts_dir": str(experts_dir),
+        "found": found,
+        "missing": missing,
+        "ok": len(found) > 0,
+    }
+
+
+def _pick_launchable_ea_file(ea_info: Dict[str, Any]) -> Optional[Path]:
+    found = ea_info.get("found") or []
+    for raw in found:
+        try:
+            p = Path(str(raw))
+            if p.suffix.lower() == ".ex5" and p.exists():
+                return p
+        except Exception:
+            continue
+    for raw in found:
+        try:
+            p = Path(str(raw))
+            if p.suffix.lower() == ".mq5":
+                ex5 = p.with_suffix(".ex5")
+                if ex5.exists():
+                    return ex5
+        except Exception:
+            continue
+    return None
+
+
+def _mt5_startup_expert_name(port_dir: Path, expert_file: Optional[Path]) -> str:
+    if not expert_file:
+        return ""
+    try:
+        experts_root = (port_dir / "MQL5" / "Experts").resolve()
+        rel = expert_file.resolve().relative_to(experts_root)
+        return str(rel).replace("/", "\\")
+    except Exception:
+        return expert_file.name
+
+
+def _ea_live_status_for_payload(port_dir: Path, payload: Optional[Dict[str, Any]], running: bool) -> str:
+    if not running:
+        return "stopped"
+    bot_code = str(payload_get(payload or {}, "botCode", "eaName", "bot_code") or "").strip()
+    rel = str(
+        payload_get(payload or {}, "expertsRelative", "experts_relative", default=r"MQL5\Experts\Trading Bot")
+        or r"MQL5\Experts\Trading Bot"
+    )
+    experts_dir = port_dir / Path(rel.replace("\\", os.sep))
+    ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
+    return "ready" if _pick_launchable_ea_file(ea_info) else "attach_required"
+
+
+def _is_modern_run_bot_payload(payload: Dict[str, Any]) -> bool:
+    if payload_get(payload, "instanceId", "instance_id"):
+        return True
+    action = str(payload_get(payload, "action", "commandType") or "").lower()
+    return action in ("run_bot", "restart_ea", "run_mt5_bot", "restart_mt5_bot")
+
+
+def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+    if not port:
+        raise RuntimeError("payload.port is required")
+
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        raise RuntimeError(f"terminal64.exe not found: {terminal}")
+
+    bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "").strip()
+    rel = str(
+        payload_get(payload, "expertsRelative", "experts_relative", default=r"MQL5\Experts\Trading Bot")
+        or r"MQL5\Experts\Trading Bot"
+    )
+    experts_dir = port_dir / Path(rel.replace("\\", os.sep))
+    ea_info = _verify_ea_in_experts_dir(experts_dir, bot_code)
+    launch_ea = _pick_launchable_ea_file(ea_info)
+    if launch_ea is None:
+        raise RuntimeError(f"EA file not found for {bot_code} in {experts_dir}")
+
+    set_info = _write_ea_preset_files(port_dir, payload, experts_dir)
+    if not set_info.get("ok"):
+        raise RuntimeError("EA preset generation failed")
+
+    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
+    password = str(payload_get(payload, "mt5Password", "password") or "")
+    server = str(payload_get(payload, "serverName", "server") or LOCKED_MT5_SERVER).strip() or LOCKED_MT5_SERVER
+    symbol = str(payload_get(payload, "symbol", default="XAUUSD") or "XAUUSD").strip() or "XAUUSD"
+    period = str(payload_get(payload, "period", "chartPeriod", default=MT5_RUNBOT_PERIOD) or MT5_RUNBOT_PERIOD).strip().upper()
+    startup_expert = _mt5_startup_expert_name(port_dir, launch_ea)
+    startup_set = str(set_info.get("fileName") or "").strip()
+
+    write_avelqua_trading_gate(port_dir, True, payload)
+    patch_mt5_experts_config(port_dir, True)
+
+    if login and password:
+        write_mt5_login_ini(
+            port_dir,
+            login,
+            password,
+            server,
+            allow_expert_trading=True,
+            startup_expert=startup_expert,
+            startup_symbol=symbol,
+            startup_period=period,
+            startup_expert_parameters=startup_set,
+        )
+
+    if mt5_running_for_port_dir(port_dir):
+        stop_mt5_port_only(port, payload)
+        time.sleep(2)
+
+    cfg = mt5_startup_ini_path(port_dir)
+    if not cfg.exists():
+        raise RuntimeError("MT5 startup.ini missing - connect MT5 from web first")
+
+    proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
+    proc_pid = proc.pid if proc else None
+    time.sleep(5)
+
+    snap = account_snapshot(port, payload)
+    bal = snap.get("balance")
+    eq = snap.get("equity")
+    profit = None
+    if bal is not None and eq is not None:
+        try:
+            profit = round(float(eq) - float(bal), 2)
+        except Exception:
+            profit = None
+
+    instance_id = payload_get(payload, "instanceId", "instance_id")
+    send_mt5_live_status(
+        instance_id,
+        port,
+        "running",
+        "ready",
+        bal or 0,
+        eq or 0,
+        "",
+        payload,
+        profit=profit,
+    )
+    send_account_metrics(payload, bal, eq, snap.get("currency", ""))
+    schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
+    threading.Thread(target=lambda: (time.sleep(2), enable_mt5_algo_trading_uia(port, payload)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
+
+    return {
+        "action": "run_bot",
+        "ok": True,
+        "status": "running",
+        "message": f"BOT auto-attached on {symbol} ({period}) and preset loaded",
+        "folderPath": str(port_dir),
+        "portNumber": normalize_port(port),
+        "mt5Running": True,
+        "keepMt5Open": True,
+        "launched": True,
+        "processId": proc_pid,
+        "balance": bal,
+        "equity": eq,
+        "profit": profit,
+        "eaStatus": "ready",
+        "botCode": bot_code,
+        "expertsPath": str(experts_dir),
+        "eaFiles": ea_info,
+        "eaSet": set_info,
+        "instanceId": instance_id,
+    }
+
+
+def restart_ea_command(payload: Dict[str, Any]) -> Dict[str, Any]:
+    return run_bot_command(payload)
+
+
 def open_mt5_port_folder(payload: Dict[str, Any]) -> Dict[str, Any]:
     port = payload_get(payload, "port", "portNumber", "portSlot")
     port_dir = resolve_mt5_port_dir(port, payload)
@@ -2530,15 +3149,36 @@ def remove_mt5_port_folder_safe(port: Any, payload: Optional[Dict[str, Any]] = N
     return {"action": "delete_port", "port": port, "port_dir": str(port_dir), "status": "deleted"}
 
 
-def send_mt5_live_status(instance_id: Any, port: Any, status: str, ea_status: str = "", balance: float = 0, equity: float = 0, error_text: str = "") -> None:
+def send_mt5_live_status(
+    instance_id: Any,
+    port: Any,
+    status: str,
+    ea_status: str = "",
+    balance: float = 0,
+    equity: float = 0,
+    error_text: str = "",
+    payload: Optional[Dict[str, Any]] = None,
+    profit: Any = None,
+) -> None:
     try:
+        bal_out = _metric_value(balance)
+        eq_out = _metric_value(equity)
+        profit_out = _profit_value(profit)
+        if profit_out is None and bal_out is not None and eq_out is not None:
+            try:
+                profit_out = round(float(eq_out) - float(bal_out), 2)
+            except Exception:
+                profit_out = None
         body = {
             "instanceId": instance_id,
             "port": port,
+            "accountId": payload_get(payload or {}, "accountId", "account_id") if payload else None,
             "status": status,
             "eaStatus": ea_status,
-            "balance": balance,
-            "equity": equity,
+            "balance": bal_out,
+            "equity": eq_out,
+            "profit": profit_out,
+            "error": error_text or "",
             "errorText": error_text,
             "at": datetime.now().isoformat(timespec="seconds"),
         }
@@ -2555,16 +3195,28 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
             return
         instance_id = payload_get(payload, "instanceId")
         st = mt5_port_status_one(port, payload)
+        port_dir = resolve_mt5_port_dir(port, payload)
         snap = account_snapshot(port, payload)
+        bal = float(snap.get("balance") or 0)
+        eq = float(snap.get("equity") or 0)
+        profit = None
+        if snap.get("balance") is not None and snap.get("equity") is not None:
+            try:
+                profit = round(float(snap.get("equity")) - float(snap.get("balance")), 2)
+            except Exception:
+                profit = None
         send_mt5_live_status(
             instance_id,
             port,
             "running" if st["running"] else "stopped",
-            st["status"],
-            float(snap.get("balance") or 0),
-            float(snap.get("equity") or 0),
+            _ea_live_status_for_payload(port_dir, payload, bool(st["running"])),
+            bal,
+            eq,
             "",
+            payload,
+            profit=profit,
         )
+        send_account_metrics(payload, snap.get("balance"), snap.get("equity"), snap.get("currency", ""))
     except Exception as e:
         log(f"WATCH INSTANCE ERROR: {e}")
 
@@ -2893,8 +3545,12 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         elif ctype in ("restart_mt5_bot", "restart_mt5", "restart_port"):
             port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
             instance_id = payload_get(payload, "instanceId")
-            res = restart_mt5_port(port, payload)
-            send_mt5_live_status(instance_id, port, "running", "manual_restart", 0, 0, "")
+            if _is_modern_run_bot_payload(payload):
+                res = restart_ea_command(payload)
+                send_mt5_live_status(instance_id, port, "running", "ready", 0, 0, "", payload)
+            else:
+                res = restart_mt5_port(port, payload)
+                send_mt5_live_status(instance_id, port, "running", "manual_restart", 0, 0, "", payload)
             command_result(cmd_id, True, res)
 
         elif ctype == "delete_port":
@@ -2924,13 +3580,28 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
     port = _worker_port_num(payload)
     try:
         log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
-        command_result(cmd_id, True, start_mt5_bot(payload))
+        if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
+            command_result(cmd_id, True, run_bot_command(payload))
+        else:
+            command_result(cmd_id, True, start_mt5_bot(payload))
         return 0
     except Exception as e:
         log(f"CONNECT WORKER ERROR port={port} cmd_id={cmd_id}: {e}")
         release_login_ui_lock_for_current_process()
         try:
-            send_connect_result(payload, "failed", str(e))
+            if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
+                send_mt5_live_status(
+                    payload_get(payload, "instanceId", "instance_id"),
+                    port,
+                    "failed",
+                    "error",
+                    0,
+                    0,
+                    str(e),
+                    payload,
+                )
+            else:
+                send_connect_result(payload, "failed", str(e))
         except Exception:
             pass
         command_result(cmd_id, False, {}, str(e))
