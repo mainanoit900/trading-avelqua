@@ -1488,6 +1488,36 @@ def quarantine_chart_profiles_with_ea(port_dir: Path) -> None:
             log(f"QUARANTINE CHART SKIP {src}: {e}")
 
 
+def reset_chart_profile_to_single_chart(port_dir: Path) -> None:
+    """ล้าง layout เดิมของ PORT นี้เพื่อให้ MT5 เปิดกลับมาที่ chart เดียว."""
+    prof = port_dir / "MQL5" / "Profiles"
+    if not prof.exists():
+        return
+    for rel in ("Charts", "charts", "LastProfile.ini", "lastprofile.ini"):
+        target = prof / rel
+        if not target.exists():
+            continue
+        try:
+            if target.is_dir():
+                shutil.rmtree(target, ignore_errors=True)
+            else:
+                target.unlink()
+            log(f"RESET SINGLE CHART PROFILE {target}")
+        except Exception as e:
+            log(f"RESET SINGLE CHART PROFILE SKIP {target}: {e}")
+    for extra in [prof / "_avelqua_saved_layout", *prof.glob("_avelqua_quarantine_*")]:
+        if not extra.exists():
+            continue
+        try:
+            if extra.is_dir():
+                shutil.rmtree(extra, ignore_errors=True)
+            else:
+                extra.unlink()
+            log(f"REMOVE CHART LAYOUT CACHE {extra}")
+        except Exception as e:
+            log(f"REMOVE CHART LAYOUT CACHE SKIP {extra}: {e}")
+
+
 def snapshot_current_chart_profile(port_dir: Path) -> bool:
     """เก็บ workspace ล่าสุดไว้ เพื่อให้เปิดรอบถัดไปใกล้เคียงเปิดมือ."""
     prof = port_dir / "MQL5" / "Profiles"
@@ -3795,6 +3825,7 @@ def _relaunch_mt5_for_login(
     except Exception as e:
         log(f"RELAUNCH stop old: {e}")
     _wait_mt5_port_stopped(port, payload, port_dir, 10.0)
+    reset_chart_profile_to_single_chart(port_dir)
     write_mt5_login_ini(
         port_dir,
         login,
@@ -4675,6 +4706,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             log(f"STOP OLD MT5 ERROR: {e}")
         time.sleep(0.35)
+        reset_chart_profile_to_single_chart(port_dir)
         write_mt5_login_ini(
             port_dir,
             login,

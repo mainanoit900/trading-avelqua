@@ -531,6 +531,39 @@ document.addEventListener('DOMContentLoaded', function () {
     return t > 0 ? Date.now() - t : 0;
   }
 
+  async function mt5MaybeShowSuccessForActiveConnectedPort(portsState, opts) {
+    const pd = portsState || window.__mt5PortsState;
+    opts = opts || {};
+    if (!pd || pd.ok !== true) return false;
+    let slot = mt5ActivePageSlot() || mt5ConnectTargetSlot();
+    if (!slot) {
+      try {
+        slot = localStorage.getItem('mt5ActivePortSlot') || '';
+      } catch (_) {
+        slot = '';
+      }
+    }
+    slot = String(slot || '').trim();
+    if (!slot) return false;
+    const port = (pd.ports || []).find(function (p) {
+      return String(p.slot) === slot;
+    });
+    if (!port || port.cssClass !== 'connected') return false;
+    const acc = (pd.connectedAccounts || []).find(function (a) {
+      return String(a.port_slot) === slot && String(a.status || '').toLowerCase() === 'connected';
+    });
+    if (!acc || !mt5ShouldForceSuccessModal(acc, {})) return false;
+    if (typeof window.finishMt5ConnectSuccess === 'function') {
+      await window.finishMt5ConnectSuccess(
+        opts.message || 'เชื่อมต่อสำเร็จ',
+        acc,
+        { force: true }
+      );
+      return true;
+    }
+    return false;
+  }
+
   function mt5CanFinishConnectSuccess(data) {
     if (!data || data.loginVerified !== true || data.connected !== true) return false;
     const successToken = mt5SuccessModalToken((data && data.account) || data);
@@ -1457,6 +1490,7 @@ document.addEventListener('DOMContentLoaded', function () {
         if (typeof window.mt5BindRunForm === 'function') window.mt5BindRunForm();
         if (typeof window.mt5BindNumberInputWheel === 'function') window.mt5BindNumberInputWheel();
       }
+      await mt5MaybeShowSuccessForActiveConnectedPort(data).catch(function () {});
     } catch (_) {}
   }
   window.refreshMt5PortCards = refreshMt5PortCards;
