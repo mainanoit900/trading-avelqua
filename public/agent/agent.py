@@ -68,7 +68,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-snapshot-force-v12"
+AGENT_BUILD_ID = "2026-05-26-mt5-port-window-target-v13"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1327,6 +1327,8 @@ def automate_mt5_login_server_form(
     login: str,
     password: str,
     server: str = LOCKED_MT5_SERVER,
+    port_dir: Optional[Path] = None,
+    process_id: Any = None,
 ) -> bool:
     """กรอกฟอร์ม Login MT5 ซ้ำอีกชั้นเมื่อ terminal เปิดมาแต่ยังไม่ผูก server ให้"""
     login_esc = str(login or "").replace("+", "{+}").replace("{", "{{").replace("}", "}}")
@@ -1347,13 +1349,31 @@ def automate_mt5_login_server_form(
         .replace("{", "{{")
         .replace("}", "}}")
     )
+    root_esc = str(port_dir or "").replace("'", "''").lower()
+    try:
+        pid_hint = int(process_id or 0)
+    except Exception:
+        pid_hint = 0
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue |
-  Where-Object {{ $_.MainWindowHandle -ne 0 }} |
-  Sort-Object MainWindowTitle -Descending |
-  Select-Object -First 1
+$pidHint = {pid_hint}
+$root = '{root_esc}'
+$items = Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.MainWindowHandle -ne 0 }}
+$p = $null
+if ($pidHint -gt 0) {{
+  $p = $items | Where-Object {{ $_.Id -eq $pidHint }} | Select-Object -First 1
+}}
+if ((-not $p) -and $root) {{
+  $p = $items |
+    Where-Object {{ $_.Path -and $_.Path.ToLower().StartsWith($root) }} |
+    Sort-Object Id -Descending |
+    Select-Object -First 1
+}}
+if (-not $p) {{
+  $p = $items | Sort-Object MainWindowTitle -Descending | Select-Object -First 1
+}}
 if (-not $p) {{ exit 0 }}
 Add-Type @"
 using System;
@@ -1385,7 +1405,7 @@ exit 0
 """
     try:
         _run_powershell(ps, timeout=14)
-        log(f"MT5 LOGIN FORM server={server} login={login}")
+        log(f"MT5 LOGIN FORM server={server} login={login} pid_hint={pid_hint} root={port_dir}")
         return True
     except Exception as e:
         log(f"MT5 LOGIN FORM ERROR: {e}")
@@ -1395,16 +1415,38 @@ exit 0
 def automate_mt5_open_account_wizard(
     company: str = LOCKED_MT5_COMPANY,
     server: str = LOCKED_MT5_SERVER,
+    port_dir: Optional[Path] = None,
+    process_id: Any = None,
 ) -> bool:
     """กด wizard Open an Account ให้เลือก Mohicans Markets Ltd + Server MohicansMarkets-Live"""
     company_esc = company.replace("'", "''")
     server_esc = server.replace("+", "{+}")
+    root_esc = str(port_dir or "").replace("'", "''").lower()
+    try:
+        pid_hint = int(process_id or 0)
+    except Exception:
+        pid_hint = 0
     ps = f"""
 Add-Type -AssemblyName System.Windows.Forms
 $ErrorActionPreference = "SilentlyContinue"
-$dlg = Get-Process | Where-Object {{
+$pidHint = {pid_hint}
+$root = '{root_esc}'
+$items = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
   $_.MainWindowHandle -ne 0 -and $_.MainWindowTitle -like "*Open an Account*"
-}} | Select-Object -First 1
+}}
+$dlg = $null
+if ($pidHint -gt 0) {{
+  $dlg = $items | Where-Object {{ $_.Id -eq $pidHint }} | Select-Object -First 1
+}}
+if ((-not $dlg) -and $root) {{
+  $dlg = $items |
+    Where-Object {{ $_.Path -and $_.Path.ToLower().StartsWith($root) }} |
+    Sort-Object Id -Descending |
+    Select-Object -First 1
+}}
+if (-not $dlg) {{
+  $dlg = $items | Select-Object -First 1
+}}
 if (-not $dlg) {{ exit 0 }}
 Add-Type @"
 using System;
@@ -1432,7 +1474,7 @@ exit 0
 """
     try:
         _run_powershell(ps, timeout=18)
-        log(f"MT5 WIZARD AUTO company={company} server={server}")
+        log(f"MT5 WIZARD AUTO company={company} server={server} pid_hint={pid_hint} root={port_dir}")
         return True
     except Exception as e:
         log(f"MT5 WIZARD AUTO ERROR: {e}")
@@ -1614,8 +1656,8 @@ def wait_mt5_login_hybrid(
         if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
             server = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
-            automate_mt5_open_account_wizard(server=server)
-            automate_mt5_login_server_form(login, pw, server)
+            automate_mt5_open_account_wizard(server=server, port_dir=port_dir, process_id=proc_pid)
+            automate_mt5_login_server_form(login, pw, server, port_dir=port_dir, process_id=proc_pid)
             last_wizard_at = now
 
         j_out, j_chunk = _quick_journal_probe(port_dir, login, journal_since)
@@ -1858,7 +1900,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
         proc = _popen_hidden(args, cwd=str(port_dir))
         time.sleep(0.9)
-        automate_mt5_login_server_form(login, password, server)
+        automate_mt5_login_server_form(login, password, server, port_dir=port_dir, process_id=(proc.pid if proc else None))
         return proc
 
     journal_since = time.time()
