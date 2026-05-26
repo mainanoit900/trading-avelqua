@@ -155,6 +155,17 @@
     <div style="font-size:13px;color:#93c5fd;margin-bottom:8px">
       <b>หน้าจอ MT5 บน VPS</b> — ตรวจสอบเลขบัญชีบน title bar ว่าตรงกับที่กรอก
     </div>
+    <div id="mt5ConnectMeta" style="display:none;margin:0 0 10px 0">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <span id="mt5ConnectStepBadge" style="display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;background:#172554;color:#bfdbfe;font-size:12px;font-weight:700">ขั้นตอน 1/4</span>
+        <span id="mt5ConnectElapsed" style="font-size:12px;color:#cbd5e1">ใช้เวลา 0 วินาที</span>
+        <span id="mt5ConnectRemaining" style="font-size:12px;color:#94a3b8">เหลือประมาณ 0 วินาที</span>
+      </div>
+      <div id="mt5ConnectStepDetail" style="font-size:13px;color:#e2e8f0;margin-bottom:8px">กำลังเตรียมการเชื่อมต่อ...</div>
+      <div style="width:100%;height:8px;background:#0f172a;border:1px solid #1e293b;border-radius:999px;overflow:hidden">
+        <div id="mt5ConnectProgressBar" style="height:100%;width:18%;background:linear-gradient(90deg,#2563eb,#38bdf8);border-radius:999px;transition:width .25s ease"></div>
+      </div>
+    </div>
     <img id="mt5PreviewImg" alt="MT5 Preview" style="max-width:100%;border-radius:8px;border:1px solid #334155;display:none">
     <div id="mt5PreviewTitle" style="font-size:12px;color:#cbd5e1;margin-top:8px;word-break:break-all"></div>
     <div style="font-size:11px;color:#64748b;margin-top:6px">ถ้าใช้ RDP เข้า VPS จะเห็นหน้าต่าง MT5 บนเดสก์ท็อป Windows โดยตรง</div>
@@ -444,6 +455,37 @@
     }
   }
 
+  function updateMt5ConnectMeta(data) {
+    const metaBox = document.getElementById('mt5ConnectMeta');
+    const badge = document.getElementById('mt5ConnectStepBadge');
+    const elapsed = document.getElementById('mt5ConnectElapsed');
+    const remaining = document.getElementById('mt5ConnectRemaining');
+    const detail = document.getElementById('mt5ConnectStepDetail');
+    const bar = document.getElementById('mt5ConnectProgressBar');
+    if (!metaBox || !badge || !elapsed || !remaining || !detail || !bar) return;
+
+    const step = data && data.step ? data.step : {};
+    const stepIndex = Math.max(0, Number(step.index || 0));
+    const stepTotal = Math.max(1, Number(step.total || 4));
+    const isFailed = String(step.key || '').toLowerCase() === 'failed';
+    const isConnected = String(step.key || '').toLowerCase() === 'connected';
+    const width = isFailed ? 100 : Math.max(14, Math.min(100, Math.round((stepIndex / stepTotal) * 100)));
+
+    metaBox.style.display = 'block';
+    badge.textContent = step.label || 'กำลังตรวจสอบการเชื่อมต่อ';
+    detail.textContent = step.detail || data.message || 'กำลังตรวจสอบการเชื่อมต่อ...';
+    elapsed.textContent = 'ใช้เวลา ' + String(Number(data.elapsedSec || 0)) + ' วินาที';
+    remaining.textContent = data.pending || data.checking
+      ? 'เหลือประมาณ ' + String(Number(data.remainingSec || 0)) + ' วินาที'
+      : '';
+    bar.style.width = width + '%';
+    bar.style.background = isFailed
+      ? 'linear-gradient(90deg,#ef4444,#f97316)'
+      : isConnected
+        ? 'linear-gradient(90deg,#22c55e,#14b8a6)'
+        : 'linear-gradient(90deg,#2563eb,#38bdf8)';
+  }
+
   function clearLegacyMt5QueryState() {
     if (!window.history || !window.history.replaceState) return;
     if (!urlParams.get('connected') && !urlParams.get('failed') && !urlParams.get('msg')) return;
@@ -532,8 +574,9 @@
             ? 'Title bar: ' + data.windowTitle
             : (sec !== '' ? 'รอหน้าต่าง MT5... (' + sec + ' วินาที)' : '');
         }
+        updateMt5ConnectMeta(data);
         if (btn) {
-          btn.innerHTML = waitMsg;
+          btn.innerHTML = waitMsg + (sec !== '' ? ' (' + sec + ' วินาที)' : '');
         }
         return;
       }
