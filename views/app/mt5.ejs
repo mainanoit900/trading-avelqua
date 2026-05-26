@@ -218,10 +218,10 @@
     </div>
   </section>
 
-  <section class="mt5-card">
+  <section class="mt5-card" id="mt5HistorySection">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
-      <span>แสดง 5 รายการล่าสุด</span>
+      <span>แสดง 5 แถว / ทั้งหมด <%= historyTotal || 0 %> รายการ</span>
     </div>
     <div class="mt5-table-wrap">
       <table class="mt5-table">
@@ -293,6 +293,21 @@
         </tbody>
       </table>
     </div>
+    <% if ((historyPageCount || 1) > 1) { %>
+      <div class="mt5-pager">
+        <% if ((historyPage || 1) > 1) { %>
+          <a class="mt5-pager-btn" href="/app/mt5?history_page=<%= historyPage - 1 %>#mt5HistorySection">ก่อนหน้า</a>
+        <% } else { %>
+          <span class="mt5-pager-btn disabled">ก่อนหน้า</span>
+        <% } %>
+        <span class="mt5-pager-meta">หน้า <b><%= historyPage %></b> / <%= historyPageCount %></span>
+        <% if ((historyPage || 1) < (historyPageCount || 1)) { %>
+          <a class="mt5-pager-btn primary" href="/app/mt5?history_page=<%= historyPage + 1 %>#mt5HistorySection">ถัดไป</a>
+        <% } else { %>
+          <span class="mt5-pager-btn disabled">ถัดไป</span>
+        <% } %>
+      </div>
+    <% } %>
   </section>
 </div>
 
@@ -1219,12 +1234,23 @@ window.openMt5EquityGraph = openMt5EquityGraph;
 </script>
 
 <script>
-async function loadMt5LiveDashboard() {
+let mt5LiveDashboardPage = 1;
+
+function changeMt5LiveDashboardPage(nextPage) {
+  const page = Math.max(1, Number(nextPage || 1));
+  mt5LiveDashboardPage = page;
+  loadMt5LiveDashboard(page);
+}
+
+window.changeMt5LiveDashboardPage = changeMt5LiveDashboardPage;
+
+async function loadMt5LiveDashboard(page) {
   const box = document.getElementById('mt5LiveDashboard');
   if (!box) return;
+  if (page != null) mt5LiveDashboardPage = Math.max(1, Number(page || 1));
 
   try {
-    const res = await fetch('/app/mt5/live-dashboard', {
+    const res = await fetch('/app/mt5/live-dashboard?page=' + encodeURIComponent(mt5LiveDashboardPage), {
       credentials: 'same-origin',
       headers: { Accept: 'application/json' }
     });
@@ -1300,6 +1326,15 @@ async function loadMt5LiveDashboard() {
     });
 
     html += '</tbody></table>';
+    if ((data.pageCount || 1) > 1) {
+      html += `
+        <div class="mt5-pager">
+          <button type="button" class="mt5-pager-btn${data.hasPrev ? '' : ' disabled'}" ${data.hasPrev ? `onclick="changeMt5LiveDashboardPage(${Number(data.page) - 1})"` : 'disabled'}>ก่อนหน้า</button>
+          <span class="mt5-pager-meta">หน้า <b>${data.page || 1}</b> / ${data.pageCount || 1}</span>
+          <button type="button" class="mt5-pager-btn primary${data.hasNext ? '' : ' disabled'}" ${data.hasNext ? `onclick="changeMt5LiveDashboardPage(${Number(data.page) + 1})"` : 'disabled'}>ถัดไป</button>
+        </div>
+      `;
+    }
     box.innerHTML = html;
 
   } catch (e) {
@@ -1323,13 +1358,20 @@ setInterval(loadMt5LiveDashboard, 3000);
 .mt5-run-secondary-disabled{background:linear-gradient(135deg,rgba(71,85,105,.85),rgba(51,65,85,.85))!important;color:#cbd5e1!important;box-shadow:none!important}
 .mt5-run-action-note{display:block;color:#94a3b8;font-size:12px;line-height:1.45}
 @media(max-width:900px){.mt5-run-action-box{margin-top:2px}}
+.mt5-pager{display:flex;align-items:center;justify-content:flex-end;gap:10px;flex-wrap:wrap;margin-top:14px}
+.mt5-pager-btn{display:inline-flex;align-items:center;justify-content:center;min-width:88px;padding:8px 12px;border-radius:12px;border:1px solid rgba(148,163,184,.18);background:linear-gradient(135deg,rgba(30,41,59,.92),rgba(15,23,42,.92));color:#e2e8f0;font-weight:800;font-size:12px;text-decoration:none;cursor:pointer;transition:.18s}
+.mt5-pager-btn:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.35);background:rgba(59,130,246,.14)}
+.mt5-pager-btn.primary{background:linear-gradient(135deg,rgba(37,99,235,.9),rgba(14,165,233,.88));border-color:rgba(96,165,250,.35);color:#eff6ff}
+.mt5-pager-btn.disabled,.mt5-pager-btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
+.mt5-pager-meta{color:#94a3b8;font-size:12px}
 .mt5-manage-menu{position:relative}
-.mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;min-width:104px;padding:9px 14px;border-radius:14px;cursor:pointer;color:#e2e8f0;font-weight:900;background:linear-gradient(135deg,rgba(30,41,59,.95),rgba(15,23,42,.95));border:1px solid rgba(148,163,184,.18);box-shadow:0 14px 28px rgba(0,0,0,.22)}
+.mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:72px;padding:7px 10px;border-radius:999px;cursor:pointer;color:#e2e8f0;font-weight:800;font-size:11px;letter-spacing:.02em;background:linear-gradient(135deg,rgba(30,41,59,.88),rgba(15,23,42,.92));border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 22px rgba(0,0,0,.18)}
+.mt5-manage-menu summary::after{content:'▾';font-size:10px;color:#93c5fd}
 .mt5-manage-menu summary::-webkit-details-marker{display:none}
-.mt5-manage-menu[open] summary{border-color:rgba(96,165,250,.42);box-shadow:0 18px 34px rgba(37,99,235,.22)}
-.mt5-manage-dropdown{position:absolute;right:0;top:calc(100% + 10px);z-index:30;display:grid;gap:8px;min-width:190px;padding:12px;border-radius:18px;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.18);box-shadow:0 24px 70px rgba(0,0,0,.42)}
+.mt5-manage-menu[open] summary{border-color:rgba(96,165,250,.35);box-shadow:0 16px 28px rgba(37,99,235,.16)}
+.mt5-manage-dropdown{position:absolute;right:0;top:calc(100% + 8px);z-index:30;display:grid;gap:6px;min-width:160px;padding:10px;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.14);box-shadow:0 22px 55px rgba(0,0,0,.38);backdrop-filter:blur(12px)}
 .mt5-manage-dropdown form{margin:0}
-.mt5-manage-item{width:100%;display:flex;align-items:center;justify-content:flex-start;padding:11px 13px;border-radius:13px;border:1px solid rgba(148,163,184,.14);background:rgba(255,255,255,.05);color:#f8fafc;font-weight:800;cursor:pointer;transition:.18s}
+.mt5-manage-item{width:100%;display:flex;align-items:center;justify-content:flex-start;padding:9px 11px;border-radius:12px;border:1px solid rgba(148,163,184,.12);background:rgba(255,255,255,.04);color:#f8fafc;font-weight:800;font-size:12px;cursor:pointer;transition:.18s}
 .mt5-manage-item:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.38);background:rgba(59,130,246,.14)}
 .mt5-manage-item.danger{color:#fecaca;background:rgba(239,68,68,.12);border-color:rgba(248,113,113,.24)}
 .mt5-manage-item.danger:hover{background:rgba(239,68,68,.18);border-color:rgba(248,113,113,.38)}

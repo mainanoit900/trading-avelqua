@@ -1499,6 +1499,8 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
 
 router.get('/mt5', async (req, res) => {
   const userId = req.user.id;
+  const historyPageSize = 5;
+  const historyPage = Math.max(1, parseInt(req.query.history_page, 10) || 1);
 
   await query(`
     UPDATE vps_system.mt5_accounts
@@ -1564,6 +1566,16 @@ router.get('/mt5', async (req, res) => {
       AND status IN ('running','pending','restarting')
     ORDER BY id DESC
   `, [userId]);
+  const historyCountRows = await safeQuery(`
+    SELECT COUNT(*)::int AS total
+    FROM vps_system.bot_instances bi
+    WHERE bi.user_id=$1
+      AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
+  `, [userId]);
+  const historyTotal = Number(historyCountRows?.[0]?.total || 0);
+  const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize));
+  const historySafePage = Math.min(historyPage, historyPageCount);
+  const historyOffset = (historySafePage - 1) * historyPageSize;
   const instances = await safeQuery(`
     SELECT bi.*, bc.display_name, bc.bot_name, bc.bot_code, n.node_name, n.node_code,
            a.mt5_login, a.last_balance, a.last_equity
@@ -1574,8 +1586,8 @@ router.get('/mt5', async (req, res) => {
     WHERE bi.user_id=$1
       AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
     ORDER BY bi.id DESC
-    LIMIT 5
-  `, [userId]);
+    LIMIT $2 OFFSET $3
+  `, [userId, historyPageSize, historyOffset]);
   const seenActiveAccountIds = new Set();
   const activeRunInstances = [];
   for (const row of activeInstanceRows || []) {
@@ -1645,6 +1657,10 @@ router.get('/mt5', async (req, res) => {
     runPresetTables,
     runPackageGroup: runLotMeta.packageGroup,
     instances,
+    historyPage: historySafePage,
+    historyPageCount,
+    historyPageSize,
+    historyTotal,
     packageExpireText: summary.packageExpired ? 'แพ็คเกจหมดอายุ' : fmtDate(summary.pkg.end_at),
     fmtDateView: fmtDate,
     packageLotMin: runLotMeta.lotMin,
@@ -2642,6 +2658,18 @@ router.post('/mt5/request-restart/:id', async (req, res) => {
 router.get('/mt5/live-dashboard', async (req, res) => {
   try {
     const userId = req.user.id;
+    const pageSize = 5;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const countRows = await query(`
+      SELECT COUNT(*)::int AS total
+      FROM vps_system.bot_instances bi
+      WHERE bi.user_id=$1
+        AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
+    `, [userId]);
+    const total = Number(countRows.rows?.[0]?.total || 0);
+    const pageCount = Math.max(1, Math.ceil(total / pageSize));
+    const safePage = Math.min(page, pageCount);
+    const offset = (safePage - 1) * pageSize;
 
     const rows = await query(`
       SELECT 
@@ -2676,10 +2704,19 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       WHERE bi.user_id=$1
         AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
       ORDER BY bi.id DESC
-      LIMIT 5
-    `, [userId]);
+      LIMIT $2 OFFSET $3
+    `, [userId, pageSize, offset]);
 
-    return res.json({ ok: true, instances: rows.rows });
+    return res.json({
+      ok: true,
+      instances: rows.rows,
+      page: safePage,
+      pageSize,
+      total,
+      pageCount,
+      hasPrev: safePage > 1,
+      hasNext: safePage < pageCount
+    });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
   }
