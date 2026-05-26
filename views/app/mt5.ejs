@@ -1386,6 +1386,9 @@ async function loadMt5LiveDashboard(page) {
               <div class="mt5-manage-dropdown">
                 <button type="button" class="mt5-manage-item" onclick="openMt5InstanceDetail(this)" ${detailAttrs}>รายละเอียด</button>
                 <button type="button" class="mt5-manage-item" onclick="openMt5EquityGraph(this)" ${detailAttrs}>กราฟ</button>
+                <form method="POST" action="/app/mt5/request-restart/${i.id}" onsubmit="return confirm('ยืนยัน Restart BOT รายการนี้ใช่ไหม?')">
+                  <button class="mt5-manage-item" type="submit">Restart</button>
+                </form>
                 <form method="POST" action="/app/mt5/instance/${i.id}/delete" onsubmit="return confirm('ยืนยันลบรายการนี้ใช่ไหม? ถ้ากำลังรันอยู่ ระบบจะสั่งออก MT5 ด้วย')">
                   <button class="mt5-manage-item danger" type="submit">ลบ</button>
                 </form>
