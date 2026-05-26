@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-algo-retry-v26"
+AGENT_BUILD_ID = "2026-05-26-mt5-inline-deploy-v27"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3630,7 +3630,7 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     script_url = str(payload_get(payload, "scriptUrl", "script_url", "url", default="") or "").strip()
     content = str(payload_get(payload, "content", default="") or "")
-    if script_url:
+    if not content.strip() and script_url:
         try:
             content = _fetch_agent_script_from_url(script_url)
         except Exception as e:
