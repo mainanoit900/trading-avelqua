@@ -210,41 +210,72 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
-      <span>แสดง 20 รายการล่าสุด</span>
+      <span>แสดง 5 รายการล่าสุด</span>
     </div>
     <div class="mt5-table-wrap">
       <table class="mt5-table">
         <thead>
           <tr>
             <th>BOT</th>
-            <th>MT5</th>
-            <th>VPS</th>
-            <th>PORT</th>
+            <th>Login</th>
+            <th>Funding</th>
             <th>Lot</th>
             <th>Level</th>
             <th>Status</th>
-            <th></th>
+            <th>Manage</th>
           </tr>
         </thead>
         <tbody>
           <% if (!instances || instances.length === 0) { %>
-            <tr><td colspan="8" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
+            <tr><td colspan="7" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
           <% } %>
           <% (instances || []).forEach(function(i){ %>
             <tr>
               <td><%= i.display_name || i.bot_name || i.bot_code %></td>
-              <td>#<%= i.mt5_account_id %></td>
-              <td><%= i.node_name || i.node_code || '-' %></td>
-              <td><%= i.assigned_port_no || '-' %></td>
+              <td><%= i.mt5_login || ('#' + i.mt5_account_id) %></td>
+              <td><%= i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-' %></td>
               <td><%= i.lot_used || '-' %></td>
               <td><%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %></td>
               <td><span class="status <%= i.status %>"><%= i.status %></span></td>
               <td>
-                <% if (['running','pending'].includes(i.status)) { %>
-                  <form method="POST" action="/app/mt5/stop/<%= i.id %>" onsubmit="return confirm('ยืนยันหยุด BOT ใช่ไหม?')">
-                    <button class="mt5-btn mini" type="submit">หยุด</button>
-                  </form>
-                <% } %>
+                <details class="mt5-manage-menu">
+                  <summary>Manage</summary>
+                  <div class="mt5-manage-dropdown">
+                    <button
+                      type="button"
+                      class="mt5-manage-item"
+                      onclick="openMt5InstanceDetail(this)"
+                      data-instance-id="<%= i.id %>"
+                      data-bot="<%= i.display_name || i.bot_name || i.bot_code %>"
+                      data-login="<%= i.mt5_login || ('#' + i.mt5_account_id) %>"
+                      data-funding="<%= i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-' %>"
+                      data-lot="<%= i.lot_used || '-' %>"
+                      data-level="<%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %>"
+                      data-status="<%= i.status || '-' %>"
+                      data-port="<%= i.assigned_port_no || '-' %>"
+                      data-node="<%= i.node_name || i.node_code || '-' %>"
+                      data-updated="<%= i.updated_at ? new Date(i.updated_at).toLocaleString('th-TH') : '-' %>"
+                    >รายละเอียด</button>
+                    <button
+                      type="button"
+                      class="mt5-manage-item"
+                      onclick="openMt5InstanceAnalysis(this)"
+                      data-instance-id="<%= i.id %>"
+                      data-bot="<%= i.display_name || i.bot_name || i.bot_code %>"
+                      data-login="<%= i.mt5_login || ('#' + i.mt5_account_id) %>"
+                      data-funding="<%= i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-' %>"
+                      data-lot="<%= i.lot_used || '-' %>"
+                      data-level="<%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %>"
+                      data-status="<%= i.status || '-' %>"
+                      data-port="<%= i.assigned_port_no || '-' %>"
+                      data-node="<%= i.node_name || i.node_code || '-' %>"
+                      data-updated="<%= i.updated_at ? new Date(i.updated_at).toLocaleString('th-TH') : '-' %>"
+                    >วิเคราะห์</button>
+                    <form method="POST" action="/app/mt5/instance/<%= i.id %>/delete" onsubmit="return confirm('ยืนยันลบรายการ BOT ใช่ไหม? ถ้ากำลังรันอยู่ ระบบจะสั่งออก MT5 ด้วย')">
+                      <button class="mt5-manage-item danger" type="submit">ลบ</button>
+                    </form>
+                  </div>
+                </details>
               </td>
             </tr>
           <% }) %>
@@ -257,7 +288,7 @@
 <section class="mt5-card">
   <div class="mt5-card-head">
     <h2>📡 Live MT5 Dashboard</h2>
-    <span>WebSocket/Live Refresh</span>
+    <span>แสดง 5 รายการล่าสุด</span>
   </div>
 
   <div id="mt5LiveDashboard" class="mt5-table-wrap">
@@ -1004,6 +1035,186 @@ if (mt5ConnectForm) {
 </script>
 
 <script>
+function mt5ManageEscape(value) {
+  return String(value == null ? '' : value)
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+}
+
+function mt5TradeLevelText(level) {
+  const v = String(level || '').toLowerCase();
+  if (v === 'high') return 'เสี่ยงสูง';
+  if (v === 'medium') return 'เสี่ยงกลาง';
+  if (v === 'low' || v === 'safe') return 'เสี่ยงต่ำ';
+  return level || '-';
+}
+
+function mt5ManageData(el) {
+  return el && el.dataset ? el.dataset : {};
+}
+
+function mt5ShowManageModal(title, bodyHtml) {
+  const old = document.getElementById('mt5ManageModal');
+  if (old) old.remove();
+  const modal = document.createElement('div');
+  modal.id = 'mt5ManageModal';
+  modal.className = 'mt5-manage-modal';
+  modal.innerHTML = `
+    <div class="mt5-manage-backdrop" onclick="closeMt5ManageModal()"></div>
+    <div class="mt5-manage-card">
+      <div class="mt5-manage-head">
+        <div>
+          <small>Manage</small>
+          <h3>${mt5ManageEscape(title)}</h3>
+        </div>
+        <button type="button" class="mt5-manage-close" onclick="closeMt5ManageModal()">ปิด</button>
+      </div>
+      <div class="mt5-manage-body">${bodyHtml}</div>
+    </div>
+  `;
+  document.body.appendChild(modal);
+}
+
+function closeMt5ManageModal() {
+  document.getElementById('mt5ManageModal')?.remove();
+}
+
+function mt5ManageDetailGrid(rows) {
+  return '<div class="mt5-manage-grid">' + rows.map((row) => `
+    <div class="mt5-manage-box">
+      <small>${mt5ManageEscape(row.label)}</small>
+      <b>${mt5ManageEscape(row.value)}</b>
+    </div>
+  `).join('') + '</div>';
+}
+
+function openMt5InstanceDetail(el) {
+  const d = mt5ManageData(el);
+  mt5ShowManageModal(
+    `รายละเอียด BOT #${d.instanceId || '-'}`,
+    mt5ManageDetailGrid([
+      { label: 'BOT', value: d.bot || '-' },
+      { label: 'Login', value: d.login || '-' },
+      { label: 'Funding', value: d.funding || '-' },
+      { label: 'Lot', value: d.lot || '-' },
+      { label: 'Level', value: mt5TradeLevelText(d.level) },
+      { label: 'Status', value: d.status || '-' },
+      { label: 'PORT', value: d.port || '-' },
+      { label: 'VPS', value: d.node || '-' },
+      { label: 'อัปเดตล่าสุด', value: d.updated || '-' }
+    ])
+  );
+}
+
+function openMt5InstanceAnalysis(el) {
+  const d = mt5ManageData(el);
+  const status = String(d.status || '').toLowerCase();
+  let summary = 'รายการนี้พร้อมใช้งาน';
+  let action = 'ยังไม่ต้องทำอะไรเพิ่มเติม';
+  if (status === 'running') {
+    summary = 'BOT กำลังทำงานอยู่บน VPS';
+    action = 'ติดตาม Equity และใช้เมนู Dashboard หากต้อง Restart หรือดูกราฟ';
+  } else if (status === 'pending' || status === 'restarting') {
+    summary = 'ระบบกำลังรอ Agent รับคำสั่ง';
+    action = 'รอสถานะอัปเดตอีกเล็กน้อย หากค้างนานค่อยสั่ง Restart';
+  } else if (status === 'failed') {
+    summary = 'BOT มีสถานะผิดพลาด';
+    action = 'ควรตรวจ Login, Funding, และสถานะ VPS ก่อนสั่งรันใหม่';
+  } else if (status === 'stopped') {
+    summary = 'BOT ถูกหยุดแล้ว';
+    action = 'สามารถลบประวัติหรือสั่ง Run ใหม่จาก PORT เดิมได้';
+  }
+
+  mt5ShowManageModal(
+    `วิเคราะห์ ${d.bot || 'BOT'}`,
+    `
+      <div class="mt5-manage-analysis">
+        <div class="mt5-manage-box">
+          <small>สรุป</small>
+          <b>${mt5ManageEscape(summary)}</b>
+        </div>
+        <div class="mt5-manage-box">
+          <small>คำแนะนำ</small>
+          <b>${mt5ManageEscape(action)}</b>
+        </div>
+      </div>
+      ${mt5ManageDetailGrid([
+        { label: 'Login', value: d.login || '-' },
+        { label: 'Funding', value: d.funding || '-' },
+        { label: 'Lot', value: d.lot || '-' },
+        { label: 'Level', value: mt5TradeLevelText(d.level) },
+        { label: 'Status', value: d.status || '-' }
+      ])}
+    `
+  );
+}
+
+function mt5Sparkline(values) {
+  const list = Array.isArray(values) ? values.map((v) => Number(v || 0)) : [];
+  if (!list.length) {
+    return '<div class="mt5-empty">ยังไม่มีข้อมูล Equity เพียงพอสำหรับกราฟ</div>';
+  }
+  const min = Math.min(...list);
+  const max = Math.max(...list);
+  const spread = Math.max(1, max - min);
+  const points = list.map((v, idx) => {
+    const x = (idx / Math.max(1, list.length - 1)) * 100;
+    const y = 100 - (((v - min) / spread) * 76 + 12);
+    return `${x},${y}`;
+  }).join(' ');
+  return `
+    <div class="mt5-chart-meta">
+      <span>ต่ำสุด ${mt5ManageEscape(min.toFixed(2))}</span>
+      <span>สูงสุด ${mt5ManageEscape(max.toFixed(2))}</span>
+      <span>จุดข้อมูล ${mt5ManageEscape(String(list.length))}</span>
+    </div>
+    <svg class="mt5-equity-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Equity chart">
+      <defs>
+        <linearGradient id="mt5EquityLine" x1="0" x2="1">
+          <stop offset="0%" stop-color="#38bdf8"></stop>
+          <stop offset="100%" stop-color="#22c55e"></stop>
+        </linearGradient>
+      </defs>
+      <polyline fill="none" stroke="url(#mt5EquityLine)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>
+    </svg>
+  `;
+}
+
+async function openMt5EquityGraph(el) {
+  const d = mt5ManageData(el);
+  mt5ShowManageModal(`กราฟ ${d.bot || 'BOT'}`, '<div class="mt5-empty">กำลังโหลดกราฟ...</div>');
+  try {
+    const res = await fetch(`/app/mt5/equity-chart/${encodeURIComponent(d.instanceId || '')}`, {
+      credentials: 'same-origin',
+      headers: { Accept: 'application/json' }
+    });
+    const json = await res.json();
+    if (!json.ok) throw new Error('โหลดกราฟไม่สำเร็จ');
+    const body = `
+      ${mt5ManageDetailGrid([
+        { label: 'BOT', value: d.bot || '-' },
+        { label: 'Login', value: d.login || '-' },
+        { label: 'PORT', value: d.port || '-' },
+        { label: 'Status', value: d.status || '-' }
+      ])}
+      <div class="mt5-manage-chart-wrap">${mt5Sparkline(json.data || [])}</div>
+    `;
+    document.querySelector('#mt5ManageModal .mt5-manage-body').innerHTML = body;
+  } catch (err) {
+    document.querySelector('#mt5ManageModal .mt5-manage-body').innerHTML = `<div class="mt5-empty">กราฟโหลดไม่สำเร็จ: ${mt5ManageEscape(err.message || 'unknown error')}</div>`;
+  }
+}
+
+window.closeMt5ManageModal = closeMt5ManageModal;
+window.openMt5InstanceDetail = openMt5InstanceDetail;
+window.openMt5InstanceAnalysis = openMt5InstanceAnalysis;
+window.openMt5EquityGraph = openMt5EquityGraph;
+</script>
+
+<script>
 async function loadMt5LiveDashboard() {
   const box = document.getElementById('mt5LiveDashboard');
   if (!box) return;
@@ -1030,36 +1241,55 @@ async function loadMt5LiveDashboard() {
         <thead>
           <tr>
             <th>BOT</th>
-            <th>VPS</th>
+            <th>Login</th>
             <th>PORT</th>
             <th>Status</th>
             <th>EA</th>
             <th>Balance</th>
             <th>Equity</th>
-            <th>Restart</th>
             <th>ล่าสุด</th>
-            <th></th>
+            <th>Manage</th>
           </tr>
         </thead>
         <tbody>
     `;
 
     data.instances.forEach(i => {
+      const detailAttrs = `
+        data-instance-id="${i.id || ''}"
+        data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
+        data-login="${mt5ManageEscape(i.mt5_login || '-')}"
+        data-funding="${i.capital_used != null ? i.capital_used : '-'}"
+        data-lot="${i.lot_used != null ? i.lot_used : '-'}"
+        data-level="${mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-'))}"
+        data-status="${mt5ManageEscape(i.status || '-')}"
+        data-port="${i.assigned_port_no || '-'}"
+        data-node="${mt5ManageEscape(i.node_name || i.node_code || '-')}"
+        data-updated="${mt5ManageEscape(i.last_agent_ping ? new Date(i.last_agent_ping).toLocaleString('th-TH') : '-')}"
+      `;
       html += `
         <tr>
           <td>${i.display_name || i.bot_name || i.bot_code || '-'}</td>
-          <td>${i.node_name || i.node_code || '-'}</td>
+          <td>${i.mt5_login || '-'}</td>
           <td>${i.assigned_port_no || '-'}</td>
           <td><span class="status ${i.status || ''}">${i.status || '-'}</span></td>
           <td>${i.ea_status || '-'}</td>
           <td>${i.mt5_balance || 0}</td>
           <td>${i.mt5_equity || 0}</td>
-          <td>${i.restart_count || 0}</td>
           <td>${i.last_agent_ping ? new Date(i.last_agent_ping).toLocaleString('th-TH') : '-'}</td>
           <td>
-            <form method="POST" action="/app/mt5/request-restart/${i.id}" onsubmit="return confirm('Restart EA/MT5 รายการนี้ใช่ไหม?')">
-              <button class="mt5-btn mini" type="submit">Restart</button>
-            </form>
+            <details class="mt5-manage-menu">
+              <summary>Manage</summary>
+              <div class="mt5-manage-dropdown">
+                <button type="button" class="mt5-manage-item" onclick="openMt5EquityGraph(this)" ${detailAttrs}>กราฟ</button>
+                <form method="POST" action="/app/mt5/request-restart/${i.id}" onsubmit="return confirm('Restart EA/MT5 รายการนี้ใช่ไหม?')">
+                  <button class="mt5-manage-item" type="submit">Restart</button>
+                </form>
+                <form method="POST" action="/app/mt5/instance/${i.id}/delete" onsubmit="return confirm('ยืนยันลบรายการนี้ใช่ไหม? ถ้ากำลังรันอยู่ ระบบจะสั่งออก MT5 ด้วย')">
+                  <button class="mt5-manage-item danger" type="submit">ลบ</button>
+                </form>
+              </div>
+            </details>
           </td>
         </tr>
       `;
@@ -1076,6 +1306,36 @@ async function loadMt5LiveDashboard() {
 loadMt5LiveDashboard();
 setInterval(loadMt5LiveDashboard, 3000);
 </script>
+
+<style>
+.mt5-manage-menu{position:relative}
+.mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;min-width:104px;padding:9px 14px;border-radius:14px;cursor:pointer;color:#e2e8f0;font-weight:900;background:linear-gradient(135deg,rgba(30,41,59,.95),rgba(15,23,42,.95));border:1px solid rgba(148,163,184,.18);box-shadow:0 14px 28px rgba(0,0,0,.22)}
+.mt5-manage-menu summary::-webkit-details-marker{display:none}
+.mt5-manage-menu[open] summary{border-color:rgba(96,165,250,.42);box-shadow:0 18px 34px rgba(37,99,235,.22)}
+.mt5-manage-dropdown{position:absolute;right:0;top:calc(100% + 10px);z-index:30;display:grid;gap:8px;min-width:190px;padding:12px;border-radius:18px;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.18);box-shadow:0 24px 70px rgba(0,0,0,.42)}
+.mt5-manage-dropdown form{margin:0}
+.mt5-manage-item{width:100%;display:flex;align-items:center;justify-content:flex-start;padding:11px 13px;border-radius:13px;border:1px solid rgba(148,163,184,.14);background:rgba(255,255,255,.05);color:#f8fafc;font-weight:800;cursor:pointer;transition:.18s}
+.mt5-manage-item:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.38);background:rgba(59,130,246,.14)}
+.mt5-manage-item.danger{color:#fecaca;background:rgba(239,68,68,.12);border-color:rgba(248,113,113,.24)}
+.mt5-manage-item.danger:hover{background:rgba(239,68,68,.18);border-color:rgba(248,113,113,.38)}
+.mt5-manage-modal{position:fixed;inset:0;z-index:999998;display:flex;align-items:center;justify-content:center;padding:18px}
+.mt5-manage-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.78);backdrop-filter:blur(10px)}
+.mt5-manage-card{position:relative;width:min(720px,96vw);max-height:88vh;overflow:auto;border-radius:28px;padding:24px;background:linear-gradient(180deg,#0f172a,#020617);border:1px solid rgba(96,165,250,.24);box-shadow:0 35px 120px rgba(0,0,0,.52)}
+.mt5-manage-head{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:18px}
+.mt5-manage-head small{display:block;color:#7dd3fc;font-weight:900;letter-spacing:.06em;text-transform:uppercase;margin-bottom:4px}
+.mt5-manage-head h3{margin:0;color:#f8fafc;font-size:24px}
+.mt5-manage-close{border:0;border-radius:14px;padding:10px 14px;background:rgba(148,163,184,.15);color:#fff;font-weight:900;cursor:pointer}
+.mt5-manage-body{display:grid;gap:16px}
+.mt5-manage-grid,.mt5-manage-analysis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.mt5-manage-box{padding:14px 15px;border-radius:18px;border:1px solid rgba(148,163,184,.14);background:rgba(255,255,255,.045)}
+.mt5-manage-box small{display:block;color:#94a3b8;font-weight:800;margin-bottom:7px}
+.mt5-manage-box b{display:block;color:#e2e8f0;line-height:1.5;word-break:break-word}
+.mt5-manage-chart-wrap{padding:16px;border-radius:22px;border:1px solid rgba(148,163,184,.14);background:rgba(255,255,255,.04)}
+.mt5-chart-meta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;color:#cbd5e1;font-size:13px}
+.mt5-chart-meta span{padding:7px 10px;border-radius:999px;background:rgba(59,130,246,.14);border:1px solid rgba(96,165,250,.2)}
+.mt5-equity-chart{width:100%;height:220px;display:block;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.86),rgba(2,6,23,.95))}
+@media(max-width:700px){.mt5-manage-grid,.mt5-manage-analysis{grid-template-columns:1fr}.mt5-manage-dropdown{right:auto;left:0}}
+</style>
 
 <style>
 .mt5-lux-modal{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center}

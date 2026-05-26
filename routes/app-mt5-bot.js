@@ -1557,19 +1557,28 @@ router.get('/mt5', async (req, res) => {
   );
   const vpsProbe = await findAvailableVpsPort();
 
+  const activeInstanceRows = await safeQuery(`
+    SELECT id, mt5_account_id, status, assigned_port_no
+    FROM vps_system.bot_instances
+    WHERE user_id=$1
+      AND status IN ('running','pending','restarting')
+    ORDER BY id DESC
+  `, [userId]);
   const instances = await safeQuery(`
-    SELECT bi.*, bc.display_name, bc.bot_name, bc.bot_code, n.node_name, n.node_code
+    SELECT bi.*, bc.display_name, bc.bot_name, bc.bot_code, n.node_name, n.node_code,
+           a.mt5_login, a.last_balance, a.last_equity
     FROM vps_system.bot_instances bi
     LEFT JOIN vps_system.bot_catalog bc ON bc.id=bi.bot_id
     LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
+    LEFT JOIN vps_system.mt5_accounts a ON a.id=bi.mt5_account_id
     WHERE bi.user_id=$1
+      AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
     ORDER BY bi.id DESC
-    LIMIT 20
+    LIMIT 5
   `, [userId]);
   const seenActiveAccountIds = new Set();
   const activeRunInstances = [];
-  for (const row of instances || []) {
-    if (!['running', 'pending', 'restarting'].includes(String(row.status || '').toLowerCase())) continue;
+  for (const row of activeInstanceRows || []) {
     const accountId = Number(row.mt5_account_id || 0);
     if (!accountId || seenActiveAccountIds.has(accountId)) continue;
     seenActiveAccountIds.add(accountId);
@@ -2443,6 +2452,59 @@ router.post('/mt5/stop/:id', async (req, res) => {
   return res.redirect('/app/mt5');
 });
 
+router.post('/mt5/instance/:id/delete', async (req, res) => {
+  const client = await getClient();
+  try {
+    const userId = req.user.id;
+    const id = num(req.params.id);
+    await client.query('BEGIN');
+    const rows = await client.query(`SELECT * FROM vps_system.bot_instances WHERE id=$1 AND user_id=$2 FOR UPDATE`, [id, userId]);
+    const inst = rows.rows[0];
+    if (!inst) throw new Error('ไม่พบรายการ BOT');
+
+    const active = ['running', 'pending', 'restarting'].includes(String(inst.status || '').toLowerCase());
+    if (active && inst.vps_id) {
+      await client.query(`
+        UPDATE vps_system.vps_nodes
+        SET used_ports=GREATEST(0,COALESCE(used_ports,0)-$2),
+            used_lot=GREATEST(0,COALESCE(used_lot,0)-$3),
+            status=CASE WHEN status='busy' THEN 'online' ELSE status END,
+            updated_at=NOW()
+        WHERE id=$1
+      `, [inst.vps_id, num(inst.port_used, 1), num(inst.lot_used)]);
+      await client.query(`
+        INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, command_type, payload, status, created_at)
+        VALUES ($1,$1,'STOP_MT5_BOT',$2::jsonb,'pending',NOW())
+      `, [
+        inst.vps_id,
+        JSON.stringify({
+          instanceId: id,
+          port: inst.assigned_port_no,
+          reason: 'user_delete_instance'
+        })
+      ]);
+    }
+
+    await client.query(`
+      UPDATE vps_system.bot_instances
+      SET status='deleted',
+          stopped_at=COALESCE(stopped_at, NOW()),
+          updated_at=NOW(),
+          last_error='user_delete_instance'
+      WHERE id=$1
+    `, [id]);
+
+    await client.query('COMMIT');
+    flash(req, 'success', active ? 'ลบรายการ BOT และออก MT5 แล้ว' : 'ลบรายการ BOT แล้ว');
+  } catch (e) {
+    await client.query('ROLLBACK').catch(() => {});
+    flash(req, 'error', e.message);
+  } finally {
+    client.release();
+  }
+  return res.redirect('/app/mt5');
+});
+
 router.get('/mt5/dashboard', async (req, res) => {
 
   try {
@@ -2589,6 +2651,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
         bi.assigned_port_no,
         bi.lot_used,
         bi.trade_level,
+        bi.capital_used,
         bi.mt5_balance,
         bi.mt5_equity,
         bi.restart_count,
@@ -2599,6 +2662,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
         bc.display_name,
         bc.bot_name,
         bc.bot_code,
+        a.mt5_login,
 
         n.node_name,
         n.cpu_percent,
@@ -2608,9 +2672,11 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       FROM vps_system.bot_instances bi
       LEFT JOIN vps_system.bot_catalog bc ON bc.id=bi.bot_id
       LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
+      LEFT JOIN vps_system.mt5_accounts a ON a.id=bi.mt5_account_id
       WHERE bi.user_id=$1
+        AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
       ORDER BY bi.id DESC
-      LIMIT 20
+      LIMIT 5
     `, [userId]);
 
     return res.json({ ok: true, instances: rows.rows });
