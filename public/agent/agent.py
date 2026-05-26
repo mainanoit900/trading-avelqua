@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-runbot-restore-v20"
+AGENT_BUILD_ID = "2026-05-26-mt5-worker-wait-v21"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1384,14 +1384,29 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
     if not port:
         raise RuntimeError("payload.port is required for worker dispatch")
 
-    reap_connect_workers()
     key = str(port)
+    wait_timeout = 0.0
+    if str(ctype or "").lower() in ("run_mt5_bot", "run_mt5", "restart_mt5_bot", "restart_mt5", "restart_port"):
+        wait_timeout = 45.0
+    deadline = time.time() + wait_timeout
 
-    with ACTIVE_CONNECT_WORKERS_LOCK:
-        prev = ACTIVE_CONNECT_WORKERS.get(key)
-        if prev and prev.poll() is None:
-            raise RuntimeError(f"PORT {port} มี worker กำลังทำงานอยู่ กรุณารอสักครู่")
-        ACTIVE_CONNECT_WORKERS.pop(key, None)
+    while True:
+        reap_connect_workers()
+        with ACTIVE_CONNECT_WORKERS_LOCK:
+            prev = ACTIVE_CONNECT_WORKERS.get(key)
+            if prev and prev.poll() is None:
+                if wait_timeout > 0 and time.time() < deadline:
+                    prev_pid = getattr(prev, "pid", "")
+                    log(
+                        f"WORKER WAIT port={port} cmd_id={cmd_id} type={ctype} "
+                        f"busy_pid={prev_pid} remaining={max(0.0, deadline - time.time()):.1f}s"
+                    )
+                else:
+                    raise RuntimeError(f"PORT {port} มี worker กำลังทำงานอยู่ กรุณารอสักครู่")
+            else:
+                ACTIVE_CONNECT_WORKERS.pop(key, None)
+                break
+        time.sleep(0.5)
 
     payload_b64 = base64.b64encode(json.dumps(payload, ensure_ascii=False).encode("utf-8")).decode("ascii")
     args = [sys.executable, str(AGENT_FILE), "--worker-connect", str(cmd_id), str(ctype or ""), payload_b64]
