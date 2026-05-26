@@ -304,13 +304,129 @@ async function requireAgentToken(req, res, next) {
   }
 }
 
-router.use((req, res, next) => {
-  const callbackPath = `${req.baseUrl || ''}${req.path || req.originalUrl || ''}`;
-  if (callbackPath.endsWith('/mt5/live-status') || callbackPath.endsWith('/mt5/account-metrics')) {
-    return requireAgentToken(req, res, next);
+async function handleMt5LiveStatusCallback(req, res) {
+  try {
+    const {
+      instanceId,
+      port,
+      status,
+      eaStatus,
+      balance,
+      equity,
+      error
+    } = req.body || {};
+
+    if (!instanceId && !port) {
+      return res.json({ ok: false, message: 'instanceId or port required' });
+    }
+
+    await query(`
+      UPDATE vps_system.bot_instances
+      SET status = COALESCE($2, status),
+          ea_status = COALESCE($3, ea_status),
+          mt5_balance = COALESCE($4::numeric, mt5_balance),
+          mt5_equity = COALESCE($5::numeric, mt5_equity),
+          last_error = COALESCE($6, last_error),
+          last_agent_ping = NOW(),
+          last_heartbeat = NOW(),
+          updated_at = NOW()
+      WHERE ($1::bigint IS NOT NULL AND id=$1)
+         OR ($7::int IS NOT NULL AND assigned_port_no=$7)
+    `, [
+      instanceId || null,
+      status || null,
+      eaStatus || null,
+      balance || null,
+      equity || null,
+      error || null,
+      port || null
+    ]);
+
+    await query(`
+      UPDATE vps_system.mt5_accounts a
+      SET last_balance = COALESCE($2::numeric, a.last_balance),
+          last_equity = COALESCE($3::numeric, a.last_equity),
+          last_seen_at = NOW()
+      FROM vps_system.bot_instances bi
+      WHERE bi.mt5_account_id = a.id
+        AND (($1::bigint IS NOT NULL AND bi.id=$1)
+          OR ($4::int IS NOT NULL AND bi.assigned_port_no=$4))
+    `, [instanceId || null, balance || null, equity || null, port || null]);
+
+    await ensureEquityLogTable();
+    if (instanceId && equity !== undefined && equity !== null) {
+      await query(`
+        INSERT INTO vps_system.mt5_equity_logs (instance_id, equity, created_at)
+        VALUES ($1, $2::numeric, NOW())
+      `, [instanceId, equity]).catch(() => {});
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
   }
-  return requireLogin(req, res, next);
-});
+}
+
+async function handleMt5AccountMetricsCallback(req, res) {
+  try {
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0) || null;
+    const userId = Number(req.body?.userId || req.body?.user_id || 0) || null;
+    const portNumber = Number(req.body?.portNumber || req.body?.port || req.body?.port_no || 0) || null;
+    const balance = req.body?.balance ?? null;
+    const equity = req.body?.equity ?? null;
+
+    if (!accountId && !(userId && portNumber)) {
+      return res.json({ ok: false, message: 'accountId or userId+portNumber required' });
+    }
+
+    await query(`
+      WITH target AS (
+        SELECT id
+        FROM vps_system.mt5_accounts
+        WHERE ($1::bigint IS NOT NULL AND id = $1)
+           OR (
+             $2::bigint IS NOT NULL
+             AND $3::int IS NOT NULL
+             AND user_id = $2
+             AND (assigned_port_no = $3 OR port_slot = $3)
+           )
+        ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END, updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+      )
+      UPDATE vps_system.mt5_accounts a
+      SET last_balance = COALESCE($4::numeric, a.last_balance),
+          last_equity = COALESCE($5::numeric, a.last_equity),
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE a.id IN (SELECT id FROM target)
+    `, [accountId, userId, portNumber, balance, equity]);
+
+    await query(`
+      UPDATE vps_system.bot_instances bi
+      SET mt5_balance = COALESCE($2::numeric, bi.mt5_balance),
+          mt5_equity = COALESCE($3::numeric, bi.mt5_equity),
+          last_agent_ping = NOW(),
+          last_heartbeat = NOW(),
+          updated_at = NOW()
+      WHERE ($1::bigint IS NOT NULL AND bi.mt5_account_id = $1)
+         OR (
+           $4::bigint IS NOT NULL
+           AND $5::int IS NOT NULL
+           AND bi.user_id = $4
+           AND bi.assigned_port_no = $5
+         )
+    `, [accountId, balance, equity, userId, portNumber]).catch(() => {});
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+}
+
+router.post('/mt5/live-status', requireAgentToken, handleMt5LiveStatusCallback);
+router.post('/mt5/account-metrics', requireAgentToken, handleMt5AccountMetricsCallback);
+
+router.use(requireLogin);
 
 // ===== VPS CACHE =====
 let VPS_CACHE = {
