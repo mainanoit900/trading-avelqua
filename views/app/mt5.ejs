@@ -461,7 +461,8 @@
   async function verifyFailedFromUrl() {
     if (urlParams.get('failed') !== '1') return;
     const failMsg = decodeURIComponent(urlParams.get('msg') || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
-    const failedAccountId = String(urlParams.get('accountId') || '').trim();
+    const failedAccountIdRaw = String(urlParams.get('accountId') || '').trim();
+    const failedAccountId = failedAccountIdRaw.split(':')[0].trim();
     if (failedAccountId) {
       try {
         const res = await fetch('/app/mt5/connect-status?accountId=' + encodeURIComponent(failedAccountId), {
@@ -591,16 +592,17 @@
         }
         return;
       }
-      const accountId = String(data.account.id) + ':' + String(data.account.updated_at || '');
+      const accountId = String(data.account.id || '').trim();
+      const modalDedupId = accountId + ':' + String(data.account.updated_at || '');
       const key = data.connected ? 'mt5ConnectedShownId' : 'mt5FailedShownId';
-      if (sessionStorage.getItem(key) === accountId) {
+      if (sessionStorage.getItem(key) === modalDedupId) {
         mt5Checking = false;
         clearInterval(window.mt5Checker);
         return;
       }
       if (data.failed) {
         mt5Checking = false;
-        sessionStorage.setItem(key, accountId);
+        sessionStorage.setItem(key, modalDedupId);
         if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
         sessionStorage.removeItem('mt5PollAccountId');
         showMt5ConnectModal('error', data.message || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
@@ -613,7 +615,7 @@
         return;
       }
       if (stWait === 'connected' || (data.connected === true && data.status === 'connected')) {
-        sessionStorage.setItem(key, accountId);
+        sessionStorage.setItem(key, modalDedupId);
         finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ');
         return;
       }
