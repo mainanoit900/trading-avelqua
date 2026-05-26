@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-interactive-launch-v34"
+AGENT_BUILD_ID = "2026-05-27-mt5-launch-diag-v35"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -93,6 +93,8 @@ WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
+MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
+MT5_LAUNCH_DIAG_LOCK = threading.Lock()
 
 
 def has_journal_gate_marker(version_or_build: str) -> bool:
@@ -1681,6 +1683,22 @@ class _SpawnedPidRef:
         self.pid = int(pid or 0)
 
 
+def _set_mt5_launch_diag(cwd: Optional[str], diag: Dict[str, Any]) -> None:
+    key = str(cwd or "").strip().lower()
+    if not key:
+        return
+    with MT5_LAUNCH_DIAG_LOCK:
+        MT5_LAUNCH_DIAG[key] = dict(diag or {})
+
+
+def _get_mt5_launch_diag(cwd: Optional[str]) -> Dict[str, Any]:
+    key = str(cwd or "").strip().lower()
+    if not key:
+        return {}
+    with MT5_LAUNCH_DIAG_LOCK:
+        return dict(MT5_LAUNCH_DIAG.get(key) or {})
+
+
 def _windows_enable_privilege(name: str) -> None:
     if os.name != "nt":
         return
@@ -1791,15 +1809,30 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
             ("dwThreadId", wintypes.DWORD),
         ]
 
+    diag: Dict[str, Any] = {
+        "mode": "interactive",
+        "cwd": str(cwd or ""),
+        "args": args,
+        "showWindow": bool(SHOW_MT5_WINDOW),
+        "attemptedSessions": [],
+        "errors": [],
+        "warnings": [],
+        "success": False,
+    }
     try:
         for priv_name in ("SeTcbPrivilege", "SeIncreaseQuotaPrivilege", "SeAssignPrimaryTokenPrivilege"):
             try:
                 _windows_enable_privilege(priv_name)
             except Exception as priv_err:
-                log(f"INTERACTIVE PRIVILEGE WARN {priv_name}: {priv_err}")
+                msg = f"{priv_name}: {priv_err}"
+                diag["warnings"].append(msg)
+                log(f"INTERACTIVE PRIVILEGE WARN {msg}")
 
         session_ids = _windows_active_session_ids()
+        diag["attemptedSessions"] = list(session_ids)
         if not session_ids:
+            diag["errors"].append("no active session")
+            _set_mt5_launch_diag(cwd, diag)
             log("INTERACTIVE LAUNCH SKIP no active session")
             return None
 
@@ -1849,10 +1882,17 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
                 )
                 if ok:
                     pid = int(proc_info.dwProcessId or 0)
+                    diag.update({
+                        "success": True,
+                        "sessionId": int(session_id),
+                        "pid": pid,
+                    })
+                    _set_mt5_launch_diag(cwd, diag)
                     log(f"INTERACTIVE LAUNCH OK session={session_id} pid={pid} cmd={command_line}")
                     return _SpawnedPidRef(pid)
                 raise ctypes.WinError()
             except Exception as session_err:
+                diag["errors"].append(f"session {session_id}: {session_err}")
                 log(f"INTERACTIVE LAUNCH FAIL session={session_id}: {session_err}")
             finally:
                 if proc_info.hThread:
@@ -1869,7 +1909,9 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
                 if user_token:
                     ctypes.windll.kernel32.CloseHandle(user_token)
     except Exception as e:
+        diag["errors"].append(str(e))
         log(f"INTERACTIVE LAUNCH ERROR: {e}")
+    _set_mt5_launch_diag(cwd, diag)
     return None
 
 
@@ -1885,6 +1927,12 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
             creationflags = subprocess.CREATE_NEW_CONSOLE
         else:
             creationflags = subprocess.CREATE_NO_WINDOW
+        diag = _get_mt5_launch_diag(cwd)
+        diag.update({
+            "fallback": "subprocess_popen",
+            "fallbackCreationFlags": int(creationflags),
+        })
+        _set_mt5_launch_diag(cwd, diag)
         return subprocess.Popen(
             args,
             cwd=cwd,
@@ -3871,6 +3919,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     time.sleep(5)
     trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=4, wait_between_sec=2.5)
     time.sleep(1)
+    launch_diag = _get_mt5_launch_diag(str(port_dir))
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -3912,6 +3961,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "keepMt5Open": True,
         "launched": True,
         "processId": proc_pid,
+        "launchDiag": launch_diag,
         "balance": bal,
         "equity": eq,
         "profit": profit,
