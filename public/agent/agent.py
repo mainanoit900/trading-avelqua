@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-compile-tempdir-v30"
+AGENT_BUILD_ID = "2026-05-27-mt5-chart-algo-v31"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -671,6 +671,255 @@ if ($method -eq 'none') {{
     if 'last_raw' in locals() and last_raw:
         log(f"ENABLE ALGO TRADING FAILED port={port} last_raw={last_raw[:400]}")
     return False
+
+
+def enable_mt5_chart_algo_trading_uia(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    attempts: int = 2,
+    wait_between_sec: float = 2.0,
+) -> bool:
+    """Open EA properties and enable chart-level Allow Algo Trading."""
+    if os.name != "nt":
+        return False
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        root = str(port_dir).replace("\\", "\\\\").replace("'", "''")
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip().replace("'", "''")
+        max_attempts = max(1, int(attempts or 1))
+        last_raw = ""
+        for attempt in range(1, max_attempts + 1):
+            ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+$root = '{root}'
+$login = '{login}'
+$deadline = (Get-Date).AddSeconds(10)
+$proc = $null
+while ((Get-Date) -lt $deadline) {{
+  $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $p = $_.Path
+    if (-not $p) {{ return $false }}
+    if ($p -like "*$root*") {{ return $true }}
+    if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+    return $false
+  }} | Select-Object -First 1
+  if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {{ break }}
+  Start-Sleep -Milliseconds 500
+}}
+if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {{
+  @{{ ok = $false; reason = 'no_window' }} | ConvertTo-Json -Compress
+  exit 0
+}}
+[void][AvqW32]::ShowWindow($proc.MainWindowHandle, 9)
+Start-Sleep -Milliseconds 300
+[void][AvqW32]::SetForegroundWindow($proc.MainWindowHandle)
+Start-Sleep -Milliseconds 700
+[System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
+Start-Sleep -Milliseconds 150
+[System.Windows.Forms.SendKeys]::SendWait("{{F7}}")
+Start-Sleep -Milliseconds 1000
+$dlg = $null
+$dlgName = ''
+$dlgDeadline = (Get-Date).AddSeconds(6)
+$rootEl = [Windows.Automation.AutomationElement]::RootElement
+$winCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Window
+)
+while ((Get-Date) -lt $dlgDeadline) {{
+  $wins = $rootEl.FindAll([Windows.Automation.TreeScope]::Children, $winCond)
+  foreach ($w in $wins) {{
+    try {{
+      if ($w.Current.ProcessId -ne $proc.Id) {{ continue }}
+      $handle = [IntPtr]$w.Current.NativeWindowHandle
+      if ($handle -eq $proc.MainWindowHandle) {{ continue }}
+      $name = [string]($w.Current.Name)
+      if ($name -match '(?i)properties|expert|advisor') {{
+        $dlg = $w
+        $dlgName = $name
+        break
+      }}
+      if (-not $dlg) {{
+        $dlg = $w
+        $dlgName = $name
+      }}
+    }} catch {{}}
+  }}
+  if ($dlg) {{ break }}
+  Start-Sleep -Milliseconds 350
+}}
+if (-not $dlg) {{
+  @{{ ok = $false; reason = 'no_dialog' }} | ConvertTo-Json -Compress
+  exit 0
+}}
+$tabCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::TabItem
+)
+$tabs = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $tabCond)
+foreach ($tab in $tabs) {{
+  $name = [string]($tab.Current.Name)
+  if ($name -match '(?i)^common$|ทั่วไป') {{
+    try {{
+      $spObj = $tab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+      if ($spObj) {{
+        $sp = [Windows.Automation.SelectionItemPattern]$spObj
+        $sp.Select()
+      }} else {{
+        $ipObj = $tab.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+        if ($ipObj) {{
+          $ip = [Windows.Automation.InvokePattern]$ipObj
+          $ip.Invoke()
+        }}
+      }}
+    }} catch {{}}
+    Start-Sleep -Milliseconds 250
+    break
+  }}
+}}
+$checkCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::CheckBox
+)
+$checks = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $checkCond)
+$target = $null
+$targetName = ''
+foreach ($c in $checks) {{
+  $name = [string]($c.Current.Name)
+  if ($name -match '(?i)allow.*(algo|live).*trading|algo.*trading|live.*trading') {{
+    $target = $c
+    $targetName = $name
+    break
+  }}
+}}
+if (-not $target) {{
+  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
+  @{{ ok = $false; reason = 'no_checkbox'; dialog = $dlgName }} | ConvertTo-Json -Compress
+  exit 0
+}}
+$method = 'none'
+$state = 'unknown'
+try {{
+  $tpObj = $target.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+  if ($tpObj) {{
+    $tp = [Windows.Automation.TogglePattern]$tpObj
+    $state = [string]$tp.Current.ToggleState
+    if ($state -ne 'On') {{
+      $tp.Toggle()
+      $method = 'toggle'
+      Start-Sleep -Milliseconds 350
+      $state = [string]$tp.Current.ToggleState
+    }} else {{
+      $method = 'already_on'
+    }}
+  }}
+}} catch {{}}
+if ($method -eq 'none') {{
+  try {{
+    $ipObj = $target.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+    if ($ipObj) {{
+      $ip = [Windows.Automation.InvokePattern]$ipObj
+      $ip.Invoke()
+      $method = 'invoke'
+      Start-Sleep -Milliseconds 350
+    }}
+  }} catch {{}}
+}}
+if ($method -eq 'none') {{
+  try {{
+    $target.SetFocus()
+    [System.Windows.Forms.SendKeys]::SendWait(" ")
+    $method = 'space'
+    Start-Sleep -Milliseconds 350
+  }} catch {{}}
+}}
+$btnCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button
+)
+$buttons = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $btnCond)
+$okButton = $null
+foreach ($b in $buttons) {{
+  $name = [string]($b.Current.Name)
+  if ($name -match '(?i)^ok$|ตกลง') {{
+    $okButton = $b
+    break
+  }}
+}}
+if ($okButton) {{
+  try {{
+    $ipObj = $okButton.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+    if ($ipObj) {{
+      $ip = [Windows.Automation.InvokePattern]$ipObj
+      $ip.Invoke()
+    }} else {{
+      [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+    }}
+  }} catch {{
+    [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+  }}
+}} else {{
+  [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+}}
+@{{ ok = $true; method = $method; state = $state; checkbox = $targetName; dialog = $dlgName }} | ConvertTo-Json -Compress
+"""
+            raw = _run_powershell(ps, timeout=30).strip()
+            last_raw = raw
+            if raw and raw.startswith("{"):
+                data = json.loads(raw)
+                ok = bool(data.get("ok"))
+                log(
+                    f"ENABLE CHART ALGO port={port} attempt={attempt}/{max_attempts} ok={ok} "
+                    f"method={data.get('method')} state={data.get('state')} "
+                    f"checkbox={data.get('checkbox')} dialog={data.get('dialog')} "
+                    f"reason={data.get('reason')}"
+                )
+                if ok:
+                    return True
+            else:
+                log(f"ENABLE CHART ALGO port={port} attempt={attempt}/{max_attempts} raw={raw[:400]}")
+            if attempt < max_attempts:
+                time.sleep(max(0.25, float(wait_between_sec or 0)))
+    except Exception as e:
+        log(f"ENABLE CHART ALGO ERROR port={port}: {e}")
+    if 'last_raw' in locals() and last_raw:
+        log(f"ENABLE CHART ALGO FAILED port={port} last_raw={last_raw[:400]}")
+    return False
+
+
+def ensure_mt5_trading_permissions_uia(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    attempts: int = 3,
+    wait_between_sec: float = 2.0,
+) -> Dict[str, bool]:
+    global_ok = enable_mt5_algo_trading_uia(
+        port, payload, attempts=attempts, wait_between_sec=wait_between_sec
+    )
+    chart_ok = enable_mt5_chart_algo_trading_uia(
+        port, payload, attempts=max(1, min(3, int(attempts or 1))), wait_between_sec=wait_between_sec
+    )
+    combined = bool(global_ok or chart_ok)
+    log(
+        f"ENABLE TRADING PERMISSIONS port={port} ok={combined} "
+        f"global_ok={global_ok} chart_ok={chart_ok}"
+    )
+    return {
+        "ok": combined,
+        "globalEnabled": bool(global_ok),
+        "chartEnabled": bool(chart_ok),
+    }
 
 
 def mt5_log_has_auto_trading_disabled(port_dir: Path) -> bool:
@@ -3395,7 +3644,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
     time.sleep(5)
-    algo_enabled = enable_mt5_algo_trading_uia(port, payload, attempts=4, wait_between_sec=2.5)
+    trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=4, wait_between_sec=2.5)
     time.sleep(1)
 
     snap = account_snapshot(port, payload)
@@ -3422,9 +3671,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     send_account_metrics(payload, bal, eq, snap.get("currency", ""))
     schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
-    threading.Thread(target=lambda: (time.sleep(8), enable_mt5_algo_trading_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(20), enable_mt5_algo_trading_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(35), enable_mt5_algo_trading_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(8), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(20), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(35), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
     threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
 
     return {
@@ -3448,7 +3697,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "eaSet": set_info,
         "eaSource": source_sync,
         "eaCompile": compile_info,
-        "algoEnabled": algo_enabled,
+        "algoEnabled": bool(trading_permissions.get("ok")),
+        "globalAlgoEnabled": bool(trading_permissions.get("globalEnabled")),
+        "chartAlgoEnabled": bool(trading_permissions.get("chartEnabled")),
         "instanceId": instance_id,
     }
 
@@ -3547,7 +3798,7 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         st = mt5_port_status_one(port, payload)
         port_dir = resolve_mt5_port_dir(port, payload)
         if bool(st.get("running")) and mt5_log_has_auto_trading_disabled(port_dir):
-            enable_mt5_algo_trading_uia(port, payload)
+            ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)
         snap = account_snapshot(port, payload)
         bal = float(snap.get("balance") or 0)
         eq = float(snap.get("equity") or 0)
