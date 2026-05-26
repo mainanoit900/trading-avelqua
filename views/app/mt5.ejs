@@ -233,12 +233,13 @@
             <th>Lot</th>
             <th>Level</th>
             <th>Status</th>
+            <th>Date</th>
             <th>Manage</th>
           </tr>
         </thead>
         <tbody>
           <% if (!instances || instances.length === 0) { %>
-            <tr><td colspan="7" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
+            <tr><td colspan="8" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
           <% } %>
           <% (instances || []).forEach(function(i){ %>
             <tr>
@@ -248,6 +249,7 @@
               <td><%= i.lot_used || '-' %></td>
               <td><%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %></td>
               <td><span class="status <%= i.status %>"><%= i.status %></span></td>
+              <td><%= (i.updated_at || i.started_at) ? new Date(i.updated_at || i.started_at).toLocaleString('th-TH') : '-' %></td>
               <td>
                 <details class="mt5-manage-menu">
                   <summary>Manage</summary>
@@ -1262,6 +1264,11 @@ function mt5Sparkline(values) {
   `;
 }
 
+function mt5Money(value, digits = 2) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n.toFixed(digits) : '-';
+}
+
 async function openMt5EquityGraph(el) {
   const d = mt5ManageData(el);
   mt5ShowManageModal(`กราฟ ${d.bot || 'BOT'}`, '<div class="mt5-empty">กำลังโหลดกราฟ...</div>');
@@ -1334,10 +1341,10 @@ async function loadMt5LiveDashboard(page) {
             <th>BOT</th>
             <th>Login</th>
             <th>PORT</th>
-            <th>Status</th>
-            <th>EA</th>
             <th>Balance</th>
             <th>Equity</th>
+            <th>Profit</th>
+            <th>Status</th>
             <th>ล่าสุด</th>
             <th>Manage</th>
           </tr>
@@ -1346,6 +1353,11 @@ async function loadMt5LiveDashboard(page) {
     `;
 
     data.instances.forEach(i => {
+      const balanceNum = Number(i.mt5_balance || 0);
+      const equityNum = Number(i.mt5_equity || 0);
+      const profitNum = Number.isFinite(balanceNum) && Number.isFinite(equityNum)
+        ? (equityNum - balanceNum)
+        : null;
       const detailAttrs = `
         data-instance-id="${i.id || ''}"
         data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
@@ -1363,19 +1375,17 @@ async function loadMt5LiveDashboard(page) {
           <td>${i.display_name || i.bot_name || i.bot_code || '-'}</td>
           <td>${i.mt5_login || '-'}</td>
           <td>${i.assigned_port_no || '-'}</td>
+          <td>${mt5Money(i.mt5_balance || 0)}</td>
+          <td>${mt5Money(i.mt5_equity || 0)}</td>
+          <td>${profitNum == null ? '-' : mt5Money(profitNum)}</td>
           <td><span class="status ${i.status || ''}">${i.status || '-'}</span></td>
-          <td>${i.ea_status || '-'}</td>
-          <td>${i.mt5_balance || 0}</td>
-          <td>${i.mt5_equity || 0}</td>
           <td>${i.last_agent_ping ? new Date(i.last_agent_ping).toLocaleString('th-TH') : '-'}</td>
           <td>
             <details class="mt5-manage-menu">
               <summary>Manage</summary>
               <div class="mt5-manage-dropdown">
+                <button type="button" class="mt5-manage-item" onclick="openMt5InstanceDetail(this)" ${detailAttrs}>รายละเอียด</button>
                 <button type="button" class="mt5-manage-item" onclick="openMt5EquityGraph(this)" ${detailAttrs}>กราฟ</button>
-                <form method="POST" action="/app/mt5/request-restart/${i.id}" onsubmit="return confirm('Restart EA/MT5 รายการนี้ใช่ไหม?')">
-                  <button class="mt5-manage-item" type="submit">Restart</button>
-                </form>
                 <form method="POST" action="/app/mt5/instance/${i.id}/delete" onsubmit="return confirm('ยืนยันลบรายการนี้ใช่ไหม? ถ้ากำลังรันอยู่ ระบบจะสั่งออก MT5 ด้วย')">
                   <button class="mt5-manage-item danger" type="submit">ลบ</button>
                 </form>
