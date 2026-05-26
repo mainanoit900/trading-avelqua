@@ -444,69 +444,14 @@
     }
   }
 
-  async function verifyConnectedFromUrl() {
-    if (urlParams.get('connected') === '1') {
-      const urlOkKey = 'mt5UrlConnectedModal';
-      if (!sessionStorage.getItem(urlOkKey)) {
-        sessionStorage.setItem(urlOkKey, '1');
-        finishMt5ConnectSuccess('เชื่อมต่อสำเร็จ');
-      }
-      return;
-    }
+  function clearLegacyMt5QueryState() {
+    if (!window.history || !window.history.replaceState) return;
+    if (!urlParams.get('connected') && !urlParams.get('failed') && !urlParams.get('msg')) return;
+    window.history.replaceState({}, '', '/app/mt5');
   }
-  verifyConnectedFromUrl();
+  clearLegacyMt5QueryState();
   refreshMt5PortCards();
   const mt5PortCardRefreshTimer = window.setInterval(refreshMt5PortCards, 5000);
-
-  async function verifyFailedFromUrl() {
-    if (urlParams.get('failed') !== '1') return;
-    const failMsg = decodeURIComponent(urlParams.get('msg') || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
-    const failedAccountIdRaw = String(urlParams.get('accountId') || '').trim();
-    const failedAccountId = failedAccountIdRaw.split(':')[0].trim();
-    if (failedAccountId) {
-      try {
-        const res = await fetch('/app/mt5/connect-status?accountId=' + encodeURIComponent(failedAccountId), {
-          credentials: 'same-origin',
-          cache: 'no-store',
-          headers: { Accept: 'application/json' }
-        });
-        const data = await res.json();
-        if (data && data.ok === true) {
-          if (data.status === 'connected' || data.connected === true) {
-            finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ');
-            if (window.history && window.history.replaceState) {
-              window.history.replaceState({}, '', '/app/mt5');
-            }
-            return;
-          }
-          if (data.status === 'checking' || data.status === 'connecting' || data.pending === true) {
-            mt5PollAccountId = failedAccountId;
-            sessionStorage.setItem('mt5PollAccountId', failedAccountId);
-            if (window.history && window.history.replaceState) {
-              window.history.replaceState({}, '', '/app/mt5');
-            }
-            window.setTimeout(function () {
-              if (typeof window.startMt5ConnectPolling === 'function') {
-                window.startMt5ConnectPolling();
-              }
-            }, 0);
-            return;
-          }
-        }
-      } catch (_) {}
-    }
-    mt5Checking = false;
-    sessionStorage.removeItem('mt5PollAccountId');
-    const failShownKey = 'mt5FailModal:' + failMsg.slice(0, 120);
-    if (!sessionStorage.getItem(failShownKey)) {
-      sessionStorage.setItem(failShownKey, '1');
-      showMt5ConnectModal('error', failMsg);
-    }
-    if (window.history && window.history.replaceState) {
-      window.history.replaceState({}, '', '/app/mt5');
-    }
-  }
-  verifyFailedFromUrl();
 
   window.mt5UnlockConnectBtn = function () {
     var b = document.getElementById('mt5ConnectBtn');
@@ -608,10 +553,6 @@
         showMt5ConnectModal('error', data.message || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
         if (window.mt5Checker) clearInterval(window.mt5Checker);
         window.mt5Checker = null;
-        if (window.history && window.history.replaceState) {
-          const msg = encodeURIComponent(data.message || 'เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด');
-          window.history.replaceState({}, '', '/app/mt5?failed=1&accountId=' + encodeURIComponent(accountId) + '&msg=' + msg);
-        }
         return;
       }
       if (stWait === 'connected' || (data.connected === true && data.status === 'connected')) {
@@ -643,7 +584,7 @@
     }
   }
 
-  if (mt5PollAccountId && !urlParams.has('connected') && urlParams.get('failed') !== '1') {
+  if (mt5PollAccountId) {
     window.startMt5ConnectPolling();
   }
 

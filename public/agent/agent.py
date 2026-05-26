@@ -69,7 +69,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-26-mt5-clear-port-logs-v18"
+AGENT_BUILD_ID = "2026-05-26-mt5-attempt-verifier-v19"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -669,6 +669,9 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
             "balance": float(ai.balance),
             "equity": float(ai.equity),
             "currency": str(ai.currency or ""),
+            "observedLogin": str(int(getattr(ai, "login", 0) or 0) or ""),
+            "accountName": str(getattr(ai, "name", "") or ""),
+            "source": "mt5_api",
         }
         if _snap_positive(out):
             log(f"MT5 API SNAPSHOT path={port_dir.name} BALANCE={out['balance']} EQUITY={out['equity']}")
@@ -856,7 +859,7 @@ def remove_mt5_login_ini(port_dir: Path) -> None:
 
 
 def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    snap = {"balance": None, "equity": None, "currency": ""}
+    snap = {"balance": None, "equity": None, "currency": "", "observedLogin": "", "source": ""}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
         for metric_file in (
@@ -878,6 +881,8 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                         num = float(str(val).replace(",", "").replace(" ", ""))
                         snap[key] = num if num > 0 else None
                     snap["currency"] = str(data.get("currency") or "").upper()
+                    snap["observedLogin"] = str(data.get("login") or data.get("mt5_login") or "").strip()
+                    snap["source"] = "metric_file"
                 else:
                     kv: Dict[str, str] = {}
                     for line in raw.splitlines():
@@ -892,6 +897,8 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                         num = float(str(val).replace(",", "").replace(" ", ""))
                         snap[key] = num if num > 0 else None
                     snap["currency"] = str(kv.get("currency") or "").upper()
+                    snap["observedLogin"] = str(kv.get("login") or kv.get("mt5_login") or "").strip()
+                    snap["source"] = "metric_file"
                 if snap["balance"] is not None or snap["equity"] is not None:
                     log(
                         f"MT5 SNAPSHOT FILE PORT={port} BALANCE={snap['balance']} "
@@ -1383,6 +1390,7 @@ def send_connect_result(
             "nodeId": payload_get(payload, "nodeId"),
             "userId": payload_get(payload, "userId"),
             "accountId": payload_get(payload, "accountId"),
+            "attemptId": payload_get(payload, "attemptId", "attempt_id"),
             "portId": payload_get(payload, "portId", "port_id"),
             "portSlot": port_slot,
             "portNumber": port,
@@ -1410,6 +1418,8 @@ def send_connect_result(
             body["balance"] = snap.get("balance")
             body["equity"] = snap.get("equity")
             body["accountCurrency"] = snap.get("currency", "")
+            body["observedLogin"] = snap.get("observedLogin", "")
+            body["observed_login"] = snap.get("observedLogin", "")
         api("POST", callback, body)
         log(f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} login={body['mt5Login']} port={port}")
         if (
@@ -1883,7 +1893,7 @@ def wait_mt5_login_hybrid(
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
                 payload,
-                "failed",
+                "failed_auth",
                 JOURNAL_FAIL_MSG,
                 port,
                 process_id=None,
@@ -1902,7 +1912,7 @@ def wait_mt5_login_hybrid(
             cleanup_mt5_after_login_fail(port, payload, port_dir)
             send_connect_result(
                 payload,
-                "failed",
+                "failed_auth",
                 JOURNAL_FAIL_MSG,
                 port,
                 process_id=proc_pid,
@@ -1957,27 +1967,13 @@ def wait_mt5_login_hybrid(
                     cleanup_mt5_after_login_fail(port, payload, port_dir)
                     send_connect_result(
                         payload,
-                        "failed",
+                        "failed_auth",
                         JOURNAL_FAIL_MSG,
                         port,
                         process_id=proc_pid,
                         journal_evidence=chunk2 or j_chunk,
                     )
                     return False, JOURNAL_FAIL_MSG, chunk2 or j_chunk
-            if elapsed >= 6 and (window_ok_streak >= 2 or saw_window_verified):
-                send_connect_result(
-                    payload,
-                    "connected",
-                    f"window verified: {login} on {resolve_mt5_server(payload)} — waiting equity sync",
-                    port,
-                    process_id=proc_pid,
-                    journal_evidence=j_chunk or joined,
-                    window_title=joined,
-                    preview_b64=preview_b64,
-                    window_verified=True,
-                )
-                return True, "window verified", j_chunk or joined
-
         hint = joined or f"กำลังเปิด MT5 ({elapsed} วินาที)..."
         send_connect_result(
             payload,
@@ -1998,7 +1994,7 @@ def wait_mt5_login_hybrid(
         cleanup_mt5_after_login_fail(port, payload, port_dir)
         send_connect_result(
             payload,
-            "failed",
+            "failed_auth",
             JOURNAL_FAIL_MSG,
             port,
             process_id=proc_pid,
@@ -2079,7 +2075,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 )
                 send_connect_result(
                     payload,
-                    "failed",
+                    "failed_auth",
                     f"MT5 login={login} กำลังทำงานอยู่ใน PORT อื่น กรุณาปิดก่อน",
                     port,
                 )
@@ -2089,20 +2085,6 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             raise
         except Exception:
             pass
-
-    def result_ok(message: str, process_id: Any = None) -> Dict[str, Any]:
-        send_connect_result(payload, "connected", message, port, process_id=process_id)
-        log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={message}")
-        return {
-            "action": "run_mt5_bot",
-            "status": "started",
-            "port": port,
-            "login": login,
-            "server": server,
-            "bot": bot,
-            "config": str(config_file),
-            "terminal": str(terminal),
-        }
 
     def launch_mt5(reason: str) -> Optional[subprocess.Popen]:
         try:
@@ -2154,6 +2136,31 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     preview_final = capture_mt5_window_base64(port, payload)
 
     if not ok:
+        if msg == JOURNAL_TIMEOUT_MSG:
+            pending_msg = "กำลังรอ verifier ยืนยันเลขบัญชีจาก Journal / MT5 API..."
+            send_connect_result(
+                payload,
+                "checking",
+                pending_msg,
+                port,
+                process_id=proc_pid,
+                journal_evidence=journal_chunk,
+                window_title=titles,
+                preview_b64=preview_final,
+            )
+            return {
+                "action": "run_mt5_bot",
+                "status": "started",
+                "port": port,
+                "login": login,
+                "server": server,
+                "bot": bot,
+                "config": str(config_file),
+                "terminal": str(terminal),
+                "journalEvidence": journal_chunk,
+                "verificationPending": True,
+                "loginVerified": False,
+            }
         try:
             kill_mt5_by_folder(port_dir)
         except Exception as e:
@@ -2166,7 +2173,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         clear_mt5_login_cache(port_dir)
         send_connect_result(
             payload,
-            "failed",
+            "failed_auth" if msg == JOURNAL_FAIL_MSG else "failed",
             msg,
             port,
             process_id=None,
@@ -2177,32 +2184,64 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(msg)
 
     journal_final = journal_chunk or ""
-    if "window verified" not in (msg or "").lower():
+    verification_pending = "window verified" in (msg or "").lower()
+    if not verification_pending:
         ok2, msg2, journal_chunk2 = check_mt5_journal_login_result(
             port_dir, login, timeout_sec=5, since_ts=journal_since
         )
         if not ok2 and not journal_final:
             fail_final = msg2 or JOURNAL_FAIL_MSG
-            try:
-                kill_mt5_by_folder(port_dir)
-                stop_mt5_port_only(port, payload)
-            except Exception:
-                pass
-            remove_mt5_login_ini(port_dir)
-            send_connect_result(
-                payload,
-                "failed",
-                fail_final,
-                port,
-                process_id=None,
-                journal_evidence=journal_chunk2,
-                window_title=titles,
-                preview_b64=preview_final,
-            )
-            raise RuntimeError(fail_final)
+            if fail_final == JOURNAL_FAIL_MSG:
+                try:
+                    kill_mt5_by_folder(port_dir)
+                    stop_mt5_port_only(port, payload)
+                except Exception:
+                    pass
+                remove_mt5_login_ini(port_dir)
+                send_connect_result(
+                    payload,
+                    "failed_auth",
+                    fail_final,
+                    port,
+                    process_id=None,
+                    journal_evidence=journal_chunk2,
+                    window_title=titles,
+                    preview_b64=preview_final,
+                )
+                raise RuntimeError(fail_final)
+            verification_pending = True
         journal_final = journal_chunk2 or journal_final
 
-    success_message = msg if "window verified" in (msg or "").lower() else JOURNAL_OK_MSG
+    if verification_pending:
+        pending_msg = "กำลังรอ verifier ยืนยันเลขบัญชีจาก Journal / MT5 API..."
+        send_connect_result(
+            payload,
+            "checking",
+            pending_msg,
+            port,
+            process_id=proc_pid,
+            journal_evidence=journal_final,
+            window_title=titles,
+            preview_b64=preview_final,
+            window_verified=True,
+            schedule_metric_retry=False,
+        )
+        return {
+            "action": "run_mt5_bot",
+            "status": "started",
+            "port": port,
+            "login": login,
+            "server": server,
+            "bot": bot,
+            "config": str(config_file),
+            "terminal": str(terminal),
+            "journalEvidence": journal_final,
+            "verificationPending": True,
+            "loginVerified": False,
+            "windowVerified": True,
+        }
+
+    success_message = JOURNAL_OK_MSG
     send_connect_result(
         payload,
         "connected",
