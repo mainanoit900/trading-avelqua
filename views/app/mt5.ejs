@@ -1075,6 +1075,66 @@ function mt5ManageData(el) {
   return el && el.dataset ? el.dataset : {};
 }
 
+function closeMt5ManageMenus(exceptMenu) {
+  document.querySelectorAll('.mt5-manage-menu[open]').forEach(function (menu) {
+    if (menu !== exceptMenu) menu.open = false;
+  });
+}
+
+function positionMt5ManageMenu(menu) {
+  if (!menu || !menu.open) return;
+  const summary = menu.querySelector('summary');
+  const dropdown = menu.querySelector('.mt5-manage-dropdown');
+  if (!summary || !dropdown) return;
+  const gap = 8;
+  const rect = summary.getBoundingClientRect();
+  const menuWidth = Math.max(dropdown.offsetWidth || 160, 160);
+  const menuHeight = Math.max(dropdown.offsetHeight || 132, 132);
+  const viewportWidth = window.innerWidth || document.documentElement.clientWidth || 1280;
+  const viewportHeight = window.innerHeight || document.documentElement.clientHeight || 720;
+  let left = rect.right - menuWidth;
+  left = Math.max(12, Math.min(left, viewportWidth - menuWidth - 12));
+  const shouldOpenUp = (viewportHeight - rect.bottom) < (menuHeight + 16) && rect.top > menuHeight;
+  const top = shouldOpenUp
+    ? Math.max(12, rect.top - menuHeight - gap)
+    : Math.max(12, rect.bottom + gap);
+  menu.style.setProperty('--mt5-manage-left', left + 'px');
+  menu.style.setProperty('--mt5-manage-top', top + 'px');
+  menu.classList.toggle('drop-up', shouldOpenUp);
+}
+
+function bindMt5ManageMenus(scope) {
+  (scope || document).querySelectorAll('.mt5-manage-menu').forEach(function (menu) {
+    if (menu.dataset.bound === '1') return;
+    menu.dataset.bound = '1';
+    menu.addEventListener('toggle', function () {
+      if (menu.open) {
+        closeMt5ManageMenus(menu);
+        requestAnimationFrame(function () {
+          positionMt5ManageMenu(menu);
+        });
+      } else {
+        menu.classList.remove('drop-up');
+      }
+    });
+  });
+}
+
+document.addEventListener('click', function (e) {
+  const activeMenu = e.target.closest('.mt5-manage-menu');
+  document.querySelectorAll('.mt5-manage-menu[open]').forEach(function (menu) {
+    if (menu !== activeMenu && !menu.contains(e.target)) menu.open = false;
+  });
+});
+
+window.addEventListener('resize', function () {
+  document.querySelectorAll('.mt5-manage-menu[open]').forEach(positionMt5ManageMenu);
+});
+
+document.addEventListener('scroll', function () {
+  document.querySelectorAll('.mt5-manage-menu[open]').forEach(positionMt5ManageMenu);
+}, true);
+
 function mt5ShowManageModal(title, bodyHtml) {
   const old = document.getElementById('mt5ManageModal');
   if (old) old.remove();
@@ -1243,6 +1303,7 @@ function changeMt5LiveDashboardPage(nextPage) {
 }
 
 window.changeMt5LiveDashboardPage = changeMt5LiveDashboardPage;
+bindMt5ManageMenus(document);
 
 async function loadMt5LiveDashboard(page) {
   const box = document.getElementById('mt5LiveDashboard');
@@ -1336,6 +1397,7 @@ async function loadMt5LiveDashboard(page) {
       `;
     }
     box.innerHTML = html;
+    bindMt5ManageMenus(box);
 
   } catch (e) {
     box.innerHTML = '<div class="mt5-empty">Live Dashboard Error: ' + e.message + '</div>';
@@ -1364,12 +1426,13 @@ setInterval(loadMt5LiveDashboard, 3000);
 .mt5-pager-btn.primary{background:linear-gradient(135deg,rgba(37,99,235,.9),rgba(14,165,233,.88));border-color:rgba(96,165,250,.35);color:#eff6ff}
 .mt5-pager-btn.disabled,.mt5-pager-btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 .mt5-pager-meta{color:#94a3b8;font-size:12px}
-.mt5-manage-menu{position:relative}
+.mt5-manage-menu{position:relative;display:inline-block}
 .mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:72px;padding:7px 10px;border-radius:999px;cursor:pointer;color:#e2e8f0;font-weight:800;font-size:11px;letter-spacing:.02em;background:linear-gradient(135deg,rgba(30,41,59,.88),rgba(15,23,42,.92));border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 22px rgba(0,0,0,.18)}
 .mt5-manage-menu summary::after{content:'▾';font-size:10px;color:#93c5fd}
 .mt5-manage-menu summary::-webkit-details-marker{display:none}
 .mt5-manage-menu[open] summary{border-color:rgba(96,165,250,.35);box-shadow:0 16px 28px rgba(37,99,235,.16)}
-.mt5-manage-dropdown{position:absolute;right:0;top:calc(100% + 8px);z-index:30;display:grid;gap:6px;min-width:160px;padding:10px;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.14);box-shadow:0 22px 55px rgba(0,0,0,.38);backdrop-filter:blur(12px)}
+.mt5-manage-menu.drop-up summary::after{transform:rotate(180deg)}
+.mt5-manage-dropdown{position:fixed;left:var(--mt5-manage-left,12px);top:var(--mt5-manage-top,12px);right:auto;z-index:2000;display:grid;gap:6px;min-width:160px;padding:10px;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.98),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.14);box-shadow:0 22px 55px rgba(0,0,0,.38);backdrop-filter:blur(12px)}
 .mt5-manage-dropdown form{margin:0}
 .mt5-manage-item{width:100%;display:flex;align-items:center;justify-content:flex-start;padding:9px 11px;border-radius:12px;border:1px solid rgba(148,163,184,.12);background:rgba(255,255,255,.04);color:#f8fafc;font-weight:800;font-size:12px;cursor:pointer;transition:.18s}
 .mt5-manage-item:hover{transform:translateY(-1px);border-color:rgba(96,165,250,.38);background:rgba(59,130,246,.14)}
@@ -1391,7 +1454,7 @@ setInterval(loadMt5LiveDashboard, 3000);
 .mt5-chart-meta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;color:#cbd5e1;font-size:13px}
 .mt5-chart-meta span{padding:7px 10px;border-radius:999px;background:rgba(59,130,246,.14);border:1px solid rgba(96,165,250,.2)}
 .mt5-equity-chart{width:100%;height:220px;display:block;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.86),rgba(2,6,23,.95))}
-@media(max-width:700px){.mt5-manage-grid,.mt5-manage-analysis{grid-template-columns:1fr}.mt5-manage-dropdown{right:auto;left:0}}
+@media(max-width:700px){.mt5-manage-grid,.mt5-manage-analysis{grid-template-columns:1fr}.mt5-manage-dropdown{min-width:148px}}
 </style>
 
 <style>
