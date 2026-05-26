@@ -305,7 +305,8 @@ async function requireAgentToken(req, res, next) {
 }
 
 router.use((req, res, next) => {
-  if (req.path === '/mt5/live-status' || req.path === '/mt5/account-metrics') {
+  const callbackPath = `${req.baseUrl || ''}${req.path || req.originalUrl || ''}`;
+  if (callbackPath.endsWith('/mt5/live-status') || callbackPath.endsWith('/mt5/account-metrics')) {
     return requireAgentToken(req, res, next);
   }
   return requireLogin(req, res, next);
