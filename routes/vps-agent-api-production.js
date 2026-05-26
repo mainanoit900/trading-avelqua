@@ -919,7 +919,26 @@ router.post('/connect-result', async (req, res) => {
       }
 
       let failMsg = message || MT5_FAIL_USER_MSG;
+      const workerBusyLike = /worker.*ทำงานอยู่|worker.*รอสักครู่/i.test(String(failMsg));
       const timeoutLike = /ทันเวลา|timeout/i.test(String(failMsg));
+      if (workerBusyLike) {
+        const inProgress = await findLoginCommandInProgress(accountId, node.id).catch(() => null);
+        if (inProgress) {
+          await query(`
+            UPDATE vps_system.mt5_accounts
+            SET status='checking',
+                last_error=NULL,
+                last_login_message='ระบบกำลังเปิด MT5 อยู่ กรุณารอสักครู่...',
+                updated_at=NOW()
+            WHERE id=$1
+          `, [accountId]).catch(() => {});
+          return res.json({ ok: true, pending: true, reason: 'LOGIN_WORKER_IN_PROGRESS' });
+        }
+        const recovered = await tryApplyPendingJournalRead(accountId, node.id).catch(() => false);
+        if (recovered) {
+          return res.json({ ok: true, connected: true, recoveredFrom: 'worker_busy_journal' });
+        }
+      }
       if (/ทันเวลา|timeout/i.test(String(failMsg))) {
         failMsg = 'ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่';
       } else {
@@ -1082,6 +1101,17 @@ router.post('/commands/:id/result', async (req, res) => {
           updated_at=NOW()
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
     `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId, node.id]);
+
+    if (
+      ok
+      && (ctype === 'read_file' || ctype === 'port_read_file')
+      && String(pl.purpose || '') === 'verify_mt5_journal'
+    ) {
+      const aid = Number(pl.accountId || pl.account_id || 0);
+      if (aid) {
+        await tryApplyPendingJournalRead(aid, node.id).catch(() => {});
+      }
+    }
 
     return res.json({ ok: true });
   } catch (e) {
