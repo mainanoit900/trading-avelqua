@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-window-pick-v41"
+AGENT_BUILD_ID = "2026-05-27-mt5-mainhwnd-v42"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -602,10 +602,49 @@ def _mt5_enum_windows_for_pids(pids: Iterable[int]) -> List[Dict[str, Any]]:
     return hits
 
 
+def _mt5_main_hwnd_from_ps(pid: int) -> Tuple[int, str]:
+    """Best-effort resolve MainWindowHandle/Title for a PID via PowerShell."""
+    if os.name != "nt":
+        return 0, ""
+    try:
+        pid = int(pid or 0)
+    except Exception:
+        return 0, ""
+    if pid <= 0:
+        return 0, ""
+    ps = f"Get-Process -Id {pid} -ErrorAction SilentlyContinue | Select-Object Id,MainWindowHandle,MainWindowTitle | ConvertTo-Json -Compress"
+    out = _run_powershell(ps, timeout=10).strip()
+    try:
+        data = json.loads(out) if out else None
+        if not isinstance(data, dict):
+            return 0, ""
+        hwnd = int(data.get('MainWindowHandle') or 0)
+        title = str(data.get('MainWindowTitle') or '').strip()
+        return hwnd, title
+    except Exception:
+        return 0, ""
+
+
 def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Pick the MT5 main window HWND for UI automation / screenshots."""
     login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
     pids = _mt5_collect_target_pids(port, payload)
+    # Prefer OS-reported MainWindowHandle (more reliable than EnumWindows filters)
+    if pids:
+        hwnd_ps, title_ps = _mt5_main_hwnd_from_ps(int(pids[0]))
+        if hwnd_ps:
+            return {
+                "ok": True,
+                "hwnd": int(hwnd_ps),
+                "pid": int(pids[0]),
+                "pids": pids,
+                "title": title_ps,
+                "titles": [title_ps] if title_ps else [],
+                "class": "",
+                "visible": True,
+                "method": "Get-Process.MainWindowHandle",
+                "reason": "",
+            }
     windows = _mt5_enum_windows_for_pids(pids)
     titles = [str(w.get("title") or "") for w in windows if str(w.get("title") or "").strip()]
     out: Dict[str, Any] = {
@@ -631,6 +670,8 @@ def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) 
         if "hook window" in cls_low or "tooltips_class32" in cls_low:
             pts -= 50_000_000
         if "gdi+ hook" in cls_low:
+            pts -= 50_000_000
+        if cls_low in ("ime", "default ime"):
             pts -= 50_000_000
         if re.search(r"(?i)gdi\\+\\s*window", title):
             pts -= 50_000_000
