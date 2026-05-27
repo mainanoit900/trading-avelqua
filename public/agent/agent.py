@@ -540,6 +540,8 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
     write_avelqua_trading_gate(port_dir, False, payload)
     patch_mt5_experts_config(port_dir, False)
     normalize_mt5_startup_ini(port_dir)
+    if mt5_running_for_port_dir(port_dir):
+        disable_mt5_trading_permissions_uia(port, payload)
     try:
         cfg = mt5_startup_ini_path(port_dir)
         if cfg.is_file():
@@ -969,6 +971,92 @@ if ($method -eq 'none') {{
     if 'last_raw' in locals() and last_raw:
         log(f"ENABLE ALGO TRADING FAILED port={port} last_raw={last_raw[:400]}")
     return False
+
+
+def disable_mt5_algo_trading_uia(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    attempts: int = 2,
+    wait_between_sec: float = 1.5,
+) -> bool:
+    """Turn off MT5 Algo Trading toolbar button when it is On."""
+    if os.name != "nt":
+        return False
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        root = str(port_dir)
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+        max_attempts = max(1, int(attempts or 1))
+        for attempt in range(1, max_attempts + 1):
+            ui = _resolve_mt5_ui_window(port, payload)
+            hwnd = int(ui.get("hwnd") or 0)
+            pid_hint = int(ui.get("pid") or 0)
+            ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+$win = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
+$method = 'none'
+$state = 'unknown'
+if ($win) {{
+  $cond = New-Object Windows.Automation.PropertyCondition(
+    [Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [Windows.Automation.ControlType]::Button
+  )
+  $buttons = $win.FindAll([Windows.Automation.TreeScope]::Descendants, $cond)
+  foreach ($b in $buttons) {{
+    $name = [string]($b.Current.Name)
+    if ($name -match '(?i)algo\\s*trading|auto\\s*trading') {{
+      try {{
+        $tpObj = $b.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+        if ($tpObj) {{
+          $tp = [Windows.Automation.TogglePattern]$tpObj
+          $state = [string]$tp.Current.ToggleState
+          if ($state -eq 'On') {{
+            $tp.Toggle()
+            $method = 'toggle_off'
+            Start-Sleep -Milliseconds 500
+            $state = [string]$tp.Current.ToggleState
+          }} else {{
+            $method = 'already_off'
+          }}
+        }}
+      }} catch {{}}
+      break
+    }}
+  }}
+}}
+@{{ ok = ($method -ne 'none'); method = $method; state = $state }} | ConvertTo-Json -Compress
+"""
+            raw = _run_powershell(ps, timeout=20).strip()
+            if raw and raw.startswith("{"):
+                data = json.loads(raw)
+                if bool(data.get("ok")):
+                    log(f"DISABLE ALGO TRADING port={port} method={data.get('method')} state={data.get('state')}")
+                    return True
+            if attempt < max_attempts:
+                time.sleep(max(0.25, float(wait_between_sec or 0)))
+    except Exception as e:
+        log(f"DISABLE ALGO TRADING ERROR port={port}: {e}")
+    return False
+
+
+def disable_mt5_trading_permissions_uia(
+    port: Any, payload: Optional[Dict[str, Any]] = None
+) -> Dict[str, bool]:
+    """Best-effort: disable algo trading gates after stop/login-only."""
+    global_ok = disable_mt5_algo_trading_uia(port, payload, attempts=2)
+    return {"ok": bool(global_ok), "globalDisabled": bool(global_ok)}
+
+
+def ensure_login_only_no_trading(port: Any, payload: Optional[Dict[str, Any]] = None) -> None:
+    """Connect MT5 for login verify only — never leave Experts/Algo enabled."""
+    port_dir = resolve_mt5_port_dir(port, payload)
+    write_avelqua_trading_gate(port_dir, False, payload)
+    patch_mt5_experts_config(port_dir, False)
+    if mt5_running_for_port_dir(port_dir):
+        disable_mt5_trading_permissions_uia(port, payload)
 
 
 def enable_mt5_chart_algo_trading_uia(
@@ -3794,7 +3882,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         # เพื่อไม่ให้ backend อ่าน authorized ของรอบก่อนมาฟันธง success ผิดบัญชี
         clear_mt5_logs(port_dir)
         clear_mt5_login_cache(port_dir)
-        write_mt5_login_ini(port_dir, login, password, server)
+        write_mt5_login_ini(
+            port_dir, login, password, server, allow_expert_trading=False
+        )
+        patch_mt5_experts_config(port_dir, False)
+        write_avelqua_trading_gate(port_dir, False, payload)
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
@@ -3911,6 +4003,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         journal_final = journal_chunk2 or journal_final
 
     if verification_pending:
+        ensure_login_only_no_trading(port, payload)
         pending_msg = "กำลังรอ verifier ยืนยันเลขบัญชีจาก Journal / MT5 API..."
         send_connect_result(
             payload,
@@ -3940,6 +4033,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         }
 
     success_message = JOURNAL_OK_MSG
+    ensure_login_only_no_trading(port, payload)
     send_connect_result(
         payload,
         "connected",
