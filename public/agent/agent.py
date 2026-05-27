@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-token-launch-v37"
+AGENT_BUILD_ID = "2026-05-27-mt5-session-ui-v38"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -527,6 +527,162 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
     return {"action": "stop_mt5", "port": port, "port_dir": str(port_dir), "stopped": stopped}
 
 
+def _ps_escape_single(value: str) -> str:
+    return str(value or "").replace("'", "''")
+
+
+def _mt5_collect_target_pids(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[int]:
+    """PIDs for this PORT: launch diag first, then psutil path match."""
+    pids: List[int] = []
+    seen: set = set()
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        diag = _get_mt5_launch_diag(str(port_dir))
+        diag_pid = int(diag.get("pid") or 0)
+        if diag_pid > 0 and diag_pid not in seen:
+            seen.add(diag_pid)
+            pids.append(diag_pid)
+    except Exception:
+        pass
+    for proc in mt5_port_processes(port, payload):
+        try:
+            pid = int(proc.pid)
+            if pid > 0 and pid not in seen:
+                seen.add(pid)
+                pids.append(pid)
+        except Exception:
+            pass
+    return pids
+
+
+def _mt5_enum_visible_windows_for_pids(pids: Iterable[int]) -> List[Dict[str, Any]]:
+    """Enumerate visible top-level windows for terminal64 PIDs (works across sessions)."""
+    if os.name != "nt":
+        return []
+    pid_set = {int(p) for p in pids if int(p or 0) > 0}
+    if not pid_set:
+        return []
+    user32 = ctypes.windll.user32
+    hits: List[Dict[str, Any]] = []
+
+    @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
+    def _enum_cb(hwnd, _lparam):
+        try:
+            if not user32.IsWindowVisible(hwnd):
+                return True
+            pid_val = wintypes.DWORD()
+            user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
+            pid = int(pid_val.value or 0)
+            if pid not in pid_set:
+                return True
+            length = user32.GetWindowTextLengthW(hwnd)
+            if length <= 0:
+                return True
+            buf = ctypes.create_unicode_buffer(length + 1)
+            user32.GetWindowTextW(hwnd, buf, length + 1)
+            title = str(buf.value or "").strip()
+            if not title:
+                return True
+            area = 0
+            rect = wintypes.RECT()
+            if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
+                area = max(0, int(rect.right - rect.left)) * max(0, int(rect.bottom - rect.top))
+            hits.append({"hwnd": int(hwnd), "pid": pid, "title": title, "area": area})
+        except Exception:
+            pass
+        return True
+
+    user32.EnumWindows(_enum_cb, 0)
+    return hits
+
+
+def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Pick the MT5 main window HWND for UI automation / screenshots."""
+    login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+    pids = _mt5_collect_target_pids(port, payload)
+    windows = _mt5_enum_visible_windows_for_pids(pids)
+    titles = [str(w.get("title") or "") for w in windows if w.get("title")]
+    out: Dict[str, Any] = {
+        "ok": False,
+        "hwnd": 0,
+        "pid": int(pids[0]) if pids else 0,
+        "pids": pids,
+        "titles": titles,
+        "method": "",
+        "reason": "no_pid" if not pids else "enum_windows_empty",
+    }
+    if not windows:
+        return out
+
+    def _score(w: Dict[str, Any]) -> Tuple[int, int]:
+        title = str(w.get("title") or "")
+        low = title.lower()
+        pts = int(w.get("area") or 0)
+        if login and login in title:
+            pts += 10_000_000
+        if "metatrader" in low:
+            pts += 5_000_000
+        if "terminal" in low:
+            pts += 1_000_000
+        if re.search(r"(?i)properties|expert|advisor|dialog", title):
+            pts -= 5_000_000
+        return pts, int(w.get("area") or 0)
+
+    best = max(windows, key=_score)
+    out.update({
+        "ok": True,
+        "hwnd": int(best.get("hwnd") or 0),
+        "pid": int(best.get("pid") or 0),
+        "title": str(best.get("title") or ""),
+        "method": "EnumWindows",
+        "reason": "",
+        "titles": titles,
+    })
+    return out
+
+
+def _ps_mt5_window_setup_block(hwnd: int, pid_hint: int, root: str, login: str) -> str:
+    """PowerShell: resolve $mainHwnd / $procId (EnumWindows hint or Get-Process fallback)."""
+    root_esc = _ps_escape_single(root.replace("\\", "\\\\"))
+    login_esc = _ps_escape_single(login)
+    return f"""
+$hwndHint = {int(hwnd or 0)}
+$pidHint = {int(pid_hint or 0)}
+$root = '{root_esc}'
+$login = '{login_esc}'
+$mainHwnd = [IntPtr]::Zero
+$procId = 0
+if ($hwndHint -gt 0) {{
+  $mainHwnd = [IntPtr]$hwndHint
+  $procId = $pidHint
+}}
+if ($mainHwnd -eq [IntPtr]::Zero) {{
+  $deadline = (Get-Date).AddSeconds(12)
+  $proc = $null
+  while ((Get-Date) -lt $deadline) {{
+    $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+      $p = $_.Path
+      if (-not $p) {{ return $false }}
+      if ($p -like "*$root*") {{ return $true }}
+      if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+      if ($pidHint -gt 0 -and $_.Id -eq $pidHint) {{ return $true }}
+      return $false
+    }} | Select-Object -First 1
+    if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {{
+      $mainHwnd = $proc.MainWindowHandle
+      $procId = [int]$proc.Id
+      break
+    }}
+    Start-Sleep -Milliseconds 500
+  }}
+}}
+if ($mainHwnd -eq [IntPtr]::Zero) {{
+  @{{ ok = $false; reason = 'no_window'; hwndHint = $hwndHint; pidHint = $pidHint }} | ConvertTo-Json -Compress
+  exit 0
+}}
+"""
+
+
 def latest_log_text(port_dir: Path) -> Tuple[Optional[Path], str]:
     # MT5 may write logs in different folders depending on portable mode/version.
     log_dirs = [
@@ -560,11 +716,14 @@ def enable_mt5_algo_trading_uia(
         return False
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
-        root = str(port_dir).replace("\\", "\\\\").replace("'", "''")
-        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip().replace("'", "''")
+        root = str(port_dir)
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
         max_attempts = max(1, int(attempts or 1))
         last_raw = ""
         for attempt in range(1, max_attempts + 1):
+            ui = _resolve_mt5_ui_window(port, payload)
+            hwnd = int(ui.get("hwnd") or 0)
+            pid_hint = int(ui.get("pid") or 0)
             ps = f"""
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
@@ -578,34 +737,16 @@ public class AvqW32 {{
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }}
 "@
-$root = '{root}'
-$login = '{login}'
-$deadline = (Get-Date).AddSeconds(10)
-$proc = $null
-while ((Get-Date) -lt $deadline) {{
-  $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-    $p = $_.Path
-    if (-not $p) {{ return $false }}
-    if ($p -like "*$root*") {{ return $true }}
-    if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
-    return $false
-  }} | Select-Object -First 1
-  if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {{ break }}
-  Start-Sleep -Milliseconds 500
-}}
-if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {{
-  @{{ ok = $false; reason = 'no_window' }} | ConvertTo-Json -Compress
-  exit 0
-}}
-[void][AvqW32]::ShowWindow($proc.MainWindowHandle, 9)
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
 Start-Sleep -Milliseconds 300
-[void][AvqW32]::SetForegroundWindow($proc.MainWindowHandle)
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
 Start-Sleep -Milliseconds 600
 $button = $null
 $buttonName = ''
 $method = 'none'
 $state = 'unknown'
-$win = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+$win = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
 if ($win) {{
   $cond = New-Object Windows.Automation.PropertyCondition(
     [Windows.Automation.AutomationElement]::ControlTypeProperty,
@@ -690,11 +831,14 @@ def enable_mt5_chart_algo_trading_uia(
         return False
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
-        root = str(port_dir).replace("\\", "\\\\").replace("'", "''")
-        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip().replace("'", "''")
+        root = str(port_dir)
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
         max_attempts = max(1, int(attempts or 1))
         last_raw = ""
         for attempt in range(1, max_attempts + 1):
+            ui = _resolve_mt5_ui_window(port, payload)
+            hwnd = int(ui.get("hwnd") or 0)
+            pid_hint = int(ui.get("pid") or 0)
             ps = f"""
 $ErrorActionPreference = 'SilentlyContinue'
 Add-Type -AssemblyName UIAutomationClient
@@ -708,30 +852,12 @@ public class AvqW32 {{
   [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
 }}
 "@
-$root = '{root}'
-$login = '{login}'
-$deadline = (Get-Date).AddSeconds(10)
-$proc = $null
-while ((Get-Date) -lt $deadline) {{
-  $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-    $p = $_.Path
-    if (-not $p) {{ return $false }}
-    if ($p -like "*$root*") {{ return $true }}
-    if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
-    return $false
-  }} | Select-Object -First 1
-  if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {{ break }}
-  Start-Sleep -Milliseconds 500
-}}
-if (-not $proc -or $proc.MainWindowHandle -eq [IntPtr]::Zero) {{
-  @{{ ok = $false; reason = 'no_window' }} | ConvertTo-Json -Compress
-  exit 0
-}}
-[void][AvqW32]::ShowWindow($proc.MainWindowHandle, 9)
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
 Start-Sleep -Milliseconds 300
-[void][AvqW32]::SetForegroundWindow($proc.MainWindowHandle)
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
 Start-Sleep -Milliseconds 700
-$main = [Windows.Automation.AutomationElement]::FromHandle($proc.MainWindowHandle)
+$main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
 if ($main) {{
   try {{ $main.SetFocus() }} catch {{}}
 }}
@@ -751,9 +877,9 @@ while ((Get-Date) -lt $dlgDeadline) {{
   $wins = $rootEl.FindAll([Windows.Automation.TreeScope]::Children, $winCond)
   foreach ($w in $wins) {{
     try {{
-      if ($w.Current.ProcessId -ne $proc.Id) {{ continue }}
+      if ($procId -gt 0 -and $w.Current.ProcessId -ne $procId) {{ continue }}
       $handle = [IntPtr]$w.Current.NativeWindowHandle
-      if ($handle -eq $proc.MainWindowHandle) {{ continue }}
+      if ($handle -eq $mainHwnd) {{ continue }}
       $name = [string]($w.Current.Name)
       if ($name -match '(?i)properties|expert|advisor') {{
         $dlg = $w
@@ -2190,8 +2316,20 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
     port_dir = resolve_mt5_port_dir(port, payload)
     root = str(port_dir).rstrip("\\/").lower()
 
+    try:
+        ui = _resolve_mt5_ui_window(port, payload)
+        enum_titles = [str(t).strip() for t in (ui.get("titles") or []) if str(t).strip()]
+        if enum_titles:
+            return enum_titles
+        main_title = str(ui.get("title") or "").strip()
+        if main_title:
+            titles.append(main_title)
+            return titles
+    except Exception:
+        pass
+
     # Primary: psutil gives path + pid, then PowerShell gives MainWindowTitle.
-    pid_set = set()
+    pid_set = set(_mt5_collect_target_pids(port, payload))
     for proc in mt5_port_processes(port, payload):
         try:
             pid_set.add(int(proc.pid))
@@ -2327,29 +2465,44 @@ def capture_mt5_window_base64(port: Any, payload: Optional[Dict[str, Any]] = Non
     if os.name != "nt":
         return ""
     try:
+        ui = _resolve_mt5_ui_window(port, payload)
+        hwnd = int(ui.get("hwnd") or 0)
         port_dir = str(resolve_mt5_port_dir(port, payload)).replace("'", "''")
         ps = f"""
-$dir = '{port_dir}'.ToLower()
-$p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
-  $_.Path -and ($_.Path.ToLower().StartsWith($dir))
-}} | Select-Object -First 1
-if (-not $p -or $p.MainWindowHandle -eq 0) {{ exit 2 }}
+$hwnd = [IntPtr]{hwnd}
+if ($hwnd -eq [IntPtr]::Zero) {{
+  $dir = '{port_dir}'.ToLower()
+  $p = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+    $_.Path -and ($_.Path.ToLower().StartsWith($dir))
+  }} | Select-Object -First 1
+  if (-not $p -or $p.MainWindowHandle -eq 0) {{ exit 2 }}
+  $hwnd = $p.MainWindowHandle
+}}
 Add-Type @"
 using System;
+using System.Drawing;
+using System.Drawing.Imaging;
 using System.Runtime.InteropServices;
-public class Win32Rect {{
+public class AvqCap {{
   [StructLayout(LayoutKind.Sequential)] public struct RECT {{ public int Left, Top, Right, Bottom; }}
   [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT rect);
+  [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr hwnd, IntPtr hdcBlt, uint nFlags);
 }}
 "@
-$rect = New-Object Win32Rect+RECT
-[void][Win32Rect]::GetWindowRect($p.MainWindowHandle, [ref]$rect)
+$rect = New-Object AvqCap+RECT
+[void][AvqCap]::GetWindowRect($hwnd, [ref]$rect)
 $w = [Math]::Max(320, $rect.Right - $rect.Left)
 $h = [Math]::Max(240, $rect.Bottom - $rect.Top)
 Add-Type -AssemblyName System.Drawing
 $bmp = New-Object System.Drawing.Bitmap $w, $h
 $g = [System.Drawing.Graphics]::FromImage($bmp)
-$g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
+$g.Clear([System.Drawing.Color]::FromArgb(24, 24, 24))
+$dc = $g.GetHdc()
+$printed = [AvqCap]::PrintWindow($hwnd, $dc, 2)
+$g.ReleaseHdc($dc)
+if (-not $printed) {{
+  $g.CopyFromScreen($rect.Left, $rect.Top, 0, 0, $bmp.Size)
+}}
 $ms = New-Object System.IO.MemoryStream
 $enc = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object {{ $_.MimeType -eq 'image/jpeg' }}
 $ep = New-Object System.Drawing.Imaging.EncoderParameters 1
@@ -3931,8 +4084,17 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
-    time.sleep(5)
-    trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=4, wait_between_sec=2.5)
+    launch_diag = _get_mt5_launch_diag(str(port_dir))
+    ui_target: Dict[str, Any] = {}
+    for _wait in range(15):
+        ui_target = _resolve_mt5_ui_window(port, payload)
+        if ui_target.get("hwnd"):
+            break
+        time.sleep(2)
+    if not ui_target.get("hwnd"):
+        time.sleep(4)
+        ui_target = _resolve_mt5_ui_window(port, payload)
+    trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=5, wait_between_sec=2.5)
     time.sleep(1)
     launch_diag = _get_mt5_launch_diag(str(port_dir))
 
@@ -3977,6 +4139,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "launched": True,
         "processId": proc_pid,
         "launchDiag": launch_diag,
+        "uiTarget": ui_target,
         "balance": bal,
         "equity": eq,
         "profit": profit,
@@ -4426,11 +4589,17 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 preview_b64 = capture_mt5_window_base64(port, payload)
             except Exception as preview_err:
                 log(f"MT5 PREVIEW CAPTURE ERROR: {preview_err}")
+            ui_target: Dict[str, Any] = {}
+            try:
+                ui_target = _resolve_mt5_ui_window(port, payload)
+            except Exception as ui_err:
+                log(f"MT5 PREVIEW UI TARGET ERROR: {ui_err}")
             command_result(cmd_id, True, {
                 "action": ctype,
                 "port": port,
                 "windowTitles": titles,
                 "window_titles": titles,
+                "uiTarget": ui_target,
                 "previewImage": (preview_b64 or "")[:2_400_000],
                 "mt5PreviewImage": (preview_b64 or "")[:2_400_000],
             })
