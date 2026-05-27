@@ -981,6 +981,8 @@ async function stopAndExpireMt5Accounts(userId, reason = 'package_expired') {
           closeMt5: true,
           botCode: row.bot_code || null,
           mt5Login: row.mt5_login || null,
+          expectedMt5Login: row.mt5_login || null,
+          closeAllPositions: true,
           reason
         })
       ]
@@ -2809,7 +2811,9 @@ router.post('/mt5/stop/:id', async (req, res) => {
         stopTradingOnly: !closeMt5,
         forceKill: closeMt5,
         botCode: runPayload.botCode || runPayload.eaName,
-        mt5Login: runPayload.mt5Login || inst.mt5_login
+        mt5Login: runPayload.mt5Login || inst.mt5_login,
+        expectedMt5Login: runPayload.mt5Login || inst.mt5_login,
+        closeAllPositions: true
       };
 
       await client.query(`

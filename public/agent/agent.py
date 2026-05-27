@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-expiry-isolated-v57"
+AGENT_BUILD_ID = "2026-05-27-mt5-halt-close-positions-v58"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -590,6 +590,16 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
     normalize_mt5_startup_ini(port_dir)
     if mt5_running_for_port_dir(port_dir):
         disable_mt5_trading_permissions_uia(port, payload)
+    close_positions = str(
+        payload_get(payload, "closeAllPositions", "closePositions", "closeOpenPositions") or "true"
+    ).lower() not in ("0", "false", "no", "off")
+    positions_closed: Dict[str, Any] = {}
+    if close_positions and mt5_running_for_port_dir(port_dir):
+        try:
+            positions_closed = close_all_mt5_positions(port, payload)
+        except Exception as e:
+            log(f"STOP BOT close positions: {e}")
+            positions_closed = {"ok": False, "error": str(e)[:200]}
     try:
         cfg = mt5_startup_ini_path(port_dir)
         if cfg.is_file():
@@ -660,6 +670,8 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
         "tradingEnabled": False,
         "instanceId": instance_id,
         "killedPids": killed,
+        "positionsClosed": positions_closed,
+        "closeAllPositions": close_positions,
     }
 
 
@@ -1105,6 +1117,138 @@ def ensure_login_only_no_trading(port: Any, payload: Optional[Dict[str, Any]] = 
     patch_mt5_experts_config(port_dir, False)
     if mt5_running_for_port_dir(port_dir):
         disable_mt5_trading_permissions_uia(port, payload)
+
+
+def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Close every open position on this PORT terminal via MetaTrader5 API."""
+    if os.name != "nt":
+        return {"ok": False, "reason": "not_windows", "closed": [], "count": 0}
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {"ok": False, "reason": "terminal_missing", "closed": [], "count": 0}
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception as e:
+        return {"ok": False, "reason": "mt5_module_missing", "error": str(e)[:300], "closed": [], "count": 0}
+
+    expected_login = str(
+        payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
+    ).strip()
+    closed: List[Dict[str, Any]] = []
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            return {
+                "ok": False,
+                "reason": "initialize_failed",
+                "last_error": str(mt5.last_error()),
+                "closed": [],
+                "count": 0,
+            }
+        ai = mt5.account_info()
+        if ai is None:
+            mt5.shutdown()
+            return {"ok": False, "reason": "no_account_info", "closed": [], "count": 0}
+        observed = str(int(getattr(ai, "login", 0) or 0) or "")
+        if expected_login and observed and observed != expected_login:
+            mt5.shutdown()
+            return {
+                "ok": False,
+                "reason": "wrong_login",
+                "expectedLogin": expected_login,
+                "observedLogin": observed,
+                "closed": [],
+                "count": 0,
+            }
+        positions = list(mt5.positions_get() or [])
+        done_codes = (
+            int(getattr(mt5, "TRADE_RETCODE_DONE", 10009)),
+            int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008)),
+            0,
+        )
+        for pos in positions:
+            symbol = str(getattr(pos, "symbol", "") or "").strip()
+            if not symbol:
+                continue
+            if not mt5.symbol_select(symbol, True):
+                closed.append(
+                    {
+                        "ticket": int(getattr(pos, "ticket", 0) or 0),
+                        "symbol": symbol,
+                        "ok": False,
+                        "reason": "symbol_select_failed",
+                    }
+                )
+                continue
+            tick = mt5.symbol_info_tick(symbol)
+            if tick is None:
+                closed.append(
+                    {
+                        "ticket": int(getattr(pos, "ticket", 0) or 0),
+                        "symbol": symbol,
+                        "ok": False,
+                        "reason": "no_tick",
+                    }
+                )
+                continue
+            pos_type = int(getattr(pos, "type", -1) or -1)
+            if pos_type == int(getattr(mt5, "POSITION_TYPE_BUY", 0)):
+                order_type = mt5.ORDER_TYPE_SELL
+                price = float(tick.bid)
+            else:
+                order_type = mt5.ORDER_TYPE_BUY
+                price = float(tick.ask)
+            req = {
+                "action": mt5.TRADE_ACTION_DEAL,
+                "symbol": symbol,
+                "volume": float(getattr(pos, "volume", 0) or 0),
+                "type": order_type,
+                "position": int(getattr(pos, "ticket", 0) or 0),
+                "price": price,
+                "deviation": 80,
+                "magic": int(getattr(pos, "magic", 0) or 0),
+                "comment": "avelqua_halt_close",
+                "type_time": mt5.ORDER_TIME_GTC,
+                "type_filling": mt5.ORDER_FILLING_IOC,
+            }
+            res = mt5.order_send(req)
+            retcode = int(getattr(res, "retcode", -1) or -1) if res is not None else -1
+            closed.append(
+                {
+                    "ticket": int(getattr(pos, "ticket", 0) or 0),
+                    "symbol": symbol,
+                    "volume": float(req["volume"]),
+                    "ok": retcode in done_codes,
+                    "retcode": retcode,
+                    "comment": str(getattr(res, "comment", "") or "") if res else "",
+                }
+            )
+        remaining = list(mt5.positions_get() or [])
+        mt5.shutdown()
+        ok = len(remaining) == 0 and all(bool(c.get("ok")) for c in closed) if closed else True
+        log(
+            f"CLOSE ALL POSITIONS port={port} closed={len(closed)} remaining={len(remaining)} "
+            f"login={observed or expected_login or '-'}"
+        )
+        return {
+            "ok": ok,
+            "closed": closed,
+            "count": len(closed),
+            "remaining": len(remaining),
+            "observedLogin": observed,
+        }
+    except Exception as e:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        log(f"CLOSE ALL POSITIONS ERROR port={port}: {e}")
+        return {"ok": False, "reason": "exception", "error": str(e)[:300], "closed": closed, "count": len(closed)}
 
 
 def enable_mt5_chart_algo_trading_uia(
