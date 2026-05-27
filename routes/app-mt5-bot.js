@@ -880,8 +880,9 @@ async function getExtraPortRows(userId, subscriptionId, packageId, packageGroup 
     FROM vps_system.mt5_extra_ports
     WHERE user_id=$1
       AND is_active=TRUE
+      AND (expires_at IS NULL OR expires_at > NOW())
       AND (
-        (port_type='temporary' AND (expires_at IS NULL OR expires_at > NOW()))
+        (port_type='temporary')
         OR
         (port_type='permanent' AND (
           $2 = ''
@@ -904,6 +905,58 @@ async function getExtraPorts(userId, subscriptionId, packageId, packageGroup = '
 
 async function stopAndExpireMt5Accounts(userId, reason = 'package_expired') {
   await ensureMt5AccountRuntimeColumns().catch(() => {});
+  // Also stop bot instances explicitly (so EA is halted before MT5 close).
+  const inst = await safeQuery(
+    `
+    SELECT bi.id, bi.vps_id, bi.port_id, bi.assigned_port_no,
+           COALESCE(vp.folder_path,'') AS folder_path,
+           COALESCE(bi.run_payload->>'botCode', bi.run_payload->>'eaName', '') AS bot_code,
+           COALESCE(bi.run_payload->>'mt5Login', '') AS mt5_login
+    FROM vps_system.bot_instances bi
+    LEFT JOIN vps_system.vps_ports vp ON vp.id = bi.port_id
+    WHERE bi.user_id=$1
+      AND bi.status IN ('running','pending','restarting')
+      AND bi.vps_id IS NOT NULL
+      AND COALESCE(bi.assigned_port_no,0) > 0
+    ORDER BY bi.id DESC
+  `,
+    [userId],
+    []
+  );
+
+  for (const row of inst || []) {
+    const stopNodeId = num(row.vps_id);
+    const stopPortNo = num(row.assigned_port_no);
+    if (!stopNodeId || !stopPortNo) continue;
+    await query(
+      `
+      INSERT INTO vps_system.vps_agent_commands
+      (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
+      VALUES ($1, $1, $2, 'stop_mt5_bot', $3::jsonb, 'pending', NOW(), NOW())
+    `,
+      [
+        stopNodeId,
+        row.port_id || null,
+        JSON.stringify({
+          action: 'stop_bot_trading',
+          commandType: 'stop_mt5_bot',
+          instanceId: String(row.id),
+          port: stopPortNo,
+          portNumber: stopPortNo,
+          portSlot: stopPortNo,
+          folder_path: row.folder_path || null,
+          vpsFolderPath: row.folder_path || null,
+          stopTradingOnly: false,
+          forceKill: true,
+          closeMt5: true,
+          botCode: row.bot_code || null,
+          mt5Login: row.mt5_login || null,
+          reason
+        })
+      ]
+    ).catch(() => {});
+  }
+
   const rows = await safeQuery(`
   SELECT 
     a.id,
@@ -967,7 +1020,8 @@ async function stopAndExpireMt5Accounts(userId, reason = 'package_expired') {
     SET status='stopped',
         stopped_at=COALESCE(stopped_at, NOW()),
         updated_at=NOW(),
-        last_error=$2
+        last_error=$2,
+        ea_status='stopped'
     WHERE user_id=$1
       AND status IN ('running','pending','restarting')
   `, [userId, reason]).catch(() => {});

@@ -4,7 +4,6 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
-const PgSession = require('connect-pg-simple')(session);
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const rateLimit = require('express-rate-limit');
@@ -12,7 +11,7 @@ const helmet = require('helmet');
 
 const { injectUser } = require('./middleware/requireAuth');
 const { languageMiddleware, normalizeLocale, localeCache } = require('./services/i18n');
-const { query, pool, repairVpsAgentCommandSequences } = require('./config/database');
+const { query, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
 
 const app = express();
@@ -34,13 +33,40 @@ setInterval(async () => {
   }
 }, 15 * 60 * 1000);
 
+// MT5 expiry enforcer: auto stop BOT + close MT5 when package/coupon/port expires.
+// Runs in-process so it works even if user doesn't open the MT5 page.
+const { runMt5ExpiryEnforcerOnce } = require('./lib/mt5ExpiryEnforcer');
+let mt5ExpiryEnforcerRunning = false;
+const MT5_EXPIRY_ENFORCER_ENABLED =
+  String(process.env.MT5_EXPIRY_ENFORCER_ENABLED || 'true').toLowerCase() !== 'false';
+const MT5_EXPIRY_ENFORCER_INTERVAL_MS = Math.max(
+  60 * 1000,
+  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 5 * 60 * 1000)
+);
+
+if (MT5_EXPIRY_ENFORCER_ENABLED) {
+  setInterval(async () => {
+    if (mt5ExpiryEnforcerRunning) return;
+    mt5ExpiryEnforcerRunning = true;
+    try {
+      await runMt5ExpiryEnforcerOnce();
+    } catch (e) {
+      console.error('MT5 expiry enforcer error:', e);
+    } finally {
+      mt5ExpiryEnforcerRunning = false;
+    }
+  }, MT5_EXPIRY_ENFORCER_INTERVAL_MS);
+}
+
 app.set('trust proxy', 1);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
+const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '8mb';
+
 app.use(helmet({ contentSecurityPolicy: false }));
-app.use(express.urlencoded({ extended: true, limit: '8mb' }));
-app.use(express.json({ limit: '8mb' }));
+app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT }));
+app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
 
 app.use((err, req, res, next) => {
   if (err && (err.type === 'entity.too.large' || err.status === 413)) {
@@ -52,6 +78,7 @@ app.use((err, req, res, next) => {
   }
   return next(err);
 });
+
 app.use(cookieParser());
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/downloads', express.static(path.join(__dirname, 'public/downloads')));
@@ -60,11 +87,6 @@ app.use('/mt5-previews', express.static(path.join(__dirname, 'public/mt5-preview
 app.use(
   session({
     secret: process.env.SESSION_SECRET || 'trading-avelqua-secret',
-    store: new PgSession({
-      pool,
-      tableName: process.env.SESSION_TABLE || 'user_sessions',
-      createTableIfMissing: true
-    }),
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -218,25 +240,6 @@ app.use('/app', require('./routes/app'));
 app.use('/', require('./routes/cart'));
 app.use('/', require('./routes/payment'));
 app.use('/api', require('./routes/api'));
-
-const {
-  runPackageExpirySweep,
-  startPackageExpiryWorker,
-  isSweepAuthorized
-} = require('./services/packageExpiryWorker');
-
-app.get('/internal/package-expiry-sweep', async (req, res) => {
-  if (!isSweepAuthorized(req)) {
-    return res.status(401).json({ ok: false, message: 'Unauthorized' });
-  }
-  try {
-    const result = await runPackageExpirySweep();
-    return res.json({ ok: true, ...result });
-  } catch (error) {
-    console.error('package-expiry-sweep http error:', error);
-    return res.status(500).json({ ok: false, message: error.message });
-  }
-});
 
 app.use((req, res) => {
   return res.status(404).render('page', {
@@ -634,13 +637,6 @@ ensureOptionalTables()
   .then(() => {
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
-      startPackageExpiryWorker();
-      try {
-        const { startMt5EquityPoller } = require('./lib/mt5EquityPoller');
-        startMt5EquityPoller();
-      } catch (pollerErr) {
-        console.error('mt5 equity poller start error:', pollerErr.message);
-      }
     });
   })
   .catch((error) => {
