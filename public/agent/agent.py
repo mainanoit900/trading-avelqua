@@ -2101,6 +2101,16 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             if mc:
                 snap["currency"] = mc.group(1)
             log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap['balance']} EQUITY={snap['equity']} LOG={latest}")
+        if not str(snap.get("observedLogin") or "").strip():
+            try:
+                for title in mt5_window_titles(port, payload):
+                    m = re.match(r"^(\d{6,10})\s*[-:]", str(title or "").strip())
+                    if m:
+                        snap["observedLogin"] = m.group(1)
+                        snap["source"] = str(snap.get("source") or "window_title")
+                        break
+            except Exception:
+                pass
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
@@ -4143,6 +4153,18 @@ def port_list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
     port, _, full = safe_port_file_path(payload)
+    purpose = str(payload_get(payload, "purpose") or "").lower()
+    if not full.exists() and re.search(r"verify.*journal|journal.*verify", purpose):
+        port_dir = resolve_mt5_port_dir(port, payload)
+        latest, text = latest_log_text(port_dir)
+        if latest and text:
+            return {
+                "action": "port_read_file",
+                "port": port,
+                "file_path": str(latest),
+                "content": text,
+                "journalEvidence": text,
+            }
     if not full.exists():
         raise RuntimeError(f"file not found: {full}")
     content = _read_log_tail(full, max_bytes=262144)
