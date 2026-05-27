@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-utf16-ini-v45"
+AGENT_BUILD_ID = "2026-05-27-mt5-autotrading-config-v46"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1806,15 +1806,37 @@ MT5_PORT_INI_REL_PATHS = (
 )
 
 
+def _read_ini_text(path: Path) -> str:
+    if not path.is_file():
+        return ""
+    try:
+        return path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        pass
+    try:
+        raw = path.read_bytes()
+        if len(raw) >= 2 and raw[1:2] == b"\x00":
+            return raw.decode("utf-16le", errors="ignore")
+        return raw.decode("utf-8", errors="ignore")
+    except Exception:
+        return ""
+
+
+def _write_ini_text(path: Path, text: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    body = text if text.endswith("\n") else text + "\n"
+    try:
+        path.write_text(body, encoding="utf-8", errors="replace")
+    except Exception:
+        path.write_bytes(body.encode("utf-16le", errors="replace"))
+
+
 def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
     if not path.parent.exists():
         return False
     trade = "true" if enabled else "false"
     flag = "1" if enabled else "0"
-    try:
-        text = path.read_text(encoding="utf-8", errors="ignore") if path.is_file() else ""
-    except Exception:
-        text = ""
+    text = _read_ini_text(path)
     lines = text.splitlines() if text else []
     out: List[str] = []
     in_exp = False
@@ -1857,19 +1879,21 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
         if insert:
             out[idx + 1 : idx + 1] = insert
     try:
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("\n".join(out) + "\n", encoding="ascii", errors="ignore")
+        _write_ini_text(path, "\n".join(out))
         return True
     except Exception as e:
         log(f"PATCH INI EXPERTS ERROR {path}: {e}")
         return False
 
 
-def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> None:
+def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> List[str]:
+    patched: List[str] = []
     for rel in MT5_PORT_INI_REL_PATHS:
         p = port_dir / Path(rel.replace("/", os.sep))
         if _patch_ini_experts_section(p, enabled):
+            patched.append(str(p))
             log(f"PATCH EXPERTS enabled={enabled} file={p}")
+    return patched
 
 
 def mt5_running_for_port_dir(port_dir: Path) -> bool:
@@ -4464,6 +4488,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         stop_mt5_port_only(port, payload)
         time.sleep(2)
 
+    patched_cfg = patch_mt5_experts_config(port_dir, True)
+    log(f"PATCH AUTO TRADING CONFIG port={port} files={patched_cfg}")
+
     clear_mt5_chart_state(port_dir)
 
     cfg = mt5_startup_ini_path(port_dir)
@@ -4482,9 +4509,20 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not ui_target.get("hwnd"):
         time.sleep(4)
         ui_target = _resolve_mt5_ui_window(port, payload)
-    trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=5, wait_between_sec=2.5)
+    trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=6, wait_between_sec=3.0)
     time.sleep(1)
     launch_diag = _get_mt5_launch_diag(str(port_dir))
+    trade_gate: Dict[str, Any] = {}
+    try:
+        trade_gate = mt5_test_trade(port, payload)
+        log(
+            f"MT5 TEST TRADE port={port} ok={trade_gate.get('ok')} "
+            f"retcode={trade_gate.get('retcode')} "
+            f"tradeAllowed={(trade_gate.get('terminalInfo') or {}).get('tradeAllowed')}"
+        )
+    except Exception as gate_err:
+        trade_gate = {"ok": False, "error": str(gate_err)[:300]}
+        log(f"MT5 TEST TRADE ERROR port={port}: {gate_err}")
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
@@ -4541,6 +4579,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "algoEnabled": bool(trading_permissions.get("ok")),
         "globalAlgoEnabled": bool(trading_permissions.get("globalEnabled")),
         "chartAlgoEnabled": bool(trading_permissions.get("chartEnabled")),
+        "optionsAlgoEnabled": bool(trading_permissions.get("optionsEnabled")),
+        "configPatched": patched_cfg,
+        "tradeGate": trade_gate,
         "instanceId": instance_id,
     }
 
@@ -4946,14 +4987,21 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             spawn_connect_worker(cmd_id, ctype, payload)
             return
 
-        elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port"):
+        elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port", "STOP_MT5_BOT"):
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
-
+            stop_payload = dict(payload or {})
+            stop_payload.setdefault("port", payload_get(payload, "portNumber", "portSlot", "folderPort"))
+            if not folder:
+                try:
+                    folder = str(resolve_mt5_port_dir(stop_payload.get("port"), stop_payload))
+                except Exception:
+                    folder = ""
+            stop_payload.setdefault("vpsFolderPath", folder)
             if folder:
                 command_result(cmd_id, True, stop_mt5_by_folder(folder))
             else:
                 port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
-                command_result(cmd_id, True, stop_mt5_port_only(port, payload))
+                command_result(cmd_id, True, stop_mt5_port_only(port, stop_payload))
 
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")

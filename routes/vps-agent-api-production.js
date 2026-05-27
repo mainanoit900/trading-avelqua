@@ -573,6 +573,26 @@ router.get('/queue', async (req, res) => {
     const { expireStuckMaintenanceCommands } = require('../lib/agentDeploy');
     await expireStuckMaintenanceCommands(node.id).catch(() => {});
 
+    // Keep only the newest pending STOP per port; cancel older duplicates (AI/stop floods).
+    await query(`
+      WITH stop_dup AS (
+        SELECT id,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(port_id, 0), UPPER(COALESCE(command_type, ''))
+            ORDER BY id DESC
+          ) AS rn
+        FROM vps_system.vps_agent_commands
+        WHERE status='pending'
+          AND (node_id=$1 OR vps_id=$1)
+          AND UPPER(COALESCE(command_type, '')) LIKE 'STOP%'
+      )
+      UPDATE vps_system.vps_agent_commands c
+      SET status='cancelled', updated_at=NOW(), finished_at=NOW(),
+          result_message='cancelled_duplicate_stop'
+      FROM stop_dup s
+      WHERE c.id = s.id AND s.rn > 1
+    `, [node.id]).catch(() => {});
+
     // Avoid idx_vac_no_dup_pending (unique pending per port_id + command_type):
     // only one stuck row per key becomes pending; extras or rows when a pending
     // already exists are cancelled instead of failing the whole UPDATE.
