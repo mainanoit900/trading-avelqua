@@ -1617,16 +1617,15 @@ def setup_bot_close_after_login(port: Any, payload: Optional[Dict[str, Any]] = N
         out["stalePositionsBefore"] = stale
         if stale > 0:
             log(f"BOTCLOSE LOGIN stale positions={stale} port={port} login={login}")
-            api_res = _close_all_mt5_positions_api_subprocess(port_dir, login, timeout_sec=28)
-            out["staleCloseApi"] = api_res
-            remaining = int(api_res.get("remaining") if api_res.get("remaining") is not None else stale)
+            closed_res = close_all_mt5_positions(port, payload)
+            out["staleClose"] = closed_res
+            remaining = int(closed_res.get("remaining") if closed_res.get("remaining") is not None else -1)
             if remaining < 0:
                 remaining = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
-            if remaining > 0:
-                out["staleClose"] = close_all_via_bot_close(port, payload)
-                remaining = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
             out["stalePositionsAfter"] = remaining
-            out["ok"] = remaining == 0
+            if remaining > 0:
+                out["ok"] = False
+                out["error"] = f"remaining_positions={remaining}"
         out["openChart"] = open_mt5_chart_uia(port, payload, symbol)
         time.sleep(1.0)
         out["botCloseAttach"] = attach_bot_close_second_chart(port, payload, symbol)
@@ -6474,7 +6473,16 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 cmd_id,
                 bool(res.get("ok")),
                 res,
-                "" if res.get("ok") else str(res.get("error") or "bot_close_setup_failed"),
+                ""
+                if res.get("ok")
+                else str(
+                    res.get("error")
+                    or (
+                        f"ยังมีออเดอร์ค้าง {res.get('stalePositionsAfter')}"
+                        if res.get("stalePositionsAfter") is not None
+                        else "bot_close_setup_failed"
+                    )
+                ),
             )
 
         elif ctype in ("dashboard", "watchdog"):
