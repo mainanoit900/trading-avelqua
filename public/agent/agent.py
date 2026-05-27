@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-concurrent-login-v75"
+AGENT_BUILD_ID = "2026-05-27-concurrent-login-v76"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2845,30 +2845,53 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
+    retries = max(1, int(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRIES", "3")))
+    retry_sleep = float(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRY_SEC", "1.2"))
+    ai = None
+    ti = None
     with MT5_API_SNAPSHOT_LOCK:
         try:
-            try:
-                mt5.shutdown()
-            except Exception:
-                pass
-            if not mt5.initialize(path=str(terminal)):
-                return {}
-            ti = None
-            try:
-                ti = mt5.terminal_info()
-            except Exception:
-                ti = None
-            ai = mt5.account_info()
-            if ai is None and login_hint:
+            for attempt in range(retries):
                 try:
-                    mt5.login(login_hint)
+                    try:
+                        mt5.shutdown()
+                    except Exception:
+                        pass
+                    if not mt5.initialize(path=str(terminal)):
+                        if attempt + 1 < retries:
+                            time.sleep(retry_sleep)
+                        continue
+                    ti = None
+                    try:
+                        ti = mt5.terminal_info()
+                    except Exception:
+                        ti = None
                     ai = mt5.account_info()
-                except Exception:
-                    ai = None
-            try:
-                mt5.shutdown()
-            except Exception:
-                pass
+                    if ai is None and login_hint:
+                        try:
+                            mt5.login(login_hint)
+                            ai = mt5.account_info()
+                        except Exception:
+                            ai = None
+                    try:
+                        mt5.shutdown()
+                    except Exception:
+                        pass
+                    if ai is None:
+                        if attempt + 1 < retries:
+                            time.sleep(retry_sleep)
+                        continue
+                    break
+                except Exception as e:
+                    log(f"MT5 API SNAPSHOT RETRY {attempt + 1}/{retries}: {e}")
+                    try:
+                        mt5.shutdown()
+                    except Exception:
+                        pass
+                    if attempt + 1 < retries:
+                        time.sleep(retry_sleep)
+                    else:
+                        return {}
             if ai is None:
                 return {}
             if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
@@ -3909,9 +3932,23 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
     )
 
 
-def acquire_login_ui_lock(port: Any, timeout_sec: int = 180, stale_sec: int = 120) -> str:
-    """Per-PORT lock for MT5 UI automation — allows different users on different PORTs concurrently."""
-    lock_file = login_ui_lock_path(port)
+def login_ui_lock_uses_global(port: Any, bot_code: Any = None) -> bool:
+    """บน VPS เดสก์ท็อปเดียว — LOGIN พร้อมกันหลาย PORT ต้องคิว UI automation ทีละตัว."""
+    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "1")).strip().lower() in ("0", "false", "no"):
+        return False
+    bot = str(bot_code or "").strip().upper()
+    return bot in ("", "LOGIN_ONLY")
+
+
+def acquire_login_ui_lock(
+    port: Any,
+    timeout_sec: int = 180,
+    stale_sec: int = 120,
+    *,
+    global_lock: bool = False,
+) -> str:
+    """Lock MT5 UI automation — global สำหรับ LOGIN_ONLY (พร้อมกันหลาย PORT), per-PORT สำหรับ Run BOT."""
+    lock_file = LOGIN_UI_LOCK_FILE if global_lock else login_ui_lock_path(port)
     deadline = time.time() + max(5, int(timeout_sec))
     token = f"{os.getpid()}:{time.time()}"
     port_label = str(port or "?")
@@ -3922,7 +3959,8 @@ def acquire_login_ui_lock(port: Any, timeout_sec: int = 180, stale_sec: int = 12
                 os.write(fd, token.encode("utf-8", errors="ignore"))
             finally:
                 os.close(fd)
-            log(f"LOGIN UI LOCK ACQUIRED port={port_label} file={lock_file.name} token={token}")
+            scope = "global" if global_lock else f"port={port_label}"
+            log(f"LOGIN UI LOCK ACQUIRED {scope} file={lock_file.name} token={token}")
             return token
         except FileExistsError:
             try:
@@ -3939,8 +3977,8 @@ def acquire_login_ui_lock(port: Any, timeout_sec: int = 180, stale_sec: int = 12
     )
 
 
-def release_login_ui_lock(port: Any, token: str) -> None:
-    lock_file = login_ui_lock_path(port)
+def release_login_ui_lock(port: Any, token: str, *, global_lock: bool = False) -> None:
+    lock_file = LOGIN_UI_LOCK_FILE if global_lock else login_ui_lock_path(port)
     try:
         if not lock_file.exists():
             return
@@ -5095,9 +5133,9 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as e:
             log(f"STOP OLD MT5 ERROR: {e}")
         time.sleep(0.6)
-        # ล้าง journal เก่าของ PORT นี้ก่อนเริ่ม attempt ใหม่
-        # เพื่อไม่ให้ backend อ่าน authorized ของรอบก่อนมาฟันธง success ผิดบัญชี
-        clear_mt5_logs(port_dir)
+        # LOGIN_ONLY: เก็บ journal ไว้ (since_ts กรองรอบเก่า) — ลบแล้ว concurrent login อ่านไม่เจอ
+        if str(bot).strip().upper() not in ("", "LOGIN_ONLY"):
+            clear_mt5_logs(port_dir)
         clear_mt5_login_cache(port_dir)
         write_mt5_login_ini(
             port_dir, login, password, server, allow_expert_trading=False
@@ -5107,7 +5145,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
-        token = acquire_login_ui_lock(port, timeout_sec=45)
+        ui_global = login_ui_lock_uses_global(port, bot)
+        token = acquire_login_ui_lock(port, timeout_sec=90, global_lock=ui_global)
         try:
             proc = _popen_hidden(args, cwd=str(port_dir))
             time.sleep(0.9)
@@ -5119,7 +5158,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 process_id=(proc.pid if proc else None),
             )
         finally:
-            release_login_ui_lock(port, token)
+            release_login_ui_lock(port, token, global_lock=ui_global)
         return proc
 
     journal_since = time.time()
