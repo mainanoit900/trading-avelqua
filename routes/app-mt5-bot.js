@@ -868,13 +868,16 @@ await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXI
 await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS package_group TEXT`).catch(() => {});
 await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS price_scoin NUMERIC NOT NULL DEFAULT 0`).catch(() => {});
 await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS expires_at TIMESTAMP NULL`).catch(() => {});
-await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`).catch(() => {});  await runner.query(`CREATE INDEX IF NOT EXISTS idx_mt5_extra_ports_user ON vps_system.mt5_extra_ports(user_id, is_active, port_type)`).catch(() => {});
+await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`).catch(() => {});
+await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP DEFAULT NOW()`).catch(() => {});
+  await runner.query(`CREATE INDEX IF NOT EXISTS idx_mt5_extra_ports_user ON vps_system.mt5_extra_ports(user_id, is_active, port_type)`).catch(() => {});
 }
 
 /** PORT ชั่วคราวผูก subscription รอบปัจจุบัน — หมดแพ็กเกจ/รอบใหม่ต้องซื้อใหม่ */
 async function deactivateOrphanTemporaryPorts(userId, subscriptionId) {
   const sid = num(subscriptionId);
   if (!sid) return;
+  await ensureExtraPortsTable().catch(() => {});
   await query(
     `
     UPDATE vps_system.mt5_extra_ports
