@@ -41,7 +41,7 @@ const MT5_EXPIRY_ENFORCER_ENABLED =
   String(process.env.MT5_EXPIRY_ENFORCER_ENABLED || 'true').toLowerCase() !== 'false';
 const MT5_EXPIRY_ENFORCER_INTERVAL_MS = Math.max(
   60 * 1000,
-  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 5 * 60 * 1000)
+  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 60 * 1000)
 );
 
 if (MT5_EXPIRY_ENFORCER_ENABLED) {

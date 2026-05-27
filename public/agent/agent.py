@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-stop-bot-fast-v51"
+AGENT_BUILD_ID = "2026-05-27-mt5-stop-kill-default-v52"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -5176,18 +5176,21 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 except Exception:
                     folder = ""
             stop_payload.setdefault("vpsFolderPath", folder)
-            stop_soft = (
-                ctype in ("stop_mt5_bot", "stop_bot")
-                or str(payload_get(payload, "action") or "").lower() in ("stop_bot_trading", "stop_bot")
-                or payload_get(payload, "stopTradingOnly", "softStop")
-                or not payload_get(payload, "forceKill", "killMt5", "closeMt5")
-            )
-            if ctype in ("force_stop_mt5", "kill_mt5") or str(payload_get(payload, "forceKill") or "").lower() in (
+            action_low = str(payload_get(payload, "action") or "").lower()
+            force_kill = ctype in ("force_stop_mt5", "kill_mt5") or str(
+                payload_get(payload, "forceKill", "killMt5", "closeMt5") or ""
+            ).lower() in ("1", "true", "yes")
+            soft_only = str(payload_get(payload, "stopTradingOnly", "softStop") or "").lower() in (
                 "1",
                 "true",
                 "yes",
-            ):
-                stop_soft = False
+            )
+            # stop_mt5 = kill terminal64 by default (package expiry, delete port).
+            # stop_mt5_bot = soft halt unless forceKill/closeMt5.
+            if ctype in ("stop_mt5_bot", "stop_bot") or action_low in ("stop_bot_trading", "stop_bot"):
+                stop_soft = soft_only or (not force_kill)
+            else:
+                stop_soft = soft_only and not force_kill
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, stop_payload))
             elif folder:

@@ -988,6 +988,8 @@ async function stopAndExpireMt5Accounts(userId, reason = 'package_expired') {
         windowsPortNo: a.windows_port_no,
         folder_path: a.folder_path || null,
         vpsFolderPath: a.folder_path || null,
+        forceKill: true,
+        closeMt5: true,
         reason
       })]).catch(() => {});
       if (a.port_id) {
@@ -1052,6 +1054,8 @@ async function stopPortsAboveEntitlement(userId, totalPorts, reason = 'port_enti
         portSlot: a.port_slot,
         assignedPortNo: a.assigned_port_no,
         windowsPortNo: a.windows_port_no,
+        forceKill: true,
+        closeMt5: true,
         reason
       })]).catch(() => {});
       if (a.port_id) {
@@ -1088,7 +1092,8 @@ async function getPortSummary(userId) {
   const packageExpired = !!pkg.is_expired || !pkg.subscription_id;
 
 if (packageExpired) {
-  await stopAndExpireMt5Accounts(userId, 'package_expired_auto_stop');
+  const { enqueueStopAllForUser } = require('../lib/mt5ExpiryEnforcer');
+  await enqueueStopAllForUser(userId, 'package_expired_auto_stop', true);
 
   // ลบสิทธิ์พอร์ตชั่วคราวทันทีเมื่อแพ็กเกจหมดอายุ
   await query(`
