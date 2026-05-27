@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-close-before-disable-v59"
+AGENT_BUILD_ID = "2026-05-27-enable-then-close-v60"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1238,8 +1238,8 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
             res = mt5.order_send(req)
             retcode = int(getattr(res, "retcode", -1) or -1) if res is not None else -1
             if retcode == autotrading_disabled:
-                enable_mt5_algo_trading_uia(port, payload, attempts=1)
-                time.sleep(0.8)
+                enable_mt5_algo_trading_uia(port, payload, attempts=2)
+                time.sleep(1.0)
                 res = mt5.order_send(req)
                 retcode = int(getattr(res, "retcode", -1) or -1) if res is not None else -1
             return {
