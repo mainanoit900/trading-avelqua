@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-stop-bot-trading-v50"
+AGENT_BUILD_ID = "2026-05-27-mt5-stop-bot-fast-v51"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -556,13 +556,12 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
     except Exception as e:
         log(f"STOP BOT CLEAR STARTUP EXPERT: {e}")
 
+    snap: Dict[str, Any] = {}
     if mt5_running_for_port_dir(port_dir):
         try:
-            ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=1.5)
+            snap = account_snapshot(port, payload)
         except Exception as e:
-            log(f"STOP BOT UIA permissions pass: {e}")
-
-    snap = account_snapshot(port, payload)
+            log(f"STOP BOT account snapshot: {e}")
     bal = snap.get("balance")
     eq = snap.get("equity")
     profit = None
