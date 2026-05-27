@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-trade-tab-mouse-v65"
+AGENT_BUILD_ID = "2026-05-27-halt-timeout-v66"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -720,6 +720,43 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
     }
 
 
+def stop_bot_trading_with_timeout(
+    port: Any, payload: Optional[Dict[str, Any]] = None, timeout_sec: int = 70
+) -> Dict[str, Any]:
+    """Run halt in a thread so heartbeat is not blocked by UIA/MT5 IPC."""
+    out: Dict[str, Any] = {}
+    err: List[str] = []
+
+    def _run() -> None:
+        try:
+            out["result"] = stop_bot_trading_only(port, payload)
+        except Exception as e:
+            err.append(str(e)[:300])
+
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+    t.join(max(15, int(timeout_sec or 70)))
+    if t.is_alive():
+        log(f"STOP BOT TIMEOUT port={port} after {timeout_sec}s")
+        return {
+            "action": "stop_bot_trading",
+            "ok": False,
+            "message": f"หยุด BOT ใช้เวลานานเกิน {timeout_sec} วินาที — ลองปิดออเดอร์ที่แท็บ Trade ใน MT5",
+            "port": port,
+            "timeout": True,
+            "positionsClosed": {"ok": False, "reason": "halt_timeout"},
+        }
+    if err:
+        return {
+            "action": "stop_bot_trading",
+            "ok": False,
+            "message": err[0],
+            "port": port,
+            "positionsClosed": {"ok": False, "error": err[0]},
+        }
+    return dict(out.get("result") or {})
+
+
 def _ps_escape_single(value: str) -> str:
     return str(value or "").replace("'", "''")
 
@@ -1185,38 +1222,64 @@ def _mt5_deal_filling_type(mt5: Any, symbol: str) -> int:
     return int(getattr(mt5, "ORDER_FILLING_IOC", 1))
 
 
-def _mt5_open_positions_count(port_dir: Path, expected_login: str = "") -> int:
+def _run_python_snippet(code: str, timeout: int = 12) -> Tuple[int, str]:
+    """Run short Python snippet in subprocess (avoid blocking main loop on MT5 IPC)."""
+    try:
+        proc = subprocess.run(
+            [sys.executable, "-c", code],
+            capture_output=True,
+            text=True,
+            timeout=max(3, int(timeout or 12)),
+            errors="ignore",
+        )
+        return int(proc.returncode or 0), str(proc.stdout or "").strip()
+    except subprocess.TimeoutExpired:
+        return 124, ""
+    except Exception:
+        return 1, ""
+
+
+def _mt5_open_positions_count(port_dir: Path, expected_login: str = "", timeout_sec: int = 12) -> int:
     """Count open positions via MT5 API (read-only). Returns -1 on failure."""
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return -1
-    try:
-        import MetaTrader5 as mt5  # type: ignore
-    except Exception:
+    login = str(expected_login or "").strip()
+    code = f"""
+import sys
+from pathlib import Path
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    sys.exit(2)
+terminal = Path({repr(str(terminal))})
+if not terminal.is_file():
+    sys.exit(3)
+try:
+    mt5.shutdown()
+except Exception:
+    pass
+if not mt5.initialize(path=str(terminal)):
+    sys.exit(4)
+ai = mt5.account_info()
+if ai is None:
+    mt5.shutdown()
+    sys.exit(5)
+observed = str(int(getattr(ai, 'login', 0) or 0) or '')
+expected = {repr(login)}
+if expected and observed and observed != expected:
+    mt5.shutdown()
+    sys.exit(6)
+n = len(list(mt5.positions_get() or []))
+mt5.shutdown()
+print(n)
+"""
+    rc, out = _run_python_snippet(code, timeout=timeout_sec)
+    if rc != 0:
         return -1
     try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        if not mt5.initialize(path=str(terminal)):
-            return -1
-        ai = mt5.account_info()
-        if ai is None:
-            mt5.shutdown()
-            return -1
-        observed = str(int(getattr(ai, "login", 0) or 0) or "")
-        if expected_login and observed and observed != expected_login:
-            mt5.shutdown()
-            return -1
-        n = len(list(mt5.positions_get() or []))
-        mt5.shutdown()
-        return n
+        return max(0, int(out.splitlines()[-1].strip()))
     except Exception:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
         return -1
 
 
@@ -1468,19 +1531,32 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
             "uiaMethod": uia_res.get("method"),
         }
 
-    # 2) Ctrl+E เปิด AutoTrading แล้วปิดผ่าน API
-    enable_mt5_autotrading_hotkey(port, payload)
-    ensure_mt5_trading_permissions_uia(port, payload, attempts=1, wait_between_sec=1.0)
-    time.sleep(1.0)
-    api_res = _close_all_mt5_positions_api(port, payload)
-    remaining = _mt5_open_positions_count(port_dir, expected_login)
+    # 2) Ctrl+E เปิด AutoTrading แล้วปิดผ่าน API (ข้ามถ้า UIA กดเมนูแล้ว — ลด IPC ค้าง)
+    if str(uia_res.get("method") or "none") == "none":
+        enable_mt5_autotrading_hotkey(port, payload)
+        ensure_mt5_trading_permissions_uia(port, payload, attempts=1, wait_between_sec=1.0)
+        time.sleep(1.0)
+        api_res = _close_all_mt5_positions_api(port, payload)
+        remaining = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
+        if remaining < 0:
+            remaining = int(api_res.get("remaining") or after_uia)
+        api_res["remaining"] = remaining
+        api_res["ok"] = remaining == 0
+        api_res["uia"] = uia_res
+        api_res["via"] = "api" if remaining == 0 else "api_failed"
+        return api_res
+    remaining = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
     if remaining < 0:
-        remaining = int(api_res.get("remaining") or after_uia)
-    api_res["remaining"] = remaining
-    api_res["ok"] = remaining == 0
-    api_res["uia"] = uia_res
-    api_res["via"] = "api" if remaining == 0 else "api_failed"
-    return api_res
+        remaining = int(uia_res.get("remaining") or after_uia)
+    return {
+        "ok": remaining == 0,
+        "closed": [],
+        "count": max(0, before),
+        "remaining": remaining,
+        "observedLogin": expected_login,
+        "via": "uia" if remaining == 0 else "uia_failed",
+        "uia": uia_res,
+    }
 
 
 def _close_all_mt5_positions_api(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -5891,7 +5967,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             else:
                 stop_soft = soft_only and not force_kill
             if stop_soft:
-                halt_res = stop_bot_trading_only(port, stop_payload)
+                halt_res = stop_bot_trading_with_timeout(port, stop_payload, timeout_sec=70)
                 command_result(
                     cmd_id,
                     bool(halt_res.get("ok")),
