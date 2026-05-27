@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-concurrent-login-v76"
+AGENT_BUILD_ID = "2026-05-27-login-no-trade-v77"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1314,9 +1314,17 @@ def schedule_login_verify_exit_mt5(
 def _should_exit_mt5_after_snapshot(payload: Optional[Dict[str, Any]], snap: Dict[str, Any]) -> bool:
     if not _is_login_only_payload(payload):
         return False
+    purpose = str(payload_get(payload or {}, "purpose") or "").lower()
+    login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+    observed = str(snap.get("observedLogin") or "").strip()
+    if _snap_positive(snap):
+        return True
+    if login_hint and observed and login_hint == observed:
+        return True
+    if "post_connect_exit" in purpose or purpose == "login_exit_mt5":
+        return True
     if not _snap_positive(snap):
         return False
-    purpose = str(payload_get(payload or {}, "purpose") or "").lower()
     if any(
         k in purpose
         for k in (
@@ -5134,8 +5142,13 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             log(f"STOP OLD MT5 ERROR: {e}")
         time.sleep(0.6)
         # LOGIN_ONLY: เก็บ journal ไว้ (since_ts กรองรอบเก่า) — ลบแล้ว concurrent login อ่านไม่เจอ
-        if str(bot).strip().upper() not in ("", "LOGIN_ONLY"):
+        login_only = str(bot).strip().upper() in ("", "LOGIN_ONLY")
+        if not login_only:
             clear_mt5_logs(port_dir)
+        else:
+            clear_mt5_chart_state(port_dir)
+            patch_mt5_experts_config(port_dir, False)
+            write_avelqua_trading_gate(port_dir, False, payload)
         clear_mt5_login_cache(port_dir)
         write_mt5_login_ini(
             port_dir, login, password, server, allow_expert_trading=False
@@ -5150,6 +5163,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         try:
             proc = _popen_hidden(args, cwd=str(port_dir))
             time.sleep(0.9)
+            if login_only:
+                ensure_login_only_no_trading(port, payload)
             automate_mt5_login_server_form(
                 login,
                 password,
