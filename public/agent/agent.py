@@ -473,23 +473,69 @@ def iter_terminal_processes() -> Iterable[Any]:
             continue
     return out
 
-def stop_mt5_by_folder(folder_path):
+def _norm_win_path(value: str) -> str:
+    try:
+        return os.path.normcase(os.path.normpath(str(value or "").strip()))
+    except Exception:
+        return str(value or "").strip().lower().replace("/", "\\")
+
+
+def _path_is_under_folder(candidate: str, folder_path: str) -> bool:
+    root = _norm_win_path(folder_path).rstrip("\\/")
+    probe = _norm_win_path(candidate)
+    if not root or not probe:
+        return False
+    if probe == root:
+        return True
+    return probe.startswith(root + os.sep)
+
+
+def _mt5_window_login_from_titles(titles: List[str]) -> str:
+    for title in titles or []:
+        m = re.match(r"^(\d{6,10})\s*[-:]", str(title or "").strip())
+        if m:
+            return m.group(1)
+    return ""
+
+
+def stop_mt5_by_folder(folder_path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not folder_path:
         raise Exception("missing folder_path")
 
-    folder_path = str(folder_path).lower().replace("/", "\\")
-    stopped = []
+    payload = payload or {}
+    expected_login = str(
+        payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
+    ).strip()
+    target_root = _norm_win_path(folder_path)
+    stopped: List[int] = []
+    skipped_login: List[int] = []
 
     for p in iter_terminal_processes():
         try:
             name = (p.info.get("name") or "").lower()
-            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
-            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
-
-            if name == "terminal64.exe" and (folder_path in exe or folder_path in cmd):
-                p.kill()
-                stopped.append(p.pid)
-                log(f"KILLED MT5 PID={p.pid} FOLDER={folder_path}")
+            if name != "terminal64.exe":
+                continue
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
+            if not (_path_is_under_folder(exe, target_root) or _path_is_under_folder(cmd, target_root)):
+                continue
+            if expected_login:
+                title_login = ""
+                try:
+                    ps = f"(Get-Process -Id {int(p.pid)} -ErrorAction SilentlyContinue).MainWindowTitle"
+                    title_login = _mt5_window_login_from_titles([_run_powershell(ps, timeout=3)])
+                except Exception:
+                    title_login = ""
+                if title_login and title_login != expected_login:
+                    skipped_login.append(int(p.pid))
+                    log(
+                        f"SKIP KILL PID={p.pid} folder={target_root} "
+                        f"expected_login={expected_login} title_login={title_login}"
+                    )
+                    continue
+            p.kill()
+            stopped.append(int(p.pid))
+            log(f"KILLED MT5 PID={p.pid} FOLDER={target_root} LOGIN={expected_login or '-'}")
 
         except Exception:
             pass
@@ -498,7 +544,9 @@ def stop_mt5_by_folder(folder_path):
         "ok": True,
         "message": "MT5 stopped",
         "folder_path": folder_path,
-        "stopped": stopped
+        "stopped": stopped,
+        "skippedWrongLogin": skipped_login,
+        "expectedLogin": expected_login or None,
     }
 
 def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -5337,7 +5385,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, stop_payload))
             elif folder:
-                command_result(cmd_id, True, stop_mt5_by_folder(folder))
+                command_result(cmd_id, True, stop_mt5_by_folder(folder, stop_payload))
             else:
                 command_result(cmd_id, True, stop_mt5_port_only(port, stop_payload))
 

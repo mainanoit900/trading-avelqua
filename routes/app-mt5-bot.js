@@ -1064,17 +1064,20 @@ async function stopPortsAboveEntitlement(userId, totalPorts, reason = 'port_enti
   await ensureMt5AccountRuntimeColumns().catch(() => {});
   const limit = Math.max(0, num(totalPorts));
   const rows = await safeQuery(`
-    SELECT id, port_slot, port_id, vps_id, assigned_port_no, windows_port_no
-    FROM vps_system.mt5_accounts
-    WHERE user_id=$1
-      AND LOWER(TRIM(COALESCE(status,'ready'))) IN ('ready','connected','checking','connecting','starting','failed')
-      AND COALESCE(port_slot,0) > $2
+    SELECT a.id, a.mt5_login, a.port_slot, a.port_id, a.vps_id, a.assigned_port_no, a.windows_port_no,
+           COALESCE(vp.folder_path, '') AS folder_path
+    FROM vps_system.mt5_accounts a
+    LEFT JOIN vps_system.vps_ports vp ON vp.id = a.port_id
+    WHERE a.user_id=$1
+      AND LOWER(TRIM(COALESCE(a.status,'ready'))) IN ('ready','connected','checking','connecting','starting','failed')
+      AND COALESCE(a.port_slot,0) > $2
   `, [userId, limit], []);
 
   for (const a of rows) {
     const stopNodeId = num(a.vps_id);
-    const stopPortNo = num(a.assigned_port_no) || num(a.windows_port_no) || num(a.port_slot);
-    if (stopNodeId && stopPortNo) {
+    const stopPortNo = num(a.assigned_port_no) || num(a.windows_port_no);
+    const folderPath = String(a.folder_path || '').trim();
+    if (stopNodeId && stopPortNo && folderPath) {
       await query(`
         INSERT INTO vps_system.vps_agent_commands
         (vps_id, node_id, port_id, command_type, payload, status, created_at)
@@ -1084,6 +1087,12 @@ async function stopPortsAboveEntitlement(userId, totalPorts, reason = 'port_enti
         portSlot: a.port_slot,
         assignedPortNo: a.assigned_port_no,
         windowsPortNo: a.windows_port_no,
+        folder_path: folderPath,
+        vpsFolderPath: folderPath,
+        mt5Login: a.mt5_login || null,
+        expectedMt5Login: a.mt5_login || null,
+        userId,
+        accountId: num(a.id) || null,
         forceKill: true,
         closeMt5: true,
         reason
@@ -1256,7 +1265,7 @@ async function getUserPortSlotStats(userId, totalPortsEntitled = 0) {
   };
 }
 
-/** Same numbers as getPortSummary for page render — no stopAndExpireMt5Accounts / stopPortsAboveEntitlement. */
+/** Same numbers as getPortSummary for page render — expiry kill runs via cron only (no cross-user side effects). */
 async function getPortSummaryReadOnly(userId) {
   const { repairFailedAccountsHoldingSlots } = require('../lib/mt5LoginCommandVerify');
   await repairFailedAccountsHoldingSlots(userId).catch(() => {});
@@ -1264,10 +1273,7 @@ async function getPortSummaryReadOnly(userId) {
   const pkg = await getPackage(userId);
   const packageExpired = !!pkg.is_expired || !pkg.subscription_id;
 
-  if (packageExpired) {
-    const { applyPackageExpiredSideEffects } = require('../lib/mt5ExpiryEnforcer');
-    await applyPackageExpiredSideEffects(userId, 'package_expired_auto_stop');
-  } else if (pkg.subscription_id) {
+  if (!packageExpired && pkg.subscription_id) {
     await deactivateOrphanTemporaryPorts(userId, pkg.subscription_id);
   }
 
