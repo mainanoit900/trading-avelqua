@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-bot-close-login-v70"
+AGENT_BUILD_ID = "2026-05-27-bot-close-deploy-v71"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -6241,6 +6241,18 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
     _sync_agent_env_build_id(build_id)
 
     log(f"PYTHON AGENT UPDATED path={agent_path} backup={backup} build={build_id}")
+
+    for item in payload.get("supportFiles") or payload.get("support_files") or []:
+        if not isinstance(item, dict):
+            continue
+        rel = str(item.get("path") or item.get("file") or "").strip().replace("\\", "/")
+        body = str(item.get("content") or "")
+        if not rel or not body.strip():
+            continue
+        dest = agent_path.parent / Path(rel)
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_text(body, encoding="utf-8")
+        log(f"AGENT SUPPORT FILE WRITTEN {dest}")
 
     restart_service_later(service_name)
 
