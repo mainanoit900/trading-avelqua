@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-close-positions-uia-v62"
+AGENT_BUILD_ID = "2026-05-27-halt-restart-retry-v63"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -582,11 +582,39 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
     return {"action": "stop_mt5", "port": port, "port_dir": str(port_dir), "stopped": stopped}
 
 
+def restart_mt5_terminal_for_port(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Restart MT5 for this PORT (session reconnect) — used before emergency close."""
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {"ok": False, "reason": "terminal_missing"}
+    patch_mt5_experts_config(port_dir, True)
+    normalize_mt5_startup_ini(port_dir)
+    try:
+        stop_mt5_port_only(port, payload)
+    except Exception as e:
+        log(f"RESTART MT5 stop old: {e}")
+    time.sleep(2.0)
+    cfg = mt5_startup_ini_path(port_dir)
+    args = [str(terminal), "/portable", f"/config:{cfg}"]
+    try:
+        _popen_hidden(args, cwd=str(port_dir))
+    except Exception as e:
+        return {"ok": False, "reason": "start_failed", "error": str(e)[:200]}
+    login = str(payload_get(payload or {}, "expectedMt5Login", "mt5Login", "login") or "").strip()
+    for _ in range(40):
+        if mt5_running_for_port_dir(port_dir):
+            n = _mt5_open_positions_count(port_dir, login)
+            if n >= 0:
+                return {"ok": True, "positions": n, "restarted": True}
+        time.sleep(1.0)
+    return {"ok": mt5_running_for_port_dir(port_dir), "reason": "wait_timeout", "restarted": True}
+
+
 def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Stop BOT trading — disable gates/Experts; keep MT5 terminal open unless force_kill."""
     port_dir = resolve_mt5_port_dir(port, payload)
     write_avelqua_trading_gate(port_dir, False, payload)
-    patch_mt5_experts_config(port_dir, False)
     normalize_mt5_startup_ini(port_dir)
     close_positions = str(
         payload_get(payload, "closeAllPositions", "closePositions", "closeOpenPositions") or "true"
@@ -599,6 +627,7 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
         except Exception as e:
             log(f"STOP BOT close positions: {e}")
             positions_closed = {"ok": False, "error": str(e)[:200]}
+    patch_mt5_experts_config(port_dir, False)
     if mt5_running_for_port_dir(port_dir):
         disable_mt5_trading_permissions_uia(port, payload)
     try:
@@ -1343,8 +1372,21 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
             "uiaMethod": uia_res.get("method"),
         }
     api_res = _close_all_mt5_positions_api(port, payload)
+    remaining = int(api_res.get("remaining") or 0)
+    if remaining > 0:
+        restart_res = restart_mt5_terminal_for_port(port, payload)
+        api_res["restart"] = restart_res
+        if restart_res.get("ok"):
+            time.sleep(2.0)
+            retry = _close_all_mt5_positions_api(port, payload)
+            api_res["retryAfterRestart"] = retry
+            remaining = int(retry.get("remaining") or remaining)
+            if retry.get("ok"):
+                api_res = retry
     api_res["uia"] = uia_res
     api_res["via"] = "api" if api_res.get("ok") else "api_failed"
+    if remaining > 0 and uia_res.get("method") not in (None, "none"):
+        api_res["via"] = "api_failed_uia_tried"
     return api_res
 
 

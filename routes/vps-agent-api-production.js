@@ -270,6 +270,30 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
     return;
   }
 
+  const ctypeLow = String(ctype || '').toLowerCase();
+  if (ctypeLow === 'stop_mt5_bot' || ctypeLow === 'stop_bot') {
+    const remaining = Number(result?.positionsClosed?.remaining ?? result?.remaining ?? 0);
+    const retry = Number(pl?.haltRetry ?? pl?.halt_retry ?? 0);
+    const wantClose = String(pl?.closeAllPositions ?? 'true').toLowerCase() !== 'false';
+    if (!ok && wantClose && remaining > 0 && retry < 3) {
+      const nextPayload = {
+        ...pl,
+        haltRetry: retry + 1,
+        closeAllPositions: true,
+        reason: pl?.reason || 'halt_auto_retry'
+      };
+      await query(
+        `
+        INSERT INTO vps_system.vps_agent_commands
+        (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
+        VALUES ($1, $1, $2, 'stop_mt5_bot', $3::jsonb, 'pending', NOW(), NOW())
+      `,
+        [node.id, pl.port_id || pl.portId || null, JSON.stringify(nextPayload)]
+      ).catch(() => {});
+    }
+    return;
+  }
+
   const accountId = pl.accountId ?? pl.account_id;
   if (accountId == null || String(accountId) === '') return;
 
