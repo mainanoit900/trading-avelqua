@@ -157,7 +157,7 @@ async function ensureEquityOnConnect(account, userId) {
   }
   if (!cmdId) return false;
 
-  const deadline = Date.now() + 4500;
+  const deadline = Date.now() + 12000;
   while (Date.now() < deadline) {
     const snapRow = await query(`
       SELECT status, result
