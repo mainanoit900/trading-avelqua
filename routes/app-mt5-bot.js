@@ -10,6 +10,10 @@ function getUserLockKey(userId) {
   return `lock:user:${userId}`;
 }
 
+function getConnectSlotLockKey(userId, portSlot) {
+  return `lock:user:${userId}:mt5:slot:${portSlot}`;
+}
+
 const { requireLogin } = require('../middleware/requireAuth');
 const { query, getClient, repairVpsAgentCommandSequences } = require('../config/database');
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
@@ -668,6 +672,69 @@ async function releaseReservedPort(reservedPort) {
       reservedPort.allocation_id
     ).catch(() => {});
   }
+}
+
+async function reserveVpsPortForConnect(userId, existingPortId) {
+  const pid = num(existingPortId);
+  if (pid > 0) {
+    const row = await query(
+      `
+      SELECT
+        p.id AS port_id,
+        p.vps_id,
+        p.port_no,
+        p.folder_path,
+        n.node_name
+      FROM vps_system.vps_ports p
+      INNER JOIN vps_system.vps_nodes n ON n.id = p.vps_id
+      WHERE p.id = $1
+      LIMIT 1
+    `,
+      [pid]
+    ).catch(() => ({ rows: [] }));
+    const port = row.rows?.[0];
+    if (port && String(port.folder_path || '').trim()) {
+      await query(
+        `
+        UPDATE vps_system.vps_ports
+        SET status='locked',
+            locked_by_user_id=$2,
+            locked_until=NOW() + INTERVAL '3 minutes',
+            updated_at=NOW()
+        WHERE id=$1
+      `,
+        [port.port_id, userId]
+      ).catch(() => {});
+      return {
+        ok: true,
+        port: {
+          port_id: port.port_id,
+          vps_id: port.vps_id,
+          port_number: port.port_no,
+          port_no: port.port_no,
+          folder_path: port.folder_path,
+          node_name: port.node_name
+        },
+        reused: true
+      };
+    }
+  }
+  return reserveMt5Port(userId);
+}
+
+function resolveConnectPortSlot(summary, requestedSlot, usedSlotSet) {
+  const total = Math.max(1, num(summary?.totalPorts, 1));
+  const req = num(requestedSlot);
+  if (req >= 1 && req <= total) {
+    if (usedSlotSet.has(req)) {
+      return { ok: false, message: `PORT ${req} กำลังเชื่อมต่ออยู่ — รอให้เสร็จก่อน หรือเลือก PORT อื่น` };
+    }
+    return { ok: true, portSlot: req };
+  }
+  for (let i = 1; i <= total; i++) {
+    if (!usedSlotSet.has(i)) return { ok: true, portSlot: i };
+  }
+  return { ok: false, message: `PORT ตามแพ็กเกจเต็มแล้ว` };
 }
 
 /** ปิดสถานะ connecting/checking ที่ค้าง + ปลดล็อกพอร์ต VPS — ให้ล็อกอินซ้ำได้หลังครั้งก่อนล้มเหลว */
@@ -1965,18 +2032,6 @@ console.log('[MT5 CONNECT START]', {
   body: req.body
 });
 
-    lockKey = getUserLockKey(userId);
-    let locked = false;
-    try {
-      locked = await redis.set(lockKey, '1', 'NX', 'EX', 30);
-    } catch (redisErr) {
-      console.warn('[MT5 CONNECT] Redis lock unavailable:', redisErr.message || redisErr);
-      locked = true;
-    }
-    if (!locked) {
-      throw new Error('⏳ ระบบกำลังเชื่อมต่ออยู่ กรุณารอสักครู่...');
-    }
-
     const summary = await getPortSummary(userId);
     const mt5Login = clean(req.body.mt5_login);
     const mt5Password = clean(req.body.mt5_password);
@@ -2000,37 +2055,51 @@ console.log('[MT5 CONNECT START]', {
     }
 
     const usedSlots = await safeQuery(`
-      SELECT port_slot
+      SELECT port_slot, mt5_login, status
       FROM vps_system.mt5_accounts
       WHERE user_id=$1
-        AND LOWER(TRIM(COALESCE(status,''))) IN ('connecting','checking','connected','ready')
+        AND LOWER(TRIM(COALESCE(status,''))) IN ('connecting','checking')
     `, [userId]);
 
-    const usedSlotSet = new Set((usedSlots || []).map(r => num(r.port_slot)));
-    const usedPorts = (usedSlots || []).length;
-    const maxPorts = Math.max(
-      1,
-      num(
-        summary.packageMaxPorts,
-        num(summary.pkg && summary.pkg.max_ports, num(summary.totalPorts, 1))
-      )
+    const usedSlotSet = new Set((usedSlots || []).map((r) => num(r.port_slot)));
+    const slotPick = resolveConnectPortSlot(summary, req.body.port_slot, usedSlotSet);
+    if (!slotPick.ok) throw new Error(slotPick.message || 'ไม่สามารถเลือก PORT ได้');
+    const portSlot = slotPick.portSlot;
+
+    const slotAccountRows = await safeQuery(
+      `
+      SELECT id, mt5_login, status, port_id, vps_id, assigned_port_no
+      FROM vps_system.mt5_accounts
+      WHERE user_id=$1 AND port_slot=$2
+        AND LOWER(TRIM(COALESCE(status,''))) NOT IN ('deleted','expired')
+      ORDER BY id DESC
+      LIMIT 1
+    `,
+      [userId, portSlot]
     );
-    let portSlot = 0;
-
-    for (let i = 1; i <= summary.totalPorts; i++) {
-      if (!usedSlotSet.has(i)) {
-        portSlot = i;
-        break;
-      }
+    const slotAccount = slotAccountRows?.[0] || null;
+    const slotSt = String(slotAccount?.status || '').toLowerCase();
+    if (slotAccount && ['connected', 'ready'].includes(slotSt) && clean(slotAccount.mt5_login) !== mt5Login) {
+      throw new Error(
+        `PORT ${portSlot} มีบัญชี ${slotAccount.mt5_login} อยู่แล้ว — ลบ PORT ก่อน หรือใช้เลข Login เดิม`
+      );
     }
 
-    if (!portSlot) {
-      throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${maxPorts})`);
+    lockKey = getConnectSlotLockKey(userId, portSlot);
+    let locked = false;
+    try {
+      locked = await redis.set(lockKey, '1', 'NX', 'EX', 120);
+    } catch (redisErr) {
+      console.warn('[MT5 CONNECT] Redis lock unavailable:', redisErr.message || redisErr);
+      locked = true;
+    }
+    if (!locked) {
+      throw new Error(`⏳ PORT ${portSlot} กำลังเชื่อมต่ออยู่ — รอสักครู่ หรือเลือก PORT อื่น (login พร้อมกันได้คนละ PORT)`);
     }
 
-    console.log('[STEP] BEFORE RESERVE');
+    console.log('[STEP] BEFORE RESERVE', { portSlot, requestedSlot: req.body.port_slot });
 
-    const reserve = await reserveMt5Port(userId);
+    const reserve = await reserveVpsPortForConnect(userId, slotAccount?.port_id);
 
     console.log('[STEP] AFTER RESERVE', reserve);
 

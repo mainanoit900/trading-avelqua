@@ -694,7 +694,7 @@
       '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
       '<div style="margin-bottom:14px;padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.8);border:1px solid rgba(56,189,248,.18);color:#cbd5e1;font-size:13px">' +
       'เลือก PORT จากข้อ 1: <b style="color:#fff">PORT ' + mt5Esc(selected.port_slot) + '</b>' + (selected.mt5_login ? ' / Login ' + mt5Esc(selected.mt5_login) : '') + (actualCapital > 0 ? ' / Equity ' + mt5Esc(actualCapital) : '') +
-      '</div>' +
+      '<br><small style="color:#94a3b8">แต่ละ PORT แยกกัน — Login หลาย PORT พร้อมกันได้ (คลิกการ์ด PORT ว่างก่อน Login)</small></div>' +
       '<div id="mt5RunSelectedMeta" style="display:none"></div>' +
       '<div id="mt5RunPresetSummary" class="mt5-run-preset-summary" style="margin-bottom:14px;padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.75);border:1px solid rgba(148,163,184,.2)"></div>' +
       '<div class="mt5-form-row">' +
@@ -1187,6 +1187,28 @@ if (mt5ConnectForm) {
       (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)('error', mt5LoginUserValidationMessage());
       return false;
     }
+
+    const connectSlot = Number(mt5SelectedPortSlot?.value || 0);
+  const connectCard = connectSlot
+    ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"]:not([data-account-id])')
+    : null;
+  const reconnectCard = connectSlot
+    ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"][data-account-id]')
+    : null;
+  if (!connectSlot) {
+    (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+      'error',
+      'กรุณาคลิกเลือก PORT ที่ว่าง (การ์ด PORT ด้านบน) ก่อน Login — แต่ละ PORT login พร้อมกันได้'
+    );
+    return false;
+  }
+  if (reconnectCard && !connectCard) {
+    (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+      'error',
+      'PORT นี้เชื่อมต่อแล้ว — ใช้ Run BOT หรือลบ PORT ก่อน login ใหม่'
+    );
+    return false;
+  }
 
     const mt5ConnectBtn = document.getElementById('mt5ConnectBtn');
     if (mt5ConnectBtn) {
