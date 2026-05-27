@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-login-lock-per-port-v53"
+AGENT_BUILD_ID = "2026-05-27-mt5-multi-queue-v54"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -5188,7 +5188,8 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, delete_file(payload))
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
-            spawn_connect_worker(cmd_id, ctype, payload)
+            result = spawn_connect_worker(cmd_id, ctype, payload)
+            command_result(cmd_id, True, {**(result or {}), "status": "dispatched"})
             return
 
         elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port", "STOP_MT5_BOT"):
@@ -5386,11 +5387,17 @@ def main() -> None:
                 pass
 
             try:
-                res = api("GET", "/queue")
-                cmd = res.get("command")
-
-                if cmd:
+                max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))
+                async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
+                for _ in range(max_per_tick):
+                    res = api("GET", "/queue")
+                    cmd = res.get("command")
+                    if not cmd:
+                        break
+                    ctype = str(cmd.get("command_type") or "").lower()
                     handle_command(cmd)
+                    if ctype not in async_types:
+                        break
 
             except Exception as e:
                 log(f"COMMAND POLL ERROR: {e}")
