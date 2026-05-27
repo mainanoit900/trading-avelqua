@@ -3,37 +3,21 @@
   "preset_slug": "ak-sniper",
   "symbol": "XAUUSD",
   "ea_file": "AK-SNIPER-VIP-VER4.0.ex5",
-  "hardcoded_in_mq5": {
-    "allowed_accounts": [0],
-    "allow_any_account_if_zero_in_list": true,
-    "expiry_date": "2027-12-30",
-    "brokers_substring": ["XM", "MOHICANS MARKETS LTD"],
-    "default_magic_number": 2122025
+  "defaults": {
+    "pip_step": 345,
+    "take_profit_average": 100
   },
+  "time_sessions": [
+    { "use": true, "start": "03:00", "stop": "06:00" },
+    { "use": true, "start": "11:00", "stop": "14:00" },
+    { "use": true, "start": "19:00", "stop": "23:55" }
+  ],
   "mappable_from_admin_table": {
     "lot_size": "InpLotSize",
     "lot_plus": "InpLotPlus",
     "t_start": "InpTrailingStartMoney",
     "t_stop": "InpTrailingStopMoney",
-    "medium_t_start": "InpTrailingStartMoney",
-    "medium_t_stop": "InpTrailingStopMoney",
-    "fast_t_start": "InpTrailingStartMoney",
-    "fast_t_stop": "InpTrailingStopMoney",
     "pip_step": "InpPipStep",
     "take_profit_average": "InpTakeProfitAverage"
-  },
-  "set_only_defaults": {
-    "InpSoftClose": 0,
-    "InpCutLossPct": 100,
-    "InpMagicNumber": 2122025
-  },
-  "not_configurable_without_new_ex5": [
-    "AllowedAccounts",
-    "InpExpiryDate",
-    "broker_whitelist",
-    "InpUseTimeFilter",
-    "InpUseTrendFilter",
-    "InpUseNewsFilter"
-  ],
-  "notes_th": "เปิดให้ทุกเลขบัญชีแล้วเมื่อ AllowedAccounts มี 0 — ตาราง admin ปรับ Lot / Trailing / Pip Step ผ่านไฟล์ .set และเว็บจะไม่บล็อกสิทธิ์บัญชี"
+  }
 }

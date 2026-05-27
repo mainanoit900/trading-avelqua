@@ -22,9 +22,11 @@ const {
   tradeLevelLabel,
   clampLot,
   computePresetForBot,
+  presetSummary,
   isProductionBot,
   validateRunCapital
 } = require('../lib/mt5BotPresets');
+const { buildEaTimeProfile } = require('../lib/mt5EaTimeProfile');
 const {
   PACKAGE_PORT_MAP,
   packagePortCapForGroup,
@@ -2523,6 +2525,13 @@ router.post('/mt5/run', async (req, res) => {
     const lotPlus = clampLot(lotPlusInput > 0 ? lotPlusInput : calc.lotPlus, lotMeta.lotMin, lotMeta.lotMax);
     const tStart = tStartInput == null ? num(trade.t_start) : tStartInput;
     const tStop = tStopInput == null ? num(trade.t_stop) : tStopInput;
+    const pipStep = num(calc.pipStep, 345);
+    const takeProfitAverage = num(calc.takeProfitAverage, 100);
+    const eaTimeProfile = buildEaTimeProfile(runTimeMode);
+    const eaSetPreview = presetSummary(
+      { ...calc, trade: { ...trade, t_start: tStart, t_stop: tStop } },
+      tradeLevel
+    );
 
     const nodeRows = await client.query(`
       SELECT *
@@ -2578,10 +2587,16 @@ router.post('/mt5/run', async (req, res) => {
       riskLabel: tradeLevelLabel(trade.trade_level),
       tStart,
       tStop,
+      pipStep,
+      takeProfitAverage,
       presetId: calc.preset?.id || null,
       presetSlug: calc.presetSlug || null,
       presetRow: calc.preset || null,
+      presetMatchBy: calc.presetMatchBy || 'capital',
+      lotOverride: !!calc.lotOverride,
       runTimeMode,
+      eaTimeProfile,
+      eaSetPreview,
       allowOpen24Hours: runTimeMode === '24h',
       useBotSchedule: runTimeMode === 'auto',
       portId: portCtx.id || account.port_id || null,

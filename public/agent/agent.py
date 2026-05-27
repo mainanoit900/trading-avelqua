@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-autotrading-ini-1-v47"
+AGENT_BUILD_ID = "2026-05-27-mt5-preset-align-v48"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4123,7 +4123,48 @@ def _ea_magic_number(payload: Dict[str, Any]) -> int:
     return base + ((checksum + inst) % 700000)
 
 
-def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str]:
+def _ea_time_profile_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
+    prof = payload_get(payload, "eaTimeProfile", "ea_time_profile") or {}
+    if not isinstance(prof, dict):
+        prof = {}
+    use_filter = prof.get("useTimeFilter")
+    if use_filter is None:
+        run_mode = str(payload_get(payload, "runTimeMode", default="auto") or "auto").strip().lower()
+        allow_24 = payload_get(payload, "allowOpen24Hours")
+        if allow_24 is True or str(allow_24).lower() in ("1", "true", "yes"):
+            use_filter = False
+        else:
+            use_filter = run_mode != "24h"
+    default_sessions = [
+        {"use": True, "start": "03:00", "stop": "06:00"},
+        {"use": True, "start": "11:00", "stop": "14:00"},
+        {"use": True, "start": "19:00", "stop": "23:55"},
+    ]
+    sessions = prof.get("sessions")
+    if not isinstance(sessions, list) or not sessions:
+        sessions = default_sessions
+    out_sessions: List[Dict[str, Any]] = []
+    for i, default in enumerate(default_sessions):
+        row = sessions[i] if i < len(sessions) and isinstance(sessions[i], dict) else {}
+        out_sessions.append({
+            "use": bool(row.get("use", default.get("use", True))),
+            "start": str(row.get("start") or default.get("start") or "03:00"),
+            "stop": str(row.get("stop") or default.get("stop") or "06:00"),
+        })
+    return {"useTimeFilter": bool(use_filter), "sessions": out_sessions}
+
+
+def _ea_set_bool_line(name: str, value: bool) -> str:
+    flag = "1" if value else "0"
+    return f"{name}={flag}||{flag}||0||1||1||N"
+
+
+def _ea_set_str_line(name: str, value: str) -> str:
+    safe = str(value or "").strip() or "00:00"
+    return f"{name}={safe}||{safe}||0||235959||1||N"
+
+
+def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
     preset = payload_get(payload, "presetRow", "preset_row") or {}
     runtime = payload_get(payload, "eaRuntime", "ea_runtime") or {}
     if not isinstance(preset, dict):
@@ -4147,11 +4188,14 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str]:
     pip_step = _ea_num(payload_get(payload, "pipStep"), _ea_num(preset.get("pip_step"), 345))
     tp_avg = _ea_num(payload_get(payload, "takeProfitAverage"), _ea_num(preset.get("take_profit_average"), 100))
     cut_loss_pct = _ea_num(runtime.get("cutLossPct"), 100)
+    time_prof = _ea_time_profile_from_payload(payload)
+    use_time_filter = bool(time_prof.get("useTimeFilter"))
+    sessions = time_prof.get("sessions") or []
 
     lines = [
         "; Avelqua - auto-generated EA preset",
         f"; bot={bot_code} level={trade_level} capital={capital or 0}",
-        f"InpSoftClose=0||0||0||1||1||N",
+        _ea_set_bool_line("InpSoftClose", False),
         f"InpLotSize={_ea_fmt(lot)}||0.02||0.01||100||0.01||N",
         f"InpLotPlus={_ea_fmt(lot_plus)}||0.02||0.01||100||0.01||N",
         f"InpPipStep={_ea_fmt(pip_step)}||345||10||2000||1||N",
@@ -4159,22 +4203,46 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str]:
         f"InpTrailingStartMoney={_ea_fmt(t_start)}||8||0||500||0.1||N",
         f"InpTrailingStopMoney={_ea_fmt(t_stop)}||5||0||500||0.1||N",
         f"InpCutLossPct={_ea_fmt(cut_loss_pct)}||100||1||100||1||N",
-        f"InpMagicNumber={_ea_magic_number(payload)}||{_ea_magic_number(payload)}||1||999999999||1||N",
+        _ea_set_bool_line("InpUseTimeFilter", use_time_filter),
     ]
+    for idx in range(3):
+        sess = sessions[idx] if idx < len(sessions) else {"use": False, "start": "03:00", "stop": "06:00"}
+        n = idx + 1
+        sess_on = use_time_filter and bool(sess.get("use"))
+        lines.append(_ea_set_bool_line(f"InpUseSession{n}", sess_on))
+        lines.append(_ea_set_str_line(f"InpStartTime{n}", str(sess.get("start") or "03:00")))
+        lines.append(_ea_set_str_line(f"InpStopTime{n}", str(sess.get("stop") or "06:00")))
+    lines.append(
+        f"InpMagicNumber={_ea_magic_number(payload)}||{_ea_magic_number(payload)}||1||999999999||1||N"
+    )
     if runtime:
         lines.extend([
             f"InpDailyProfitTarget={_ea_fmt(runtime.get('dailyProfitTarget', 0))}||0||0||100000||1||N",
             f"InpDailyLossLimit={_ea_fmt(runtime.get('dailyLossLimit', 0))}||0||0||100000||1||N",
             f"InpMaxDailyCommands={_ea_fmt(runtime.get('maxDailyCommands', 30000))}||30000||100||100000||1||N",
         ])
-    return file_name, "\r\n".join(lines) + "\r\n"
+    applied = {
+        "fileName": file_name,
+        "lot": lot,
+        "lotPlus": lot_plus,
+        "tStart": t_start,
+        "tStop": t_stop,
+        "pipStep": pip_step,
+        "takeProfitAverage": tp_avg,
+        "useTimeFilter": use_time_filter,
+        "sessions": sessions,
+        "presetId": preset.get("id"),
+        "capitalRecommend": preset.get("capital_recommend"),
+    }
+    return file_name, "\r\n".join(lines) + "\r\n", applied
 
 
 def _write_ea_preset_files(port_dir: Path, payload: Dict[str, Any], experts_dir: Path) -> Dict[str, Any]:
     content = str(payload_get(payload, "eaSetContent", "ea_set_content") or "").strip()
     file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
+    applied: Dict[str, Any] = {}
     if not content or not file_name:
-        file_name, content = _default_ea_set_payload(payload)
+        file_name, content, applied = _default_ea_set_payload(payload)
     if not content or not file_name:
         return {"ok": False, "reason": "no_ea_set_content"}
 
@@ -4225,6 +4293,8 @@ def _write_ea_preset_files(port_dir: Path, payload: Dict[str, Any], experts_dir:
             "tradeLevel": payload_get(payload, "tradeLevel", "trade_level"),
             "lot": payload_get(payload, "lot"),
             "capitalUsed": payload_get(payload, "capitalUsed", "capital"),
+            "eaSetApplied": applied or payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
+            "runTimeMode": payload_get(payload, "runTimeMode"),
             "writtenAt": datetime.now().isoformat(timespec="seconds"),
         }
         files_dir = port_dir / "MQL5" / "Files"
@@ -4237,7 +4307,12 @@ def _write_ea_preset_files(port_dir: Path, payload: Dict[str, Any], experts_dir:
     except Exception as e:
         log(f"avelqua_run.json write error: {e}")
 
-    return {"ok": len(written) > 0, "fileName": file_name, "written": written}
+    return {
+        "ok": len(written) > 0,
+        "fileName": file_name,
+        "written": written,
+        "eaSetApplied": applied or payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
+    }
 
 
 def _verify_ea_in_experts_dir(experts_dir: Path, bot_code: str) -> Dict[str, Any]:
@@ -4597,6 +4672,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "expertsPath": str(experts_dir),
         "eaFiles": ea_info,
         "eaSet": set_info,
+        "eaSetApplied": set_info.get("eaSetApplied") or payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
         "eaSource": source_sync,
         "eaCompile": compile_info,
         "algoEnabled": bool(trading_permissions.get("ok")),
