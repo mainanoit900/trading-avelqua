@@ -3200,19 +3200,19 @@ const trend = emaFast - emaSlow;
   }
 }
 
-setInterval(async () => {
+if (String(process.env.MT5_AI_BRAIN_ENABLED || 'true').toLowerCase() !== 'false') {
+  setInterval(async () => {
+    const rows = await query(`
+      SELECT bi.*, n.ping_ms, n.cpu_percent, n.ram_percent
+      FROM vps_system.bot_instances bi
+      LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
+      WHERE bi.status IN ('running','pending')
+    `);
 
-  const rows = await query(`
-    SELECT bi.*, n.ping_ms, n.cpu_percent, n.ram_percent
-    FROM vps_system.bot_instances bi
-    LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
-    WHERE bi.status IN ('running','pending')
-  `);
-
-  for (const inst of rows.rows) {
-    await aiTradingBrain(inst);
-  }
-
-}, 5000);
+    for (const inst of rows.rows) {
+      await aiTradingBrain(inst);
+    }
+  }, 5000);
+}
 
 module.exports = router;
