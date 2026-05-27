@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-halt-restart-retry-v63"
+AGENT_BUILD_ID = "2026-05-27-trade-tab-close-v64"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -691,7 +691,12 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
         killed = list(res.get("stopped") or [])
 
     remaining_pos = int(positions_closed.get("remaining") or 0) if positions_closed else 0
-    positions_ok = not close_positions or bool(positions_closed.get("ok"))
+    if close_positions and mt5_running_for_port_dir(port_dir):
+        login_chk = str(payload_get(payload, "expectedMt5Login", "mt5Login", "login") or "").strip()
+        live = _mt5_open_positions_count(port_dir, login_chk)
+        if live >= 0:
+            remaining_pos = live
+    positions_ok = not close_positions or (remaining_pos == 0 and bool(positions_closed.get("ok")))
     halt_ok = positions_ok and remaining_pos == 0
     if force_kill:
         msg = "หยุด BOT และปิด MT5 แล้ว"
@@ -1215,6 +1220,63 @@ def _mt5_open_positions_count(port_dir: Path, expected_login: str = "") -> int:
         return -1
 
 
+def _ensure_avelqua_close_script(port_dir: Path) -> Path:
+    """Deploy MQL5 close-all script into PORT Scripts folder."""
+    src = Path(__file__).resolve().parent / "mql5" / "AvelquaCloseAll.mq5"
+    dst_dir = port_dir / "MQL5" / "Scripts"
+    dst_dir.mkdir(parents=True, exist_ok=True)
+    dst = dst_dir / "AvelquaCloseAll.mq5"
+    try:
+        if src.is_file():
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        elif not dst.is_file():
+            dst.write_text(
+                '#property script_show_inputs\n#include <Trade/Trade.mqh>\nvoid OnStart(){CTrade t;'
+                'for(int i=PositionsTotal()-1;i>=0;i--){ulong tk=PositionGetTicket(i);'
+                'if(tk&&PositionSelectByTicket(tk))t.PositionClose(tk);}}\n',
+                encoding="utf-8",
+            )
+    except Exception as e:
+        log(f"DEPLOY CLOSE SCRIPT: {e}")
+    return dst
+
+
+def enable_mt5_autotrading_hotkey(port: Any, payload: Optional[Dict[str, Any]] = None) -> bool:
+    """Toggle MT5 AutoTrading via Ctrl+E (standard MT5 shortcut)."""
+    if os.name != "nt":
+        return False
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        login = str(payload_get(payload or {}, "expectedMt5Login", "mt5Login", "login") or "").strip()
+        ui = _resolve_mt5_ui_window(port, payload)
+        hwnd = int(ui.get("hwnd") or 0)
+        pid_hint = int(ui.get("pid") or 0)
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+{_ps_mt5_window_setup_block(hwnd, pid_hint, str(port_dir), login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait("^e")
+Start-Sleep -Milliseconds 600
+@{{ ok = $true }} | ConvertTo-Json -Compress
+"""
+        raw = _run_powershell(ps, timeout=15).strip()
+        return bool(raw and "true" in raw.lower())
+    except Exception as e:
+        log(f"ENABLE AUTO TRADING HOTKEY port={port}: {e}")
+        return False
+
+
 def close_all_mt5_positions_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Close all positions via MT5 Trade tab UI (works when AutoTrading API is off)."""
     if os.name != "nt":
@@ -1246,72 +1308,104 @@ public class AvqW32 {{
 Start-Sleep -Milliseconds 300
 [void][AvqW32]::SetForegroundWindow($mainHwnd)
 Start-Sleep -Milliseconds 500
-[System.Windows.Forms.SendKeys]::SendWait("^t")
-Start-Sleep -Milliseconds 900
 $main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
 $method = 'none'
 $desc = [Windows.Automation.TreeScope]::Descendants
-if ($main) {{
+
+function Find-TradeTab($rootEl) {{
+  if (-not $rootEl) {{ return $null }}
   $tabCond = New-Object Windows.Automation.PropertyCondition(
     [Windows.Automation.AutomationElement]::ControlTypeProperty,
     [Windows.Automation.ControlType]::TabItem)
-  foreach ($t in $main.FindAll($desc, $tabCond)) {{
+  foreach ($t in $rootEl.FindAll($desc, $tabCond)) {{
     $n = [string]($t.Current.Name)
-    if ($n -match '(?i)^(trade|เทรด|positions?)$') {{
-      try {{
-        $sp = $t.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
-        [void][Windows.Automation.SelectionItemPattern]$sp.Select()
-        $method = 'trade_tab'
-        break
-      }} catch {{}}
-    }}
+    if ($n -match '(?i)trade|เทรด|position|deal') {{ return $t }}
   }}
+  return $null
 }}
-Start-Sleep -Milliseconds 700
-if ($main) {{
-  $btnCond = New-Object Windows.Automation.PropertyCondition(
-    [Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [Windows.Automation.ControlType]::Button)
-  foreach ($b in $main.FindAll($desc, $btnCond)) {{
-    $n = [string]($b.Current.Name)
-    if ($n -match '(?i)close\\s*all|ปิด.*(ทั้งหมด|ทุก|all\\s*position)') {{
-      try {{
-        $ip = $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-        [void][Windows.Automation.InvokePattern]$ip.Invoke()
-        $method = 'close_all_button'
-        break
-      }} catch {{}}
-    }}
-  }}
-}}
-if ($method -eq 'trade_tab') {{
-  [void][AvqW32]::SetForegroundWindow($mainHwnd)
-  Start-Sleep -Milliseconds 300
-  [System.Windows.Forms.SendKeys]::SendWait("{{APPS}}")
+
+$tradeTab = Find-TradeTab $main
+if (-not $tradeTab) {{
+  [System.Windows.Forms.SendKeys]::SendWait("^t")
   Start-Sleep -Milliseconds 700
-  $rootEl = [Windows.Automation.AutomationElement]::RootElement
-  $menuCond = New-Object Windows.Automation.PropertyCondition(
-    [Windows.Automation.AutomationElement]::ControlTypeProperty,
-    [Windows.Automation.ControlType]::MenuItem)
-  $menus = $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, $menuCond)
-  foreach ($m in $menus) {{
-    $n = [string]($m.Current.Name)
-    if ($n -match '(?i)close\\s*all|ปิด.*(ทั้งหมด|ทุก|all)') {{
-      try {{
-        $ip = $m.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
-        [void][Windows.Automation.InvokePattern]$ip.Invoke()
-        $method = 'context_close_all'
-        break
-      }} catch {{}}
-    }}
+  $main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
+  $tradeTab = Find-TradeTab $main
+}}
+if (-not $tradeTab) {{
+  [System.Windows.Forms.SendKeys]::SendWait("^t")
+  Start-Sleep -Milliseconds 700
+  $main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
+  $tradeTab = Find-TradeTab $main
+}}
+if ($tradeTab) {{
+  try {{
+    $sp = $tradeTab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+    [void][Windows.Automation.SelectionItemPattern]$sp.Select()
+    $method = 'trade_tab'
+  }} catch {{}}
+}}
+Start-Sleep -Milliseconds 600
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
+Start-Sleep -Milliseconds 200
+
+# คลิกขวาในรายการ Trade แล้ว Close All (เหมือนปิดมือ)
+$tables = @()
+if ($main) {{
+  $tableCond = New-Object Windows.Automation.OrCondition(
+    (New-Object Windows.Automation.PropertyCondition(
+      [Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [Windows.Automation.ControlType]::Table)),
+    (New-Object Windows.Automation.PropertyCondition(
+      [Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [Windows.Automation.ControlType]::List)),
+    (New-Object Windows.Automation.PropertyCondition(
+      [Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [Windows.Automation.ControlType]::Pane)))
+  foreach ($el in $main.FindAll($desc, $tableCond)) {{
+    try {{
+      $rn = [string]($el.Current.Name)
+      if ($el.Current.BoundingRectangle.Height -gt 40) {{ $tables += $el }}
+    }} catch {{}}
   }}
 }}
-Start-Sleep -Milliseconds 1200
-$rootEl2 = [Windows.Automation.AutomationElement]::RootElement
-$dlgBtn = New-Object Windows.Automation.PropertyCondition(
+if ($tables.Count -gt 0) {{
+  $target = $tables[$tables.Count - 1]
+  try {{
+    $rect = $target.Current.BoundingRectangle
+    $cx = [int]($rect.X + [Math]::Max(30, $rect.Width / 2))
+    $cy = [int]($rect.Y + [Math]::Max(20, $rect.Height / 2))
+    [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($cx, $cy)
+    Start-Sleep -Milliseconds 150
+    [System.Windows.Forms.SendKeys]::SendWait("+{{F10}}")
+    Start-Sleep -Milliseconds 500
+  }} catch {{
+    [System.Windows.Forms.SendKeys]::SendWait("{{APPS}}")
+    Start-Sleep -Milliseconds 500
+  }}
+}} else {{
+  [System.Windows.Forms.SendKeys]::SendWait("{{APPS}}")
+  Start-Sleep -Milliseconds 500
+}}
+
+$rootEl = [Windows.Automation.AutomationElement]::RootElement
+$menuCond = New-Object Windows.Automation.PropertyCondition(
   [Windows.Automation.AutomationElement]::ControlTypeProperty,
-  [Windows.Automation.ControlType]::Button)
-foreach ($b in $rootEl2.FindAll([Windows.Automation.TreeScope]::Subtree, $dlgBtn)) {{
+  [Windows.Automation.ControlType]::MenuItem)
+foreach ($m in $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, $menuCond)) {{
+  $n = [string]($m.Current.Name)
+  if ($n -match '(?i)close\\s*all|ปิด.*(ทั้งหมด|ทุก|all\\s*position)|close\\s*position') {{
+    try {{
+      $ip = $m.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+      [void][Windows.Automation.InvokePattern]$ip.Invoke()
+      if ($method -eq 'none') {{ $method = 'context_close_all' }} else {{ $method = 'trade_tab_context_close' }}
+      break
+    }} catch {{}}
+  }}
+}}
+Start-Sleep -Milliseconds 900
+foreach ($b in $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, (New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button)))) {{
   $n = [string]($b.Current.Name)
   if ($n -match '(?i)^(yes|ok|ใช่|ตกลง)$') {{
     try {{
@@ -1321,7 +1415,7 @@ foreach ($b in $rootEl2.FindAll([Windows.Automation.TreeScope]::Subtree, $dlgBtn
     }} catch {{}}
   }}
 }}
-Start-Sleep -Milliseconds 1500
+Start-Sleep -Milliseconds 1200
 @{{ ok = ($method -ne 'none'); method = $method }} | ConvertTo-Json -Compress
 """
         raw = _run_powershell(ps, timeout=55).strip()
@@ -1345,7 +1439,7 @@ Start-Sleep -Milliseconds 1500
 
 
 def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Close every open position: UI first (no AutoTrading), then MT5 API fallback."""
+    """Close every open position: Trade-tab UI (manual path) then Ctrl+E + API."""
     if os.name != "nt":
         return {"ok": False, "reason": "not_windows", "closed": [], "count": 0}
     payload = payload or {}
@@ -1356,12 +1450,15 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
     expected_login = str(
         payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
     ).strip()
+    _ensure_avelqua_close_script(port_dir)
     before = _mt5_open_positions_count(port_dir, expected_login)
     if before == 0:
         return {"ok": True, "closed": [], "count": 0, "remaining": 0, "via": "none", "method": "already_flat"}
+
+    # 1) เหมือนปิดมือ: Trade tab → Close All (ไม่ต้องเปิด AutoTrading)
     uia_res = close_all_mt5_positions_uia(port, payload)
-    after_uia = int(uia_res.get("remaining") if uia_res.get("remaining") is not None else -1)
-    if uia_res.get("ok") and after_uia == 0:
+    after_uia = _mt5_open_positions_count(port_dir, expected_login)
+    if after_uia == 0:
         return {
             "ok": True,
             "closed": [],
@@ -1371,22 +1468,19 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
             "via": "uia",
             "uiaMethod": uia_res.get("method"),
         }
+
+    # 2) Ctrl+E เปิด AutoTrading แล้วปิดผ่าน API
+    enable_mt5_autotrading_hotkey(port, payload)
+    ensure_mt5_trading_permissions_uia(port, payload, attempts=1, wait_between_sec=1.0)
+    time.sleep(1.0)
     api_res = _close_all_mt5_positions_api(port, payload)
-    remaining = int(api_res.get("remaining") or 0)
-    if remaining > 0:
-        restart_res = restart_mt5_terminal_for_port(port, payload)
-        api_res["restart"] = restart_res
-        if restart_res.get("ok"):
-            time.sleep(2.0)
-            retry = _close_all_mt5_positions_api(port, payload)
-            api_res["retryAfterRestart"] = retry
-            remaining = int(retry.get("remaining") or remaining)
-            if retry.get("ok"):
-                api_res = retry
+    remaining = _mt5_open_positions_count(port_dir, expected_login)
+    if remaining < 0:
+        remaining = int(api_res.get("remaining") or after_uia)
+    api_res["remaining"] = remaining
+    api_res["ok"] = remaining == 0
     api_res["uia"] = uia_res
-    api_res["via"] = "api" if api_res.get("ok") else "api_failed"
-    if remaining > 0 and uia_res.get("method") not in (None, "none"):
-        api_res["via"] = "api_failed_uia_tried"
+    api_res["via"] = "api" if remaining == 0 else "api_failed"
     return api_res
 
 
