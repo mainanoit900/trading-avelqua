@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-login-exit-mt5-v73"
+AGENT_BUILD_ID = "2026-05-27-login-exit-snapshot-v74"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1204,6 +1204,8 @@ def ensure_login_only_no_trading(port: Any, payload: Optional[Dict[str, Any]] = 
 def _is_login_only_payload(payload: Optional[Dict[str, Any]]) -> bool:
     """True when command is MT5 login/verify — not Run BOT."""
     pl = dict(payload or {})
+    if str(payload_get(pl, "keepMt5Open", "keep_mt5_open") or "").lower() in ("1", "true", "yes"):
+        return False
     action = str(payload_get(pl, "action", "commandType", "command_type") or "").lower()
     if action in ("run_mt5_bot", "run_mt5", "run_bot", "restart_ea", "restart_mt5_bot"):
         return False
@@ -1217,11 +1219,48 @@ def _is_login_only_payload(payload: Optional[Dict[str, Any]]) -> bool:
     return True
 
 
+def _login_exit_stamp_path(port_dir: Path) -> Path:
+    return port_dir / "MQL5" / "Files" / "avelqua_login_exit.done"
+
+
+def _login_exit_already_done(port_dir: Path, max_age_sec: int = 3600) -> bool:
+    stamp = _login_exit_stamp_path(port_dir)
+    if not stamp.is_file():
+        return False
+    try:
+        age = time.time() - stamp.stat().st_mtime
+        return age < max(60, int(max_age_sec or 3600))
+    except Exception:
+        return False
+
+
+def _mark_login_exit_done(port_dir: Path) -> None:
+    try:
+        stamp = _login_exit_stamp_path(port_dir)
+        stamp.parent.mkdir(parents=True, exist_ok=True)
+        stamp.write_text(datetime.now().isoformat(), encoding="utf-8")
+    except Exception as e:
+        log(f"LOGIN EXIT STAMP ERROR: {e}")
+
+
+def _clear_login_exit_stamp(port_dir: Path) -> None:
+    try:
+        stamp = _login_exit_stamp_path(port_dir)
+        if stamp.is_file():
+            stamp.unlink()
+    except Exception:
+        pass
+
+
 def finalize_login_verify_exit_mt5(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """หลังยืนยัน login + equity: ปิด MT5 ทันที แต่ยังล็อก PORT/VPS ในระบบ."""
     out: Dict[str, Any] = {"ok": True, "port": port, "action": "login_exit_mt5"}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
+        if _login_exit_already_done(port_dir):
+            out["skipped"] = "already_done"
+            out["mt5Running"] = mt5_running_for_port_dir(port_dir)
+            return out
         ensure_login_only_no_trading(port, payload)
         time.sleep(0.8)
         if mt5_running_for_port_dir(port_dir):
@@ -1238,6 +1277,7 @@ def finalize_login_verify_exit_mt5(port: Any, payload: Optional[Dict[str, Any]] 
             time.sleep(0.5)
         remove_mt5_login_ini(port_dir)
         clear_mt5_chart_state(port_dir)
+        _mark_login_exit_done(port_dir)
         out["mt5Running"] = mt5_running_for_port_dir(port_dir)
         log(f"LOGIN VERIFY EXIT MT5 port={port} running={out['mt5Running']}")
     except Exception as e:
@@ -1253,6 +1293,12 @@ def schedule_login_verify_exit_mt5(
     if not _is_login_only_payload(payload):
         return
     pl = dict(payload or {})
+    try:
+        port_dir = resolve_mt5_port_dir(port, pl)
+        if _login_exit_already_done(port_dir):
+            return
+    except Exception:
+        pass
 
     def _worker() -> None:
         try:
@@ -1262,6 +1308,27 @@ def schedule_login_verify_exit_mt5(
             log(f"LOGIN EXIT THREAD ERROR port={port}: {e}")
 
     threading.Thread(target=_worker, daemon=True).start()
+
+
+def _should_exit_mt5_after_snapshot(payload: Optional[Dict[str, Any]], snap: Dict[str, Any]) -> bool:
+    if not _is_login_only_payload(payload):
+        return False
+    if not _snap_positive(snap):
+        return False
+    purpose = str(payload_get(payload or {}, "purpose") or "").lower()
+    if any(
+        k in purpose
+        for k in (
+            "attempt_verify_snapshot",
+            "equity_connect",
+            "verify_snapshot",
+            "connect",
+            "login",
+        )
+    ):
+        return True
+    ctype = str(payload_get(payload or {}, "commandType", "command_type") or "").lower()
+    return ctype in ("account_snapshot", "sync_mt5_account", "read_account_metrics")
 
 
 def _mt5_deal_filling_type(mt5: Any, symbol: str) -> int:
@@ -4961,6 +5028,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     log(f"MT5 TERMINAL={terminal}")
 
     config_file = write_mt5_login_ini(port_dir, login, password, server)
+    _clear_login_exit_stamp(port_dir)
 
     # ====================================
     # BLOCK SAME LOGIN ON ANOTHER PORT (not this port_dir)
@@ -5912,6 +5980,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         raise RuntimeError(f"terminal64.exe not found: {terminal}")
+    _clear_login_exit_stamp(port_dir)
 
     bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "").strip()
     rel = str(
@@ -6544,7 +6613,18 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             except Exception as sync_err:
                 log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
                 snap["error"] = str(sync_err)[:500]
-            command_result(cmd_id, True, {"action": ctype, "snapshot": snap, **snap})
+            exit_after = _should_exit_mt5_after_snapshot(payload, snap)
+            if exit_after:
+                schedule_login_verify_exit_mt5(port, payload, delay_sec=1.0)
+            command_result(
+                cmd_id,
+                True,
+                {"action": ctype, "snapshot": snap, "loginExitScheduled": bool(exit_after), **snap},
+            )
+
+        elif ctype == "login_exit_mt5":
+            port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+            command_result(cmd_id, True, finalize_login_verify_exit_mt5(port, payload))
 
         elif ctype in ("mt5_preview", "capture_mt5_window", "capture_mt5_preview"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
