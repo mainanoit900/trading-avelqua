@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-hidden-hwnd-v40"
+AGENT_BUILD_ID = "2026-05-27-mt5-window-pick-v41"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -626,17 +626,28 @@ def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) 
         pts = int(w.get("area") or 0)
         if bool(w.get("visible")):
             pts += 2_000_000
+        cls = str(w.get("class") or "")
+        cls_low = cls.lower()
+        if "hook window" in cls_low or "tooltips_class32" in cls_low:
+            pts -= 50_000_000
+        if "gdi+ hook" in cls_low:
+            pts -= 50_000_000
+        if re.search(r"(?i)gdi\\+\\s*window", title):
+            pts -= 50_000_000
         if login and login in title:
             pts += 10_000_000
         if "metatrader" in low:
             pts += 5_000_000
         if "terminal" in low:
             pts += 1_000_000
-        cls = str(w.get("class") or "").lower()
-        if "metatrader" in cls or "terminal" in cls:
+        if "metatrader" in cls_low or "terminal" in cls_low:
+            pts += 2_000_000
+        if login and login in low:
             pts += 2_000_000
         if re.search(r"(?i)properties|expert|advisor|dialog", title):
             pts -= 5_000_000
+        if not title and not bool(w.get("visible")):
+            pts -= 2_000_000
         return pts, int(w.get("area") or 0)
 
     best = max(windows, key=_score)
