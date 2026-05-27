@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-halt-timeout-v66"
+AGENT_BUILD_ID = "2026-05-27-bot-close-v68"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -619,10 +619,10 @@ def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -
         payload_get(payload, "closeAllPositions", "closePositions", "closeOpenPositions") or "true"
     ).lower() not in ("0", "false", "no", "off")
     positions_closed: Dict[str, Any] = {}
-    # ปิดออเดอร์ก่อน gate/AutoTrading — Trade tab UI ไม่ต้องพึ่ง API
+    # BOTClose EA ก่อน — ไม่ปิด Algo จนกว่าออเดอร์จะ flat
     if close_positions and mt5_running_for_port_dir(port_dir):
         try:
-            positions_closed = close_all_mt5_positions(port, payload)
+            positions_closed = close_all_via_bot_close(port, payload)
         except Exception as e:
             log(f"STOP BOT close positions: {e}")
             positions_closed = {"ok": False, "error": str(e)[:200]}
@@ -1283,6 +1283,95 @@ print(n)
         return -1
 
 
+def _close_all_mt5_positions_api_subprocess(
+    port_dir: Path, expected_login: str = "", timeout_sec: int = 28
+) -> Dict[str, Any]:
+    """Close all positions via MT5 API in subprocess (fast when Algo is ON)."""
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {"ok": False, "reason": "terminal_missing", "closed": [], "count": 0}
+    login = str(expected_login or "").strip()
+    code = f"""
+import json, sys
+from pathlib import Path
+try:
+    import MetaTrader5 as mt5
+except Exception as e:
+    print(json.dumps({{"ok": False, "reason": "no_mt5", "error": str(e)[:200]}}))
+    sys.exit(0)
+terminal = Path({repr(str(terminal))})
+try:
+    mt5.shutdown()
+except Exception:
+    pass
+if not mt5.initialize(path=str(terminal)):
+    print(json.dumps({{"ok": False, "reason": "initialize_failed", "last_error": str(mt5.last_error())}}))
+    sys.exit(0)
+ai = mt5.account_info()
+if ai is None:
+    mt5.shutdown()
+    print(json.dumps({{"ok": False, "reason": "no_account"}}))
+    sys.exit(0)
+observed = str(int(getattr(ai, "login", 0) or 0) or "")
+expected = {repr(login)}
+if expected and observed and observed != expected:
+    mt5.shutdown()
+    print(json.dumps({{"ok": False, "reason": "wrong_login", "observedLogin": observed}}))
+    sys.exit(0)
+done = (int(getattr(mt5, "TRADE_RETCODE_DONE", 10009)), int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008)), 0)
+closed = []
+for _ in range(3):
+    positions = list(mt5.positions_get() or [])
+    if not positions:
+        break
+    for pos in positions:
+        symbol = str(getattr(pos, "symbol", "") or "")
+        ticket = int(getattr(pos, "ticket", 0) or 0)
+        if not symbol or not ticket:
+            continue
+        if not mt5.symbol_select(symbol, True):
+            closed.append({{"ticket": ticket, "ok": False, "reason": "symbol_select_failed"}})
+            continue
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            closed.append({{"ticket": ticket, "ok": False, "reason": "no_tick"}})
+            continue
+        pt = int(getattr(pos, "type", 0) or 0)
+        if pt == int(getattr(mt5, "POSITION_TYPE_BUY", 0)):
+            otype, price = mt5.ORDER_TYPE_SELL, float(tick.bid)
+        else:
+            otype, price = mt5.ORDER_TYPE_BUY, float(tick.ask)
+        req = {{
+            "action": mt5.TRADE_ACTION_DEAL, "symbol": symbol,
+            "volume": float(getattr(pos, "volume", 0) or 0),
+            "type": otype, "position": ticket, "price": price,
+            "deviation": 120, "magic": int(getattr(pos, "magic", 0) or 0),
+            "comment": "avelqua_halt_close",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": int(getattr(mt5, "ORDER_FILLING_IOC", 1)),
+        }}
+        res = mt5.order_send(req)
+        rc = int(getattr(res, "retcode", -1) or -1) if res else -1
+        closed.append({{
+            "ticket": ticket, "symbol": symbol, "ok": rc in done, "retcode": rc,
+            "comment": str(getattr(res, "comment", "") or "") if res else "",
+        }})
+remaining = len(list(mt5.positions_get() or []))
+mt5.shutdown()
+print(json.dumps({{
+    "ok": remaining == 0, "closed": closed, "count": len(closed),
+    "remaining": remaining, "observedLogin": observed, "via": "api_subprocess"
+}}))
+"""
+    rc, out = _run_python_snippet(code, timeout=timeout_sec)
+    if not out:
+        return {"ok": False, "reason": "subprocess_failed", "rc": rc, "closed": [], "count": 0}
+    try:
+        return json.loads(out.splitlines()[-1].strip())
+    except Exception:
+        return {"ok": False, "reason": "bad_json", "raw": out[:300], "closed": [], "count": 0}
+
+
 def _ensure_avelqua_close_script(port_dir: Path) -> Path:
     """Deploy MQL5 close-all script into PORT Scripts folder."""
     src = Path(__file__).resolve().parent / "mql5" / "AvelquaCloseAll.mq5"
@@ -1302,6 +1391,195 @@ def _ensure_avelqua_close_script(port_dir: Path) -> Path:
     except Exception as e:
         log(f"DEPLOY CLOSE SCRIPT: {e}")
     return dst
+
+
+def _bot_close_experts_dir(port_dir: Path) -> Path:
+    return port_dir / "MQL5" / "Experts" / "Trading Bot"
+
+
+def _ensure_bot_close_ea(port_dir: Path) -> Dict[str, Any]:
+    """Deploy + compile BOTClose.mq5 into MQL5/Experts/Trading Bot/."""
+    src = Path(__file__).resolve().parent / "mql5" / "BOTClose.mq5"
+    if not src.is_file():
+        alt = Path(__file__).resolve().parents[2] / "BOT_MT5" / "BOTClose.mq5"
+        if alt.is_file():
+            src = alt
+    experts_dir = _bot_close_experts_dir(port_dir)
+    experts_dir.mkdir(parents=True, exist_ok=True)
+    dst = experts_dir / "BOTClose.mq5"
+    out: Dict[str, Any] = {"ok": False, "mq5": str(dst), "ex5": str(dst.with_suffix(".ex5"))}
+    try:
+        if src.is_file():
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+        elif not dst.is_file():
+            out["reason"] = "source_missing"
+            return out
+    except Exception as e:
+        out["reason"] = "copy_failed"
+        out["error"] = str(e)[:200]
+        return out
+    compile_info = _compile_ea_source(port_dir, dst)
+    out["compile"] = compile_info
+    ex5 = dst.with_suffix(".ex5")
+    out["ok"] = bool(ex5.is_file() and ex5.stat().st_size > 0)
+    if out["ok"]:
+        log(f"BOTCLOSE EA READY ex5={ex5}")
+    else:
+        log(f"BOTCLOSE EA COMPILE WARN mq5={dst} ok={compile_info.get('ok')}")
+    return out
+
+
+def write_bot_close_signal(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> None:
+    """Signal BOTClose EA to close all positions (before disabling Algo)."""
+    body = f"close\nupdatedAt={datetime.now().isoformat(timespec='seconds')}\n"
+    if payload:
+        body += f"instanceId={payload_get(payload, 'instanceId', 'instance_id')}\n"
+    for files_dir in avelqua_gate_target_dirs(port_dir):
+        try:
+            files_dir.mkdir(parents=True, exist_ok=True)
+            (files_dir / "bot_close.txt").write_text(body, encoding="ascii")
+            done = files_dir / "bot_close_done.txt"
+            if done.is_file():
+                done.unlink()
+            log(f"BOTCLOSE SIGNAL {files_dir}")
+        except Exception as e:
+            log(f"BOTCLOSE SIGNAL ERROR {files_dir}: {e}")
+
+
+def _read_bot_close_done_remaining(port_dir: Path) -> int:
+    for files_dir in avelqua_gate_target_dirs(port_dir):
+        done = files_dir / "bot_close_done.txt"
+        if not done.is_file():
+            continue
+        try:
+            text = done.read_text(encoding="utf-8", errors="ignore")
+            m = re.search(r"(?im)^remaining=(\d+)", text)
+            if m:
+                return int(m.group(1))
+            if re.search(r"(?im)^ok=1", text):
+                return 0
+        except Exception:
+            pass
+    return -1
+
+
+def close_all_via_bot_close(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Ask BOTClose EA to close positions via bot_close.txt, then fallback API/UIA."""
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    expected_login = str(
+        payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
+    ).strip()
+    before = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
+    if before == 0:
+        return {"ok": True, "closed": [], "count": 0, "remaining": 0, "via": "none", "method": "already_flat"}
+
+    bot_close_info = _ensure_bot_close_ea(port_dir)
+    write_bot_close_signal(port_dir, payload)
+    wait_sec = max(3, int(os.getenv("AVELQUA_BOTCLOSE_WAIT_SEC", "14")))
+    deadline = time.time() + wait_sec
+    remaining = before
+    done_remaining = -1
+    while time.time() < deadline:
+        time.sleep(1.0)
+        done_remaining = _read_bot_close_done_remaining(port_dir)
+        live = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=8)
+        if live >= 0:
+            remaining = live
+        elif done_remaining >= 0:
+            remaining = done_remaining
+        if remaining == 0 or done_remaining == 0:
+            log(f"BOTCLOSE SUCCESS port={port} remaining=0")
+            return {
+                "ok": True,
+                "closed": [],
+                "count": max(0, before),
+                "remaining": 0,
+                "observedLogin": expected_login,
+                "via": "bot_close",
+                "botCloseEa": bot_close_info,
+            }
+
+    log(f"BOTCLOSE TIMEOUT port={port} remaining={remaining} fallback=close_all")
+    fallback = close_all_mt5_positions(port, payload)
+    fallback["botCloseEa"] = bot_close_info
+    fallback["botCloseTimeout"] = True
+    if str(fallback.get("via") or "") == "api_subprocess" and fallback.get("ok"):
+        fallback["via"] = "bot_close_api_fallback"
+    return fallback
+
+
+def attach_bot_close_second_chart(
+    port: Any, payload: Optional[Dict[str, Any]] = None, symbol: str = "XAUUSD"
+) -> Dict[str, Any]:
+    """Best-effort: open second chart and attach BOTClose from Navigator."""
+    if os.name != "nt":
+        return {"ok": False, "reason": "not_windows"}
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    login = str(payload_get(payload, "expectedMt5Login", "mt5Login", "login") or "").strip()
+    sym = str(symbol or "XAUUSD").strip() or "XAUUSD"
+    try:
+        ui = _resolve_mt5_ui_window(port, payload)
+        hwnd = int(ui.get("hwnd") or 0)
+        pid_hint = int(ui.get("pid") or 0)
+        root = str(port_dir)
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait("^n")
+Start-Sleep -Milliseconds 700
+$attached = $false
+$rootEl = [Windows.Automation.AutomationElement]::RootElement
+$treeItem = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::TreeItem)
+foreach ($el in $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, $treeItem)) {{
+  $n = [string]($el.Current.Name)
+  if ($n -match '(?i)^BOTClose(\\.(ex5|mq5))?$') {{
+    try {{
+      $dp = $el.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+      [void][Windows.Automation.InvokePattern]$dp.Invoke()
+      $attached = $true
+      break
+    }} catch {{
+      try {{
+        [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+        $attached = $true
+        break
+      }} catch {{}}
+    }}
+  }}
+}}
+Start-Sleep -Milliseconds 1200
+@{{ ok = $attached; method = $(if ($attached) {{ 'navigator_invoke' }} else {{ 'none' }}) }} | ConvertTo-Json -Compress
+"""
+        raw = _run_powershell(ps, timeout=25).strip()
+        ok = False
+        method = "none"
+        if raw and raw.startswith("{"):
+            data = json.loads(raw)
+            ok = bool(data.get("ok"))
+            method = str(data.get("method") or "none")
+        log(f"BOTCLOSE ATTACH port={port} ok={ok} method={method}")
+        return {"ok": ok, "method": method, "symbol": sym}
+    except Exception as e:
+        log(f"BOTCLOSE ATTACH ERROR port={port}: {e}")
+        return {"ok": False, "error": str(e)[:200]}
 
 
 def enable_mt5_autotrading_hotkey(port: Any, payload: Optional[Dict[str, Any]] = None) -> bool:
@@ -1501,7 +1779,7 @@ Start-Sleep -Milliseconds 1200
 
 
 def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Close every open position: Trade-tab UI (manual path) then Ctrl+E + API."""
+    """Close every open position: API first (Algo ON), then Trade-tab UI fallback."""
     if os.name != "nt":
         return {"ok": False, "reason": "not_windows", "closed": [], "count": 0}
     payload = payload or {}
@@ -1513,13 +1791,24 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
         payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
     ).strip()
     _ensure_avelqua_close_script(port_dir)
-    before = _mt5_open_positions_count(port_dir, expected_login)
+    before = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
     if before == 0:
         return {"ok": True, "closed": [], "count": 0, "remaining": 0, "via": "none", "method": "already_flat"}
 
-    # 1) เหมือนปิดมือ: Trade tab → Close All (ไม่ต้องเปิด AutoTrading)
+    # 1) API ก่อน — เร็วเมื่อ Algo เปิด (2 ออเดอร์ ≈ 3-5 วินาที)
+    api_res = _close_all_mt5_positions_api_subprocess(port_dir, expected_login, timeout_sec=28)
+    remaining = int(api_res.get("remaining") if api_res.get("remaining") is not None else -1)
+    if remaining < 0:
+        remaining = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
+    log(f"CLOSE POSITIONS API-FIRST port={port} remaining={remaining} before={before}")
+    if remaining == 0:
+        api_res["ok"] = True
+        api_res["remaining"] = 0
+        return api_res
+
+    # 2) Trade tab UI (เมื่อ AutoTrading ปิด)
     uia_res = close_all_mt5_positions_uia(port, payload)
-    after_uia = _mt5_open_positions_count(port_dir, expected_login)
+    after_uia = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
     if after_uia == 0:
         return {
             "ok": True,
@@ -1529,34 +1818,23 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
             "observedLogin": expected_login,
             "via": "uia",
             "uiaMethod": uia_res.get("method"),
+            "api": api_res,
         }
 
-    # 2) Ctrl+E เปิด AutoTrading แล้วปิดผ่าน API (ข้ามถ้า UIA กดเมนูแล้ว — ลด IPC ค้าง)
-    if str(uia_res.get("method") or "none") == "none":
-        enable_mt5_autotrading_hotkey(port, payload)
-        ensure_mt5_trading_permissions_uia(port, payload, attempts=1, wait_between_sec=1.0)
-        time.sleep(1.0)
-        api_res = _close_all_mt5_positions_api(port, payload)
-        remaining = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
-        if remaining < 0:
-            remaining = int(api_res.get("remaining") or after_uia)
-        api_res["remaining"] = remaining
-        api_res["ok"] = remaining == 0
-        api_res["uia"] = uia_res
-        api_res["via"] = "api" if remaining == 0 else "api_failed"
-        return api_res
-    remaining = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
-    if remaining < 0:
-        remaining = int(uia_res.get("remaining") or after_uia)
-    return {
-        "ok": remaining == 0,
-        "closed": [],
-        "count": max(0, before),
-        "remaining": remaining,
-        "observedLogin": expected_login,
-        "via": "uia" if remaining == 0 else "uia_failed",
-        "uia": uia_res,
-    }
+    # 3) เปิด Algo แล้ว retry API ใน process
+    enable_mt5_autotrading_hotkey(port, payload)
+    ensure_mt5_trading_permissions_uia(port, payload, attempts=1, wait_between_sec=0.8)
+    time.sleep(0.8)
+    retry_res = _close_all_mt5_positions_api(port, payload)
+    final = _mt5_open_positions_count(port_dir, expected_login, timeout_sec=10)
+    if final < 0:
+        final = int(retry_res.get("remaining") if retry_res.get("remaining") is not None else after_uia)
+    retry_res["remaining"] = final
+    retry_res["ok"] = final == 0
+    retry_res["uia"] = uia_res
+    retry_res["apiFirst"] = api_res
+    retry_res["via"] = "api_retry" if final == 0 else "all_failed"
+    return retry_res
 
 
 def _close_all_mt5_positions_api(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -5405,6 +5683,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if launch_ea is None:
         raise RuntimeError(f"EA file not found for {bot_code} in {experts_dir}")
 
+    bot_close_info = _ensure_bot_close_ea(port_dir)
+
     set_info = _write_ea_preset_files(port_dir, payload, experts_dir)
     if not set_info.get("ok"):
         raise RuntimeError("EA preset generation failed")
@@ -5461,6 +5741,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         time.sleep(4)
         ui_target = _resolve_mt5_ui_window(port, payload)
     trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=6, wait_between_sec=3.0)
+    bot_close_attach = attach_bot_close_second_chart(port, payload, symbol)
     time.sleep(1)
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     trade_gate: Dict[str, Any] = {}
@@ -5528,6 +5809,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "eaSetApplied": set_info.get("eaSetApplied") or payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
         "eaSource": source_sync,
         "eaCompile": compile_info,
+        "botCloseEa": bot_close_info,
+        "botCloseAttach": bot_close_attach,
         "algoEnabled": bool(trading_permissions.get("ok")),
         "globalAlgoEnabled": bool(trading_permissions.get("globalEnabled")),
         "chartAlgoEnabled": bool(trading_permissions.get("chartEnabled")),
@@ -5967,7 +6250,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             else:
                 stop_soft = soft_only and not force_kill
             if stop_soft:
-                halt_res = stop_bot_trading_with_timeout(port, stop_payload, timeout_sec=70)
+                halt_res = stop_bot_trading_with_timeout(port, stop_payload, timeout_sec=100)
                 command_result(
                     cmd_id,
                     bool(halt_res.get("ok")),
