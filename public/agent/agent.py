@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-autotrading-config-v46"
+AGENT_BUILD_ID = "2026-05-27-mt5-autotrading-ini-1-v47"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1692,7 +1692,7 @@ def write_mt5_login_ini(
         pw_line = f'Password="{safe_password}"'
     else:
         pw_line = f"Password={safe_password}"
-    trade_flag = "true" if allow_expert_trading else "false"
+    trade_flag = "1" if allow_expert_trading else "0"
     startup_expert = str(startup_expert or "").strip()
     startup_symbol = str(startup_symbol or "").strip()
     startup_period = str(startup_period or "").strip().upper()
@@ -1708,7 +1708,7 @@ CertInstall=0
 
 [Experts]
 AllowLiveTrading={trade_flag}
-AllowDllImport=true
+AllowDllImport=1
 Enabled={trade_flag}
 """
     if startup_expert:
@@ -1834,7 +1834,7 @@ def _write_ini_text(path: Path, text: str) -> None:
 def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
     if not path.parent.exists():
         return False
-    trade = "true" if enabled else "false"
+    trade = "1" if enabled else "0"
     flag = "1" if enabled else "0"
     text = _read_ini_text(path)
     lines = text.splitlines() if text else []
@@ -1859,21 +1859,21 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
                 seen_en = True
                 continue
             if low.startswith("allowdllimport="):
-                out.append("AllowDllImport=true")
+                out.append("AllowDllImport=1")
                 seen_dll = True
                 continue
         out.append(line)
     if not any(l.strip().lower() == "[experts]" for l in out):
         if out and out[-1].strip():
             out.append("")
-        out.extend(["[Experts]", f"AllowLiveTrading={trade}", "AllowDllImport=true", f"Enabled={flag}"])
+        out.extend(["[Experts]", f"AllowLiveTrading={trade}", "AllowDllImport=1", f"Enabled={flag}"])
     else:
         idx = max(i for i, l in enumerate(out) if l.strip().lower() == "[experts]")
         insert: List[str] = []
         if not seen_allow:
             insert.append(f"AllowLiveTrading={trade}")
         if not seen_dll:
-            insert.append("AllowDllImport=true")
+            insert.append("AllowDllImport=1")
         if not seen_en:
             insert.append(f"Enabled={flag}")
         if insert:
@@ -1886,7 +1886,28 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
         return False
 
 
+def normalize_mt5_startup_ini(port_dir: Path) -> bool:
+    """MT5 expects AllowLiveTrading=1|0 in ini, not true|false."""
+    cfg = mt5_startup_ini_path(port_dir)
+    if not cfg.is_file():
+        return False
+    text = _read_ini_text(cfg)
+    if not text:
+        return False
+    new_text = re.sub(
+        r"(?im)^(AllowLiveTrading|Enabled|AllowDllImport)\s*=\s*(true|false)\s*$",
+        lambda m: f"{m.group(1)}={'1' if str(m.group(2)).lower() == 'true' else '0'}",
+        text,
+    )
+    if new_text != text:
+        _write_ini_text(cfg, new_text)
+        log(f"NORMALIZE STARTUP INI {cfg}")
+        return True
+    return False
+
+
 def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> List[str]:
+    normalize_mt5_startup_ini(port_dir)
     patched: List[str] = []
     for rel in MT5_PORT_INI_REL_PATHS:
         p = port_dir / Path(rel.replace("/", os.sep))
@@ -4496,6 +4517,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     cfg = mt5_startup_ini_path(port_dir)
     if not cfg.exists():
         raise RuntimeError("MT5 startup.ini missing - connect MT5 from web first")
+    normalize_mt5_startup_ini(port_dir)
+    patch_mt5_experts_config(port_dir, True)
 
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
