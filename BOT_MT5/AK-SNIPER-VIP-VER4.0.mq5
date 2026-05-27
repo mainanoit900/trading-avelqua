@@ -9,6 +9,7 @@
 
 #include <Trade\Trade.mqh>
 #include <Trade\PositionInfo.mqh>
+#include "AvelquaBotClose.mqh"
 
 CTrade         trade;
 CPositionInfo  pos; // ตัวแปรหลักของระบบ
@@ -193,6 +194,8 @@ int OnInit()
    }
      
    UpdateDashboard();
+   
+   AvelquaBotCloseOnInit();
      
    return(INIT_SUCCEEDED);
   }
@@ -202,6 +205,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
   {
+   AvelquaBotCloseOnDeinit();
    IndicatorRelease(handle_adx);
    IndicatorRelease(handle_bb);
    IndicatorRelease(handle_atr);
@@ -216,6 +220,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 void OnTick()
   {
+   if(AvelquaBotClosePoll())
+      return;
+
    ResetDailyFlagsIfNeeded();
    
    // อัปเดตข้อมูลข่าว (ทุกๆ 4 ชั่วโมง เพื่อไม่ให้โดนแบน IP)
@@ -223,6 +230,9 @@ void OnTick()
    
    // อัปเดต Dashboard ทุกๆ Tick เพื่อให้ตัวเลขวิ่งแบบ Real-time
    UpdateDashboard();
+
+   if(!IsAvelquaTradingEnabled())
+      return;
 
    if(CheckCutLoss()) return;
    if(CheckDailyProfitLoss()) return;
@@ -241,6 +251,14 @@ void OnTick()
    ManageGrid(POSITION_TYPE_SELL);
    CheckTakeProfitAverage(POSITION_TYPE_SELL);
    CheckMoneyTrailing(POSITION_TYPE_SELL);
+  }
+
+//+------------------------------------------------------------------+
+//| Timer — ตรวจ halt / bot_close.txt แม้ไม่มี tick                      |
+//+------------------------------------------------------------------+
+void OnTimer()
+  {
+   AvelquaBotClosePoll();
   }
 
 //+------------------------------------------------------------------+

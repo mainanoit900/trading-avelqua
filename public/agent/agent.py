@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-bot-close-deploy-v71"
+AGENT_BUILD_ID = "2026-05-27-ak-sniper-halt-mqh-v72"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1597,7 +1597,7 @@ Start-Sleep -Milliseconds 1200
 
 
 def setup_bot_close_after_login(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """หลัง login MT5: ปิดออเดอร์ค้าง (API) → เปิดชาร์ต → แนบ BOTClose → gate off."""
+    """หลัง login: ปิดออเดอร์ค้าง (API) → เปิดชาร์ต — halt อยู่ใน AK-SNIPER เมื่อ Run BOT."""
     payload = dict(payload or {})
     port_dir = resolve_mt5_port_dir(port, payload)
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
@@ -1627,12 +1627,11 @@ def setup_bot_close_after_login(port: Any, payload: Optional[Dict[str, Any]] = N
                 out["ok"] = False
                 out["error"] = f"remaining_positions={remaining}"
         out["openChart"] = open_mt5_chart_uia(port, payload, symbol)
-        time.sleep(1.0)
-        out["botCloseAttach"] = attach_bot_close_second_chart(port, payload, symbol)
+        out["haltCloseInMainEa"] = True
         ensure_login_only_no_trading(port, payload)
         log(
             f"BOTCLOSE LOGIN SETUP port={port} login={login} stale={stale} "
-            f"after={out.get('stalePositionsAfter')} attach={out.get('botCloseAttach', {}).get('ok')}"
+            f"after={out.get('stalePositionsAfter')}"
         )
     except Exception as e:
         log(f"BOTCLOSE LOGIN SETUP ERROR port={port}: {e}")
@@ -5676,7 +5675,35 @@ def _sync_ea_source_file(experts_dir: Path, payload: Dict[str, Any], bot_code: s
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8", errors="ignore")
     log(f"EA SOURCE WRITTEN {target}")
-    return {"requested": True, "ok": True, "sourceFile": str(target), "fileName": file_name}
+    bundle = _deploy_avelqua_ea_bundle_files(experts_dir)
+    return {
+        "requested": True,
+        "ok": True,
+        "sourceFile": str(target),
+        "fileName": file_name,
+        "bundleFiles": bundle,
+    }
+
+
+def _deploy_avelqua_ea_bundle_files(experts_dir: Path) -> List[str]:
+    """Copy .mqh helpers next to main EA (AK-SNIPER #include AvelquaBotClose.mqh)."""
+    copied: List[str] = []
+    for name in ("AvelquaBotClose.mqh",):
+        src = Path(__file__).resolve().parent / "mql5" / name
+        if not src.is_file():
+            alt = Path(__file__).resolve().parents[2] / "BOT_MT5" / name
+            if alt.is_file():
+                src = alt
+        if not src.is_file():
+            continue
+        dst = experts_dir / name
+        try:
+            dst.write_text(src.read_text(encoding="utf-8"), encoding="utf-8")
+            copied.append(str(dst))
+            log(f"EA BUNDLE FILE {dst}")
+        except Exception as e:
+            log(f"EA BUNDLE FILE ERROR {name}: {e}")
+    return copied
 
 
 def _compile_ea_source(port_dir: Path, mq5_path: Path) -> Dict[str, Any]:
@@ -5826,6 +5853,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     experts_dir = port_dir / Path(rel.replace("\\", os.sep))
     source_sync = _sync_ea_source_file(experts_dir, payload, bot_code)
+    if not source_sync.get("requested"):
+        _deploy_avelqua_ea_bundle_files(experts_dir)
     compile_info = None
     if source_sync.get("requested"):
         compile_info = _compile_ea_source(port_dir, Path(source_sync["sourceFile"]))
@@ -5908,7 +5937,6 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         time.sleep(4)
         ui_target = _resolve_mt5_ui_window(port, payload)
     trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=6, wait_between_sec=3.0)
-    bot_close_attach = attach_bot_close_second_chart(port, payload, symbol)
     time.sleep(1)
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     trade_gate: Dict[str, Any] = {}
@@ -5977,7 +6005,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "eaSource": source_sync,
         "eaCompile": compile_info,
         "botCloseEa": bot_close_info,
-        "botCloseAttach": bot_close_attach,
+        "haltCloseInMainEa": True,
         "algoEnabled": bool(trading_permissions.get("ok")),
         "globalAlgoEnabled": bool(trading_permissions.get("globalEnabled")),
         "chartAlgoEnabled": bool(trading_permissions.get("chartEnabled")),
