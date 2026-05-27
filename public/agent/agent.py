@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-options-algo-v39"
+AGENT_BUILD_ID = "2026-05-27-mt5-hidden-hwnd-v40"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -555,8 +555,8 @@ def _mt5_collect_target_pids(port: Any, payload: Optional[Dict[str, Any]] = None
     return pids
 
 
-def _mt5_enum_visible_windows_for_pids(pids: Iterable[int]) -> List[Dict[str, Any]]:
-    """Enumerate visible top-level windows for terminal64 PIDs (works across sessions)."""
+def _mt5_enum_windows_for_pids(pids: Iterable[int]) -> List[Dict[str, Any]]:
+    """Enumerate top-level windows for terminal64 PIDs (works across sessions; may be hidden)."""
     if os.name != "nt":
         return []
     pid_set = {int(p) for p in pids if int(p or 0) > 0}
@@ -565,29 +565,35 @@ def _mt5_enum_visible_windows_for_pids(pids: Iterable[int]) -> List[Dict[str, An
     user32 = ctypes.windll.user32
     hits: List[Dict[str, Any]] = []
 
+    GetClassNameW = user32.GetClassNameW
+
     @ctypes.WINFUNCTYPE(ctypes.c_bool, wintypes.HWND, wintypes.LPARAM)
     def _enum_cb(hwnd, _lparam):
         try:
-            if not user32.IsWindowVisible(hwnd):
-                return True
             pid_val = wintypes.DWORD()
             user32.GetWindowThreadProcessId(hwnd, ctypes.byref(pid_val))
             pid = int(pid_val.value or 0)
             if pid not in pid_set:
                 return True
-            length = user32.GetWindowTextLengthW(hwnd)
-            if length <= 0:
-                return True
-            buf = ctypes.create_unicode_buffer(length + 1)
-            user32.GetWindowTextW(hwnd, buf, length + 1)
-            title = str(buf.value or "").strip()
-            if not title:
-                return True
+            visible = bool(user32.IsWindowVisible(hwnd))
+            length = int(user32.GetWindowTextLengthW(hwnd) or 0)
+            title = ""
+            if length > 0:
+                buf = ctypes.create_unicode_buffer(length + 1)
+                user32.GetWindowTextW(hwnd, buf, length + 1)
+                title = str(buf.value or "").strip()
+            cls_buf = ctypes.create_unicode_buffer(128)
+            try:
+                GetClassNameW(hwnd, cls_buf, 128)
+            except Exception:
+                pass
+            cls = str(cls_buf.value or "").strip()
             area = 0
             rect = wintypes.RECT()
             if user32.GetWindowRect(hwnd, ctypes.byref(rect)):
                 area = max(0, int(rect.right - rect.left)) * max(0, int(rect.bottom - rect.top))
-            hits.append({"hwnd": int(hwnd), "pid": pid, "title": title, "area": area})
+            # keep even when title is blank (hidden/minimized windows)
+            hits.append({"hwnd": int(hwnd), "pid": pid, "title": title, "class": cls, "area": area, "visible": visible})
         except Exception:
             pass
         return True
@@ -600,8 +606,8 @@ def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) 
     """Pick the MT5 main window HWND for UI automation / screenshots."""
     login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
     pids = _mt5_collect_target_pids(port, payload)
-    windows = _mt5_enum_visible_windows_for_pids(pids)
-    titles = [str(w.get("title") or "") for w in windows if w.get("title")]
+    windows = _mt5_enum_windows_for_pids(pids)
+    titles = [str(w.get("title") or "") for w in windows if str(w.get("title") or "").strip()]
     out: Dict[str, Any] = {
         "ok": False,
         "hwnd": 0,
@@ -618,12 +624,17 @@ def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) 
         title = str(w.get("title") or "")
         low = title.lower()
         pts = int(w.get("area") or 0)
+        if bool(w.get("visible")):
+            pts += 2_000_000
         if login and login in title:
             pts += 10_000_000
         if "metatrader" in low:
             pts += 5_000_000
         if "terminal" in low:
             pts += 1_000_000
+        cls = str(w.get("class") or "").lower()
+        if "metatrader" in cls or "terminal" in cls:
+            pts += 2_000_000
         if re.search(r"(?i)properties|expert|advisor|dialog", title):
             pts -= 5_000_000
         return pts, int(w.get("area") or 0)
@@ -634,6 +645,8 @@ def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) 
         "hwnd": int(best.get("hwnd") or 0),
         "pid": int(best.get("pid") or 0),
         "title": str(best.get("title") or ""),
+        "class": str(best.get("class") or ""),
+        "visible": bool(best.get("visible")),
         "method": "EnumWindows",
         "reason": "",
         "titles": titles,
