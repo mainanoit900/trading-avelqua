@@ -1123,6 +1123,27 @@ function mt5SelectPortSlot(slot) {
   if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
 }
 
+/** เลือก PORT ว่างอัตโนมัติเมื่อกดเชื่อมต่อ (login พร้อมกันคนละ PORT) */
+function mt5AutoPickEmptyConnectSlot() {
+  const current = Number(mt5SelectedPortSlot?.value || 0);
+  if (current) {
+    const curCard = document.querySelector(
+      '.port-card-pick[data-port-slot="' + current + '"]:not([data-account-id])'
+    );
+    if (curCard) return current;
+  }
+  const empty = document.querySelector('.port-card-pick[data-port-slot]:not([data-account-id])');
+  if (empty) {
+    const slot = Number(empty.getAttribute('data-port-slot') || 0);
+    if (slot) {
+      mt5SelectPortSlot(slot);
+      return slot;
+    }
+  }
+  return current;
+}
+window.mt5AutoPickEmptyConnectSlot = mt5AutoPickEmptyConnectSlot;
+
 function mt5SelectRunAccount(accountId) {
   const id = Number(accountId || 0);
   if (!id) return;
@@ -1194,7 +1215,7 @@ if (mt5ConnectForm) {
       return false;
     }
 
-    const connectSlot = Number(mt5SelectedPortSlot?.value || 0);
+    const connectSlot = mt5AutoPickEmptyConnectSlot();
   const connectCard = connectSlot
     ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"]:not([data-account-id])')
     : null;
@@ -1204,15 +1225,25 @@ if (mt5ConnectForm) {
   if (!connectSlot) {
     (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
       'error',
-      'กรุณาคลิกเลือก PORT ที่ว่าง (การ์ด PORT ด้านบน) ก่อน Login — แต่ละ PORT login พร้อมกันได้'
+      'ไม่มี PORT ว่าง — ลบ PORT เก่าหรือซื้อพอร์ตเพิ่มก่อน login พร้อมกัน'
     );
     return false;
   }
   if (reconnectCard && !connectCard) {
-    (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
-      'error',
-      'PORT นี้เชื่อมต่อแล้ว — ใช้ Run BOT หรือลบ PORT ก่อน login ใหม่'
-    );
+    const sameLogin = reconnectCard.querySelector('small');
+    const titleText = sameLogin ? String(sameLogin.textContent || '') : '';
+  const loginOnCard = titleText.includes(mt5LoginValue);
+    if (loginOnCard) {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'info',
+        'บัญชีนี้เชื่อมต่อที่ PORT ' + connectSlot + ' อยู่แล้ว — ใช้ Run BOT หรือลบ PORT ก่อน login ใหม่'
+      );
+    } else {
+      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+        'error',
+        'PORT ' + connectSlot + ' มีบัญชีอื่นอยู่แล้ว — เลือก PORT ว่าง หรือลบ PORT นี้ก่อน'
+      );
+    }
     return false;
   }
 

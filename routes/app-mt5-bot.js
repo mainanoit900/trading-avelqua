@@ -674,7 +674,7 @@ async function releaseReservedPort(reservedPort) {
   }
 }
 
-async function reserveVpsPortForConnect(userId, existingPortId) {
+async function reserveVpsPortForConnect(userId, existingPortId, portSlot = 0) {
   const pid = num(existingPortId);
   if (pid > 0) {
     const row = await query(
@@ -719,22 +719,88 @@ async function reserveVpsPortForConnect(userId, existingPortId) {
       };
     }
   }
+
+  const slot = num(portSlot);
+  if (slot > 0) {
+    const preferred = await query(
+      `
+      SELECT
+        p.id AS port_id,
+        p.vps_id,
+        p.port_no,
+        p.folder_path,
+        n.node_name
+      FROM vps_system.vps_ports p
+      INNER JOIN vps_system.vps_nodes n ON n.id = p.vps_id
+      WHERE LOWER(COALESCE(p.status, '')) IN ('available', 'free', 'idle')
+        AND LOWER(COALESCE(p.status, '')) NOT IN ('disabled', 'off', 'deleted')
+        AND COALESCE(n.agent_enabled, TRUE) = TRUE
+        AND LOWER(TRIM(COALESCE(n.status, ''))) IN ('online', 'available', 'active', 'connected')
+        AND COALESCE(TRIM(p.folder_path), '') <> ''
+        AND (
+          p.port_no = $1
+          OR p.folder_path ~* ('PORT[-_ ]*0?' || $1::text || '([^0-9]|$)')
+        )
+      ORDER BY
+        CASE WHEN p.port_no = $1 THEN 0 ELSE 1 END,
+        COALESCE(n.cpu_percent, 0) ASC,
+        COALESCE(n.ping_ms, 0) ASC,
+        p.port_no ASC
+      LIMIT 1
+      FOR UPDATE OF p SKIP LOCKED
+    `,
+      [slot]
+    ).catch(() => ({ rows: [] }));
+
+    const pick = preferred.rows?.[0];
+    if (pick) {
+      await query(
+        `
+        UPDATE vps_system.vps_ports
+        SET status='locked',
+            locked_by_user_id=$2,
+            locked_until=NOW() + INTERVAL '3 minutes',
+            updated_at=NOW()
+        WHERE id=$1
+      `,
+        [pick.port_id, userId]
+      ).catch(() => {});
+      return {
+        ok: true,
+        port: {
+          port_id: pick.port_id,
+          vps_id: pick.vps_id,
+          port_number: pick.port_no,
+          port_no: pick.port_no,
+          folder_path: pick.folder_path,
+          node_name: pick.node_name
+        },
+        reused: false,
+        matchedSlot: true
+      };
+    }
+  }
+
   return reserveMt5Port(userId);
 }
 
-function resolveConnectPortSlot(summary, requestedSlot, usedSlotSet) {
+function resolveConnectPortSlot(summary, requestedSlot, usedSlotSet, busySlotSet = null) {
   const total = Math.max(1, num(summary?.totalPorts, 1));
+  const busy = busySlotSet instanceof Set ? busySlotSet : new Set();
   const req = num(requestedSlot);
   if (req >= 1 && req <= total) {
     if (usedSlotSet.has(req)) {
       return { ok: false, message: `PORT ${req} กำลังเชื่อมต่ออยู่ — รอให้เสร็จก่อน หรือเลือก PORT อื่น` };
     }
+    if (busy.has(req)) {
+      return { ok: false, message: `PORT ${req} มีบัญชีอยู่แล้ว — เลือก PORT ว่างสำหรับ login พร้อมกัน` };
+    }
     return { ok: true, portSlot: req };
   }
   for (let i = 1; i <= total; i++) {
-    if (!usedSlotSet.has(i)) return { ok: true, portSlot: i };
+    if (!usedSlotSet.has(i) && !busy.has(i)) return { ok: true, portSlot: i, autoPicked: true };
   }
-  return { ok: false, message: `PORT ตามแพ็กเกจเต็มแล้ว` };
+  return { ok: false, message: `PORT ตามแพ็กเกจเต็มแล้ว — ลบ PORT เก่าก่อน login พร้อมกัน` };
 }
 
 /** ปิดสถานะ connecting/checking ที่ค้าง + ปลดล็อกพอร์ต VPS — ให้ล็อกอินซ้ำได้หลังครั้งก่อนล้มเหลว */
@@ -2045,15 +2111,6 @@ console.log('[MT5 CONNECT START]', {
 
     await expireStaleConnectingForLogin(userId, mt5Login, FIXED_SERVER);
 
-    const {
-      findMt5LoginInUse,
-      mt5LoginInUseMessage
-    } = require('../lib/mt5LoginDuplicate');
-    const dupLogin = await findMt5LoginInUse(mt5Login, FIXED_SERVER, userId);
-    if (dupLogin) {
-      throw new Error(mt5LoginInUseMessage(dupLogin));
-    }
-
     const usedSlots = await safeQuery(`
       SELECT port_slot, mt5_login, status
       FROM vps_system.mt5_accounts
@@ -2061,8 +2118,22 @@ console.log('[MT5 CONNECT START]', {
         AND LOWER(TRIM(COALESCE(status,''))) IN ('connecting','checking')
     `, [userId]);
 
+    const busySlots = await safeQuery(`
+      SELECT port_slot, mt5_login
+      FROM vps_system.mt5_accounts
+      WHERE user_id=$1
+        AND LOWER(TRIM(COALESCE(status,''))) IN ('connected','ready')
+    `, [userId]);
+
     const usedSlotSet = new Set((usedSlots || []).map((r) => num(r.port_slot)));
-    const slotPick = resolveConnectPortSlot(summary, req.body.port_slot, usedSlotSet);
+    const busySlotSet = new Set();
+    for (const row of busySlots || []) {
+      const slot = num(row.port_slot);
+      if (!slot) continue;
+      if (clean(row.mt5_login) === mt5Login) continue;
+      busySlotSet.add(slot);
+    }
+    const slotPick = resolveConnectPortSlot(summary, req.body.port_slot, usedSlotSet, busySlotSet);
     if (!slotPick.ok) throw new Error(slotPick.message || 'ไม่สามารถเลือก PORT ได้');
     const portSlot = slotPick.portSlot;
 
@@ -2085,6 +2156,21 @@ console.log('[MT5 CONNECT START]', {
       );
     }
 
+    const {
+      findMt5LoginInUse,
+      mt5LoginInUseMessage
+    } = require('../lib/mt5LoginDuplicate');
+    const dupLogin = await findMt5LoginInUse(
+      mt5Login,
+      FIXED_SERVER,
+      userId,
+      slotAccount?.id || null,
+      portSlot
+    );
+    if (dupLogin) {
+      throw new Error(mt5LoginInUseMessage(dupLogin));
+    }
+
     lockKey = getConnectSlotLockKey(userId, portSlot);
     let locked = false;
     try {
@@ -2099,7 +2185,7 @@ console.log('[MT5 CONNECT START]', {
 
     console.log('[STEP] BEFORE RESERVE', { portSlot, requestedSlot: req.body.port_slot });
 
-    const reserve = await reserveVpsPortForConnect(userId, slotAccount?.port_id);
+    const reserve = await reserveVpsPortForConnect(userId, slotAccount?.port_id, portSlot);
 
     console.log('[STEP] AFTER RESERVE', reserve);
 
@@ -2249,14 +2335,16 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
       ? `${reservedPort.node_name} / ${reservedPort.port_name || 'PORT ' + allocPortNo}`
       : `PORT ${portSlot}`;
 
+    const folderLabel = String(reservedPort.folder_path || '').trim();
     return res.json({
       ok: true,
       status: 'queued',
-      message: `ส่งคำสั่งเปิด MT5 แล้ว — ${pickLabel} (${FIXED_SERVER}) กำลังล็อกอิน...`,
+      message: `ส่งคำสั่งเปิด MT5 แล้ว — PORT แพ็กเกจ ${portSlot}${folderLabel ? ' → ' + folderLabel : ''} (${FIXED_SERVER})`,
       accountId,
       commandId: cmdRes.rows?.[0]?.id || null,
       vpsName: reservedPort.node_name || '',
-      folderPath: reservedPort.folder_path || '',
+      folderPath: folderLabel,
+      portSlot,
       portNumber: allocPortNo
     });
 
