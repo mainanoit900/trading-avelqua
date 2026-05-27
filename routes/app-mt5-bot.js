@@ -2318,6 +2318,90 @@ router.post('/mt5/account/:id/edit', async (req, res) => {
   return res.redirect('/app/mt5');
 });
 
+/** หยุด BOT + ปิด MT5 ทันทีเมื่อผู้ใช้ลบ/ยกเลิก PORT (ไม่ต้องกด Stop ก่อน) */
+async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_delete_port') {
+  const bots = await query(
+    `
+    SELECT bi.id, bi.vps_id, bi.port_id, bi.assigned_port_no, bi.port_used, bi.lot_used,
+           bi.run_payload, bi.mt5_login,
+           COALESCE(vp.folder_path, '') AS folder_path
+    FROM vps_system.bot_instances bi
+    LEFT JOIN vps_system.vps_ports vp ON vp.id = bi.port_id
+    WHERE bi.mt5_account_id = $1
+      AND bi.user_id = $2
+      AND bi.status IN ('running', 'pending', 'restarting')
+    ORDER BY bi.id DESC
+  `,
+    [accountId, userId]
+  ).catch(() => ({ rows: [] }));
+
+  for (const bi of bots.rows || []) {
+    const runPayload = bi.run_payload && typeof bi.run_payload === 'object' ? bi.run_payload : {};
+    const portNo = num(bi.assigned_port_no || bi.port_used || runPayload.portNumber || runPayload.port);
+    const folderPath = String(
+      bi.folder_path || runPayload.vpsFolderPath || runPayload.folder_path || runPayload.folderPath || ''
+    ).trim();
+    const stopNodeId = num(bi.vps_id);
+    if (!stopNodeId || !portNo) continue;
+
+    await query(
+      `
+      UPDATE vps_system.bot_instances
+      SET status = 'stopped',
+          stopped_at = COALESCE(stopped_at, NOW()),
+          updated_at = NOW(),
+          ea_status = 'stopped',
+          last_error = $3
+      WHERE id = $1 AND user_id = $2
+    `,
+      [bi.id, userId, reason]
+    ).catch(() => {});
+
+    await query(
+      `
+      UPDATE vps_system.vps_nodes
+      SET used_ports = GREATEST(0, COALESCE(used_ports, 0) - 1),
+          used_lot = GREATEST(0, COALESCE(used_lot, 0) - $2),
+          status = CASE WHEN status = 'busy' THEN 'online' ELSE status END,
+          updated_at = NOW()
+      WHERE id = $1
+    `,
+      [stopNodeId, num(bi.lot_used)]
+    ).catch(() => {});
+
+    await query(
+      `
+      INSERT INTO vps_system.vps_agent_commands
+      (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
+      VALUES ($1, $1, $2, 'stop_mt5_bot', $3::jsonb, 'pending', NOW(), NOW())
+    `,
+      [
+        stopNodeId,
+        bi.port_id || null,
+        JSON.stringify({
+          action: 'stop_bot_trading',
+          commandType: 'stop_mt5_bot',
+          instanceId: bi.id,
+          accountId,
+          port: portNo,
+          portNumber: portNo,
+          portSlot: num(bi.port_used || runPayload.portSlot || portNo),
+          folder_path: folderPath || null,
+          vpsFolderPath: folderPath || null,
+          stopTradingOnly: false,
+          forceKill: true,
+          closeMt5: true,
+          closeAllPositions: true,
+          botCode: runPayload.botCode || runPayload.eaName || null,
+          mt5Login: runPayload.mt5Login || bi.mt5_login || null,
+          expectedMt5Login: runPayload.mt5Login || bi.mt5_login || null,
+          reason
+        })
+      ]
+    ).catch((e) => console.error('[PORT] stop_mt5_bot error:', e.message || e));
+  }
+}
+
 router.post('/mt5/account/:id/cancel', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -2325,14 +2409,7 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
 
     if (!id) throw new Error('ไม่พบ PORT ที่ต้องการยกเลิก');
 
-    const running = await query(
-      "SELECT id FROM vps_system.bot_instances WHERE mt5_account_id=$1 AND user_id=$2 AND status IN ('running','pending') LIMIT 1",
-      [id, userId]
-    );
-
-    if (running.rows[0]) {
-      throw new Error('PORT นี้กำลังรัน BOT อยู่ กรุณาหยุด BOT ก่อนยกเลิก');
-    }
+    await queueStopBotsAndMt5ForAccount(userId, id, 'user_cancel_port');
 
     // STEP 1: ดึงค่า PORT/VPS เดิมก่อนล้างค่า
     const old = await query(`
@@ -2415,14 +2492,7 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
 
     if (!id) throw new Error('ไม่พบ PORT ที่ต้องการลบ');
 
-    const running = await query(
-      "SELECT id FROM vps_system.bot_instances WHERE mt5_account_id=$1 AND user_id=$2 AND status IN ('running','pending') LIMIT 1",
-      [id, userId]
-    );
-
-    if (running.rows[0]) {
-      throw new Error('PORT นี้กำลังรัน BOT อยู่ กรุณาหยุด BOT ก่อนลบ');
-    }
+    await queueStopBotsAndMt5ForAccount(userId, id, 'user_delete_port');
 
     // STEP 1: ดึง PORT/VPS + folder_path จาก vps_ports (strict mode บน agent)
     const old = await query(`
@@ -2469,6 +2539,7 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
           windowsPortNo: oldPort.windows_port_no,
           folder_path: folderPath,
           vpsFolderPath: folderPath,
+          forceKill: true,
           reason: 'user_delete_port'
         })
       ]).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
@@ -2505,7 +2576,7 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
         AND LOWER(TRIM(COALESCE(status,'ready'))) <> 'deleted'
     `, [id, userId]);
 
-    flash(req, 'success', 'ลบ PORT ' + (oldPort.port_slot || '') + ' แล้ว');
+    flash(req, 'success', 'ลบ PORT ' + (oldPort.port_slot || '') + ' แล้ว — สั่งปิด MT5 แล้ว');
   } catch (e) {
     flash(req, 'error', e.message);
   }

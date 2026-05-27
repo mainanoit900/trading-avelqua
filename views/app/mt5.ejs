@@ -108,10 +108,10 @@
               <span><%= canUsePort ? 'พร้อมรัน' : (accStatus === 'connecting' || accStatus === 'starting' ? 'กำลังเปิด MT5...' : (accStatus === 'checking' ? 'กำลังตรวจ Login' : (accStatus === 'failed' ? 'Login ไม่ผ่าน' : (accStatus === 'ready' ? 'ต้องเชื่อมต่อใหม่' : (acc ? 'ยกเลิกแล้ว' : 'ว่าง'))))) %></span>
             </div>
             <% if (acc) { %>
-              <div class="port-actions">
-                <form method="POST" action="/app/mt5/account/<%= acc.id %>/delete" onsubmit="return deletePortCountdown(event, this)">
-  <button class="mt5-btn mini delete" type="submit">ลบ</button>
-</form>
+              <div class="port-actions" onclick="event.stopPropagation()">
+                <form method="POST" action="/app/mt5/account/<%= acc.id %>/delete" class="port-delete-form" onclick="event.stopPropagation()">
+                  <button class="mt5-btn mini delete" type="submit" onclick="event.stopPropagation()">ลบ</button>
+                </form>
               </div>
             <% } %>
           </div>
@@ -652,10 +652,10 @@
 
   function renderPortItemHtml(p) {
     const del = p.accountId
-      ? '<form method="POST" action="/app/mt5/account/' + p.accountId + '/delete" onsubmit="return deletePortCountdown(event, this)">' +
-        '<button class="mt5-btn mini delete" type="submit">ลบ</button></form>'
+      ? '<form method="POST" action="/app/mt5/account/' + p.accountId + '/delete" class="port-delete-form" onclick="event.stopPropagation()">' +
+        '<button class="mt5-btn mini delete" type="submit" onclick="event.stopPropagation()">ลบ</button></form>'
       : '';
-    const actions = p.accountId ? '<div class="port-actions">' + del + '</div>' : '';
+    const actions = p.accountId ? '<div class="port-actions" onclick="event.stopPropagation()">' + del + '</div>' : '';
     const pickable = !!(p.canUse || p.canPick);
     const pickCls = pickable ? ' port-card-pick' : '';
     const pickAttr = pickable
@@ -1113,7 +1113,7 @@ function isAllowedMt5LoginUser(login) {
 }
 
 function mt5LoginUserValidationMessage() {
-  return 'Userไม่ถูกต้อง - ใช้ได้เฉพาะเลขขึ้นต้น 2 จำนวน 9 หลัก หรือขึ้นต้น 8 จำนวน 8 หลัก';
+  return 'Userไม่ถูกต้อง ';
 }
 
 function mt5SelectPortSlot(slot) {
@@ -1151,6 +1151,12 @@ function mt5UpdateSharedPortSelections() {
 }
 
 function mt5BindPortSlotPicks() {
+  document.querySelectorAll('.port-delete-form, .port-actions').forEach(function (el) {
+    if (el.dataset.delBound === '1') return;
+    el.dataset.delBound = '1';
+    el.addEventListener('click', function (e) { e.stopPropagation(); });
+    el.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+  });
   document.querySelectorAll('.port-card-pick').forEach(function (el) {
     if (el.dataset.pickBound === '1') return;
     el.dataset.pickBound = '1';
@@ -1913,44 +1919,5 @@ function closeMt5ErrorModal(){
 }
 </script>
 
-<script>
-function deletePortCountdown(e, form) {
-  e.preventDefault();
-
-  let sec = 15;
-
-  const modal = document.createElement('div');
-  modal.className = 'mt5-lux-modal';
-  modal.innerHTML = `
-    <div class="mt5-lux-backdrop"></div>
-    <div class="mt5-lux-card error">
-      <div class="mt5-lux-icon">⚠️</div>
-      <h3>กำลังลบ PORT</h3>
-      <p>ระบบจะปิด terminal64.exe เฉพาะ PORT นี้ใน <b id="delCount">15</b> วินาที</p>
-      <button type="button" id="cancelDeletePort">ยกเลิก</button>
-    </div>
-  `;
-
-  document.body.appendChild(modal);
-
-  const timer = setInterval(() => {
-    sec--;
-    const el = document.getElementById('delCount');
-    if (el) el.innerText = sec;
-
-    if (sec <= 0) {
-      clearInterval(timer);
-      form.submit();
-    }
-  }, 1000);
-
-  document.getElementById('cancelDeletePort').onclick = () => {
-    clearInterval(timer);
-    modal.remove();
-  };
-
-  return false;
-}
-</script>
 
 <% } %>
