@@ -871,9 +871,32 @@ await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXI
 await runner.query(`ALTER TABLE vps_system.mt5_extra_ports ADD COLUMN IF NOT EXISTS is_active BOOLEAN NOT NULL DEFAULT TRUE`).catch(() => {});  await runner.query(`CREATE INDEX IF NOT EXISTS idx_mt5_extra_ports_user ON vps_system.mt5_extra_ports(user_id, is_active, port_type)`).catch(() => {});
 }
 
+/** PORT ชั่วคราวผูก subscription รอบปัจจุบัน — หมดแพ็กเกจ/รอบใหม่ต้องซื้อใหม่ */
+async function deactivateOrphanTemporaryPorts(userId, subscriptionId) {
+  const sid = num(subscriptionId);
+  if (!sid) return;
+  await query(
+    `
+    UPDATE vps_system.mt5_extra_ports
+    SET is_active=FALSE, updated_at=NOW()
+    WHERE user_id=$1
+      AND port_type='temporary'
+      AND is_active=TRUE
+      AND (
+        COALESCE(subscription_id, 0) <> $2
+        OR created_at < COALESCE((
+          SELECT start_at FROM user_subscriptions WHERE id=$2 LIMIT 1
+        ), NOW())
+      )
+  `,
+    [userId, sid]
+  ).catch(() => {});
+}
+
 async function getExtraPortRows(userId, subscriptionId, packageId, packageGroup = '') {
   await ensureExtraPortsTable().catch(() => {});
   const groupUpper = String(packageGroup || '').toUpperCase().trim();
+  const subId = num(subscriptionId);
   return await safeQuery(`
     SELECT id, qty, port_type, subscription_id, package_id, package_group, price_scoin, expires_at, is_active, created_at,
            CASE WHEN expires_at IS NOT NULL AND expires_at <= NOW() THEN TRUE ELSE FALSE END AS is_expired
@@ -882,7 +905,11 @@ async function getExtraPortRows(userId, subscriptionId, packageId, packageGroup 
       AND is_active=TRUE
       AND (expires_at IS NULL OR expires_at > NOW())
       AND (
-        (port_type='temporary')
+        (port_type='temporary'
+          AND subscription_id=$3
+          AND created_at >= COALESCE((
+            SELECT start_at FROM user_subscriptions WHERE id=$3 LIMIT 1
+          ), created_at))
         OR
         (port_type='permanent' AND (
           $2 = ''
@@ -891,7 +918,7 @@ async function getExtraPortRows(userId, subscriptionId, packageId, packageGroup 
         ))
       )
     ORDER BY created_at DESC, id DESC
-  `, [userId, groupUpper], []);
+  `, [userId, groupUpper, subId], []);
 }
 
 async function getExtraPorts(userId, subscriptionId, packageId, packageGroup = '') {
@@ -1096,6 +1123,10 @@ if (packageExpired) {
   await applyPackageExpiredSideEffects(userId, 'package_expired_auto_stop');
 }
 
+  if (!packageExpired && pkg.subscription_id) {
+    await deactivateOrphanTemporaryPorts(userId, pkg.subscription_id);
+  }
+
   const extraPortRows = packageExpired ? [] : await getExtraPortRows(
   userId,
   pkg.subscription_id,
@@ -1233,6 +1264,8 @@ async function getPortSummaryReadOnly(userId) {
   if (packageExpired) {
     const { applyPackageExpiredSideEffects } = require('../lib/mt5ExpiryEnforcer');
     await applyPackageExpiredSideEffects(userId, 'package_expired_auto_stop');
+  } else if (pkg.subscription_id) {
+    await deactivateOrphanTemporaryPorts(userId, pkg.subscription_id);
   }
 
   const extraPortRows = packageExpired ? [] : await getExtraPortRows(
