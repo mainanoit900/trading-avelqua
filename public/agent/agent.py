@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-login-verify-v49"
+AGENT_BUILD_ID = "2026-05-27-mt5-stop-bot-trading-v50"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -525,6 +525,86 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
             pass
 
     return {"action": "stop_mt5", "port": port, "port_dir": str(port_dir), "stopped": stopped}
+
+
+def stop_bot_trading_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Stop BOT trading — disable gates/Experts; keep MT5 terminal open unless force_kill."""
+    port_dir = resolve_mt5_port_dir(port, payload)
+    write_avelqua_trading_gate(port_dir, False, payload)
+    patch_mt5_experts_config(port_dir, False)
+    normalize_mt5_startup_ini(port_dir)
+    try:
+        cfg = mt5_startup_ini_path(port_dir)
+        if cfg.is_file():
+            text = _read_ini_text(cfg)
+            lines = []
+            skip_startup = False
+            for line in text.splitlines():
+                low = line.strip().lower()
+                if low == "[startup]":
+                    skip_startup = True
+                    continue
+                if skip_startup:
+                    if low.startswith("[") and low != "[startup]":
+                        skip_startup = False
+                        lines.append(line)
+                    continue
+                if low.startswith("expert="):
+                    continue
+                lines.append(line)
+            _write_ini_text(cfg, "\n".join(lines))
+    except Exception as e:
+        log(f"STOP BOT CLEAR STARTUP EXPERT: {e}")
+
+    if mt5_running_for_port_dir(port_dir):
+        try:
+            ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=1.5)
+        except Exception as e:
+            log(f"STOP BOT UIA permissions pass: {e}")
+
+    snap = account_snapshot(port, payload)
+    bal = snap.get("balance")
+    eq = snap.get("equity")
+    profit = None
+    if bal is not None and eq is not None:
+        try:
+            profit = round(float(eq) - float(bal), 2)
+        except Exception:
+            profit = None
+    instance_id = payload_get(payload, "instanceId", "instance_id")
+    send_mt5_live_status(
+        instance_id,
+        port,
+        "stopped",
+        "trading_halted",
+        bal or 0,
+        eq or 0,
+        "",
+        payload,
+        profit=profit,
+    )
+
+    force_kill = str(payload_get(payload, "forceKill", "killMt5", "closeMt5") or "").lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    killed: List[int] = []
+    if force_kill:
+        res = stop_mt5_port_only(port, payload)
+        killed = list(res.get("stopped") or [])
+
+    return {
+        "action": "stop_bot_trading",
+        "ok": True,
+        "message": "หยุดการเทรดแล้ว — MT5 ยังเปิดอยู่" if not force_kill else "หยุด BOT และปิด MT5 แล้ว",
+        "port": port,
+        "port_dir": str(port_dir),
+        "mt5Running": mt5_running_for_port_dir(port_dir),
+        "tradingEnabled": False,
+        "instanceId": instance_id,
+        "killedPids": killed,
+    }
 
 
 def _ps_escape_single(value: str) -> str:
@@ -5088,18 +5168,32 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port", "STOP_MT5_BOT"):
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
+            port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
             stop_payload = dict(payload or {})
-            stop_payload.setdefault("port", payload_get(payload, "portNumber", "portSlot", "folderPort"))
+            stop_payload.setdefault("port", port)
             if not folder:
                 try:
-                    folder = str(resolve_mt5_port_dir(stop_payload.get("port"), stop_payload))
+                    folder = str(resolve_mt5_port_dir(port, stop_payload))
                 except Exception:
                     folder = ""
             stop_payload.setdefault("vpsFolderPath", folder)
-            if folder:
+            stop_soft = (
+                ctype in ("stop_mt5_bot", "stop_bot")
+                or str(payload_get(payload, "action") or "").lower() in ("stop_bot_trading", "stop_bot")
+                or payload_get(payload, "stopTradingOnly", "softStop")
+                or not payload_get(payload, "forceKill", "killMt5", "closeMt5")
+            )
+            if ctype in ("force_stop_mt5", "kill_mt5") or str(payload_get(payload, "forceKill") or "").lower() in (
+                "1",
+                "true",
+                "yes",
+            ):
+                stop_soft = False
+            if stop_soft:
+                command_result(cmd_id, True, stop_bot_trading_only(port, stop_payload))
+            elif folder:
                 command_result(cmd_id, True, stop_mt5_by_folder(folder))
             else:
-                port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
                 command_result(cmd_id, True, stop_mt5_port_only(port, stop_payload))
 
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):

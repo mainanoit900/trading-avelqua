@@ -654,7 +654,7 @@ router.get('/queue', async (req, res) => {
         ORDER BY
           CASE
             WHEN command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN -1
-            WHEN command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5') THEN 0
+            WHEN command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN 0
             WHEN command_type IN ('port_read_file', 'read_file', 'account_snapshot', 'sync_mt5_account', 'read_account_metrics', 'mt5_preview', 'capture_mt5_window', 'capture_mt5_preview')
               AND COALESCE(payload->>'purpose', '') ~* 'attempt_verify|equity|connect|login|preview'
               THEN 0

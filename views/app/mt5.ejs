@@ -602,7 +602,7 @@
       '<div class="mt5-run-action-buttons">' +
       '<button type="submit" class="mt5-btn run mt5-run-primary"' + ((expired || hasActiveInstance) ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
       (hasActiveInstance
-        ? '<button class="mt5-btn mt5-run-secondary" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยัน Stop BOT และออก MT5 ใช่ไหม?\')">Stop BOT</button>'
+        ? '<button class="mt5-btn mt5-run-secondary" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยันหยุดการเทรด BOT? (MT5 จะยังเปิดอยู่)\')">Stop BOT</button>'
         : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
       '</div>' +
       '<small class="mt5-run-action-note">' + (hasActiveInstance ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +

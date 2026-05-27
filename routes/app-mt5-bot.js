@@ -2661,12 +2661,25 @@ router.post('/mt5/stop/:id', async (req, res) => {
   try {
     const userId = req.user.id;
     const id = num(req.params.id);
+    const closeMt5 = String(req.body?.close_mt5 || req.body?.closeMt5 || '').toLowerCase() === '1'
+      || String(req.body?.close_mt5 || req.body?.closeMt5 || '').toLowerCase() === 'true';
     await client.query('BEGIN');
     const rows = await client.query(`SELECT * FROM vps_system.bot_instances WHERE id=$1 AND user_id=$2 FOR UPDATE`, [id, userId]);
     const inst = rows.rows[0];
     if (!inst) throw new Error('ไม่พบรายการ BOT');
 
-    await client.query(`UPDATE vps_system.bot_instances SET status='stopped', stopped_at=NOW(), updated_at=NOW() WHERE id=$1`, [id]);
+    const runPayload = (inst.run_payload && typeof inst.run_payload === 'object') ? inst.run_payload : {};
+    const portNo = num(inst.assigned_port_no || inst.port_used || runPayload.portNumber || runPayload.port);
+    const folderPath = String(
+      inst.folder_path || runPayload.vpsFolderPath || runPayload.folder_path || runPayload.folderPath || ''
+    ).trim();
+
+    await client.query(`
+      UPDATE vps_system.bot_instances
+      SET status='stopped', stopped_at=NOW(), updated_at=NOW(), ea_status='stopped', last_error=NULL
+      WHERE id=$1
+    `, [id]);
+
     if (inst.vps_id) {
       await client.query(`
         UPDATE vps_system.vps_nodes
@@ -2676,19 +2689,43 @@ router.post('/mt5/stop/:id', async (req, res) => {
             updated_at=NOW()
         WHERE id=$1
       `, [inst.vps_id, num(inst.lot_used)]);
+
       await client.query(`
-        INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, command_type, payload, status, created_at)
-        VALUES ($1,$1,'STOP_MT5_BOT',$2::jsonb,'pending',NOW())
-      `, [
-        inst.vps_id,
-        JSON.stringify({
-          instanceId: id,
-          port: inst.assigned_port_no
-        })
-      ]);
+        UPDATE vps_system.vps_agent_commands
+        SET status='cancelled', updated_at=NOW(), finished_at=NOW(), result_message='cancelled_by_user_stop'
+        WHERE (vps_id=$1 OR node_id=$1)
+          AND status='pending'
+          AND command_type IN ('run_mt5_bot', 'run_mt5', 'restart_mt5_bot')
+          AND COALESCE(payload->>'instanceId', '') = $2
+      `, [inst.vps_id, String(id)]).catch(() => {});
+
+      const stopPayload = {
+        action: 'stop_bot_trading',
+        commandType: 'stop_mt5_bot',
+        instanceId: id,
+        accountId: inst.mt5_account_id,
+        port: portNo,
+        portNumber: portNo,
+        portSlot: num(inst.port_used || runPayload.portSlot || portNo),
+        vpsFolderPath: folderPath,
+        folder_path: folderPath,
+        stopTradingOnly: !closeMt5,
+        forceKill: closeMt5,
+        botCode: runPayload.botCode || runPayload.eaName,
+        mt5Login: runPayload.mt5Login || inst.mt5_login
+      };
+
+      await client.query(`
+        INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
+        VALUES ($1,$1,$2,'stop_mt5_bot',$3::jsonb,'pending',NOW(),NOW())
+      `, [inst.vps_id, inst.port_id || null, JSON.stringify(stopPayload)]);
     }
     await client.query('COMMIT');
-    flash(req, 'success', 'ส่งคำสั่งหยุด BOT และออก MT5 แล้ว');
+    flash(
+      req,
+      'success',
+      closeMt5 ? 'ส่งคำสั่งหยุด BOT และปิด MT5 แล้ว' : 'ส่งคำสั่งหยุดการเทรดแล้ว (MT5 ยังเปิดอยู่)'
+    );
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     flash(req, 'error', e.message);
