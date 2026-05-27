@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-full-enable-close-v61"
+AGENT_BUILD_ID = "2026-05-27-close-positions-uia-v62"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1151,8 +1151,172 @@ def _mt5_deal_filling_type(mt5: Any, symbol: str) -> int:
     return int(getattr(mt5, "ORDER_FILLING_IOC", 1))
 
 
+def _mt5_open_positions_count(port_dir: Path, expected_login: str = "") -> int:
+    """Count open positions via MT5 API (read-only). Returns -1 on failure."""
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return -1
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
+        return -1
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            return -1
+        ai = mt5.account_info()
+        if ai is None:
+            mt5.shutdown()
+            return -1
+        observed = str(int(getattr(ai, "login", 0) or 0) or "")
+        if expected_login and observed and observed != expected_login:
+            mt5.shutdown()
+            return -1
+        n = len(list(mt5.positions_get() or []))
+        mt5.shutdown()
+        return n
+    except Exception:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        return -1
+
+
+def close_all_mt5_positions_uia(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Close all positions via MT5 Trade tab UI (works when AutoTrading API is off)."""
+    if os.name != "nt":
+        return {"ok": False, "reason": "not_windows", "method": "none", "remaining": -1}
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    login = str(payload_get(payload, "expectedMt5Login", "mt5Login", "login") or "").strip()
+    expected_login = login
+    try:
+        ui = _resolve_mt5_ui_window(port, payload)
+        hwnd = int(ui.get("hwnd") or 0)
+        pid_hint = int(ui.get("pid") or 0)
+        root = str(port_dir)
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
+Start-Sleep -Milliseconds 300
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait("^t")
+Start-Sleep -Milliseconds 900
+$main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
+$method = 'none'
+$desc = [Windows.Automation.TreeScope]::Descendants
+if ($main) {{
+  $tabCond = New-Object Windows.Automation.PropertyCondition(
+    [Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [Windows.Automation.ControlType]::TabItem)
+  foreach ($t in $main.FindAll($desc, $tabCond)) {{
+    $n = [string]($t.Current.Name)
+    if ($n -match '(?i)^(trade|เทรด|positions?)$') {{
+      try {{
+        $sp = $t.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+        [void][Windows.Automation.SelectionItemPattern]$sp.Select()
+        $method = 'trade_tab'
+        break
+      }} catch {{}}
+    }}
+  }}
+}}
+Start-Sleep -Milliseconds 700
+if ($main) {{
+  $btnCond = New-Object Windows.Automation.PropertyCondition(
+    [Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [Windows.Automation.ControlType]::Button)
+  foreach ($b in $main.FindAll($desc, $btnCond)) {{
+    $n = [string]($b.Current.Name)
+    if ($n -match '(?i)close\\s*all|ปิด.*(ทั้งหมด|ทุก|all\\s*position)') {{
+      try {{
+        $ip = $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+        [void][Windows.Automation.InvokePattern]$ip.Invoke()
+        $method = 'close_all_button'
+        break
+      }} catch {{}}
+    }}
+  }}
+}}
+if ($method -eq 'trade_tab') {{
+  [void][AvqW32]::SetForegroundWindow($mainHwnd)
+  Start-Sleep -Milliseconds 300
+  [System.Windows.Forms.SendKeys]::SendWait("{{APPS}}")
+  Start-Sleep -Milliseconds 700
+  $rootEl = [Windows.Automation.AutomationElement]::RootElement
+  $menuCond = New-Object Windows.Automation.PropertyCondition(
+    [Windows.Automation.AutomationElement]::ControlTypeProperty,
+    [Windows.Automation.ControlType]::MenuItem)
+  $menus = $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, $menuCond)
+  foreach ($m in $menus) {{
+    $n = [string]($m.Current.Name)
+    if ($n -match '(?i)close\\s*all|ปิด.*(ทั้งหมด|ทุก|all)') {{
+      try {{
+        $ip = $m.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+        [void][Windows.Automation.InvokePattern]$ip.Invoke()
+        $method = 'context_close_all'
+        break
+      }} catch {{}}
+    }}
+  }}
+}}
+Start-Sleep -Milliseconds 1200
+$rootEl2 = [Windows.Automation.AutomationElement]::RootElement
+$dlgBtn = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button)
+foreach ($b in $rootEl2.FindAll([Windows.Automation.TreeScope]::Subtree, $dlgBtn)) {{
+  $n = [string]($b.Current.Name)
+  if ($n -match '(?i)^(yes|ok|ใช่|ตกลง)$') {{
+    try {{
+      $ip = $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+      [void][Windows.Automation.InvokePattern]$ip.Invoke()
+      break
+    }} catch {{}}
+  }}
+}}
+Start-Sleep -Milliseconds 1500
+@{{ ok = ($method -ne 'none'); method = $method }} | ConvertTo-Json -Compress
+"""
+        raw = _run_powershell(ps, timeout=55).strip()
+        method = "none"
+        ok = False
+        if raw and raw.startswith("{"):
+            data = json.loads(raw)
+            ok = bool(data.get("ok"))
+            method = str(data.get("method") or "none")
+        remaining = _mt5_open_positions_count(port_dir, expected_login)
+        log(f"CLOSE POSITIONS UIA port={port} method={method} ok={ok} remaining={remaining}")
+        return {
+            "ok": ok and remaining == 0,
+            "method": method,
+            "remaining": remaining,
+            "via": "uia",
+        }
+    except Exception as e:
+        log(f"CLOSE POSITIONS UIA ERROR port={port}: {e}")
+        return {"ok": False, "reason": "exception", "error": str(e)[:200], "method": "none", "remaining": -1}
+
+
 def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Close every open position on this PORT terminal via MetaTrader5 API."""
+    """Close every open position: UI first (no AutoTrading), then MT5 API fallback."""
     if os.name != "nt":
         return {"ok": False, "reason": "not_windows", "closed": [], "count": 0}
     payload = payload or {}
@@ -1160,6 +1324,35 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {"ok": False, "reason": "terminal_missing", "closed": [], "count": 0}
+    expected_login = str(
+        payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
+    ).strip()
+    before = _mt5_open_positions_count(port_dir, expected_login)
+    if before == 0:
+        return {"ok": True, "closed": [], "count": 0, "remaining": 0, "via": "none", "method": "already_flat"}
+    uia_res = close_all_mt5_positions_uia(port, payload)
+    after_uia = int(uia_res.get("remaining") if uia_res.get("remaining") is not None else -1)
+    if uia_res.get("ok") and after_uia == 0:
+        return {
+            "ok": True,
+            "closed": [],
+            "count": max(0, before),
+            "remaining": 0,
+            "observedLogin": expected_login,
+            "via": "uia",
+            "uiaMethod": uia_res.get("method"),
+        }
+    api_res = _close_all_mt5_positions_api(port, payload)
+    api_res["uia"] = uia_res
+    api_res["via"] = "api" if api_res.get("ok") else "api_failed"
+    return api_res
+
+
+def _close_all_mt5_positions_api(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Close positions via MetaTrader5 Python API."""
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
     try:
         import MetaTrader5 as mt5  # type: ignore
     except Exception as e:
