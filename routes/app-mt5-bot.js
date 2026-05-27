@@ -1092,17 +1092,8 @@ async function getPortSummary(userId) {
   const packageExpired = !!pkg.is_expired || !pkg.subscription_id;
 
 if (packageExpired) {
-  const { enqueueStopAllForUser } = require('../lib/mt5ExpiryEnforcer');
-  await enqueueStopAllForUser(userId, 'package_expired_auto_stop', true);
-
-  // ลบสิทธิ์พอร์ตชั่วคราวทันทีเมื่อแพ็กเกจหมดอายุ
-  await query(`
-    UPDATE vps_system.mt5_extra_ports
-    SET is_active=FALSE
-    WHERE user_id=$1
-      AND port_type='temporary'
-      AND is_active=TRUE
-  `, [userId]).catch(() => {});
+  const { applyPackageExpiredSideEffects } = require('../lib/mt5ExpiryEnforcer');
+  await applyPackageExpiredSideEffects(userId, 'package_expired_auto_stop');
 }
 
   const extraPortRows = packageExpired ? [] : await getExtraPortRows(
@@ -1238,6 +1229,11 @@ async function getPortSummaryReadOnly(userId) {
 
   const pkg = await getPackage(userId);
   const packageExpired = !!pkg.is_expired || !pkg.subscription_id;
+
+  if (packageExpired) {
+    const { applyPackageExpiredSideEffects } = require('../lib/mt5ExpiryEnforcer');
+    await applyPackageExpiredSideEffects(userId, 'package_expired_auto_stop');
+  }
 
   const extraPortRows = packageExpired ? [] : await getExtraPortRows(
     userId,
