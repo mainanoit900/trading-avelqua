@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-session-ui-v38"
+AGENT_BUILD_ID = "2026-05-27-mt5-options-algo-v39"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1051,6 +1051,216 @@ if ($okButton) {{
     return False
 
 
+def enable_mt5_options_algo_trading_uia(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    attempts: int = 2,
+    wait_between_sec: float = 2.0,
+) -> bool:
+    """Enable Algo Trading inside Tools -> Options -> Expert Advisors."""
+    if os.name != "nt":
+        return False
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        root = str(port_dir)
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+        max_attempts = max(1, int(attempts or 1))
+        last_raw = ""
+        for attempt in range(1, max_attempts + 1):
+            ui = _resolve_mt5_ui_window(port, payload)
+            hwnd = int(ui.get("hwnd") or 0)
+            pid_hint = int(ui.get("pid") or 0)
+            ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+}}
+"@
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
+Start-Sleep -Milliseconds 250
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
+Start-Sleep -Milliseconds 450
+$main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
+if ($main) {{
+  try {{ $main.SetFocus() }} catch {{}}
+}}
+[System.Windows.Forms.SendKeys]::SendWait("^(o)")
+Start-Sleep -Milliseconds 900
+
+$dlg = $null
+$dlgName = ''
+$dlgDeadline = (Get-Date).AddSeconds(7)
+$rootEl = [Windows.Automation.AutomationElement]::RootElement
+$winCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Window
+)
+while ((Get-Date) -lt $dlgDeadline) {{
+  $wins = $rootEl.FindAll([Windows.Automation.TreeScope]::Children, $winCond)
+  foreach ($w in $wins) {{
+    try {{
+      if ($procId -gt 0 -and $w.Current.ProcessId -ne $procId) {{ continue }}
+      $handle = [IntPtr]$w.Current.NativeWindowHandle
+      if ($handle -eq $mainHwnd) {{ continue }}
+      $name = [string]($w.Current.Name)
+      if ($name -match '(?i)options|properties|ตั้งค่า|ตัวเลือก') {{
+        $dlg = $w
+        $dlgName = $name
+        break
+      }}
+      if (-not $dlg) {{
+        $dlg = $w
+        $dlgName = $name
+      }}
+    }} catch {{}}
+  }}
+  if ($dlg) {{ break }}
+  Start-Sleep -Milliseconds 350
+}}
+if (-not $dlg) {{
+  @{{ ok = $false; reason = 'no_options_dialog' }} | ConvertTo-Json -Compress
+  exit 0
+}}
+
+$tabCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::TabItem
+)
+$checkCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::CheckBox
+)
+$btnCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button
+)
+
+$eaTab = $null
+$tabs = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $tabCond)
+foreach ($t in $tabs) {{
+  $name = [string]($t.Current.Name)
+  if ($name -match '(?i)expert\\s*advisors|expert advisors|advisors|ที่ปรึกษา') {{
+    $eaTab = $t
+    break
+  }}
+}}
+if ($eaTab) {{
+  try {{
+    $spObj = $eaTab.GetCurrentPattern([Windows.Automation.SelectionItemPattern]::Pattern)
+    if ($spObj) {{
+      $sp = [Windows.Automation.SelectionItemPattern]$spObj
+      $sp.Select()
+    }} else {{
+      $ipObj = $eaTab.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+      if ($ipObj) {{
+        $ip = [Windows.Automation.InvokePattern]$ipObj
+        $ip.Invoke()
+      }}
+    }}
+  }} catch {{}}
+  Start-Sleep -Milliseconds 250
+}}
+
+$target = $null
+$targetName = ''
+$checks = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $checkCond)
+foreach ($c in $checks) {{
+  $name = [string]($c.Current.Name)
+  if ($name -match '(?i)allow.*(algo|algorithmic).*trading|algo.*trading|allow\\s*automated\\s*trading|enable\\s*automated') {{
+    $target = $c
+    $targetName = $name
+    break
+  }}
+}}
+if (-not $target) {{
+  [System.Windows.Forms.SendKeys]::SendWait("{{ESC}}")
+  @{{ ok = $false; reason = 'no_checkbox'; dialog = $dlgName }} | ConvertTo-Json -Compress
+  exit 0
+}}
+
+$method = 'none'
+$state = 'unknown'
+try {{
+  $tpObj = $target.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+  if ($tpObj) {{
+    $tp = [Windows.Automation.TogglePattern]$tpObj
+    $state = [string]$tp.Current.ToggleState
+    if ($state -ne 'On') {{
+      $tp.Toggle()
+      $method = 'toggle'
+      Start-Sleep -Milliseconds 250
+      $state = [string]$tp.Current.ToggleState
+    }} else {{
+      $method = 'already_on'
+    }}
+  }}
+}} catch {{}}
+if ($method -eq 'none') {{
+  try {{
+    $target.SetFocus()
+    [System.Windows.Forms.SendKeys]::SendWait(" ")
+    $method = 'space'
+    Start-Sleep -Milliseconds 250
+  }} catch {{}}
+}}
+
+$okButton = $null
+$buttons = $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $btnCond)
+foreach ($b in $buttons) {{
+  $name = [string]($b.Current.Name)
+  if ($name -match '(?i)^ok$|ตกลง') {{
+    $okButton = $b
+    break
+  }}
+}}
+if ($okButton) {{
+  try {{
+    $ipObj = $okButton.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+    if ($ipObj) {{
+      $ip = [Windows.Automation.InvokePattern]$ipObj
+      $ip.Invoke()
+    }} else {{
+      [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+    }}
+  }} catch {{
+    [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+  }}
+}} else {{
+  [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+}}
+@{{ ok = $true; method = $method; state = $state; checkbox = $targetName; dialog = $dlgName }} | ConvertTo-Json -Compress
+"""
+            raw = _run_powershell(ps, timeout=35).strip()
+            last_raw = raw
+            if raw and raw.startswith("{"):
+                data = json.loads(raw)
+                ok = bool(data.get("ok"))
+                log(
+                    f"ENABLE OPTIONS ALGO port={port} attempt={attempt}/{max_attempts} ok={ok} "
+                    f"method={data.get('method')} state={data.get('state')} checkbox={data.get('checkbox')} "
+                    f"dialog={data.get('dialog')} reason={data.get('reason')}"
+                )
+                if ok:
+                    return True
+            else:
+                log(f"ENABLE OPTIONS ALGO port={port} attempt={attempt}/{max_attempts} raw={raw[:400]}")
+            if attempt < max_attempts:
+                time.sleep(max(0.25, float(wait_between_sec or 0)))
+    except Exception as e:
+        log(f"ENABLE OPTIONS ALGO ERROR port={port}: {e}")
+    if 'last_raw' in locals() and last_raw:
+        log(f"ENABLE OPTIONS ALGO FAILED port={port} last_raw={last_raw[:400]}")
+    return False
+
+
 def ensure_mt5_trading_permissions_uia(
     port: Any,
     payload: Optional[Dict[str, Any]] = None,
@@ -1060,17 +1270,21 @@ def ensure_mt5_trading_permissions_uia(
     global_ok = enable_mt5_algo_trading_uia(
         port, payload, attempts=attempts, wait_between_sec=wait_between_sec
     )
+    options_ok = enable_mt5_options_algo_trading_uia(
+        port, payload, attempts=max(1, min(2, int(attempts or 1))), wait_between_sec=wait_between_sec
+    )
     chart_ok = enable_mt5_chart_algo_trading_uia(
         port, payload, attempts=max(1, min(3, int(attempts or 1))), wait_between_sec=wait_between_sec
     )
-    combined = bool(global_ok or chart_ok)
+    combined = bool(global_ok or options_ok or chart_ok)
     log(
         f"ENABLE TRADING PERMISSIONS port={port} ok={combined} "
-        f"global_ok={global_ok} chart_ok={chart_ok}"
+        f"global_ok={global_ok} options_ok={options_ok} chart_ok={chart_ok}"
     )
     return {
         "ok": combined,
         "globalEnabled": bool(global_ok),
+        "optionsEnabled": bool(options_ok),
         "chartEnabled": bool(chart_ok),
     }
 
