@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-interactive-launch-v44"
+AGENT_BUILD_ID = "2026-05-27-mt5-utf16-ini-v45"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2998,7 +2998,19 @@ def _read_log_tail(path: Path, max_bytes: int = 262144) -> str:
             fh.seek(0, 2)
             size = fh.tell()
             fh.seek(max(0, size - max_bytes))
-            return fh.read().decode("utf-8", errors="ignore")
+            raw = fh.read()
+            text = raw.decode("utf-8", errors="ignore")
+            if text.strip():
+                return text
+            # Some MT5 ini/dat files are UTF-16LE; utf-8 decode becomes mostly NULs.
+            if raw and raw.count(b"\x00") > (len(raw) // 6):
+                try:
+                    text16 = raw.decode("utf-16le", errors="ignore")
+                    if text16.strip():
+                        return text16
+                except Exception:
+                    pass
+            return text
     except Exception:
         try:
             return path.read_text(errors="ignore")
