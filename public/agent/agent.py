@@ -73,7 +73,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-mainhwnd-v42"
+AGENT_BUILD_ID = "2026-05-27-mt5-test-trade-v43"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1473,6 +1473,11 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
             pass
         if not mt5.initialize(path=str(terminal)):
             return {}
+        ti = None
+        try:
+            ti = mt5.terminal_info()
+        except Exception:
+            ti = None
         ai = mt5.account_info()
         if ai is None and login_hint:
             try:
@@ -1491,6 +1496,8 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
             "currency": str(ai.currency or ""),
             "observedLogin": str(int(getattr(ai, "login", 0) or 0) or ""),
             "accountName": str(getattr(ai, "name", "") or ""),
+            "tradeAllowed": (bool(getattr(ti, "trade_allowed", False)) if ti is not None else None),
+            "tradeApiDisabled": (bool(getattr(ti, "tradeapi_disabled", False)) if ti is not None else None),
             "source": "mt5_api",
         }
         if _snap_positive(out):
@@ -1966,6 +1973,94 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
+
+
+def mt5_test_trade(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Send a tiny test order via MetaTrader5 API (demo-friendly)."""
+    if os.name != "nt":
+        return {"ok": False, "reason": "not_windows"}
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {"ok": False, "reason": "terminal_missing", "terminal": str(terminal)}
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception as e:
+        return {"ok": False, "reason": "mt5_module_missing", "error": str(e)[:300]}
+
+    symbol = str(payload_get(payload, "symbol", default="XAUUSD") or "XAUUSD").strip() or "XAUUSD"
+    try:
+        vol = float(payload_get(payload, "volume", "lot", default=0.01) or 0.01)
+    except Exception:
+        vol = 0.01
+    action = str(payload_get(payload, "side", default="buy") or "buy").strip().lower()
+    if action not in ("buy", "sell"):
+        action = "buy"
+    try:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        if not mt5.initialize(path=str(terminal)):
+            return {"ok": False, "reason": "initialize_failed", "last_error": str(mt5.last_error())}
+        ti = mt5.terminal_info()
+        ai = mt5.account_info()
+        if ai is None:
+            mt5.shutdown()
+            return {"ok": False, "reason": "no_account_info"}
+        if not mt5.symbol_select(symbol, True):
+            mt5.shutdown()
+            return {"ok": False, "reason": "symbol_select_failed", "symbol": symbol}
+        tick = mt5.symbol_info_tick(symbol)
+        if tick is None:
+            mt5.shutdown()
+            return {"ok": False, "reason": "no_tick", "symbol": symbol}
+        price = float(tick.ask if action == "buy" else tick.bid)
+        order_type = mt5.ORDER_TYPE_BUY if action == "buy" else mt5.ORDER_TYPE_SELL
+        req = {
+            "action": mt5.TRADE_ACTION_DEAL,
+            "symbol": symbol,
+            "volume": float(max(0.01, vol)),
+            "type": order_type,
+            "price": price,
+            "deviation": 50,
+            "magic": 991122,
+            "comment": "avelqua_test",
+            "type_time": mt5.ORDER_TIME_GTC,
+            "type_filling": mt5.ORDER_FILLING_IOC,
+        }
+        res = mt5.order_send(req)
+        last_err = mt5.last_error()
+        out = {
+            "ok": bool(res and getattr(res, "retcode", None) in (0, mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED)),
+            "symbol": symbol,
+            "volume": float(req["volume"]),
+            "side": action,
+            "price": price,
+            "terminalInfo": {
+                "tradeAllowed": (bool(getattr(ti, "trade_allowed", False)) if ti is not None else None),
+                "tradeApiDisabled": (bool(getattr(ti, "tradeapi_disabled", False)) if ti is not None else None),
+            },
+            "accountLogin": str(int(getattr(ai, "login", 0) or 0) or ""),
+            "retcode": int(getattr(res, "retcode", -1) or -1) if res is not None else -1,
+            "comment": str(getattr(res, "comment", "") or ""),
+            "order": int(getattr(res, "order", 0) or 0) if res is not None else 0,
+            "deal": int(getattr(res, "deal", 0) or 0) if res is not None else 0,
+            "request": req,
+            "last_error": str(last_err),
+        }
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        return out
+    except Exception as e:
+        try:
+            mt5.shutdown()
+        except Exception:
+            pass
+        return {"ok": False, "reason": "exception", "error": str(e)[:500]}
 
 
 def _metric_value(v: Any) -> Any:
@@ -4923,6 +5018,10 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             folder = Path(payload_get(payload, "folder_path", default=str(MT5_ROOT)))
             files = [str(x) for x in folder.rglob("*.set")] if folder.exists() else []
             command_result(cmd_id, True, {"folder_path": str(folder), "files": files})
+
+        elif ctype in ("mt5_test_trade", "test_trade"):
+            port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+            command_result(cmd_id, True, mt5_test_trade(port, payload))
 
         else:
             command_result(cmd_id, False, {"command_type": ctype}, f"Unknown command_type: {ctype}")
