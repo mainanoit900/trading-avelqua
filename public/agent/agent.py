@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-bot-close-login-v69"
+AGENT_BUILD_ID = "2026-05-27-bot-close-login-v70"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1509,8 +1509,95 @@ def close_all_via_bot_close(port: Any, payload: Optional[Dict[str, Any]] = None)
     return fallback
 
 
+def open_mt5_chart_uia(
+    port: Any, payload: Optional[Dict[str, Any]] = None, symbol: str = "XAUUSD"
+) -> Dict[str, Any]:
+    """Open a chart for symbol (required before attaching EA when workspace is empty)."""
+    if os.name != "nt":
+        return {"ok": False, "reason": "not_windows"}
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    login = str(payload_get(payload, "expectedMt5Login", "mt5Login", "login") or "").strip()
+    sym = str(symbol or "XAUUSD").strip().upper() or "XAUUSD"
+    try:
+        ui = _resolve_mt5_ui_window(port, payload)
+        hwnd = int(ui.get("hwnd") or 0)
+        pid_hint = int(ui.get("pid") or 0)
+        root = str(port_dir)
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqW32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern void mouse_event(int dwFlags, int dx, int dy, int dwData, int dwExtraInfo);
+}}
+"@
+{_ps_mt5_window_setup_block(hwnd, pid_hint, root, login)}
+[void][AvqW32]::ShowWindow($mainHwnd, 9)
+[void][AvqW32]::SetForegroundWindow($mainHwnd)
+Start-Sleep -Milliseconds 500
+$method = 'none'
+$main = [Windows.Automation.AutomationElement]::FromHandle($mainHwnd)
+$symRe = '(?i){sym}'
+$treeItem = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::TreeItem)
+if ($main) {{
+  foreach ($el in $main.FindAll([Windows.Automation.TreeScope]::Descendants, $treeItem)) {{
+    $n = [string]($el.Current.Name)
+    if ($n -match $symRe) {{
+      try {{
+        $rect = $el.Current.BoundingRectangle
+        $cx = [int]($rect.X + $rect.Width / 2)
+        $cy = [int]($rect.Y + $rect.Height / 2)
+        [System.Windows.Forms.Cursor]::Position = New-Object System.Drawing.Point($cx, $cy)
+        Start-Sleep -Milliseconds 100
+        [AvqW32]::mouse_event(0x0002, 0, 0, 0, 0)
+        Start-Sleep -Milliseconds 50
+        [AvqW32]::mouse_event(0x0004, 0, 0, 0, 0)
+        Start-Sleep -Milliseconds 50
+        [AvqW32]::mouse_event(0x0002, 0, 0, 0, 0)
+        Start-Sleep -Milliseconds 50
+        [AvqW32]::mouse_event(0x0004, 0, 0, 0, 0)
+        $method = 'market_watch_dblclick'
+        break
+      }} catch {{}}
+    }}
+  }}
+}}
+if ($method -eq 'none') {{
+  [System.Windows.Forms.SendKeys]::SendWait("^m")
+  Start-Sleep -Milliseconds 600
+  [System.Windows.Forms.SendKeys]::SendWait("{sym}")
+  Start-Sleep -Milliseconds 400
+  [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}{{ENTER}}")
+  $method = 'market_watch_keys'
+}}
+Start-Sleep -Milliseconds 1200
+@{{ ok = ($method -ne 'none'); method = $method; symbol = '{sym}' }} | ConvertTo-Json -Compress
+"""
+        raw = _run_powershell(ps, timeout=30).strip()
+        ok = False
+        method = "none"
+        if raw and raw.startswith("{"):
+            data = json.loads(raw)
+            ok = bool(data.get("ok"))
+            method = str(data.get("method") or "none")
+        log(f"OPEN CHART port={port} symbol={sym} ok={ok} method={method}")
+        return {"ok": ok, "method": method, "symbol": sym}
+    except Exception as e:
+        log(f"OPEN CHART ERROR port={port}: {e}")
+        return {"ok": False, "error": str(e)[:200]}
+
+
 def setup_bot_close_after_login(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """หลัง login MT5: deploy BOTClose, แนบชาร์ต, ปิดออเดอร์ค้าง, gate off."""
+    """หลัง login MT5: ปิดออเดอร์ค้าง (API) → เปิดชาร์ต → แนบ BOTClose → gate off."""
     payload = dict(payload or {})
     port_dir = resolve_mt5_port_dir(port, payload)
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
@@ -1526,19 +1613,27 @@ def setup_bot_close_after_login(port: Any, payload: Optional[Dict[str, Any]] = N
         enable_mt5_autotrading_hotkey(port, payload)
         ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=1.0)
         time.sleep(1.0)
-        out["botCloseAttach"] = attach_bot_close_second_chart(port, payload, symbol)
         stale = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
         out["stalePositionsBefore"] = stale
         if stale > 0:
             log(f"BOTCLOSE LOGIN stale positions={stale} port={port} login={login}")
-            out["staleClose"] = close_all_via_bot_close(port, payload)
-            after = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
-            out["stalePositionsAfter"] = after
-            out["ok"] = after == 0
+            api_res = _close_all_mt5_positions_api_subprocess(port_dir, login, timeout_sec=28)
+            out["staleCloseApi"] = api_res
+            remaining = int(api_res.get("remaining") if api_res.get("remaining") is not None else stale)
+            if remaining < 0:
+                remaining = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
+            if remaining > 0:
+                out["staleClose"] = close_all_via_bot_close(port, payload)
+                remaining = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
+            out["stalePositionsAfter"] = remaining
+            out["ok"] = remaining == 0
+        out["openChart"] = open_mt5_chart_uia(port, payload, symbol)
+        time.sleep(1.0)
+        out["botCloseAttach"] = attach_bot_close_second_chart(port, payload, symbol)
         ensure_login_only_no_trading(port, payload)
         log(
             f"BOTCLOSE LOGIN SETUP port={port} login={login} stale={stale} "
-            f"attach={out.get('botCloseAttach', {}).get('ok')}"
+            f"after={out.get('stalePositionsAfter')} attach={out.get('botCloseAttach', {}).get('ok')}"
         )
     except Exception as e:
         log(f"BOTCLOSE LOGIN SETUP ERROR port={port}: {e}")
@@ -1597,12 +1692,6 @@ public class AvqW32 {{
 [void][AvqW32]::ShowWindow($mainHwnd, 9)
 [void][AvqW32]::SetForegroundWindow($mainHwnd)
 Start-Sleep -Milliseconds 500
-[System.Windows.Forms.SendKeys]::SendWait("^m")
-Start-Sleep -Milliseconds 500
-[System.Windows.Forms.SendKeys]::SendWait("{sym}")
-Start-Sleep -Milliseconds 400
-[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
-Start-Sleep -Milliseconds 900
 [System.Windows.Forms.SendKeys]::SendWait("^n")
 Start-Sleep -Milliseconds 700
 $attached = $false
@@ -1612,19 +1701,34 @@ $treeItem = New-Object Windows.Automation.PropertyCondition(
   [Windows.Automation.ControlType]::TreeItem)
 foreach ($el in $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, $treeItem)) {{
   $n = [string]($el.Current.Name)
-  if ($n -match '(?i)^BOTClose(\\.(ex5|mq5))?$') {{
+  if ($n -match '(?i)BOTClose') {{
     try {{
       $dp = $el.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
       [void][Windows.Automation.InvokePattern]$dp.Invoke()
       $attached = $true
+      $method = 'navigator_invoke'
       break
     }} catch {{
       try {{
         [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
         $attached = $true
+        $method = 'navigator_enter'
         break
       }} catch {{}}
     }}
+  }}
+}}
+Start-Sleep -Milliseconds 800
+foreach ($b in $rootEl.FindAll([Windows.Automation.TreeScope]::Subtree, (New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button)))) {{
+  $bn = [string]($b.Current.Name)
+  if ($bn -match '(?i)^(yes|ok|ใช่|ตกลง)$') {{
+    try {{
+      $ip = $b.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+      [void][Windows.Automation.InvokePattern]$ip.Invoke()
+      break
+    }} catch {{}}
   }}
 }}
 Start-Sleep -Milliseconds 1200
@@ -6362,6 +6466,16 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 "previewImage": (preview_b64 or "")[:2_400_000],
                 "mt5PreviewImage": (preview_b64 or "")[:2_400_000],
             })
+
+        elif ctype in ("bot_close_setup", "setup_bot_close", "login_bot_close"):
+            port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+            res = setup_bot_close_after_login(port, payload)
+            command_result(
+                cmd_id,
+                bool(res.get("ok")),
+                res,
+                "" if res.get("ok") else str(res.get("error") or "bot_close_setup_failed"),
+            )
 
         elif ctype in ("dashboard", "watchdog"):
             command_result(cmd_id, True, mt5_ports_dashboard())
