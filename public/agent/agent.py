@@ -61,7 +61,14 @@ MT5_ROOT = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
 LOG_DIR = AGENT_DIR / "logs"
 LOG_FILE = AGENT_DIR / "agent.log"
 STOP_FLAG = AGENT_DIR / "agent.disabled"
-LOGIN_UI_LOCK_FILE = AGENT_DIR / "login-ui.lock"
+LOGIN_UI_LOCK_FILE = AGENT_DIR / "login-ui.lock"  # legacy global (port 0 fallback only)
+
+
+def login_ui_lock_path(port: Any) -> Path:
+    p = int(re.sub(r"[^0-9]", "", str(port or "")) or "0")
+    if p <= 0:
+        return LOGIN_UI_LOCK_FILE
+    return AGENT_DIR / f"login-ui-port-{p:02d}.lock"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = int(os.getenv("AVELQUA_LOOP_SECONDS", "3"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
@@ -73,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-mt5-stop-kill-default-v52"
+AGENT_BUILD_ID = "2026-05-27-mt5-login-lock-per-port-v53"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2591,52 +2598,65 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
     )
 
 
-def acquire_login_ui_lock(timeout_sec: int = 180, stale_sec: int = 420) -> str:
-    """Cross-process lock for MT5 SendKeys/UI automation on the shared Windows desktop."""
+def acquire_login_ui_lock(port: Any, timeout_sec: int = 180, stale_sec: int = 120) -> str:
+    """Per-PORT lock for MT5 UI automation — allows different users on different PORTs concurrently."""
+    lock_file = login_ui_lock_path(port)
     deadline = time.time() + max(5, int(timeout_sec))
     token = f"{os.getpid()}:{time.time()}"
+    port_label = str(port or "?")
     while time.time() < deadline:
         try:
-            fd = os.open(str(LOGIN_UI_LOCK_FILE), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
             try:
                 os.write(fd, token.encode("utf-8", errors="ignore"))
             finally:
                 os.close(fd)
-            log(f"LOGIN UI LOCK ACQUIRED token={token}")
+            log(f"LOGIN UI LOCK ACQUIRED port={port_label} file={lock_file.name} token={token}")
             return token
         except FileExistsError:
             try:
-                age = time.time() - LOGIN_UI_LOCK_FILE.stat().st_mtime
+                age = time.time() - lock_file.stat().st_mtime
                 if age > stale_sec:
-                    LOGIN_UI_LOCK_FILE.unlink(missing_ok=True)
-                    log(f"LOGIN UI LOCK STALE REMOVED age_sec={int(age)}")
+                    lock_file.unlink(missing_ok=True)
+                    log(f"LOGIN UI LOCK STALE REMOVED port={port_label} age_sec={int(age)}")
                     continue
             except Exception:
                 pass
-        time.sleep(0.5)
-    raise RuntimeError("มีคำสั่ง Login MT5 อื่นกำลังใช้งานจอบน VPS กรุณารอสักครู่แล้วลองใหม่")
+        time.sleep(0.35)
+    raise RuntimeError(
+        f"PORT {port_label} กำลัง Login MT5 อยู่ กรุณารอสักครู่แล้วลองใหม่ (หรือเลือก PORT อื่น)"
+    )
 
 
-def release_login_ui_lock(token: str) -> None:
+def release_login_ui_lock(port: Any, token: str) -> None:
+    lock_file = login_ui_lock_path(port)
     try:
-        if not LOGIN_UI_LOCK_FILE.exists():
+        if not lock_file.exists():
             return
-        current = LOGIN_UI_LOCK_FILE.read_text(encoding="utf-8", errors="ignore").strip()
+        current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
         if current == token:
-            LOGIN_UI_LOCK_FILE.unlink(missing_ok=True)
-            log(f"LOGIN UI LOCK RELEASED token={token}")
+            lock_file.unlink(missing_ok=True)
+            log(f"LOGIN UI LOCK RELEASED port={port} token={token}")
     except Exception as e:
-        log(f"LOGIN UI LOCK RELEASE ERROR: {e}")
+        log(f"LOGIN UI LOCK RELEASE ERROR port={port}: {e}")
 
 
-def release_login_ui_lock_for_current_process() -> None:
+def release_login_ui_lock_for_current_process(port: Any = None) -> None:
+    pid_prefix = f"{os.getpid()}:"
     try:
-        if not LOGIN_UI_LOCK_FILE.exists():
-            return
-        current = LOGIN_UI_LOCK_FILE.read_text(encoding="utf-8", errors="ignore").strip()
-        if current.startswith(f"{os.getpid()}:"):
-            LOGIN_UI_LOCK_FILE.unlink(missing_ok=True)
-            log(f"LOGIN UI LOCK FORCE RELEASE pid={os.getpid()}")
+        candidates: List[Path] = []
+        if port is not None:
+            candidates.append(login_ui_lock_path(port))
+        else:
+            candidates.append(LOGIN_UI_LOCK_FILE)
+            candidates.extend(sorted(AGENT_DIR.glob("login-ui-port-*.lock")))
+        for lock_file in candidates:
+            if not lock_file.exists():
+                continue
+            current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+            if current.startswith(pid_prefix):
+                lock_file.unlink(missing_ok=True)
+                log(f"LOGIN UI LOCK FORCE RELEASE port={port or lock_file.name} pid={os.getpid()}")
     except Exception as e:
         log(f"LOGIN UI LOCK FORCE RELEASE ERROR: {e}")
 
@@ -2709,17 +2729,22 @@ def run_login_ui_automation(
     password: str,
     server: str,
     port_dir: Path,
+    port: Any = None,
     process_id: Any = None,
     with_wizard: bool = False,
     timeout_sec: int = 45,
 ) -> None:
-    token = acquire_login_ui_lock(timeout_sec=timeout_sec)
+    port_num = port
+    if not port_num:
+        m = re.search(r"PORT-(\d+)", str(port_dir), re.I)
+        port_num = int(m.group(1)) if m else 0
+    token = acquire_login_ui_lock(port_num, timeout_sec=timeout_sec)
     try:
         if with_wizard:
             automate_mt5_open_account_wizard(server=server, port_dir=port_dir, process_id=process_id)
         automate_mt5_login_server_form(login, password, server, port_dir=port_dir, process_id=process_id)
     finally:
-        release_login_ui_lock(token)
+        release_login_ui_lock(port_num, token)
 
 
 def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -3544,6 +3569,7 @@ def wait_mt5_login_hybrid(
                 pw,
                 server,
                 port_dir,
+                port=port,
                 process_id=proc_pid,
                 with_wizard=True,
                 timeout_sec=45,
@@ -3762,7 +3788,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         cfg = mt5_startup_ini_path(port_dir)
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
-        token = acquire_login_ui_lock(timeout_sec=45)
+        token = acquire_login_ui_lock(port, timeout_sec=45)
         try:
             proc = _popen_hidden(args, cwd=str(port_dir))
             time.sleep(0.9)
@@ -3774,7 +3800,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 process_id=(proc.pid if proc else None),
             )
         finally:
-            release_login_ui_lock(token)
+            release_login_ui_lock(port, token)
         return proc
 
     journal_since = time.time()
@@ -5286,7 +5312,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
     except Exception as e:
         log(f"COMMAND ERROR ID={cmd_id}: {e}")
         if ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
-            release_login_ui_lock_for_current_process()
+            release_login_ui_lock_for_current_process(_worker_port_num(payload))
             try:
                 send_connect_result(payload, "failed", str(e))
             except Exception:
@@ -5305,7 +5331,7 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
         return 0
     except Exception as e:
         log(f"CONNECT WORKER ERROR port={port} cmd_id={cmd_id}: {e}")
-        release_login_ui_lock_for_current_process()
+        release_login_ui_lock_for_current_process(port)
         try:
             if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
                 send_mt5_live_status(
@@ -5325,7 +5351,7 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
         command_result(cmd_id, False, {}, str(e))
         return 1
     finally:
-        release_login_ui_lock_for_current_process()
+        release_login_ui_lock_for_current_process(port)
         clear_worker_state(port, os.getpid())
         log(f"CONNECT WORKER STOP port={port} cmd_id={cmd_id} pid={os.getpid()}")
 
