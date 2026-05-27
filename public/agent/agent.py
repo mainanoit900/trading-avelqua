@@ -1197,6 +1197,11 @@ def close_all_mt5_positions(port: Any, payload: Optional[Dict[str, Any]] = None)
                 "closed": [],
                 "count": 0,
             }
+        if not list(mt5.positions_get() or []):
+            mt5.shutdown()
+            return {"ok": True, "closed": [], "count": 0, "remaining": 0, "observedLogin": observed}
+        enable_mt5_algo_trading_uia(port, payload, attempts=2)
+        time.sleep(1.0)
         done_codes = (
             int(getattr(mt5, "TRADE_RETCODE_DONE", 10009)),
             int(getattr(mt5, "TRADE_RETCODE_PLACED", 10008)),
