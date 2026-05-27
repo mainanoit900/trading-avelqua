@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-bot-close-v68"
+AGENT_BUILD_ID = "2026-05-27-bot-close-login-v69"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1509,6 +1509,62 @@ def close_all_via_bot_close(port: Any, payload: Optional[Dict[str, Any]] = None)
     return fallback
 
 
+def setup_bot_close_after_login(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """หลัง login MT5: deploy BOTClose, แนบชาร์ต, ปิดออเดอร์ค้าง, gate off."""
+    payload = dict(payload or {})
+    port_dir = resolve_mt5_port_dir(port, payload)
+    login = str(payload_get(payload, "mt5Login", "login") or "").strip()
+    symbol = str(payload_get(payload, "symbol", default="XAUUSD") or "XAUUSD").strip() or "XAUUSD"
+    out: Dict[str, Any] = {"ok": True, "port": port, "login": login, "action": "bot_close_login_setup"}
+    try:
+        if not mt5_running_for_port_dir(port_dir):
+            out["ok"] = False
+            out["reason"] = "mt5_not_running"
+            return out
+        out["botCloseEa"] = _ensure_bot_close_ea(port_dir)
+        patch_mt5_experts_config(port_dir, True)
+        enable_mt5_autotrading_hotkey(port, payload)
+        ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=1.0)
+        time.sleep(1.0)
+        out["botCloseAttach"] = attach_bot_close_second_chart(port, payload, symbol)
+        stale = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
+        out["stalePositionsBefore"] = stale
+        if stale > 0:
+            log(f"BOTCLOSE LOGIN stale positions={stale} port={port} login={login}")
+            out["staleClose"] = close_all_via_bot_close(port, payload)
+            after = _mt5_open_positions_count(port_dir, login, timeout_sec=10)
+            out["stalePositionsAfter"] = after
+            out["ok"] = after == 0
+        ensure_login_only_no_trading(port, payload)
+        log(
+            f"BOTCLOSE LOGIN SETUP port={port} login={login} stale={stale} "
+            f"attach={out.get('botCloseAttach', {}).get('ok')}"
+        )
+    except Exception as e:
+        log(f"BOTCLOSE LOGIN SETUP ERROR port={port}: {e}")
+        out["ok"] = False
+        out["error"] = str(e)[:200]
+        try:
+            ensure_login_only_no_trading(port, payload)
+        except Exception:
+            pass
+    return out
+
+
+def schedule_bot_close_login_setup(port: Any, payload: Optional[Dict[str, Any]] = None, delay_sec: float = 6.0) -> None:
+    """Run BOTClose login setup in background after MT5 UI is ready."""
+    pl = dict(payload or {})
+
+    def _worker() -> None:
+        try:
+            time.sleep(max(2.0, float(delay_sec or 6.0)))
+            setup_bot_close_after_login(port, pl)
+        except Exception as e:
+            log(f"BOTCLOSE LOGIN SETUP THREAD ERROR port={port}: {e}")
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+
 def attach_bot_close_second_chart(
     port: Any, payload: Optional[Dict[str, Any]] = None, symbol: str = "XAUUSD"
 ) -> Dict[str, Any]:
@@ -1541,6 +1597,12 @@ public class AvqW32 {{
 [void][AvqW32]::ShowWindow($mainHwnd, 9)
 [void][AvqW32]::SetForegroundWindow($mainHwnd)
 Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait("^m")
+Start-Sleep -Milliseconds 500
+[System.Windows.Forms.SendKeys]::SendWait("{sym}")
+Start-Sleep -Milliseconds 400
+[System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+Start-Sleep -Milliseconds 900
 [System.Windows.Forms.SendKeys]::SendWait("^n")
 Start-Sleep -Milliseconds 700
 $attached = $false
@@ -3309,6 +3371,7 @@ def schedule_connect_metrics_retry(
                 window_title=window_title,
                 schedule_metric_retry=False,
             )
+            schedule_bot_close_login_setup(port, payload, delay_sec=4.0)
         except Exception as e:
             log(f"CONNECT METRICS RETRY ERROR PORT={port} delay={delay_sec}: {e}")
 
@@ -4944,6 +5007,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     success_message = JOURNAL_OK_MSG
     ensure_login_only_no_trading(port, payload)
+    schedule_bot_close_login_setup(port, payload, delay_sec=6.0)
     send_connect_result(
         payload,
         "connected",
