@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-login-exit-snapshot-v74"
+AGENT_BUILD_ID = "2026-05-27-concurrent-login-v75"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -100,6 +100,7 @@ WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
+MT5_API_SNAPSHOT_LOCK = threading.Lock()
 MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
 MT5_LAUNCH_DIAG_LOCK = threading.Lock()
 
@@ -2844,50 +2845,57 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
-    try:
+    with MT5_API_SNAPSHOT_LOCK:
         try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        if not mt5.initialize(path=str(terminal)):
-            return {}
-        ti = None
-        try:
-            ti = mt5.terminal_info()
-        except Exception:
-            ti = None
-        ai = mt5.account_info()
-        if ai is None and login_hint:
             try:
-                mt5.login(login_hint)
-                ai = mt5.account_info()
+                mt5.shutdown()
             except Exception:
-                ai = None
-        mt5.shutdown()
-        if ai is None:
+                pass
+            if not mt5.initialize(path=str(terminal)):
+                return {}
+            ti = None
+            try:
+                ti = mt5.terminal_info()
+            except Exception:
+                ti = None
+            ai = mt5.account_info()
+            if ai is None and login_hint:
+                try:
+                    mt5.login(login_hint)
+                    ai = mt5.account_info()
+                except Exception:
+                    ai = None
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
+            if ai is None:
+                return {}
+            if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
+                return {}
+            out = {
+                "balance": float(ai.balance),
+                "equity": float(ai.equity),
+                "currency": str(ai.currency or ""),
+                "observedLogin": str(int(getattr(ai, "login", 0) or 0) or ""),
+                "accountName": str(getattr(ai, "name", "") or ""),
+                "tradeAllowed": (bool(getattr(ti, "trade_allowed", False)) if ti is not None else None),
+                "tradeApiDisabled": (bool(getattr(ti, "tradeapi_disabled", False)) if ti is not None else None),
+                "source": "mt5_api",
+            }
+            if _snap_positive(out):
+                log(
+                    f"MT5 API SNAPSHOT path={port_dir.name} login={out.get('observedLogin')} "
+                    f"BALANCE={out['balance']} EQUITY={out['equity']}"
+                )
+            return out
+        except Exception as e:
+            log(f"MT5 API SNAPSHOT ERROR: {e}")
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
             return {}
-        if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
-            return {}
-        out = {
-            "balance": float(ai.balance),
-            "equity": float(ai.equity),
-            "currency": str(ai.currency or ""),
-            "observedLogin": str(int(getattr(ai, "login", 0) or 0) or ""),
-            "accountName": str(getattr(ai, "name", "") or ""),
-            "tradeAllowed": (bool(getattr(ti, "trade_allowed", False)) if ti is not None else None),
-            "tradeApiDisabled": (bool(getattr(ti, "tradeapi_disabled", False)) if ti is not None else None),
-            "source": "mt5_api",
-        }
-        if _snap_positive(out):
-            log(f"MT5 API SNAPSHOT path={port_dir.name} BALANCE={out['balance']} EQUITY={out['equity']}")
-        return out
-    except Exception as e:
-        log(f"MT5 API SNAPSHOT ERROR: {e}")
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        return {}
 
 
 def clear_mt5_logs(port_dir: Path) -> None:
@@ -5459,7 +5467,8 @@ def port_list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
     port, _, full = safe_port_file_path(payload)
     purpose = str(payload_get(payload, "purpose") or "").lower()
-    if not full.exists() and re.search(r"verify.*journal|journal.*verify", purpose):
+    journal_verify = bool(re.search(r"verify.*journal|journal.*verify", purpose))
+    if not full.exists() and journal_verify:
         port_dir = resolve_mt5_port_dir(port, payload)
         latest, text = latest_log_text(port_dir)
         if latest and text:
@@ -5470,6 +5479,15 @@ def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "content": text,
                 "journalEvidence": text,
             }
+        log(f"JOURNAL VERIFY NO LOG port={port} tried={full}")
+        return {
+            "action": "port_read_file",
+            "port": port,
+            "file_path": str(full),
+            "content": "",
+            "journalEvidence": "",
+            "journalMissing": True,
+        }
     if not full.exists():
         raise RuntimeError(f"file not found: {full}")
     content = _read_log_tail(full, max_bytes=262144)
