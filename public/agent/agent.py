@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-login-no-bot-autostart-v79"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-v80"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1312,32 +1312,19 @@ def schedule_login_verify_exit_mt5(
 
 
 def _should_exit_mt5_after_snapshot(payload: Optional[Dict[str, Any]], snap: Dict[str, Any]) -> bool:
+    """ปิด MT5 หลัง login เฉพาะเมื่อยืนยันบัญชี/equity แล้ว — ห้ามปิดระหว่าง attempt_verify_snapshot (พัง concurrent login)."""
     if not _is_login_only_payload(payload):
         return False
     purpose = str(payload_get(payload or {}, "purpose") or "").lower()
+    if "attempt_verify" in purpose:
+        return False
+    if "post_connect_exit" in purpose or purpose == "login_exit_mt5":
+        return True
     login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
     observed = str(snap.get("observedLogin") or "").strip()
     if _snap_positive(snap):
         return True
-    if login_hint and observed and login_hint == observed:
-        return True
-    if "post_connect_exit" in purpose or purpose == "login_exit_mt5":
-        return True
-    if not _snap_positive(snap):
-        return False
-    if any(
-        k in purpose
-        for k in (
-            "attempt_verify_snapshot",
-            "equity_connect",
-            "verify_snapshot",
-            "connect",
-            "login",
-        )
-    ):
-        return True
-    ctype = str(payload_get(payload or {}, "commandType", "command_type") or "").lower()
-    return ctype in ("account_snapshot", "sync_mt5_account", "read_account_metrics")
+    return bool(login_hint and observed and login_hint == observed)
 
 
 def _mt5_deal_filling_type(mt5: Any, symbol: str) -> int:
