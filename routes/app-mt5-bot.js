@@ -557,6 +557,7 @@ const {
   buildMt5LoginPayload,
   formatPickMessage: formatAdminPickMessage
 } = require('../lib/adminVpsPortPicker');
+const { fetchVpsActiveLoginLoadMap } = require('../lib/vpsLoginLoad');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 
 async function reserveMt5Port(userId) {
@@ -593,7 +594,24 @@ async function reserveMt5Port(userId) {
         AND COALESCE(n.ram_percent, 0) <= COALESCE(n.max_ram_percent, 85)
         AND COALESCE(n.ping_ms, 0) <= COALESCE(n.max_ping_ms, 150)
         AND COALESCE(TRIM(p.folder_path), '') <> ''
-      ORDER BY COALESCE(n.cpu_percent, 0) ASC, COALESCE(n.ping_ms, 0) ASC, p.port_no ASC
+      ORDER BY (
+        SELECT COUNT(*)::int
+        FROM (
+          SELECT vps_id FROM vps_system.mt5_connect_attempts
+          WHERE vps_id = n.id
+            AND LOWER(COALESCE(status, '')) IN ('starting', 'checking')
+            AND created_at > NOW() - INTERVAL '20 minutes'
+          UNION ALL
+          SELECT vps_id FROM vps_system.vps_agent_commands
+          WHERE vps_id = n.id
+            AND LOWER(COALESCE(command_type, '')) IN ('login_mt5', 'connect_mt5')
+            AND LOWER(COALESCE(status, '')) IN ('pending', 'processing')
+            AND created_at > NOW() - INTERVAL '20 minutes'
+        ) active
+      ) ASC,
+      COALESCE(n.cpu_percent, 0) ASC,
+      COALESCE(n.ping_ms, 0) ASC,
+      p.port_no ASC
       FOR UPDATE OF p SKIP LOCKED
       LIMIT 1
     `);
