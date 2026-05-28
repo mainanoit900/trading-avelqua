@@ -407,6 +407,26 @@ router.get('/queue', async (req, res) => {
       });
     }
 
+    // UX: เมื่อ Agent pick งาน login/connect แล้ว ให้หน้าเว็บรู้ทันทีว่าเริ่มทำงาน
+    try {
+      const ctype = String(cmd.command_type || '').toLowerCase();
+      const pl = cmd.payload && typeof cmd.payload === 'object' ? cmd.payload : {};
+      const attemptId = String(pl.attemptId || pl.attempt_id || '').trim();
+      if (attemptId && (ctype === 'login_mt5' || ctype === 'connect_mt5')) {
+        await query(
+          `
+          UPDATE vps_system.mt5_connect_attempts
+          SET status='starting',
+              last_message=COALESCE(last_message, 'กำลังเปิด MT5...'),
+              evidence_source=COALESCE(evidence_source, 'login_command'),
+              updated_at=NOW()
+          WHERE attempt_id=$1 AND vps_id=$2 AND terminal=FALSE
+        `,
+          [attemptId, Number(node.id)]
+        ).catch(() => {});
+      }
+    } catch (_) {}
+
     return res.json({
       ok: true,
       command: cmd
