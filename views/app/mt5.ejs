@@ -19,6 +19,11 @@
 .port-card-pick:hover{border-color:rgba(125,211,252,.45)}
 .port-item.selected-run{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.25)}
 .port-item.selected-connect{border-color:#facc15;box-shadow:0 0 0 2px rgba(250,204,21,.20)}
+.status{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:800;text-transform:lowercase}
+.status.running{background:rgba(34,197,94,.18);color:#86efac;border:1px solid rgba(34,197,94,.35)}
+.status.connecting{background:rgba(56,189,248,.16);color:#7dd3fc;border:1px solid rgba(56,189,248,.32)}
+.status.stopped{background:rgba(148,163,184,.14);color:#cbd5e1;border:1px solid rgba(148,163,184,.28)}
+.status.fail{background:rgba(239,68,68,.16);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
 </style>
 
 
@@ -210,7 +215,7 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>📡 Live MT5 Dashboard</h2>
-      <span>แสดง 5 รายการล่าสุด · อัปเดตทุก 20 วินาที</span>
+      <span>1 การรันต่อ 1 แถว · อัปเดตอัตโนมัติทุก 60 วินาที</span>
     </div>
 
     <div id="mt5LiveDashboard" class="mt5-table-wrap">
@@ -221,95 +226,11 @@
   <section class="mt5-card" id="mt5HistorySection">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
-      <span>แสดง 5 แถว / ทั้งหมด <%= historyTotal || 0 %> รายการ</span>
+      <span id="mt5HistoryMeta">1 การรันต่อ 1 แถว · อัปเดตอัตโนมัติทุก 60 วินาที</span>
     </div>
-    <div class="mt5-table-wrap">
-      <table class="mt5-table">
-        <thead>
-          <tr>
-            <th>BOT</th>
-            <th>Login</th>
-            <th>Funding</th>
-            <th>Lot</th>
-            <th>Level</th>
-            <th>Status</th>
-            <th>Date</th>
-            <th>Manage</th>
-          </tr>
-        </thead>
-        <tbody>
-          <% if (!instances || instances.length === 0) { %>
-            <tr><td colspan="8" class="mt5-empty-cell">ยังไม่มีรายการรัน BOT</td></tr>
-          <% } %>
-          <% (instances || []).forEach(function(i){ %>
-            <tr>
-              <td><%= i.display_name || i.bot_name || i.bot_code %></td>
-              <td><%= i.mt5_login || ('#' + i.mt5_account_id) %></td>
-              <td><%= i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-' %></td>
-              <td><%= i.lot_used || '-' %></td>
-              <td><%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %></td>
-              <td><span class="status <%= i.status %>"><%= i.status %></span></td>
-              <td><%= (i.updated_at || i.started_at) ? new Date(i.updated_at || i.started_at).toLocaleString('th-TH') : '-' %></td>
-              <td>
-                <details class="mt5-manage-menu">
-                  <summary>Manage</summary>
-                  <div class="mt5-manage-dropdown">
-                    <button
-                      type="button"
-                      class="mt5-manage-item"
-                      onclick="openMt5InstanceDetail(this)"
-                      data-instance-id="<%= i.id %>"
-                      data-bot="<%= i.display_name || i.bot_name || i.bot_code %>"
-                      data-login="<%= i.mt5_login || ('#' + i.mt5_account_id) %>"
-                      data-funding="<%= i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-' %>"
-                      data-lot="<%= i.lot_used || '-' %>"
-                      data-level="<%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %>"
-                      data-status="<%= i.status || '-' %>"
-                      data-port="<%= i.assigned_port_no || '-' %>"
-                      data-node="<%= i.node_name || i.node_code || '-' %>"
-                      data-updated="<%= i.updated_at ? new Date(i.updated_at).toLocaleString('th-TH') : '-' %>"
-                    >รายละเอียด</button>
-                    <button
-                      type="button"
-                      class="mt5-manage-item"
-                      onclick="openMt5InstanceAnalysis(this)"
-                      data-instance-id="<%= i.id %>"
-                      data-bot="<%= i.display_name || i.bot_name || i.bot_code %>"
-                      data-login="<%= i.mt5_login || ('#' + i.mt5_account_id) %>"
-                      data-funding="<%= i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-' %>"
-                      data-lot="<%= i.lot_used || '-' %>"
-                      data-level="<%= i.trade_level === 'high' ? 'เสี่ยงสูง' : (i.trade_level === 'medium' ? 'เสี่ยงกลาง' : (i.trade_level === 'low' || i.trade_level === 'safe' ? 'เสี่ยงต่ำ' : (i.trade_level || '-'))) %>"
-                      data-status="<%= i.status || '-' %>"
-                      data-port="<%= i.assigned_port_no || '-' %>"
-                      data-node="<%= i.node_name || i.node_code || '-' %>"
-                      data-updated="<%= i.updated_at ? new Date(i.updated_at).toLocaleString('th-TH') : '-' %>"
-                    >วิเคราะห์</button>
-                    <form method="POST" action="/app/mt5/instance/<%= i.id %>/delete" onsubmit="return confirm('ยืนยันลบรายการ BOT ใช่ไหม? ถ้ากำลังรันอยู่ ระบบจะสั่งออก MT5 ด้วย')">
-                      <button class="mt5-manage-item danger" type="submit">ลบ</button>
-                    </form>
-                  </div>
-                </details>
-              </td>
-            </tr>
-          <% }) %>
-        </tbody>
-      </table>
+    <div id="mt5HistoryDashboard" class="mt5-table-wrap">
+      กำลังโหลดข้อมูล...
     </div>
-    <% if ((historyPageCount || 1) > 1) { %>
-      <div class="mt5-pager">
-        <% if ((historyPage || 1) > 1) { %>
-          <a class="mt5-pager-btn" href="/app/mt5?history_page=<%= historyPage - 1 %>#mt5HistorySection">ก่อนหน้า</a>
-        <% } else { %>
-          <span class="mt5-pager-btn disabled">ก่อนหน้า</span>
-        <% } %>
-        <span class="mt5-pager-meta">หน้า <b><%= historyPage %></b> / <%= historyPageCount %></span>
-        <% if ((historyPage || 1) < (historyPageCount || 1)) { %>
-          <a class="mt5-pager-btn primary" href="/app/mt5?history_page=<%= historyPage + 1 %>#mt5HistorySection">ถัดไป</a>
-        <% } else { %>
-          <span class="mt5-pager-btn disabled">ถัดไป</span>
-        <% } %>
-      </div>
-    <% } %>
   </section>
 </div>
 
@@ -479,20 +400,44 @@
     return ui.capitalHint || ('ขั้นต่ำ ' + mt5MinCapitalForBot(code));
   }
 
+  function mt5CapitalLabelForBot(code) {
+    const minCap = mt5MinCapitalForBot(code);
+    return 'เงินทุน (ขั้นต่ำ ' + minCap + ')';
+  }
+
   function mt5DefaultCapitalForBot(code, equity) {
-    const ui = ((window.__mt5RunConfig || {}).botUi || {})[code] || {};
     const eq = mt5Num(equity, 0);
     const kind = mt5BotKind(code);
-    if (kind === 'quantum') return Math.max(eq, mt5Num(ui.defaultCapital, 50000));
-    if (kind === 'queen') return Math.max(eq, mt5Num(ui.defaultCapital, 10000));
+    if (kind === 'queen' || kind === 'quantum') {
+      return eq > 0 ? eq : 0;
+    }
+    const ui = ((window.__mt5RunConfig || {}).botUi || {})[code] || {};
     return eq > 0 ? eq : mt5Num(ui.minCapital, 100);
+  }
+
+  function mt5BotUsesEquityCapital(code) {
+    const ui = ((window.__mt5RunConfig || {}).botUi || {})[code] || {};
+    if (ui.equityBased) return true;
+    const kind = mt5BotKind(code);
+    return kind === 'queen' || kind === 'quantum';
   }
 
   function mt5SelectedRunAccount() {
     const connected = Array.isArray(mt5RunState.connectedAccounts) ? mt5RunState.connectedAccounts : [];
+    const connectSlot = Number(document.getElementById('mt5SelectedPortSlot')?.value || 0);
+    if (connectSlot) {
+      const bySlot = connected.find(function (a) { return Number(a.port_slot) === connectSlot; });
+      if (bySlot) {
+        mt5RunState.selectedAccountId = Number(bySlot.id);
+        sessionStorage.setItem('mt5RunAccountId', String(bySlot.id));
+        return bySlot;
+      }
+    }
     let picked = connected.find(function (a) { return Number(a.id) === Number(mt5RunState.selectedAccountId); }) || null;
     if (!picked && connected.length) {
-      picked = connected[0];
+      const active = Array.isArray(mt5RunState.activeInstances) ? mt5RunState.activeInstances : [];
+      const activeIds = new Set(active.map(function (row) { return Number(row.mt5_account_id || 0); }));
+      picked = connected.find(function (a) { return !activeIds.has(Number(a.id)); }) || connected[0];
       mt5RunState.selectedAccountId = Number(picked.id);
       sessionStorage.setItem('mt5RunAccountId', String(picked.id));
     }
@@ -671,12 +616,7 @@
     const capHint = form.querySelector('.mt5-capital-hint');
     if (capHint) capHint.textContent = mt5CapitalHintForBot(code);
     const capLabel = form.querySelector('.mt5-capital-label');
-    if (capLabel) {
-      const minCap = mt5MinCapitalForBot(code);
-      capLabel.textContent = kind === 'quantum' || kind === 'queen'
-        ? ('เงินทุน (ขั้นต่ำ ' + minCap.toLocaleString() + ')')
-        : ('เงินทุน (ขั้นต่ำ ' + minCap + ')');
-    }
+    if (capLabel) capLabel.textContent = mt5CapitalLabelForBot(code);
     const lotHint = form.querySelector('.mt5-lot-hint');
     if (lotHint) {
       lotHint.textContent = kind === 'queen'
@@ -752,6 +692,9 @@
       const label = mt5Esc(b.label || b.display_name || b.bot_name || b.bot_code || '');
       return '<option value="' + code + '">' + label + '</option>';
     }).join('');
+    const initialBotCode = (bots && bots[0]) ? String(bots[0].code || bots[0].bot_code || '').trim() : 'AK-SNIPER-VIP-VER4.0';
+    const initialMinCap = mt5MinCapitalForBot(initialBotCode);
+    const initialCapitalLabel = mt5CapitalLabelForBot(initialBotCode);
     return (
       '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
       '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
@@ -768,14 +711,14 @@
       '<div class="mt5-run-time-mode-wrap"><label>เวลาเปิดออเดอร์</label><select name="run_time_mode"><option value="auto" selected>Auto trading</option><option value="24h">Open 24H.</option></select></div>' +
       '</div>' +
       '<div class="mt5-form-row">' +
-      '<div><label class="mt5-capital-label">เงินทุน (ขั้นต่ำ 100)</label><input type="number" step="0.01" min="100" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('Equity: ' + mt5Esc(actualCapital)) : 'กรอกเงินทุน') + '" value="' + (actualCapital > 0 ? mt5Esc(actualCapital) : '') + '"><small class="mt5-capital-hint" style="color:#94a3b8;display:block;margin-top:4px">ดึงจาก Equity ล่าสุด แก้ไขได้</small></div>' +
+      '<div><label class="mt5-capital-label">' + mt5Esc(initialCapitalLabel) + '</label><input type="number" step="0.01" min="' + mt5Esc(initialMinCap) + '" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('Equity: ' + mt5Esc(actualCapital)) : 'กรอกเงินทุน') + '" value="' + (actualCapital > 0 ? mt5Esc(actualCapital) : '') + '"><small class="mt5-capital-hint" style="color:#94a3b8;display:block;margin-top:4px">' + mt5Esc(mt5CapitalHintForBot(initialBotCode)) + '</small></div>' +
       '<div class="mt5-run-lot-wrap"><label>Lot Size</label><input name="manual_lot" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(defaultLot)) + '"><small class="mt5-lot-hint" style="color:#94a3b8;display:block;margin-top:4px">สูงสุดตามแพ็กเกจ ' + mt5Esc(mt5Fixed(lotMax)) + '</small></div>' +
       '<div class="mt5-run-action-box">' +
       '<label>คำสั่ง BOT</label>' +
       '<div class="mt5-run-action-buttons">' +
       '<button type="submit" class="mt5-btn run mt5-run-primary"' + ((expired || hasActiveInstance) ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
       (hasActiveInstance
-        ? '<button class="mt5-btn mt5-run-secondary" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยันหยุดการเทรด BOT? (MT5 จะยังเปิดอยู่)\')">Stop BOT</button>'
+        ? '<input type="hidden" name="close_mt5" value="1"><button class="mt5-btn mt5-run-secondary" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยันหยุด BOT และปิด MT5? หลังจากนั้นสามารถเลือกบอทหรือ Run ใหม่ได้\')">Stop BOT</button>'
         : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
       '</div>' +
       '<small class="mt5-run-action-note">' + (hasActiveInstance ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
@@ -804,8 +747,8 @@
       if (changedField === 'capital_manual') syncField = 'capital';
       if (changedField === 'bot_code') {
         syncField = 'capital';
-        const actualCapital = mt5RunAccountCapital(selected);
-        const defCap = mt5DefaultCapitalForBot(botSelect.value, actualCapital);
+        const eqNow = mt5RunAccountCapital(selected);
+        const defCap = mt5DefaultCapitalForBot(botSelect.value, eqNow);
         capitalInput.value = defCap > 0 ? mt5Fixed(defCap) : '';
       }
 
@@ -820,7 +763,8 @@
       lotInput.min = String(mt5Num(cfg.packageLotMin, 0.01));
       lotInput.max = String(mt5Num(cfg.packageLotMax, 0.05));
 
-      const capital = mt5Num(capitalInput.value, actualCapital);
+      let capital = mt5Num(capitalInput.value, 0);
+      if (!capital && actualCapital > 0) capital = actualCapital;
       const manualLot = mt5Num(lotInput.value, 0);
       const preview = mt5ComputeRunPreset(
         botCode,
@@ -1195,6 +1139,12 @@ function mt5SelectPortSlot(slot) {
   const n = Number(slot || 0);
   if (!n || !mt5SelectedPortSlot) return;
   mt5SelectedPortSlot.value = String(n);
+  const runState = window.mt5RunState;
+  const connected = runState && Array.isArray(runState.connectedAccounts) ? runState.connectedAccounts : [];
+  const acc = connected.find(function (a) { return Number(a.port_slot) === n; });
+  if (acc && typeof mt5SelectRunAccount === 'function') {
+    mt5SelectRunAccount(acc.id);
+  }
   if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
 }
 
@@ -1640,123 +1590,179 @@ window.openMt5EquityGraph = openMt5EquityGraph;
 
 <script>
 let mt5LiveDashboardPage = 1;
+let mt5HistoryDashboardPage = 1;
+const MT5_DASHBOARD_REFRESH_MS = 60000;
+
+function mt5DisplayStatus(row) {
+  const s = String(row?.display_status || row?.status || '').trim().toLowerCase();
+  if (s === 'running' || s === 'connecting' || s === 'stopped' || s === 'fail') return s;
+  if (s === 'failed' || s === 'error') return 'fail';
+  if (s === 'pending' || s === 'restarting' || s === 'starting') return 'connecting';
+  return s || 'connecting';
+}
+
+function mt5DashboardUpdatedAt(row) {
+  const raw = row?.last_agent_ping || row?.updated_at || row?.started_at;
+  return raw ? new Date(raw).toLocaleString('th-TH') : '-';
+}
+
+function renderMt5DashboardTable(data, opts) {
+  const mode = opts?.mode || 'live';
+  const instances = data?.instances || [];
+  if (!instances.length) {
+    return '<div class="mt5-empty">ยังไม่มีรายการ BOT</div>';
+  }
+
+  const headLive = mode === 'live';
+  let html = `
+    <table class="mt5-table">
+      <thead>
+        <tr>
+          <th>BOT</th>
+          <th>Login</th>
+          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th>' : '<th>Funding</th><th>Lot</th><th>Level</th>'}
+          <th>Status</th>
+          <th>ล่าสุด</th>
+          <th>Manage</th>
+        </tr>
+      </thead>
+      <tbody>
+  `;
+
+  instances.forEach(function (i) {
+    const st = mt5DisplayStatus(i);
+    const balanceNum = Number(i.mt5_balance || 0);
+    const equityNum = Number(i.mt5_equity || 0);
+    const profitNum = Number.isFinite(balanceNum) && Number.isFinite(equityNum) ? (equityNum - balanceNum) : null;
+    const detailAttrs = `
+      data-instance-id="${i.id || ''}"
+      data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
+      data-login="${mt5ManageEscape(i.mt5_login || '-')}"
+      data-funding="${i.capital_used != null ? i.capital_used : '-'}"
+      data-lot="${i.lot_used != null ? i.lot_used : '-'}"
+      data-level="${mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-'))}"
+      data-status="${mt5ManageEscape(st)}"
+      data-port="${i.assigned_port_no || '-'}"
+      data-node="${mt5ManageEscape(i.node_name || i.node_code || '-')}"
+      data-updated="${mt5ManageEscape(mt5DashboardUpdatedAt(i))}"
+    `;
+    html += '<tr>';
+    html += '<td>' + (i.display_name || i.bot_name || i.bot_code || '-') + '</td>';
+    html += '<td>' + (i.mt5_login || '-') + '</td>';
+    if (headLive) {
+      html += '<td>' + (i.assigned_port_no || '-') + '</td>';
+      html += '<td>' + mt5Money(i.mt5_balance || 0) + '</td>';
+      html += '<td>' + mt5Money(i.mt5_equity || 0) + '</td>';
+      html += '<td>' + (profitNum == null ? '-' : mt5Money(profitNum)) + '</td>';
+    } else {
+      html += '<td>' + (i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-') + '</td>';
+      html += '<td>' + (i.lot_used || '-') + '</td>';
+      html += '<td>' + mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-')) + '</td>';
+    }
+    html += '<td><span class="status ' + st + '">' + st + '</span></td>';
+    html += '<td>' + mt5DashboardUpdatedAt(i) + '</td>';
+    html += '<td><details class="mt5-manage-menu"><summary>Manage</summary><div class="mt5-manage-dropdown">';
+    html += '<button type="button" class="mt5-manage-item" onclick="openMt5InstanceDetail(this)" ' + detailAttrs + '>รายละเอียด</button>';
+    if (headLive) {
+      html += '<button type="button" class="mt5-manage-item" onclick="openMt5EquityGraph(this)" ' + detailAttrs + '>กราฟ</button>';
+      html += '<form method="POST" action="/app/mt5/request-restart/' + i.id + '" onsubmit="return confirm(\'ยืนยัน Restart BOT รายการนี้ใช่ไหม?\')"><button class="mt5-manage-item" type="submit">Restart</button></form>';
+    } else {
+      html += '<button type="button" class="mt5-manage-item" onclick="openMt5InstanceAnalysis(this)" ' + detailAttrs + '>วิเคราะห์</button>';
+    }
+    html += '<form method="POST" action="/app/mt5/instance/' + i.id + '/delete" onsubmit="return confirm(\'ยืนยันลบรายการนี้ใช่ไหม?\')"><button class="mt5-manage-item danger" type="submit">ลบ</button></form>';
+    html += '</div></details></td></tr>';
+  });
+
+  html += '</tbody></table>';
+  const page = Number(data.page || 1);
+  const pageCount = Number(data.pageCount || 1);
+  if (pageCount > 1) {
+    const prevFn = mode === 'live' ? 'changeMt5LiveDashboardPage' : 'changeMt5HistoryDashboardPage';
+    const nextFn = prevFn;
+    html += '<div class="mt5-pager">';
+    html += '<button type="button" class="mt5-pager-btn' + (data.hasPrev ? '' : ' disabled') + '" ' + (data.hasPrev ? ('onclick="' + prevFn + '(' + (page - 1) + ')"') : 'disabled') + '>ก่อนหน้า</button>';
+    html += '<span class="mt5-pager-meta">หน้า <b>' + page + '</b> / ' + pageCount + '</span>';
+    html += '<button type="button" class="mt5-pager-btn primary' + (data.hasNext ? '' : ' disabled') + '" ' + (data.hasNext ? ('onclick="' + nextFn + '(' + (page + 1) + ')"') : 'disabled') + '>ถัดไป</button>';
+    html += '</div>';
+  }
+  return html;
+}
 
 function changeMt5LiveDashboardPage(nextPage) {
-  const page = Math.max(1, Number(nextPage || 1));
-  mt5LiveDashboardPage = page;
-  loadMt5LiveDashboard(page);
+  mt5LiveDashboardPage = Math.max(1, Number(nextPage || 1));
+  loadMt5LiveDashboard(mt5LiveDashboardPage);
+}
+
+function changeMt5HistoryDashboardPage(nextPage) {
+  mt5HistoryDashboardPage = Math.max(1, Number(nextPage || 1));
+  loadMt5HistoryDashboard(mt5HistoryDashboardPage);
 }
 
 window.changeMt5LiveDashboardPage = changeMt5LiveDashboardPage;
+window.changeMt5HistoryDashboardPage = changeMt5HistoryDashboardPage;
 bindMt5ManageMenus(document);
 
 async function loadMt5LiveDashboard(page) {
   const box = document.getElementById('mt5LiveDashboard');
   if (!box) return;
   if (page != null) mt5LiveDashboardPage = Math.max(1, Number(page || 1));
-
   try {
     const res = await fetch('/app/mt5/live-dashboard?page=' + encodeURIComponent(mt5LiveDashboardPage), {
       credentials: 'same-origin',
+      cache: 'no-store',
       headers: { Accept: 'application/json' }
     });
     const data = await res.json();
-
     if (!data.ok) {
       box.innerHTML = '<div class="mt5-empty">โหลด Live Dashboard ไม่สำเร็จ</div>';
       return;
     }
-
-    if (!data.instances || data.instances.length === 0) {
-      box.innerHTML = '<div class="mt5-empty">ยังไม่มี BOT</div>';
-      return;
-    }
-
-    let html = `
-      <table class="mt5-table">
-        <thead>
-          <tr>
-            <th>BOT</th>
-            <th>Login</th>
-            <th>PORT</th>
-            <th>Balance</th>
-            <th>Equity</th>
-            <th>Profit</th>
-            <th>Status</th>
-            <th>ล่าสุด</th>
-            <th>Manage</th>
-          </tr>
-        </thead>
-        <tbody>
-    `;
-
-    data.instances.forEach(i => {
-      const balanceNum = Number(i.mt5_balance || 0);
-      const equityNum = Number(i.mt5_equity || 0);
-      const profitNum = Number.isFinite(balanceNum) && Number.isFinite(equityNum)
-        ? (equityNum - balanceNum)
-        : null;
-      const detailAttrs = `
-        data-instance-id="${i.id || ''}"
-        data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
-        data-login="${mt5ManageEscape(i.mt5_login || '-')}"
-        data-funding="${i.capital_used != null ? i.capital_used : '-'}"
-        data-lot="${i.lot_used != null ? i.lot_used : '-'}"
-        data-level="${mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-'))}"
-        data-status="${mt5ManageEscape(i.status || '-')}"
-        data-port="${i.assigned_port_no || '-'}"
-        data-node="${mt5ManageEscape(i.node_name || i.node_code || '-')}"
-        data-updated="${mt5ManageEscape(i.last_agent_ping ? new Date(i.last_agent_ping).toLocaleString('th-TH') : '-')}"
-      `;
-      html += `
-        <tr>
-          <td>${i.display_name || i.bot_name || i.bot_code || '-'}</td>
-          <td>${i.mt5_login || '-'}</td>
-          <td>${i.assigned_port_no || '-'}</td>
-          <td>${mt5Money(i.mt5_balance || 0)}</td>
-          <td>${mt5Money(i.mt5_equity || 0)}</td>
-          <td>${profitNum == null ? '-' : mt5Money(profitNum)}</td>
-          <td><span class="status ${i.status || ''}">${i.status || '-'}</span></td>
-          <td>${i.last_agent_ping ? new Date(i.last_agent_ping).toLocaleString('th-TH') : '-'}</td>
-          <td>
-            <details class="mt5-manage-menu">
-              <summary>Manage</summary>
-              <div class="mt5-manage-dropdown">
-                <button type="button" class="mt5-manage-item" onclick="openMt5InstanceDetail(this)" ${detailAttrs}>รายละเอียด</button>
-                <button type="button" class="mt5-manage-item" onclick="openMt5EquityGraph(this)" ${detailAttrs}>กราฟ</button>
-                <form method="POST" action="/app/mt5/request-restart/${i.id}" onsubmit="return confirm('ยืนยัน Restart BOT รายการนี้ใช่ไหม?')">
-                  <button class="mt5-manage-item" type="submit">Restart</button>
-                </form>
-                <form method="POST" action="/app/mt5/instance/${i.id}/delete" onsubmit="return confirm('ยืนยันลบรายการนี้ใช่ไหม? ถ้ากำลังรันอยู่ ระบบจะสั่งออก MT5 ด้วย')">
-                  <button class="mt5-manage-item danger" type="submit">ลบ</button>
-                </form>
-              </div>
-            </details>
-          </td>
-        </tr>
-      `;
-    });
-
-    html += '</tbody></table>';
-    if ((data.pageCount || 1) > 1) {
-      html += `
-        <div class="mt5-pager">
-          <button type="button" class="mt5-pager-btn${data.hasPrev ? '' : ' disabled'}" ${data.hasPrev ? `onclick="changeMt5LiveDashboardPage(${Number(data.page) - 1})"` : 'disabled'}>ก่อนหน้า</button>
-          <span class="mt5-pager-meta">หน้า <b>${data.page || 1}</b> / ${data.pageCount || 1}</span>
-          <button type="button" class="mt5-pager-btn primary${data.hasNext ? '' : ' disabled'}" ${data.hasNext ? `onclick="changeMt5LiveDashboardPage(${Number(data.page) + 1})"` : 'disabled'}>ถัดไป</button>
-        </div>
-      `;
-    }
-    box.innerHTML = html;
+    box.innerHTML = renderMt5DashboardTable(data, { mode: 'live' });
     bindMt5ManageMenus(box);
-
   } catch (e) {
     box.innerHTML = '<div class="mt5-empty">Live Dashboard Error: ' + e.message + '</div>';
   }
 }
 
+async function loadMt5HistoryDashboard(page) {
+  const box = document.getElementById('mt5HistoryDashboard');
+  if (!box) return;
+  if (page != null) mt5HistoryDashboardPage = Math.max(1, Number(page || 1));
+  try {
+    const res = await fetch('/app/mt5/live-dashboard?page=' + encodeURIComponent(mt5HistoryDashboardPage), {
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { Accept: 'application/json' }
+    });
+    const data = await res.json();
+    const meta = document.getElementById('mt5HistoryMeta');
+    if (meta && data.ok) {
+      meta.textContent = '1 การรันต่อ 1 แถว · ทั้งหมด ' + (data.total || 0) + ' PORT · อัปเดตทุก 60 วินาที';
+    }
+    if (!data.ok) {
+      box.innerHTML = '<div class="mt5-empty">โหลดประวัติไม่สำเร็จ</div>';
+      return;
+    }
+    box.innerHTML = renderMt5DashboardTable(data, { mode: 'history' });
+    bindMt5ManageMenus(box);
+  } catch (e) {
+    box.innerHTML = '<div class="mt5-empty">ประวัติ Error: ' + e.message + '</div>';
+  }
+}
+
+async function refreshMt5Dashboards() {
+  await Promise.all([
+    loadMt5LiveDashboard(mt5LiveDashboardPage),
+    loadMt5HistoryDashboard(mt5HistoryDashboardPage)
+  ]);
+  if (typeof window.refreshMt5PortCards === 'function') {
+    await window.refreshMt5PortCards();
+  }
+}
+
 loadMt5LiveDashboard();
-setInterval(loadMt5LiveDashboard, 20000);
+loadMt5HistoryDashboard();
+setInterval(refreshMt5Dashboards, MT5_DASHBOARD_REFRESH_MS);
 </script>
 
 <style>

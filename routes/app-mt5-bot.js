@@ -33,6 +33,11 @@ const {
 const { buildEaTimeProfile } = require('../lib/mt5EaTimeProfile');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
 const {
+  purgeStaleBotInstances,
+  fetchDashboardInstances,
+  fetchActiveRunInstances
+} = require('../lib/mt5InstanceDashboard');
+const {
   PACKAGE_PORT_MAP,
   packagePortCapForGroup,
   packagePortRangeLabel,
@@ -1876,29 +1881,8 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         last_equity: a.last_equity
       }));
 
-    const activeInstances = await safeQuery(
-      `
-      SELECT id, mt5_account_id, status, assigned_port_no
-      FROM vps_system.bot_instances
-      WHERE user_id=$1
-        AND status IN ('running','pending','restarting')
-      ORDER BY id DESC
-    `,
-      [userId]
-    );
-    const seenActiveAccountIds = new Set();
-    const activeRunInstances = [];
-    for (const row of activeInstances || []) {
-      const accountId = Number(row.mt5_account_id || 0);
-      if (!accountId || seenActiveAccountIds.has(accountId)) continue;
-      seenActiveAccountIds.add(accountId);
-      activeRunInstances.push({
-        id: Number(row.id),
-        mt5_account_id: accountId,
-        status: String(row.status || ''),
-        assigned_port_no: Number(row.assigned_port_no || 0)
-      });
-    }
+    await purgeStaleBotInstances(userId).catch(() => {});
+    const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
 
     const bots = (await safeQuery(
       `SELECT id, bot_code, display_name, bot_name FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`,
@@ -1999,48 +1983,16 @@ router.get('/mt5', async (req, res) => {
   );
   const vpsProbe = await findAvailableVpsPort();
 
-  const activeInstanceRows = await safeQuery(`
-    SELECT id, mt5_account_id, status, assigned_port_no
-    FROM vps_system.bot_instances
-    WHERE user_id=$1
-      AND status IN ('running','pending','restarting')
-    ORDER BY id DESC
-  `, [userId]);
-  const historyCountRows = await safeQuery(`
-    SELECT COUNT(*)::int AS total
-    FROM vps_system.bot_instances bi
-    WHERE bi.user_id=$1
-      AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
-  `, [userId]);
-  const historyTotal = Number(historyCountRows?.[0]?.total || 0);
-  const historyPageCount = Math.max(1, Math.ceil(historyTotal / historyPageSize));
+  await purgeStaleBotInstances(userId).catch(() => {});
+  const dashPage = await fetchDashboardInstances(userId, {
+    limit: historyPageSize,
+    offset: (Math.max(1, historyPage) - 1) * historyPageSize
+  }).catch(() => ({ instances: [], total: 0, pageSize: historyPageSize, pageCount: 1 }));
+  const instances = dashPage.instances || [];
+  const historyTotal = dashPage.total || 0;
+  const historyPageCount = dashPage.pageCount || 1;
   const historySafePage = Math.min(historyPage, historyPageCount);
-  const historyOffset = (historySafePage - 1) * historyPageSize;
-  const instances = await safeQuery(`
-    SELECT bi.*, bc.display_name, bc.bot_name, bc.bot_code, n.node_name, n.node_code,
-           a.mt5_login, a.last_balance, a.last_equity
-    FROM vps_system.bot_instances bi
-    LEFT JOIN vps_system.bot_catalog bc ON bc.id=bi.bot_id
-    LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
-    LEFT JOIN vps_system.mt5_accounts a ON a.id=bi.mt5_account_id
-    WHERE bi.user_id=$1
-      AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
-    ORDER BY bi.id DESC
-    LIMIT $2 OFFSET $3
-  `, [userId, historyPageSize, historyOffset]);
-  const seenActiveAccountIds = new Set();
-  const activeRunInstances = [];
-  for (const row of activeInstanceRows || []) {
-    const accountId = Number(row.mt5_account_id || 0);
-    if (!accountId || seenActiveAccountIds.has(accountId)) continue;
-    seenActiveAccountIds.add(accountId);
-    activeRunInstances.push({
-      id: Number(row.id),
-      mt5_account_id: accountId,
-      status: String(row.status || ''),
-      assigned_port_no: Number(row.assigned_port_no || 0)
-    });
-  }
+  const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
 
   const flashData = pullFlash(req);
 
@@ -3160,8 +3112,10 @@ router.post('/mt5/stop/:id', async (req, res) => {
   try {
     const userId = req.user.id;
     const id = num(req.params.id);
-    const closeMt5 = String(req.body?.close_mt5 || req.body?.closeMt5 || '').toLowerCase() === '1'
-      || String(req.body?.close_mt5 || req.body?.closeMt5 || '').toLowerCase() === 'true';
+    const closeMt5Raw = req.body?.close_mt5 ?? req.body?.closeMt5;
+    const closeMt5 = closeMt5Raw == null || closeMt5Raw === ''
+      ? true
+      : String(closeMt5Raw).toLowerCase() === '1' || String(closeMt5Raw).toLowerCase() === 'true';
     await client.query('BEGIN');
     const rows = await client.query(`SELECT * FROM vps_system.bot_instances WHERE id=$1 AND user_id=$2 FOR UPDATE`, [id, userId]);
     const inst = rows.rows[0];
@@ -3208,8 +3162,9 @@ router.post('/mt5/stop/:id', async (req, res) => {
         portSlot: num(inst.port_used || runPayload.portSlot || portNo),
         vpsFolderPath: folderPath,
         folder_path: folderPath,
-        stopTradingOnly: !closeMt5,
-        forceKill: closeMt5,
+        stopTradingOnly: false,
+        forceKill: true,
+        closeMt5: true,
         botCode: runPayload.botCode || runPayload.eaName,
         mt5Login: runPayload.mt5Login || inst.mt5_login,
         expectedMt5Login: runPayload.mt5Login || inst.mt5_login,
@@ -3334,27 +3289,34 @@ router.post('/mt5/live-status', async (req, res) => {
       return res.json({ ok: false, message: 'instanceId or port required' });
     }
 
-    await query(`
-      UPDATE vps_system.bot_instances
-      SET status = COALESCE($2, status),
-          ea_status = COALESCE($3, ea_status),
-          mt5_balance = COALESCE($4::numeric, mt5_balance),
-          mt5_equity = COALESCE($5::numeric, mt5_equity),
-          last_error = COALESCE($6, last_error),
-          last_agent_ping = NOW(),
-	last_heartbeat = NOW(),
-          updated_at = NOW()
-      WHERE ($1::bigint IS NOT NULL AND id=$1)
-         OR ($7::int IS NOT NULL AND assigned_port_no=$7)
-    `, [
-      instanceId || null,
-      status || null,
-      eaStatus || null,
-      balance || null,
-      equity || null,
-      error || null,
-      port || null
-    ]);
+    const rawStatus = String(status || '').trim().toLowerCase();
+    let dbStatus = status || null;
+    if (rawStatus === 'stopped') dbStatus = 'stopped';
+    else if (rawStatus === 'failed' || rawStatus === 'fail') dbStatus = 'failed';
+    else if (rawStatus === 'running') dbStatus = 'running';
+    else if (['pending', 'connecting', 'starting', 'restarting'].includes(rawStatus)) dbStatus = 'pending';
+
+    if (instanceId) {
+      await query(`
+        UPDATE vps_system.bot_instances
+        SET status = COALESCE($2, status),
+            ea_status = COALESCE($3, ea_status),
+            mt5_balance = COALESCE($4::numeric, mt5_balance),
+            mt5_equity = COALESCE($5::numeric, mt5_equity),
+            last_error = COALESCE($6, last_error),
+            last_agent_ping = NOW(),
+            last_heartbeat = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+      `, [
+        instanceId,
+        dbStatus,
+        eaStatus || null,
+        balance || null,
+        equity || null,
+        error || null
+      ]);
+    }
 
     await query(`
       UPDATE vps_system.mt5_accounts a
@@ -3484,62 +3446,20 @@ router.get('/mt5/live-dashboard', async (req, res) => {
     const userId = req.user.id;
     const pageSize = 5;
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
-    const countRows = await query(`
-      SELECT COUNT(*)::int AS total
-      FROM vps_system.bot_instances bi
-      WHERE bi.user_id=$1
-        AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
-    `, [userId]);
-    const total = Number(countRows.rows?.[0]?.total || 0);
-    const pageCount = Math.max(1, Math.ceil(total / pageSize));
-    const safePage = Math.min(page, pageCount);
-    const offset = (safePage - 1) * pageSize;
-
-    const rows = await query(`
-      SELECT 
-        bi.id,
-        bi.status,
-        bi.ea_status,
-        bi.assigned_port_no,
-        bi.lot_used,
-        bi.trade_level,
-        bi.capital_used,
-        bi.mt5_balance,
-        bi.mt5_equity,
-        bi.restart_count,
-        bi.last_error,
-        bi.last_agent_ping,
-        EXTRACT(EPOCH FROM (NOW() - bi.last_agent_ping)) AS last_ping_sec,
-
-        bc.display_name,
-        bc.bot_name,
-        bc.bot_code,
-        a.mt5_login,
-
-        n.node_name,
-        n.cpu_percent,
-        n.ram_percent,
-        n.ping_ms
-
-      FROM vps_system.bot_instances bi
-      LEFT JOIN vps_system.bot_catalog bc ON bc.id=bi.bot_id
-      LEFT JOIN vps_system.vps_nodes n ON n.id=bi.vps_id
-      LEFT JOIN vps_system.mt5_accounts a ON a.id=bi.mt5_account_id
-      WHERE bi.user_id=$1
-        AND LOWER(TRIM(COALESCE(bi.status,''))) <> 'deleted'
-      ORDER BY bi.id DESC
-      LIMIT $2 OFFSET $3
-    `, [userId, pageSize, offset]);
+    const offset = (page - 1) * pageSize;
+    const dash = await fetchDashboardInstances(userId, { limit: pageSize, offset });
+    const safePage = Math.min(page, dash.pageCount || 1);
 
     return res.json({
       ok: true,
-      instances: rows.rows,
+      instances: dash.instances,
       page: safePage,
       pageSize,
-      total,
-      pageCount,
+      total: dash.total,
+      pageCount: dash.pageCount,
       hasPrev: safePage > 1,
-      hasNext: safePage < pageCount
+      hasNext: safePage < dash.pageCount,
+      refreshSec: 60
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
