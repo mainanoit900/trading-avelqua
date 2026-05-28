@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-login-fast-v1"
+AGENT_BUILD_ID = "2026-05-28-post-connect-kill-v96"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -496,6 +496,47 @@ def clear_port_folder_reservation(port_dir: Path) -> None:
         port_folder_reservation_path(port_dir).unlink(missing_ok=True)
     except Exception:
         pass
+
+
+def close_mt5_after_login_success(
+    port: Any,
+    port_dir: Path,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    process_id: Any = None,
+    login: str = "",
+    reason: str = "login_success",
+) -> Dict[str, Any]:
+    """ปิด MT5 ของ PORT นี้ทันทีหลัง login สำเร็จ (ไม่กลืน error เงียบ)"""
+    kill_payload = dict(payload or {})
+    kill_payload.setdefault("forceKill", True)
+    kill_payload.setdefault("closeMt5", True)
+    kill_payload.setdefault("killMt5", True)
+    if process_id is not None:
+        kill_payload.setdefault("process_id", process_id)
+    if login:
+        kill_payload.setdefault("mt5Login", login)
+        kill_payload.setdefault("login", login)
+    kill_payload.setdefault("vpsFolderPath", str(port_dir))
+    kill_payload.setdefault("folder_path", str(port_dir))
+    try:
+        res = stop_mt5_port_only(port, kill_payload)
+        stopped = list(res.get("stopped") or [])
+        taskkill = list(res.get("taskkill") or [])
+        if stopped or taskkill:
+            log(
+                f"CLOSE MT5 AFTER LOGIN port={port} reason={reason} "
+                f"stopped={stopped} taskkill={taskkill}"
+            )
+        else:
+            log(f"CLOSE MT5 AFTER LOGIN port={port} reason={reason} no_pids_matched")
+        return res
+    except Exception as e:
+        log(f"CLOSE MT5 AFTER LOGIN ERROR port={port} reason={reason}: {e}")
+        res2 = stop_mt5_by_folder(str(port_dir))
+        log(f"CLOSE MT5 FALLBACK folder kill stopped={res2.get('stopped')}")
+        return res2
+
 
 def stop_mt5_by_folder(folder_path):
     if not folder_path:
@@ -4030,17 +4071,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                                 set_port_folder_reservation(port, port_dir, login=login, reason="connected")
                             except Exception:
                                 pass
-                            try:
-                                kill_payload = dict(payload or {})
-                                kill_payload.setdefault("forceKill", True)
-                                kill_payload.setdefault("closeMt5", True)
-                                kill_payload.setdefault("killMt5", True)
-                                kill_payload.setdefault("process_id", proc_pid)
-                                kill_payload.setdefault("mt5Login", login)
-                                kill_payload.setdefault("login", login)
-                                stop_mt5_port_only(port, kill_payload)
-                            except Exception:
-                                pass
+                            close_mt5_after_login_success(
+                                port,
+                                port_dir,
+                                payload,
+                                process_id=proc_pid,
+                                login=login,
+                                reason="pending_equity_finalize",
+                            )
                             return
                     except Exception:
                         pass
@@ -4081,17 +4119,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         set_port_folder_reservation(port, port_dir, login=login, reason="connected")
     except Exception:
         pass
-    try:
-        kill_payload = dict(payload or {})
-        kill_payload.setdefault("forceKill", True)
-        kill_payload.setdefault("closeMt5", True)
-        kill_payload.setdefault("killMt5", True)
-        kill_payload.setdefault("process_id", proc_pid)
-        kill_payload.setdefault("mt5Login", login)
-        kill_payload.setdefault("login", login)
-        stop_mt5_port_only(port, kill_payload)
-    except Exception:
-        pass
+    close_mt5_after_login_success(
+        port,
+        port_dir,
+        payload,
+        process_id=proc_pid,
+        login=login,
+        reason="login_journal_ok",
+    )
     log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message}")
     return {
         "action": "run_mt5_bot",
@@ -5359,7 +5394,23 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, {**(result or {}), "status": "dispatched"})
             return
 
-        elif ctype in ("stop_mt5", "stop_mt5_bot", "force_stop_mt5", "kill_mt5", "stop_port", "STOP_MT5_BOT"):
+        elif ctype in (
+            "login_exit_mt5",
+            "stop_mt5",
+            "stop_mt5_bot",
+            "force_stop_mt5",
+            "kill_mt5",
+            "stop_port",
+            "STOP_MT5_BOT",
+        ):
+            if ctype == "login_exit_mt5":
+                exit_payload = dict(payload or {})
+                exit_payload.setdefault("forceKill", True)
+                exit_payload.setdefault("closeMt5", True)
+                exit_payload.setdefault("killMt5", True)
+                port = payload_get(exit_payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
+                command_result(cmd_id, True, stop_mt5_port_only(port, exit_payload))
+                return
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
             port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
             stop_payload = dict(payload or {})
@@ -5490,12 +5541,19 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
 def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
     port = _worker_port_num(payload)
+    worker_result: Optional[Dict[str, Any]] = None
+    close_mt5_in_finally = False
     try:
         log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
         if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
-            command_result(cmd_id, True, run_bot_command(payload))
+            worker_result = run_bot_command(payload)
+            command_result(cmd_id, True, worker_result)
         else:
-            command_result(cmd_id, True, start_mt5_bot(payload))
+            worker_result = start_mt5_bot(payload)
+            command_result(cmd_id, True, worker_result)
+            if ctype in ("connect_mt5", "login_mt5") and isinstance(worker_result, dict):
+                if worker_result.get("loginVerified") is True:
+                    close_mt5_in_finally = True
         return 0
     except Exception as e:
         log(f"CONNECT WORKER ERROR port={port} cmd_id={cmd_id}: {e}")
@@ -5519,6 +5577,23 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
         command_result(cmd_id, False, {}, str(e))
         return 1
     finally:
+        if close_mt5_in_finally:
+            try:
+                port_dir = resolve_mt5_port_dir(port, payload)
+                login = str(payload_get(payload, "mt5Login", "login") or "").strip()
+                proc_pid = None
+                if isinstance(worker_result, dict):
+                    proc_pid = worker_result.get("process_id") or worker_result.get("pid")
+                close_mt5_after_login_success(
+                    port,
+                    port_dir,
+                    payload,
+                    process_id=proc_pid,
+                    login=login,
+                    reason="worker_finally",
+                )
+            except Exception as e:
+                log(f"CONNECT WORKER FINALLY CLOSE MT5 port={port}: {e}")
         release_login_ui_lock_for_current_process(port)
         clear_worker_state(port, os.getpid())
         log(f"CONNECT WORKER STOP port={port} cmd_id={cmd_id} pid={os.getpid()}")
