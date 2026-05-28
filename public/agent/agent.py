@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-concurrent-login-v97"
+AGENT_BUILD_ID = "2026-05-28-journal-latest-v98"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4349,10 +4349,18 @@ def port_list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
-    port, _, full = safe_port_file_path(payload)
     purpose = str(payload_get(payload, "purpose") or "").lower()
-    if not full.exists() and re.search(r"verify.*journal|journal.*verify", purpose):
-        port_dir = resolve_mt5_port_dir(port, payload)
+    journal_verify = bool(
+        re.search(r"verify.*journal|journal.*verify|attempt_verify", purpose)
+        or str(payload_get(payload, "use_latest_journal", "useLatestJournal") or "").lower()
+        in ("1", "true", "yes")
+    )
+    port = payload_get(payload, "port", "portNumber", "portSlot")
+    if not port:
+        raise RuntimeError("payload.port is required")
+    port_dir = resolve_mt5_port_dir(port, payload)
+
+    if journal_verify:
         latest, text = latest_log_text(port_dir)
         if latest and text:
             return {
@@ -4362,6 +4370,16 @@ def port_read_file(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "content": text,
                 "journalEvidence": text,
             }
+        return {
+            "action": "port_read_file",
+            "port": port,
+            "file_path": "",
+            "content": "",
+            "journalEvidence": "",
+            "journalMissing": True,
+        }
+
+    _, _, full = safe_port_file_path(payload)
     if not full.exists():
         raise RuntimeError(f"file not found: {full}")
     content = _read_log_tail(full, max_bytes=262144)
