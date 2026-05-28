@@ -226,7 +226,7 @@
   <section class="mt5-card" id="mt5HistorySection">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
-      <span id="mt5HistoryMeta">1 การรันต่อ 1 แถว · เก็บประวัติการเปิดบอทแต่ละครั้ง</span>
+      <span id="mt5HistoryMeta">ทุกครั้งที่ Run = แถวใหม่ · หยุด/Error บันทึกในรายการ</span>
     </div>
     <div id="mt5HistoryDashboard" class="mt5-table-wrap">
       กำลังโหลดข้อมูล...
@@ -1940,7 +1940,7 @@ async function loadMt5HistoryDashboard(page) {
   if (!box) return;
   if (page != null) mt5HistoryDashboardPage = Math.max(1, Number(page || 1));
   try {
-    const res = await fetch('/app/mt5/live-dashboard?page=' + encodeURIComponent(mt5HistoryDashboardPage), {
+    const res = await fetch('/app/mt5/history?page=' + encodeURIComponent(mt5HistoryDashboardPage), {
       credentials: 'same-origin',
       cache: 'no-store',
       headers: { Accept: 'application/json' }
@@ -1948,7 +1948,7 @@ async function loadMt5HistoryDashboard(page) {
     const data = await res.json();
     const meta = document.getElementById('mt5HistoryMeta');
     if (meta && data.ok) {
-      meta.textContent = '1 การรันต่อ 1 แถว · ทั้งหมด ' + (data.total || 0) + ' PORT · เก็บประวัติการเปิดบอทแต่ละครั้ง';
+      meta.textContent = 'ทุกครั้งที่ Run = แถวใหม่ · รวม ' + (data.total || 0) + ' รายการ · หยุด/Error บันทึกในรายการ';
     }
     if (!data.ok) {
       box.innerHTML = '<div class="mt5-empty">โหลดประวัติไม่สำเร็จ</div>';

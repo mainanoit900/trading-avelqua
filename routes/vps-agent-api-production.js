@@ -240,15 +240,8 @@ async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
         AND LOWER(TRIM(COALESCE(bi.status,''))) IN ('pending','restarting')
     `, [instanceId]).catch(() => {});
 
-    await query(`
-      UPDATE vps_system.bot_instances
-      SET status='failed',
-          ea_status='error',
-          last_error=$2,
-          last_agent_ping=NOW(),
-          updated_at=NOW()
-      WHERE id=$1
-    `, [instanceId, failMsg]).catch(() => {});
+    const { finalizeBotInstanceRecord } = require('../lib/mt5InstanceDashboard');
+    await finalizeBotInstanceRecord(instanceId, { status: 'failed', lastError: failMsg }).catch(() => {});
   }
 
   const accountId = Number(pl?.accountId || pl?.account_id || 0);

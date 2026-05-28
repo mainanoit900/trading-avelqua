@@ -35,8 +35,11 @@ const { buildEaTimeProfile } = require('../lib/mt5EaTimeProfile');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
 const {
   purgeStaleBotInstances,
-  fetchDashboardInstances,
-  fetchActiveRunInstances
+  fetchHistoryInstances,
+  fetchLiveDashboardInstances,
+  fetchActiveRunInstances,
+  finalizeBotInstanceRecord,
+  stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
 const {
   PACKAGE_PORT_MAP,
@@ -1880,7 +1883,6 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         last_equity: a.last_equity
       }));
 
-    await purgeStaleBotInstances(userId).catch(() => {});
     const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
 
     const bots = (await safeQuery(
@@ -1982,8 +1984,7 @@ router.get('/mt5', async (req, res) => {
   );
   const vpsProbe = await findAvailableVpsPort();
 
-  await purgeStaleBotInstances(userId).catch(() => {});
-  const dashPage = await fetchDashboardInstances(userId, {
+  const dashPage = await fetchHistoryInstances(userId, {
     limit: historyPageSize,
     offset: (Math.max(1, historyPage) - 1) * historyPageSize
   }).catch(() => ({ instances: [], total: 0, pageSize: historyPageSize, pageCount: 1 }));
@@ -2928,8 +2929,7 @@ router.post('/mt5/run', async (req, res) => {
     if (String(account.status || '').toLowerCase() !== 'connected') throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
     if (!num(account.vps_id) || !num(account.assigned_port_no)) throw new Error('PORT นี้ยังไม่มีข้อมูล VPS/PORT ที่พร้อมรัน');
 
-    const dup = await client.query(`SELECT id FROM vps_system.bot_instances WHERE mt5_account_id=$1 AND status IN ('running','pending') LIMIT 1`, [mt5AccountId]);
-    if (dup.rows[0]) throw new Error('PORT นี้กำลังรัน BOT อยู่แล้ว กรุณาหยุดก่อน');
+    await stopActiveInstancesForAccount(mt5AccountId, userId, client);
 
     const botRows = await client.query(`SELECT * FROM vps_system.bot_catalog WHERE UPPER(bot_code)=UPPER($1) AND is_active=TRUE LIMIT 1`, [botCode]);
     const bot = botRows.rows[0];
@@ -3136,11 +3136,7 @@ router.post('/mt5/stop/:id', async (req, res) => {
       inst.folder_path || runPayload.vpsFolderPath || runPayload.folder_path || runPayload.folderPath || ''
     ).trim();
 
-    await client.query(`
-      UPDATE vps_system.bot_instances
-      SET status='stopped', stopped_at=NOW(), updated_at=NOW(), ea_status='stopped', last_error=NULL
-      WHERE id=$1
-    `, [id]);
+    await finalizeBotInstanceRecord(id, { status: 'stopped', lastError: null, db: client });
 
     if (inst.vps_id) {
       await client.query(`
@@ -3445,13 +3441,37 @@ router.post('/mt5/request-restart/:id', async (req, res) => {
   }
 });
 
+router.get('/mt5/history', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const pageSize = 10;
+    const page = Math.max(1, parseInt(req.query.page, 10) || 1);
+    const offset = (page - 1) * pageSize;
+    const dash = await fetchHistoryInstances(userId, { limit: pageSize, offset });
+    const safePage = Math.min(page, dash.pageCount || 1);
+
+    return res.json({
+      ok: true,
+      instances: dash.instances,
+      page: safePage,
+      pageSize,
+      total: dash.total,
+      pageCount: dash.pageCount,
+      hasPrev: safePage > 1,
+      hasNext: safePage < dash.pageCount
+    });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+});
+
 router.get('/mt5/live-dashboard', async (req, res) => {
   try {
     const userId = req.user.id;
     const pageSize = 5;
     const page = Math.max(1, parseInt(req.query.page, 10) || 1);
     const offset = (page - 1) * pageSize;
-    const dash = await fetchDashboardInstances(userId, { limit: pageSize, offset });
+    const dash = await fetchLiveDashboardInstances(userId, { limit: pageSize, offset });
     const safePage = Math.min(page, dash.pageCount || 1);
 
     return res.json({
