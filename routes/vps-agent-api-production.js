@@ -219,14 +219,14 @@ async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
       UPDATE vps_system.bot_instances
       SET status='running',
           ea_status=COALESCE(NULLIF($2::text, ''), 'ready'),
-          mt5_balance=COALESCE($3::numeric, mt5_balance),
-          mt5_equity=COALESCE($4::numeric, mt5_equity),
           last_error=NULL,
           last_agent_ping=NOW(),
           last_heartbeat=NOW(),
           updated_at=NOW()
       WHERE id=$1
-    `, [instanceId, eaStatus, balance, equity]).catch(() => {});
+    `, [instanceId, eaStatus]).catch(() => {});
+    const { seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
+    await seedInstanceLiveMetrics(instanceId, balance, equity).catch(() => {});
   } else {
     await query(`
       UPDATE vps_system.vps_nodes n

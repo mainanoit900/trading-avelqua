@@ -1790,19 +1790,32 @@ function mt5DisplayStatus(row) {
 
 function mt5DashboardUpdatedAt(row, preferSnapshot) {
   const raw = preferSnapshot
-    ? (row?.last_equity_snapshot_at || row?.last_agent_ping || row?.updated_at)
+    ? (row?.live_metrics_at || row?.last_equity_snapshot_at || row?.last_agent_ping || row?.updated_at)
     : (row?.last_agent_ping || row?.last_equity_snapshot_at || row?.updated_at || row?.started_at);
   return raw ? new Date(raw).toLocaleString('th-TH') : '-';
 }
 
-function mt5DashboardProfit(i) {
+function mt5DashboardProfit(i, preferLive) {
+  if (preferLive && i && i.live_profit != null && Number.isFinite(Number(i.live_profit))) {
+    return Number(i.live_profit);
+  }
   if (i && i.profit != null && Number.isFinite(Number(i.profit))) return Number(i.profit);
-  const balance = Number(i?.mt5_balance || 0);
-  const equity = Number(i?.mt5_equity || 0);
+  const balance = Number((preferLive && i?.live_balance != null) ? i.live_balance : (i?.mt5_balance || 0));
+  const equity = Number((preferLive && i?.live_equity != null) ? i.live_equity : (i?.mt5_equity || 0));
   const startEq = Number(i?.start_equity || 0);
   if (startEq > 0 && Number.isFinite(equity)) return equity - startEq;
   if (Number.isFinite(balance) && Number.isFinite(equity)) return equity - balance;
   return null;
+}
+
+function mt5LiveMoney(i, field) {
+  if (field === 'live_equity') {
+    return i?.live_equity != null ? Number(i.live_equity) : Number(i?.mt5_equity || 0);
+  }
+  if (field === 'live_balance') {
+    return i?.live_balance != null ? Number(i.live_balance) : Number(i?.mt5_balance || 0);
+  }
+  return 0;
 }
 
 function renderMt5DashboardTable(data, opts) {
@@ -1830,9 +1843,9 @@ function renderMt5DashboardTable(data, opts) {
 
   instances.forEach(function (i) {
     const st = mt5DisplayStatus(i);
-    const balanceNum = Number(i.mt5_balance || 0);
-    const equityNum = Number(i.mt5_equity || 0);
-    const profitNum = mt5DashboardProfit(i);
+    const balanceNum = headLive ? Number(mt5LiveMoney(i, 'live_balance')) : Number(i.mt5_balance || 0);
+    const equityNum = headLive ? Number(mt5LiveMoney(i, 'live_equity')) : Number(i.mt5_equity || 0);
+    const profitNum = mt5DashboardProfit(i, headLive);
     const profitCls = profitNum == null ? '' : (profitNum >= 0 ? 'pos' : 'neg');
     const detailAttrs = `
       data-instance-id="${i.id || ''}"
@@ -1853,8 +1866,8 @@ function renderMt5DashboardTable(data, opts) {
     html += '<td>' + (i.mt5_login || '-') + '</td>';
     if (headLive) {
       html += '<td>' + (i.assigned_port_no || '-') + '</td>';
-      html += '<td class="mt5-metric">' + mt5Money(i.mt5_balance || 0) + '</td>';
-      html += '<td class="mt5-metric">' + mt5Money(i.mt5_equity || 0) + '</td>';
+      html += '<td class="mt5-metric">' + mt5Money(balanceNum) + '</td>';
+      html += '<td class="mt5-metric">' + mt5Money(equityNum) + '</td>';
       html += '<td class="mt5-metric ' + profitCls + '">' + (profitNum == null ? '-' : ((profitNum >= 0 ? '+' : '') + mt5Money(profitNum))) + '</td>';
     } else {
       const funding = i.display_funding != null ? i.display_funding : i.capital_used;

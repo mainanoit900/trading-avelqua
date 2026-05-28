@@ -47,7 +47,7 @@ const {
   packagePortRangeLabel,
   computePortEntitlement
 } = require('../lib/mt5PortEntitlement');
-const { fetchEquityChartForInstance, recordEquityLog } = require('../lib/mt5EquityChart');
+const { fetchEquityChartForInstance, recordEquityLog, seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
 
@@ -370,9 +370,8 @@ async function handleMt5LiveStatusCallback(req, res) {
           OR ($4::int IS NOT NULL AND bi.assigned_port_no=$4))
     `, [instanceId || null, balance || null, equity || null, port || null]);
 
-    await ensureEquityLogTable();
-    if (instanceId && equity !== undefined && equity !== null) {
-      await recordEquityLog(instanceId, equity).catch(() => {});
+    if (instanceId && equity !== undefined && equity !== null && Number(equity) > 0) {
+      await seedInstanceLiveMetrics(instanceId, balance, equity).catch(() => {});
     }
 
     return res.json({ ok: true });
@@ -415,21 +414,23 @@ async function handleMt5AccountMetricsCallback(req, res) {
       WHERE a.id IN (SELECT id FROM target)
     `, [accountId, userId, portNumber, balance, equity]);
 
-    await query(`
-      UPDATE vps_system.bot_instances bi
-      SET mt5_balance = COALESCE($2::numeric, bi.mt5_balance),
-          mt5_equity = COALESCE($3::numeric, bi.mt5_equity),
-          last_agent_ping = NOW(),
-          last_heartbeat = NOW(),
-          updated_at = NOW()
-      WHERE ($1::bigint IS NOT NULL AND bi.mt5_account_id = $1)
-         OR (
-           $4::bigint IS NOT NULL
-           AND $5::int IS NOT NULL
-           AND bi.user_id = $4
-           AND bi.assigned_port_no = $5
-         )
-    `, [accountId, balance, equity, userId, portNumber]).catch(() => {});
+    const activeInst = await query(
+      `
+      SELECT id FROM vps_system.bot_instances
+      WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('running', 'pending', 'restarting', 'connecting', 'starting')
+        AND (
+          ($1::bigint IS NOT NULL AND mt5_account_id = $1)
+          OR ($2::bigint IS NOT NULL AND $3::int IS NOT NULL AND user_id = $2 AND assigned_port_no = $3)
+        )
+      ORDER BY started_at DESC NULLS LAST, id DESC
+      LIMIT 1
+      `,
+      [accountId, userId, portNumber]
+    );
+    const instId = activeInst.rows?.[0]?.id;
+    if (instId && equity != null && Number(equity) > 0) {
+      await seedInstanceLiveMetrics(instId, balance, equity).catch(() => {});
+    }
 
     return res.json({ ok: true });
   } catch (e) {
@@ -3098,11 +3099,16 @@ router.post('/mt5/run', async (req, res) => {
       WHERE id=$1
     `, [node.id, lot]);
 
-    await client.query(`
-      UPDATE vps_system.bot_instances
-      SET start_equity = COALESCE(start_equity, $2::numeric)
-      WHERE id = $1
-    `, [inst.rows[0].id, capitalUsed > 0 ? capitalUsed : null]).catch(() => {});
+    const accEq = await client.query(
+      `SELECT last_balance, last_equity FROM vps_system.mt5_accounts WHERE id=$1`,
+      [mt5AccountId]
+    );
+    const accRow = accEq.rows?.[0] || {};
+    await seedInstanceLiveMetrics(
+      inst.rows[0].id,
+      accRow.last_balance,
+      accRow.last_equity
+    ).catch(() => {});
 
     await client.query('COMMIT');
     flash(req, 'success', `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว`);
