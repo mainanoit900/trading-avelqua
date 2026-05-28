@@ -662,7 +662,13 @@ router.get('/queue', async (req, res) => {
           AND c.port_id IS NOT NULL
           AND c.finished_at IS NULL
           AND COALESCE(c.locked_at, c.started_at, c.picked_at, c.updated_at, c.created_at)
-              < NOW() - INTERVAL '5 minutes'
+              < NOW() - CASE
+                WHEN c.command_type IN (
+                  'account_snapshot', 'sync_mt5_account', 'read_account_metrics',
+                  'port_read_file', 'mt5_preview', 'capture_mt5_window', 'capture_mt5_preview'
+                ) THEN INTERVAL '90 seconds'
+                ELSE INTERVAL '5 minutes'
+              END
       )
       UPDATE vps_system.vps_agent_commands c
       SET
@@ -686,6 +692,27 @@ router.get('/queue', async (req, res) => {
         AND finished_at IS NULL
         AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
             < NOW() - INTERVAL '5 minutes'
+    `, [node.id]).catch(() => {});
+
+    await query(`
+      WITH verify_dup AS (
+        SELECT id,
+          ROW_NUMBER() OVER (
+            PARTITION BY COALESCE(port_id, 0), command_type
+            ORDER BY id DESC
+          ) AS rn
+        FROM vps_system.vps_agent_commands
+        WHERE status = 'pending'
+          AND (node_id = $1 OR vps_id = $1)
+          AND command_type IN ('account_snapshot', 'port_read_file', 'sync_mt5_account', 'read_account_metrics')
+      )
+      UPDATE vps_system.vps_agent_commands c
+      SET status = 'cancelled',
+          finished_at = NOW(),
+          updated_at = NOW(),
+          result_message = 'cancelled_duplicate_verify'
+      FROM verify_dup d
+      WHERE c.id = d.id AND d.rn > 1
     `, [node.id]).catch(() => {});
 
     const r = await query(`

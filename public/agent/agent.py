@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-concurrent-login-v81"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-v82"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4055,11 +4055,11 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
 
 
 def login_ui_lock_uses_global(port: Any, bot_code: Any = None) -> bool:
-    """บน VPS เดสก์ท็อปเดียว — LOGIN พร้อมกันหลาย PORT ต้องคิว UI automation ทีละตัว."""
-    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "1")).strip().lower() in ("0", "false", "no"):
-        return False
-    bot = str(bot_code or "").strip().upper()
-    return bot in ("", "LOGIN_ONLY")
+    """LOGIN หลาย PORT พร้อมกันใช้ lock แยกต่อ PORT (คนละ terminal) — global lock ทำให้ค้าง."""
+    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "0")).strip().lower() in ("1", "true", "yes"):
+        bot = str(bot_code or "").strip().upper()
+        return bot in ("", "LOGIN_ONLY")
+    return False
 
 
 def acquire_login_ui_lock(
@@ -6822,20 +6822,27 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
-            snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
-            try:
-                snap = account_snapshot(port, payload)
-            except Exception as sync_err:
-                log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
-                snap["error"] = str(sync_err)[:500]
-            exit_after = _should_exit_mt5_after_snapshot(payload, snap)
-            if exit_after:
-                schedule_login_verify_exit_mt5(port, payload, delay_sec=1.0)
-            command_result(
-                cmd_id,
-                True,
-                {"action": ctype, "snapshot": snap, "loginExitScheduled": bool(exit_after), **snap},
-            )
+            pl = dict(payload or {})
+            ct = ctype
+
+            def _snapshot_worker() -> None:
+                snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
+                try:
+                    snap = account_snapshot(port, pl)
+                except Exception as sync_err:
+                    log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
+                    snap["error"] = str(sync_err)[:500]
+                exit_after = _should_exit_mt5_after_snapshot(pl, snap)
+                if exit_after:
+                    schedule_login_verify_exit_mt5(port, pl, delay_sec=1.0)
+                command_result(
+                    cmd_id,
+                    True,
+                    {"action": ct, "snapshot": snap, "loginExitScheduled": bool(exit_after), **snap},
+                )
+
+            threading.Thread(target=_snapshot_worker, daemon=True).start()
+            return
 
         elif ctype == "login_exit_mt5":
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
@@ -6897,7 +6904,16 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, port_list_files(payload))
 
         elif ctype == "port_read_file":
-            command_result(cmd_id, True, port_read_file(payload))
+            pl = dict(payload or {})
+
+            def _read_file_worker() -> None:
+                try:
+                    command_result(cmd_id, True, port_read_file(pl))
+                except Exception as e:
+                    command_result(cmd_id, False, {"action": "port_read_file", "error": str(e)[:500]}, str(e))
+
+            threading.Thread(target=_read_file_worker, daemon=True).start()
+            return
 
         elif ctype == "port_write_file":
             command_result(cmd_id, True, port_write_file(payload))
