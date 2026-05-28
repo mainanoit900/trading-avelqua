@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-login-fast-connected-v85"
+AGENT_BUILD_ID = "2026-05-28-login-require-equity-v86"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -5453,11 +5453,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     success_message = JOURNAL_OK_MSG
     ensure_login_only_no_trading(port, payload)
 
-    # 1) แจ้ง connected ให้เว็บทันที (ไม่รอ MT5 API snapshot)
+    # 1) แจ้งสถานะทันทีว่าเปิด/ยืนยันเลขบัญชีแล้ว และกำลังดึง Equity (ห้ามส่ง connected จนกว่าจะได้ equity)
     send_connect_result(
         payload,
-        "connected",
-        success_message,
+        "checking",
+        "กำลังดึง Equity จาก MT5...",
         port,
         process_id=proc_pid,
         journal_evidence=journal_final,
@@ -5470,7 +5470,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     # 2) พยายามดึง equity แบบ background แล้วค่อยปิด MT5 (ถ้าไม่ได้ในเวลาที่กำหนดก็ปิดเพื่อไม่ให้ค้างหน้าจอ)
     def _equity_then_exit() -> None:
         try:
-            deadline = time.time() + float(os.getenv("AVELQUA_EQUITY_BEFORE_EXIT_TIMEOUT_SEC", "10") or 10)
+            deadline = time.time() + float(os.getenv("AVELQUA_EQUITY_BEFORE_EXIT_TIMEOUT_SEC", "25") or 25)
             sent = False
             while time.time() < deadline and not sent:
                 snap = account_snapshot(port, payload) or {}
@@ -5479,7 +5479,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 if bal is not None or eq is not None:
                     cb = dict(payload or {})
                     cb["observedLogin"] = snap.get("observedLogin", "") or payload_get(payload, "mt5Login", "login")
-                    # ส่ง connected อีกรอบพร้อม equity (ให้เว็บโชว์ตัวเลข)
+                    # ส่ง connected พร้อม equity (ให้เว็บโชว์ตัวเลข) แล้วค่อยปิด MT5
                     try:
                         callback = payload_get(payload, "callbackUrl", default=DEFAULT_CALLBACK_URL)
                         body = {
@@ -5510,6 +5510,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 time.sleep(0.8)
         except Exception as e:
             log(f"EQUITY BEFORE EXIT ERROR: {e}")
+        if not sent:
+            # ถ้าดึง equity ไม่ได้ ให้แจ้ง failed ชัดเจน (ไม่ใช่ connected ปลอม)
+            try:
+                send_connect_result(payload, "failed", "ดึง Equity ไม่สำเร็จ กรุณาลองใหม่", port, process_id=proc_pid)
+            except Exception:
+                pass
         try:
             finalize_login_verify_exit_mt5(port, payload)
         except Exception as e:
