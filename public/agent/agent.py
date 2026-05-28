@@ -81,7 +81,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-login-equity-required-v92"
+AGENT_BUILD_ID = "2026-05-28-login-equity-pending-v93"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -101,7 +101,17 @@ WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
-MT5_API_SNAPSHOT_LOCK = threading.Lock()
+MT5_API_SNAPSHOT_LOCK = threading.Lock()  # legacy fallback
+_MT5_API_PORT_LOCKS: Dict[str, threading.Lock] = {}
+_MT5_API_PORT_LOCKS_GUARD = threading.Lock()
+
+
+def _mt5_api_port_lock(port_dir: Path) -> threading.Lock:
+    key = str(port_dir).rstrip("\\/").lower()
+    with _MT5_API_PORT_LOCKS_GUARD:
+        if key not in _MT5_API_PORT_LOCKS:
+            _MT5_API_PORT_LOCKS[key] = threading.Lock()
+        return _MT5_API_PORT_LOCKS[key]
 MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
 MT5_LAUNCH_DIAG_LOCK = threading.Lock()
 
@@ -2859,7 +2869,7 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     retry_sleep = float(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRY_SEC", "2.0"))
     ai = None
     ti = None
-    with MT5_API_SNAPSHOT_LOCK:
+    with _mt5_api_port_lock(port_dir):
         try:
             for attempt in range(retries):
                 try:
@@ -5455,44 +5465,18 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             verification_pending = True
         journal_final = journal_chunk2 or journal_final
 
-    if verification_pending:
-        ensure_login_only_no_trading(port, payload)
-        pending_msg = "กำลังรอ verifier ยืนยันเลขบัญชีจาก Journal / MT5 API..."
-        send_connect_result(
-            payload,
-            "checking",
-            pending_msg,
-            port,
-            process_id=proc_pid,
-            journal_evidence=journal_final,
-            window_title=titles,
-            preview_b64=preview_final,
-            window_verified=True,
-            schedule_metric_retry=False,
-        )
-        return {
-            "action": "run_mt5_bot",
-            "status": "started",
-            "port": port,
-            "login": login,
-            "server": server,
-            "bot": bot,
-            "config": str(config_file),
-            "terminal": str(terminal),
-            "journalEvidence": journal_final,
-            "verificationPending": True,
-            "loginVerified": False,
-            "windowVerified": True,
-        }
-
-    success_message = JOURNAL_OK_MSG
+    success_message = JOURNAL_OK_MSG if not verification_pending else "window verified"
     ensure_login_only_no_trading(port, payload)
 
-    # 1) แจ้งสถานะทันทีว่าเปิด/ยืนยันเลขบัญชีแล้ว และกำลังดึง Equity (ห้ามส่ง connected จนกว่าจะได้ equity)
+    pending_detail = (
+        "กำลังดึง Equity จาก MT5..."
+        if verification_pending
+        else "กำลังดึง Equity จาก MT5..."
+    )
     send_connect_result(
         payload,
         "checking",
-        "กำลังดึง Equity จาก MT5...",
+        pending_detail,
         port,
         process_id=proc_pid,
         journal_evidence=journal_final,
@@ -5502,7 +5486,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         schedule_metric_retry=False,
     )
 
-    # 2) ดึง Equity ล่าสุด → connected + lock PORT (ฝั่ง server) → ปิด MT5 ทันที
+    # ดึง Equity (MT5 API) → POST connected + equity → ปิด MT5 (ทั้ง journal OK และ window-only)
     def _equity_then_exit() -> None:
         sent = False
         try:
@@ -5567,10 +5551,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             log(f"LOGIN EXIT AFTER EQUITY ERROR: {e}")
 
     threading.Thread(target=_equity_then_exit, daemon=True).start()
-    log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message}")
+    log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message} verification_pending={verification_pending}")
     return {
-        "action": "login_mt5",
-        "status": "connected",
+        "action": "login_mt5" if not verification_pending else "run_mt5_bot",
+        "status": "started" if verification_pending else "connected",
         "port": port,
         "login": login,
         "server": server,
@@ -5578,8 +5562,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         "config": str(config_file),
         "terminal": str(terminal),
         "journalEvidence": journal_final,
-        "journalVerified": True,
-        "loginVerified": True,
+        "journalVerified": not verification_pending,
+        "loginVerified": not verification_pending,
+        "windowVerified": True,
+        "verificationPending": verification_pending,
         "loginExitScheduled": True,
     }
 
