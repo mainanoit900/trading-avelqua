@@ -81,7 +81,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-login-equity-pending-v93"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-v94"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -101,17 +101,8 @@ WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
-MT5_API_SNAPSHOT_LOCK = threading.Lock()  # legacy fallback
-_MT5_API_PORT_LOCKS: Dict[str, threading.Lock] = {}
-_MT5_API_PORT_LOCKS_GUARD = threading.Lock()
-
-
-def _mt5_api_port_lock(port_dir: Path) -> threading.Lock:
-    key = str(port_dir).rstrip("\\/").lower()
-    with _MT5_API_PORT_LOCKS_GUARD:
-        if key not in _MT5_API_PORT_LOCKS:
-            _MT5_API_PORT_LOCKS[key] = threading.Lock()
-        return _MT5_API_PORT_LOCKS[key]
+MT5_API_SNAPSHOT_LOCK = threading.Lock()  # legacy in-process fallback
+MT5_API_FILE_LOCK = AGENT_DIR / "locks" / "mt5_api_global.lock"
 MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
 MT5_LAUNCH_DIAG_LOCK = threading.Lock()
 
@@ -2869,7 +2860,14 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     retry_sleep = float(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRY_SEC", "2.0"))
     ai = None
     ti = None
-    with _mt5_api_port_lock(port_dir):
+    api_timeout = max(30, int(os.getenv("AVELQUA_MT5_API_LOCK_TIMEOUT_SEC", "120") or 120))
+    api_token = acquire_file_lock(
+        MT5_API_FILE_LOCK,
+        timeout_sec=api_timeout,
+        stale_sec=api_timeout,
+        label="mt5_api",
+    )
+    try:
         try:
             for attempt in range(retries):
                 try:
@@ -2945,6 +2943,8 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
             except Exception:
                 pass
             return {}
+    finally:
+        release_file_lock(MT5_API_FILE_LOCK, api_token)
 
 
 def clear_mt5_logs(port_dir: Path) -> None:
@@ -4104,11 +4104,53 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
 
 
 def login_ui_lock_uses_global(port: Any, bot_code: Any = None) -> bool:
-    """Per-PORT UI lock (backup style); server serializes login_mt5 per VPS for concurrent safety."""
-    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "0")).strip().lower() in ("0", "false", "no"):
-        return False
-    bot = str(bot_code or "").strip().upper()
-    return bot in ("", "LOGIN_ONLY")
+    """Per-PORT UI lock — เปิด login พร้อมกันหลาย PORT ได้ (ห้ามเปิด global lock)."""
+    return False
+
+
+def acquire_file_lock(
+    lock_file: Path,
+    *,
+    timeout_sec: int = 180,
+    stale_sec: int = 120,
+    label: str = "",
+) -> str:
+    lock_file.parent.mkdir(parents=True, exist_ok=True)
+    deadline = time.time() + max(5, int(timeout_sec))
+    token = f"{os.getpid()}:{time.time()}"
+    while time.time() < deadline:
+        try:
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, token.encode("utf-8", errors="ignore"))
+            finally:
+                os.close(fd)
+            log(f"FILE LOCK ACQUIRED {label or lock_file.name} token={token}")
+            return token
+        except FileExistsError:
+            try:
+                age = time.time() - lock_file.stat().st_mtime
+                if age > stale_sec:
+                    lock_file.unlink(missing_ok=True)
+                    log(f"FILE LOCK STALE REMOVED {label or lock_file.name} age_sec={int(age)}")
+                    continue
+            except Exception:
+                pass
+        time.sleep(0.35)
+    raise RuntimeError(
+        f"รอ {label or lock_file.name} ไม่สำเร็จ — กำลังมีงาน MT5 อีก PORT อยู่ กรุณารอสักครู่"
+    )
+
+
+def release_file_lock(lock_file: Path, token: str) -> None:
+    try:
+        if not lock_file.exists():
+            return
+        current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+        if current == token:
+            lock_file.unlink(missing_ok=True)
+    except Exception as e:
+        log(f"FILE LOCK RELEASE ERROR {lock_file.name}: {e}")
 
 
 def acquire_login_ui_lock(
@@ -4118,47 +4160,25 @@ def acquire_login_ui_lock(
     *,
     global_lock: bool = False,
 ) -> str:
-    """Lock MT5 UI automation — global สำหรับ LOGIN_ONLY (พร้อมกันหลาย PORT), per-PORT สำหรับ Run BOT."""
+    """Lock MT5 UI automation per PORT (login พร้อมกันหลาย PORT ได้)."""
     lock_file = LOGIN_UI_LOCK_FILE if global_lock else login_ui_lock_path(port)
-    deadline = time.time() + max(5, int(timeout_sec))
-    token = f"{os.getpid()}:{time.time()}"
     port_label = str(port or "?")
-    while time.time() < deadline:
-        try:
-            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-            try:
-                os.write(fd, token.encode("utf-8", errors="ignore"))
-            finally:
-                os.close(fd)
-            scope = "global" if global_lock else f"port={port_label}"
-            log(f"LOGIN UI LOCK ACQUIRED {scope} file={lock_file.name} token={token}")
-            return token
-        except FileExistsError:
-            try:
-                age = time.time() - lock_file.stat().st_mtime
-                if age > stale_sec:
-                    lock_file.unlink(missing_ok=True)
-                    log(f"LOGIN UI LOCK STALE REMOVED port={port_label} age_sec={int(age)}")
-                    continue
-            except Exception:
-                pass
-        time.sleep(0.35)
-    raise RuntimeError(
-        "กำลัง Login MT5 อีก PORT อยู่ ระบบกำลังคิวให้อัตโนมัติ — กรุณารอสักครู่"
-    )
+    try:
+        return acquire_file_lock(
+            lock_file,
+            timeout_sec=timeout_sec,
+            stale_sec=stale_sec,
+            label=f"ui port={port_label}",
+        )
+    except RuntimeError:
+        raise RuntimeError(
+            "กำลัง Login MT5 ที่ PORT นี้อยู่ ระบบกำลังคิวให้อัตโนมัติ — กรุณารอสักครู่"
+        )
 
 
 def release_login_ui_lock(port: Any, token: str, *, global_lock: bool = False) -> None:
     lock_file = LOGIN_UI_LOCK_FILE if global_lock else login_ui_lock_path(port)
-    try:
-        if not lock_file.exists():
-            return
-        current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
-        if current == token:
-            lock_file.unlink(missing_ok=True)
-            log(f"LOGIN UI LOCK RELEASED port={port} token={token}")
-    except Exception as e:
-        log(f"LOGIN UI LOCK RELEASE ERROR port={port}: {e}")
+    release_file_lock(lock_file, token)
 
 
 def release_login_ui_lock_for_current_process(port: Any = None) -> None:
@@ -7148,8 +7168,19 @@ def main() -> None:
                 pass
 
             try:
-                max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))
-                async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
+                max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "8")))
+                pipeline_types = {
+                    "connect_mt5",
+                    "login_mt5",
+                    "run_mt5_bot",
+                    "run_mt5",
+                    "account_snapshot",
+                    "sync_mt5_account",
+                    "read_account_metrics",
+                    "port_read_file",
+                    "read_file",
+                    "login_exit_mt5",
+                }
                 for _ in range(max_per_tick):
                     res = api(
                         "GET",
@@ -7161,7 +7192,7 @@ def main() -> None:
                         break
                     ctype = str(cmd.get("command_type") or "").lower()
                     handle_command(cmd)
-                    if ctype not in async_types:
+                    if ctype not in pipeline_types:
                         break
 
             except Exception as e:

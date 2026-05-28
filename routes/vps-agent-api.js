@@ -374,8 +374,41 @@ router.get('/queue', async (req, res) => {
               FROM vps_system.vps_agent_commands busy
               WHERE busy.vps_id = $1
                 AND busy.id <> c.id
-                AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked')
+                AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked', 'running')
                 AND LOWER(COALESCE(busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
+                AND (
+                  (
+                    COALESCE(busy.port_id, 0) > 0
+                    AND COALESCE(busy.port_id, 0) = COALESCE(c.port_id, 0)
+                  )
+                  OR (
+                    COALESCE(busy.port_id, 0) = 0
+                    AND COALESCE(c.port_id, 0) = 0
+                    AND LOWER(
+                      COALESCE(
+                        NULLIF(TRIM(busy.payload->>'portNumber'), ''),
+                        NULLIF(TRIM(busy.payload->>'port'), ''),
+                        NULLIF(TRIM(busy.payload->>'port_no'), ''),
+                        ''
+                      )
+                    ) = LOWER(
+                      COALESCE(
+                        NULLIF(TRIM(c.payload->>'portNumber'), ''),
+                        NULLIF(TRIM(c.payload->>'port'), ''),
+                        NULLIF(TRIM(c.payload->>'port_no'), ''),
+                        ''
+                      )
+                    )
+                    AND LOWER(
+                      COALESCE(
+                        NULLIF(TRIM(c.payload->>'portNumber'), ''),
+                        NULLIF(TRIM(c.payload->>'port'), ''),
+                        NULLIF(TRIM(c.payload->>'port_no'), ''),
+                        ''
+                      )
+                    ) <> ''
+                  )
+                )
             )
           )
         ORDER BY
