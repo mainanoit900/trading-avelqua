@@ -2940,41 +2940,26 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
 
     const liveMap = await fetchLiveHealthMap(nodeId);
     const dbUsageMap = await fetchDbMt5UsageMap(nodeId);
-    const {
-      reconcilePortIdleWhenAgentFree,
-      lookupLiveHealth,
-      lookupDbUsage,
-      resolveAdminPortMt5State
-    } = require('../lib/adminVpsBridge');
+    const { isAgentMt5Running, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
 
     const rows = (ports.rows || []).map((p) => {
       const portNo = parsePortNumber(p);
-      const live = lookupLiveHealth(liveMap, portNo);
-      const dbUse = lookupDbUsage(dbUsageMap, portNo);
+      const live = liveMap[portNo] || {};
+      const dbUse = dbUsageMap[portNo] || {};
+      const agentState = isAgentMt5Running(live);
+      const agentRunning = agentState === true;
+      const dbRunning = dbUse.running === true;
       const adminDisabled = isPortAdminDisabled(p);
       const dbSt = String(p.status || '').trim().toLowerCase();
       const dbBusy = ['locked', 'used', 'running', 'busy', 'full'].includes(dbSt);
       const portName = p.port_name || p.display_name || (`PORT-${String(portNo).padStart(2, '0')}`);
       const basePath =
         p.folder_path || p.base_path || live.folder_path || dbUse.folder_path || `C:\\MT5_PORTS\\${portName}`;
-      const mt5State = resolveAdminPortMt5State({ live, dbUse, adminDisabled });
-      const inUse = mt5State.inUse;
-      const agentState = mt5State.agentState;
-      const orphanRunning = mt5State.orphanRunning === true;
-      const dbRunning = dbUse.running === true;
-      const freshAgent = live?.updated_at && Date.now() - new Date(live.updated_at).getTime() <= 3 * 60 * 1000;
-      if (
-        agentState === false &&
-        freshAgent &&
-        !dbRunning &&
-        !inUse &&
-        !orphanRunning
-      ) {
+      if (agentState === false && (dbRunning || dbBusy)) {
         reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
       }
-      const mt5Login = inUse || orphanRunning
-        ? mt5State.mt5Login || p.mt5_login || null
-        : null;
+      const inUse = !adminDisabled && (agentRunning || (agentState !== false && (dbRunning || dbBusy)));
+      const mt5Login = live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null;
       return {
         ...p,
         vps_id: p.vps_id || p.node_id || nodeId,
@@ -2987,12 +2972,11 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
         is_active: !adminDisabled,
         admin_disabled: adminDisabled,
         is_used: inUse,
-        orphan_running: orphanRunning,
-        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
-        status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
+        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
+        status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
         live_pid: live?.pid || live?.process_id || null,
-        live_running: (inUse || orphanRunning) && !adminDisabled,
-        usage_source: mt5State.usageSource,
+        live_running: inUse && !adminDisabled,
+        usage_source: agentState === false ? 'free' : agentRunning ? 'agent' : dbRunning ? dbUse.source || 'db' : dbBusy ? 'allocation' : 'free',
         mt5_login: mt5Login
       };
     });
@@ -3035,16 +3019,14 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
     const cleanRows = Array.from(dedupe.values()).sort((a,b) => Number(a.port_number||0) - Number(b.port_number||0));
 
     const totalPorts = cleanRows.length;
-    const connectedPorts = cleanRows.filter((p) => p.is_used === true && !p.admin_disabled).length;
-    const orphanPorts = cleanRows.filter((p) => p.orphan_running === true && !p.admin_disabled).length;
+    const activePorts = cleanRows.filter((p) => p.live_running === true && !p.admin_disabled).length;
 
     res.json({
       ok: true,
       stats: {
         total_ports: totalPorts,
-        active_ports: connectedPorts,
-        orphan_ports: orphanPorts,
-        free_ports: Math.max(0, totalPorts - connectedPorts - orphanPorts)
+        active_ports: activePorts,
+        free_ports: Math.max(0, totalPorts - activePorts)
       },
       ports: cleanRows
     });
@@ -3100,13 +3082,17 @@ function adminSystemPortNos(portNo) {
   return [...new Set([n, systemNo].filter((x) => x > 0))];
 }
 
-async function adminStopPortRow(portRow, sourceTable, portDbId) {
+async function adminStopPortRow(portRow, sourceTable, portDbId, options = {}) {
   const adminNodeId = Number(portRow.node_id || portRow.vps_id || 0);
   const portNo = parsePortNumber(portRow);
+  const portName =
+    portRow.port_name || portRow.display_name || `PORT-${String(portNo).padStart(2, '0')}`;
   const folderPath =
-    portRow.folder_path || portRow.base_path || `C:\\MT5_PORTS\\${portRow.port_name || `PORT-${String(portNo).padStart(2, '0')}`}`;
+    portRow.folder_path || portRow.base_path || `C:\\MT5_PORTS\\${portName}`;
+  const mt5Login = String(portRow.mt5_login || portRow.current_mt5_login || '').trim() || null;
   const { systemVpsId } = await resolveSystemVpsId(adminNodeId);
   const systemPortNos = adminSystemPortNos(portNo);
+  const reason = String(options.reason || 'admin_port_stop');
 
   if (systemVpsId && folderPath) {
     await queueSystemAgentCommand(
@@ -3116,10 +3102,20 @@ async function adminStopPortRow(portRow, sourceTable, portDbId) {
         port: portNo,
         portNumber: portNo,
         port_no: portNo,
+        portSlot: portNo,
+        portName,
+        vpsPortName: portName,
         folder_path: folderPath,
         folderPath,
         vpsFolderPath: folderPath,
-        reason: 'admin_port_stop',
+        mt5Login,
+        login: mt5Login,
+        reason,
+        purpose: reason,
+        forceKill: true,
+        closeMt5: true,
+        killMt5: true,
+        clearReservation: true,
         sourceTable
       },
       portDbId
@@ -3345,14 +3341,9 @@ router.post('/vps/ports/api/delete/:id', async (req, res) => {
 
     const portRow = portRes.rows[0];
     const nodeId = Number(portRow.node_id || portRow.vps_id || 0);
-    const raw = String(portRow.port_name || portRow.display_name || portRow.port_number || portRow.port || '');
-    const m = raw.match(/(\d+)/);
-    const no = m ? Number(m[1]) : Number(portRow.port_number || portRow.port || 0);
-    const portCode = 'PORT' + String(no || 1).padStart(2, '0');
-    const folderPath = portRow.base_path || portRow.folder_path || `C:\\MT5_PORTS\\${portCode}`;
 
     if (nodeId) {
-      await adminStopPortRow(portRow, tableName, id);
+      await adminStopPortRow(portRow, tableName, id, { reason: 'admin_delete_port' });
     }
 
     let r;
@@ -3362,7 +3353,10 @@ router.post('/vps/ports/api/delete/:id', async (req, res) => {
       r = await query(`DELETE FROM vps_ports WHERE id=$1 RETURNING *`, [id]).catch(() => ({ rows: [] }));
     }
     if (!r.rows.length) return res.status(404).json({ ok:false, error:'PORT not found' });
-    return res.json({ ok:true });
+    return res.json({
+      ok: true,
+      message: 'ลบ PORT แล้ว — ส่งคำสั่งปิด MT5 และเคลียร์การจองโฟลเดอร์บน VPS แล้ว'
+    });
   } catch (err) {
     return res.status(500).json({ ok:false, error:err.message });
   }

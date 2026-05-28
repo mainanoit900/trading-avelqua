@@ -81,7 +81,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-equity-port-health-v95"
+AGENT_BUILD_ID = os.getenv("AVELQUA_AGENT_BUILD_ID", "2026-05-28-equity-port-health-v95")
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -473,7 +473,8 @@ def iter_terminal_processes() -> Iterable[Any]:
     out: List[Any] = []
     for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
         try:
-            if (p.info.get("name") or "").lower() == "terminal64.exe":
+            n = (p.info.get("name") or "").lower()
+            if n in ("terminal64.exe", "terminal.exe"):
                 out.append(p)
         except Exception:
             continue
@@ -503,6 +504,190 @@ def _mt5_window_login_from_titles(titles: List[str]) -> str:
             return m.group(1)
     return ""
 
+def port_folder_reservation_path(port_dir: Path) -> Path:
+    # Persistent reservation marker for this PORT folder (cleared only by delete/expire flows).
+    return port_dir / ".avelqua-port.reserved"
+
+
+def mt5_pid_path(port_dir: Path) -> Path:
+    # PID of last launched MT5 process for this PORT (best-effort; helps killing without psutil/window-title).
+    return port_dir / ".avelqua-mt5.pid"
+
+
+def write_mt5_pid(port_dir: Path, pid: Optional[int], *, reason: str = "") -> None:
+    try:
+        if not pid:
+            return
+        token = {
+            "pid": int(pid),
+            "ts": datetime.now().isoformat(timespec="seconds"),
+            "reason": str(reason or "").strip(),
+        }
+        mt5_pid_path(port_dir).write_text(json.dumps(token, ensure_ascii=False) + "\n", encoding="utf-8", errors="ignore")
+    except Exception:
+        pass
+
+
+def read_mt5_pid(port_dir: Path) -> Optional[int]:
+    try:
+        p = mt5_pid_path(port_dir)
+        if not p.is_file():
+            return None
+        raw = p.read_text(encoding="utf-8", errors="ignore").strip()
+        if not raw:
+            return None
+        data = json.loads(raw)
+        pid = data.get("pid") if isinstance(data, dict) else None
+        if pid is None:
+            return None
+        pid = int(pid)
+        return pid if pid > 0 else None
+    except Exception:
+        return None
+
+
+def reserve_port_folder(port: Any, port_dir: Path, *, login: str = "", reason: str = "login") -> str:
+    """
+    Reserve PORT folder so it doesn't collide across users/ports.
+    This reservation stays even after MT5 is killed on login success.
+    """
+    lock_file = port_folder_reservation_path(port_dir)
+    token = (
+        f"pid={os.getpid()} port={normalize_port(port)} login={str(login or '').strip()} "
+        f"reason={reason} ts={datetime.now().isoformat(timespec='seconds')}"
+    )
+    try:
+        fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        try:
+            os.write(fd, (token + "\n").encode("utf-8", errors="ignore"))
+        finally:
+            os.close(fd)
+        log(f"PORT RESERVED file={lock_file} token={token}")
+        return token
+    except FileExistsError:
+        holder = ""
+        try:
+            holder = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+        except Exception:
+            holder = ""
+        # Allow reconnect on the same MT5 login without requiring delete/unreserve.
+        try:
+            want = str(login or "").strip()
+            if want and holder and re.search(rf"(?i)\\blogin\\s*=\\s*{re.escape(want)}\\b", holder):
+                log(f"PORT RESERVED already by same login; reuse port={normalize_port(port)} login={want}")
+                return holder
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"PORT {normalize_port(port)} ถูกจองอยู่แล้ว กรุณากดลบ PORT เดิมก่อน"
+            + (f" holder={holder[:160]}" if holder else "")
+        )
+
+
+def set_port_folder_reservation(port: Any, port_dir: Path, *, login: str = "", reason: str = "connected") -> str:
+    """
+    Set (overwrite) persistent reservation marker for this PORT folder.
+    This is used only after connect succeeded (equity fetched), to avoid leaving stale reservations on failures.
+    """
+    lock_file = port_folder_reservation_path(port_dir)
+    token = (
+        f"pid={os.getpid()} port={normalize_port(port)} login={str(login or '').strip()} "
+        f"reason={reason} ts={datetime.now().isoformat(timespec='seconds')}"
+    )
+    try:
+        lock_file.write_text(token + "\n", encoding="utf-8", errors="ignore")
+    except Exception:
+        try:
+            # Fallback to binary write if encoding flags differ on some Python builds.
+            with open(lock_file, "wb") as f:
+                f.write((token + "\n").encode("utf-8", errors="ignore"))
+        except Exception:
+            pass
+    log(f"PORT RESERVATION SET file={lock_file} token={token}")
+    return token
+
+
+def clear_port_folder_reservation(port_dir: Path) -> None:
+    try:
+        port_folder_reservation_path(port_dir).unlink(missing_ok=True)
+        log(f"PORT RESERVATION CLEARED file={port_folder_reservation_path(port_dir)}")
+    except Exception:
+        pass
+
+
+def _powershell_kill_mt5_by_port_dir(port_dir: Path) -> List[int]:
+    if os.name != "nt":
+        return []
+    root = str(port_dir).rstrip("\\/").replace("/", "\\")
+    if not root:
+        return []
+    ps = rf"""
+$root = "{root.lower()}"
+$procs = Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object {{
+  $_.Name -and ($_.Name.ToLower() -eq 'terminal64.exe' -or $_.Name.ToLower() -eq 'terminal.exe')
+}}
+$killed = @()
+foreach ($p in $procs) {{
+  $path = ([string]$p.ExecutablePath).ToLower()
+  $cmd  = ([string]$p.CommandLine).ToLower()
+  if ($path.Contains($root) -or $cmd.Contains($root)) {{
+    try {{
+      Stop-Process -Id $p.ProcessId -Force -ErrorAction SilentlyContinue
+      $killed += [int]$p.ProcessId
+    }} catch {{}}
+  }}
+}}
+$killed | ConvertTo-Json -Compress
+""".strip()
+    try:
+        out = _run_powershell(ps, timeout=10).strip()
+        if not out:
+            return []
+        data = json.loads(out)
+        if isinstance(data, list):
+            return [int(x) for x in data if str(x).strip().isdigit()]
+        if isinstance(data, int):
+            return [int(data)]
+        return []
+    except Exception:
+        return []
+
+
+def _powershell_kill_mt5_by_login(login: str) -> List[int]:
+    if os.name != "nt":
+        return []
+    lg = str(login or "").strip()
+    if not lg:
+        return []
+    ps = rf"""
+$login = "{lg}"
+$items = @(Get-Process terminal64 -ErrorAction SilentlyContinue; Get-Process terminal -ErrorAction SilentlyContinue) | Select-Object Id,MainWindowTitle
+$killed = @()
+foreach ($p in $items) {{
+  $t = [string]$p.MainWindowTitle
+  if ($t -and $t -match [regex]::Escape($login)) {{
+    try {{
+      # taskkill is more forceful than Stop-Process in some sessions.
+      cmd /c ("taskkill /PID " + $p.Id + " /T /F") | Out-Null
+      $killed += [int]$p.Id
+    }} catch {{}}
+  }}
+}}
+$killed | ConvertTo-Json -Compress
+""".strip()
+    try:
+        out = _run_powershell(ps, timeout=10).strip()
+        if not out:
+            return []
+        data = json.loads(out)
+        if isinstance(data, list):
+            return [int(x) for x in data if str(x).strip().isdigit()]
+        if isinstance(data, int):
+            return [int(data)]
+        return []
+    except Exception:
+        return []
+
 
 def stop_mt5_by_folder(folder_path: str, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     if not folder_path:
@@ -519,7 +704,7 @@ def stop_mt5_by_folder(folder_path: str, payload: Optional[Dict[str, Any]] = Non
     for p in iter_terminal_processes():
         try:
             name = (p.info.get("name") or "").lower()
-            if name != "terminal64.exe":
+            if name not in ("terminal64.exe", "terminal.exe"):
                 continue
             exe = p.info.get("exe") or ""
             cmd = " ".join(p.info.get("cmdline") or [])
@@ -546,6 +731,21 @@ def stop_mt5_by_folder(folder_path: str, payload: Optional[Dict[str, Any]] = Non
         except Exception:
             pass
 
+    # Windows fallback (covers cases where psutil path match fails)
+    if os.name == "nt" and not stopped:
+        try:
+            stopped.extend(_powershell_kill_mt5_by_port_dir(Path(folder_path)))
+        except Exception:
+            pass
+
+    # Optionally clear persistent reservation on delete/expire workflows.
+    try:
+        port_dir = Path(str(folder_path).replace("/", "\\"))
+        if port_dir.exists():
+            clear_port_folder_reservation(port_dir)
+    except Exception:
+        pass
+
     return {
         "ok": True,
         "message": "MT5 stopped",
@@ -558,6 +758,11 @@ def stop_mt5_by_folder(folder_path: str, payload: Optional[Dict[str, Any]] = Non
 def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
     root = str(port_dir).rstrip("\\/").lower()
+    before_pids: List[int] = []
+    try:
+        before_pids = [int(p.pid) for p in mt5_port_processes(port, payload) if getattr(p, "pid", None)]
+    except Exception:
+        before_pids = []
     stopped: List[int] = []
     for p in list(iter_terminal_processes()):
         try:
@@ -569,6 +774,96 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
                 stopped.append(p.pid)
         except Exception as e:
             log(f"STOP PROCESS ERROR PID={getattr(p, 'pid', '')}: {e}")
+
+    # Windows fallback: kill by folder + kill by login in window title.
+    taskkill: List[Dict[str, Any]] = []
+    if os.name == "nt":
+        # If caller knows the process id, kill it directly.
+        try:
+            direct_pid = payload_get(payload or {}, "process_id", "processId", "pid")
+            if direct_pid is not None and str(direct_pid).strip().isdigit():
+                pid0 = int(direct_pid)
+                if pid0 > 0:
+                    pr0 = subprocess.run(
+                        ["taskkill", "/PID", str(pid0), "/T", "/F"],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        check=False,
+                        creationflags=(subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0),
+                    )
+                    taskkill.append({"pid": pid0, "returncode": getattr(pr0, "returncode", None), "source": "payload"})
+                    if getattr(pr0, "returncode", None) == 0 and pid0 not in stopped:
+                        stopped.append(pid0)
+        except Exception:
+            pass
+        # Best-effort kill by last known PID for this PORT.
+        try:
+            pid = read_mt5_pid(port_dir)
+            if pid:
+                pr = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0),
+                )
+                taskkill.append({"pid": pid, "returncode": getattr(pr, "returncode", None), "source": "pidfile"})
+                if getattr(pr, "returncode", None) == 0 and pid not in stopped:
+                    stopped.append(pid)
+        except Exception:
+            pass
+        try:
+            killed = _powershell_kill_mt5_by_port_dir(port_dir)
+            for pid in killed:
+                if pid not in stopped:
+                    stopped.append(pid)
+        except Exception:
+            pass
+        try:
+            login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+            if login:
+                killed2 = _powershell_kill_mt5_by_login(login)
+                for pid in killed2:
+                    if pid not in stopped:
+                        stopped.append(pid)
+        except Exception:
+            pass
+
+        # Last resort (opt-in): kill all MT5 terminals by image name.
+        try:
+            p = payload or {}
+            kill_all = str(payload_get(p, "killAllTerminals", "kill_all_terminals") or "").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            if kill_all and not stopped:
+                for img in ("terminal64.exe", "terminal.exe"):
+                    try:
+                        pr = subprocess.run(
+                            ["taskkill", "/IM", img, "/T", "/F"],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            check=False,
+                            creationflags=(
+                                subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+                            ),
+                        )
+                        taskkill.append({"img": img, "returncode": getattr(pr, "returncode", None)})
+                    except Exception:
+                        taskkill.append({"img": img, "returncode": None, "error": "taskkill_spawn_failed"})
+        except Exception:
+            pass
+
+    # Clear reservation only when explicitly requested (delete/expire).
+    try:
+        p = payload or {}
+        purpose = str(payload_get(p, "purpose", "reason") or "").lower()
+        clear_flag = str(payload_get(p, "clearReservation", "clear_reservation", "clearPortReservation") or "").lower()
+        if clear_flag in ("1", "true", "yes") or any(x in purpose for x in ("expire", "expired", "package", "delete", "remove")):
+            clear_port_folder_reservation(port_dir)
+    except Exception:
+        pass
     time.sleep(2)
 
     # kill ghost terminal ของ PORT นี้อีกรอบ
@@ -585,7 +880,28 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
         except Exception:
             pass
 
-    return {"action": "stop_mt5", "port": port, "port_dir": str(port_dir), "stopped": stopped}
+    after_pids: List[int] = []
+    still_running = False
+    try:
+        after_pids = [int(p.pid) for p in mt5_port_processes(port, payload) if getattr(p, "pid", None)]
+        still_running = len(after_pids) > 0
+    except Exception:
+        after_pids = []
+        try:
+            still_running = mt5_running_for_port_dir(port_dir)
+        except Exception:
+            still_running = False
+
+    return {
+        "action": "stop_mt5",
+        "port": port,
+        "port_dir": str(port_dir),
+        "stopped": stopped,
+        "beforePids": before_pids,
+        "afterPids": after_pids,
+        "stillRunning": bool(still_running),
+        "taskkill": taskkill,
+    }
 
 
 def restart_mt5_terminal_for_port(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -5102,7 +5418,16 @@ def wait_mt5_login_hybrid(
         if _is_login_only_payload(payload):
             ensure_login_only_no_trading(port, payload)
 
-        if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
+        # UI automation can be slow/hang; keep it short and only when needed.
+        ui_timeout = int(os.getenv("AVELQUA_LOGIN_UI_AUTOMATION_TIMEOUT_SEC", "10"))
+        titles = mt5_window_titles(port, payload)
+        joined = " | ".join(titles)
+
+        if (
+            elapsed < 14
+            and not joined
+            and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0)
+        ):
             server = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
             run_login_ui_automation(
@@ -5113,7 +5438,7 @@ def wait_mt5_login_hybrid(
                 port=port,
                 process_id=proc_pid,
                 with_wizard=True,
-                timeout_sec=45,
+                timeout_sec=max(6, min(15, ui_timeout)),
             )
             last_wizard_at = now
 
@@ -5132,8 +5457,15 @@ def wait_mt5_login_hybrid(
         if j_out is True:
             return True, JOURNAL_OK_MSG, j_chunk
 
-        titles = mt5_window_titles(port, payload)
-        joined = " | ".join(titles)
+        # Fast-path: as soon as MT5 API can return balance/equity, accept login
+        # without waiting for full Journal verification.
+        try:
+            snap0 = account_snapshot(port, payload)
+            if snap0.get("balance") is not None or snap0.get("equity") is not None:
+                return True, JOURNAL_OK_MSG, j_chunk or joined or ""
+        except Exception:
+            pass
+
         if joined and joined != last_title:
             last_title = joined
 
@@ -5171,6 +5503,14 @@ def wait_mt5_login_hybrid(
                 window_title=joined,
                 preview_b64=preview_b64,
             )
+            # Fast-path: if we can read equity/balance already, treat login as success
+            # (still safe because metrics are bound to this PORT folder).
+            try:
+                snap = account_snapshot(port, payload)
+                if snap.get("balance") is not None or snap.get("equity") is not None:
+                    return True, JOURNAL_OK_MSG, j_chunk or joined or ""
+            except Exception:
+                pass
             if j_out is True or j_chunk:
                 ok2, msg2, chunk2 = check_mt5_journal_login_result(
                     port_dir, login, timeout_sec=6, since_ts=journal_since
@@ -5370,6 +5710,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         try:
             proc = _popen_hidden(args, cwd=str(port_dir))
+            try:
+                write_mt5_pid(port_dir, proc.pid if proc else None, reason=f"launch:{reason}")
+            except Exception:
+                pass
             time.sleep(0.9)
             if login_only:
                 ensure_login_only_no_trading(port, payload)
@@ -5485,93 +5829,172 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             verification_pending = True
         journal_final = journal_chunk2 or journal_final
 
-    success_message = JOURNAL_OK_MSG if not verification_pending else "window verified"
-    ensure_login_only_no_trading(port, payload)
+    if verification_pending:
+        pending_msg = "กำลังรอ verifier ยืนยันเลขบัญชีจาก Journal / MT5 API..."
+        send_connect_result(
+            payload,
+            "checking",
+            pending_msg,
+            port,
+            process_id=proc_pid,
+            journal_evidence=journal_final,
+            window_title=titles,
+            preview_b64=preview_final,
+            window_verified=True,
+            schedule_metric_retry=False,
+        )
+        # Background: fetch latest equity, notify connected, then close MT5 for THIS PORT.
+        def _equity_notify_then_kill() -> None:
+            try:
+                deadline = time.time() + float(os.getenv("AVELQUA_EQUITY_WAIT_SEC", "60"))
+                snap = {"balance": None, "equity": None, "currency": ""}
+                while time.time() < deadline:
+                    try:
+                        snap = account_snapshot(port, payload)
+                    except Exception:
+                        snap = {"balance": None, "equity": None, "currency": ""}
+                    if snap.get("balance") is not None or snap.get("equity") is not None:
+                        break
+                    time.sleep(1.0)
 
-    pending_detail = (
-        "กำลังดึง Equity จาก MT5..."
-        if verification_pending
-        else "กำลังดึง Equity จาก MT5..."
-    )
+                try:
+                    send_account_metrics(payload, snap.get("balance"), snap.get("equity"), snap.get("currency", ""))
+                except Exception:
+                    pass
+
+                # Reserve/lock only on success
+                try:
+                    holder = ""
+                    lock_file = port_folder_reservation_path(port_dir)
+                    if lock_file.exists():
+                        holder = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+                    want = str(login or "").strip()
+                    if not (holder and want and re.search(rf"(?i)\\blogin\\s*=\\s*{re.escape(want)}\\b", holder)):
+                        set_port_folder_reservation(port, port_dir, login=login, reason="connected")
+                except Exception:
+                    pass
+
+                send_connect_result(
+                    payload,
+                    "connected",
+                    JOURNAL_OK_MSG,
+                    port,
+                    process_id=proc_pid,
+                    journal_evidence=journal_final,
+                    window_title=titles,
+                    preview_b64=preview_final,
+                    window_verified=True,
+                )
+
+            finally:
+                kill_payload = dict(payload or {})
+                kill_payload.setdefault("mt5Login", login)
+                kill_payload.setdefault("login", login)
+                kill_payload.setdefault("process_id", proc_pid)
+                kill_payload.setdefault("forceKill", True)
+                kill_payload.setdefault("closeMt5", True)
+                kill_payload.setdefault("killMt5", True)
+                try:
+                    stop_mt5_port_only(port, kill_payload)
+                except Exception:
+                    pass
+                try:
+                    kill_mt5_by_folder(port_dir)
+                except Exception:
+                    pass
+                try:
+                    _powershell_kill_mt5_by_login(login)
+                except Exception:
+                    pass
+
+        threading.Thread(target=_equity_notify_then_kill, daemon=True).start()
+        return {
+            "action": "run_mt5_bot",
+            "status": "started",
+            "port": port,
+            "login": login,
+            "server": server,
+            "bot": bot,
+            "config": str(config_file),
+            "terminal": str(terminal),
+            "journalEvidence": journal_final,
+            "verificationPending": True,
+            "loginVerified": False,
+            "windowVerified": True,
+        }
+
+    success_message = JOURNAL_OK_MSG
+    # Fetch latest equity before notifying success, then kill MT5 immediately.
+    snap = {"balance": None, "equity": None, "currency": ""}
+    try:
+        snap = account_snapshot(port, payload)
+    except Exception as e:
+        log(f"ACCOUNT SNAPSHOT AFTER LOGIN ERROR: {e}")
+
+    try:
+        send_account_metrics(payload, snap.get("balance"), snap.get("equity"), snap.get("currency", ""))
+    except Exception as e:
+        log(f"SEND ACCOUNT METRICS ERROR: {e}")
+
+    # Lock/reserve this PORT folder only after connect succeeded + equity fetched.
+    try:
+        holder = ""
+        lock_file = port_folder_reservation_path(port_dir)
+        if lock_file.exists():
+            holder = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+        want = str(login or "").strip()
+        if holder and want and re.search(rf"(?i)\\blogin\\s*=\\s*{re.escape(want)}\\b", holder):
+            # same login: keep reservation
+            pass
+        else:
+            set_port_folder_reservation(port, port_dir, login=login, reason="connected")
+    except Exception as e:
+        log(f"PORT RESERVATION SET ERROR: {e}")
+
     send_connect_result(
         payload,
-        "checking",
-        pending_detail,
+        "connected",
+        success_message,
         port,
         process_id=proc_pid,
         journal_evidence=journal_final,
         window_title=titles,
         preview_b64=preview_final,
         window_verified=True,
-        schedule_metric_retry=False,
+    )
+    log(
+        f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message} "
+        f"BALANCE={snap.get('balance')} EQUITY={snap.get('equity')}"
     )
 
-    # ดึง Equity (MT5 API) → POST connected + equity → ปิด MT5 (ทั้ง journal OK และ window-only)
-    def _equity_then_exit() -> None:
-        sent = False
-        try:
-            deadline = time.time() + float(os.getenv("AVELQUA_EQUITY_BEFORE_EXIT_TIMEOUT_SEC", "30") or 30)
-            pl_snap = dict(payload or {})
-            pl_snap.pop("purpose", None)
-            while time.time() < deadline and not sent:
-                snap = account_snapshot_mt5_api(port_dir, pl_snap) or {}
-                if not _snap_positive(snap):
-                    snap = account_snapshot(port, pl_snap) or snap
-                bal = snap.get("balance")
-                eq = snap.get("equity")
-                obs = str(snap.get("observedLogin") or login).strip()
-                if (bal is not None or eq is not None) and obs == login:
-                    try:
-                        callback = payload_get(payload, "callbackUrl", default=DEFAULT_CALLBACK_URL)
-                        body = {
-                            "nodeId": payload_get(payload, "nodeId"),
-                            "userId": payload_get(payload, "userId"),
-                            "accountId": payload_get(payload, "accountId"),
-                            "attemptId": payload_get(payload, "attemptId", "attempt_id"),
-                            "portId": payload_get(payload, "portId", "port_id"),
-                            "portSlot": payload_get(payload, "portSlot"),
-                            "portNumber": str(port),
-                            "mt5Login": login,
-                            "status": "connected",
-                            "message": "ยืนยัน Equity แล้ว — PORT ถูกล็อกสำหรับเปิด BOT",
-                            "process_id": proc_pid,
-                            "balance": bal,
-                            "equity": eq,
-                            "accountCurrency": snap.get("currency", ""),
-                            "observedLogin": obs,
-                            "observed_login": obs,
-                            "loginVerified": True,
-                            "journalEvidence": journal_final,
-                            "agentVersion": AGENT_BUILD_ID,
-                            "agentBuildId": AGENT_BUILD_ID,
-                        }
-                        api("POST", callback, body, timeout=int(os.getenv("AVELQUA_HTTP_TIMEOUT", "25") or 25))
-                        sent = True
-                    except Exception as e:
-                        log(f"EQUITY CALLBACK ERROR: {e}")
-                    break
-                time.sleep(0.7)
-        except Exception as e:
-            log(f"EQUITY BEFORE EXIT ERROR: {e}")
-        if not sent:
-            try:
-                send_connect_result(
-                    payload,
-                    "failed",
-                    "ดึง Equity ไม่สำเร็จ กรุณาลองใหม่",
-                    port,
-                    process_id=proc_pid,
-                    journal_evidence=journal_final,
-                )
-            except Exception:
-                pass
-        try:
-            finalize_login_verify_exit_mt5(port, payload)
-        except Exception as e:
-            log(f"LOGIN EXIT AFTER EQUITY ERROR: {e}")
+    # Optional delay (default 0) then kill immediately.
+    try:
+        delay_sec = float(os.getenv("AVELQUA_POST_EQUITY_KILL_DELAY_SEC", "0"))
+        if delay_sec > 0:
+            time.sleep(delay_sec)
+    except Exception:
+        pass
 
-    threading.Thread(target=_equity_then_exit, daemon=True).start()
-    log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message} verification_pending={verification_pending}")
+    # Close MT5 immediately for THIS PORT only (best-effort, forceful).
+    kill_payload = dict(payload or {})
+    kill_payload.setdefault("mt5Login", login)
+    kill_payload.setdefault("login", login)
+    kill_payload.setdefault("process_id", proc_pid)
+    kill_payload.setdefault("forceKill", True)
+    kill_payload.setdefault("closeMt5", True)
+    kill_payload.setdefault("killMt5", True)
+    try:
+        stop_mt5_port_only(port, kill_payload)
+    except Exception as e:
+        log(f"POST LOGIN STOP MT5 ERROR: {e}")
+    try:
+        kill_mt5_by_folder(port_dir)
+    except Exception as e:
+        log(f"POST LOGIN KILL MT5 ERROR: {e}")
+    try:
+        _powershell_kill_mt5_by_login(login)
+    except Exception:
+        pass
     return {
         "action": "login_mt5" if not verification_pending else "run_mt5_bot",
         "status": "started" if verification_pending else "connected",
@@ -5582,11 +6005,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         "config": str(config_file),
         "terminal": str(terminal),
         "journalEvidence": journal_final,
-        "journalVerified": not verification_pending,
-        "loginVerified": not verification_pending,
-        "windowVerified": True,
-        "verificationPending": verification_pending,
-        "loginExitScheduled": True,
+        "journalVerified": True,
+        "loginVerified": True,
+        "balance": snap.get("balance"),
+        "equity": snap.get("equity"),
+        "closedMt5": True,
     }
 
 def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
@@ -6520,8 +6943,19 @@ def restart_mt5_port(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
 
 def remove_mt5_port_folder_safe(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    stop_mt5_port_only(port, payload)
+    kill_payload = dict(payload or {})
+    kill_payload.setdefault("forceKill", True)
+    kill_payload.setdefault("closeMt5", True)
+    kill_payload.setdefault("killMt5", True)
+    kill_payload.setdefault("clearReservation", True)
+    kill_payload.setdefault("purpose", "delete_port")
+    stop_mt5_port_only(port, kill_payload)
     time.sleep(1)
+    clear_port_folder_reservation(port_dir)
+    try:
+        release_port_run_lock(port_dir)
+    except Exception:
+        pass
     shutil.rmtree(port_dir)
     return {"action": "delete_port", "port": port, "port_dir": str(port_dir), "status": "deleted"}
 
@@ -6931,7 +7365,40 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             elif folder:
                 command_result(cmd_id, True, stop_mt5_by_folder(folder, stop_payload))
             else:
-                command_result(cmd_id, True, stop_mt5_port_only(port, stop_payload))
+                # Always try port-scoped stop first (enables kill-by-login), then folder-scoped.
+                res1: Dict[str, Any] = {}
+                res2: Dict[str, Any] = {}
+                try:
+                    res1 = stop_mt5_port_only(port, stop_payload)
+                except Exception as e:
+                    res1 = {"action": "stop_mt5", "port": port, "error": str(e)[:300], "stopped": []}
+                if folder:
+                    # For delete/expire flows, clearReservation may be set.
+                    if payload_get(payload, "clearReservation", "clear_reservation", "clearPortReservation") is None:
+                        purpose = str(payload_get(payload, "purpose", "reason") or "").lower()
+                        if any(x in purpose for x in ("expire", "expired", "package", "delete", "remove")):
+                            stop_payload["clearReservation"] = True
+                    try:
+                        res2 = stop_mt5_by_folder(folder)
+                    except Exception as e:
+                        res2 = {"ok": False, "message": str(e)[:300], "folder_path": str(folder)}
+                stopped = []
+                for pid in (res1.get("stopped") or []):
+                    if pid not in stopped:
+                        stopped.append(pid)
+                for pid in (res2.get("stopped") or []):
+                    if pid not in stopped:
+                        stopped.append(pid)
+                command_result(cmd_id, True, {
+                    "action": "stop_mt5",
+                    "port": port,
+                    "portResult": res1,
+                    "folderResult": res2,
+                    "stopped": stopped,
+                    "ok": True,
+                    "message": "MT5 stopped",
+                    "folder_path": str(folder or ""),
+                })
 
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
