@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-concurrent-login-v82"
+AGENT_BUILD_ID = "2026-05-28-login-exit-lock-v83"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1228,6 +1228,8 @@ def _login_exit_stamp_path(port_dir: Path) -> Path:
 
 
 def _login_exit_already_done(port_dir: Path, max_age_sec: int = 3600) -> bool:
+    if mt5_running_for_port_dir(port_dir):
+        return False
     stamp = _login_exit_stamp_path(port_dir)
     if not stamp.is_file():
         return False
@@ -1261,24 +1263,29 @@ def finalize_login_verify_exit_mt5(port: Any, payload: Optional[Dict[str, Any]] 
     out: Dict[str, Any] = {"ok": True, "port": port, "action": "login_exit_mt5"}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
+        _clear_login_exit_stamp(port_dir)
         if _login_exit_already_done(port_dir):
             out["skipped"] = "already_done"
             out["mt5Running"] = mt5_running_for_port_dir(port_dir)
             return out
         ensure_login_only_no_trading(port, payload)
-        time.sleep(0.8)
         if mt5_running_for_port_dir(port_dir):
             try:
                 stop_mt5_port_only(port, payload)
             except Exception as e:
                 log(f"LOGIN EXIT stop_mt5_port_only: {e}")
-            time.sleep(1.2)
+            time.sleep(0.4)
         if mt5_running_for_port_dir(port_dir):
             try:
                 kill_mt5_by_folder(port_dir)
             except Exception as e:
                 log(f"LOGIN EXIT kill_mt5: {e}")
-            time.sleep(0.5)
+            time.sleep(0.35)
+        if mt5_running_for_port_dir(port_dir):
+            try:
+                stop_mt5_port_only(port, payload)
+            except Exception:
+                pass
         remove_mt5_login_ini(port_dir)
         clear_mt5_chart_state(port_dir)
         _mark_login_exit_done(port_dir)
@@ -1292,7 +1299,7 @@ def finalize_login_verify_exit_mt5(port: Any, payload: Optional[Dict[str, Any]] 
 
 
 def schedule_login_verify_exit_mt5(
-    port: Any, payload: Optional[Dict[str, Any]] = None, delay_sec: float = 2.0
+    port: Any, payload: Optional[Dict[str, Any]] = None, delay_sec: float = 0.5
 ) -> None:
     if not _is_login_only_payload(payload):
         return
@@ -4571,8 +4578,7 @@ def send_connect_result(
         api("POST", callback, body)
         log(f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} login={body['mt5Login']} port={port}")
         if status == "connected" and _is_login_only_payload(payload):
-            if body.get("balance") is not None or body.get("equity") is not None:
-                schedule_login_verify_exit_mt5(port, payload, delay_sec=2.0)
+            schedule_login_verify_exit_mt5(port, payload, delay_sec=0.4)
         if (
             status == "connected"
             and schedule_metric_retry
@@ -5459,7 +5465,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         preview_b64=preview_final,
         window_verified=True,
     )
-    schedule_login_verify_exit_mt5(port, payload, delay_sec=2.5)
+    schedule_login_verify_exit_mt5(port, payload, delay_sec=0.4)
     log(f"LOGIN OK PORT={port} LOGIN={login} MESSAGE={success_message}")
     return {
         "action": "login_mt5",
@@ -6834,7 +6840,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                     snap["error"] = str(sync_err)[:500]
                 exit_after = _should_exit_mt5_after_snapshot(pl, snap)
                 if exit_after:
-                    schedule_login_verify_exit_mt5(port, pl, delay_sec=1.0)
+                    schedule_login_verify_exit_mt5(port, pl, delay_sec=0.2)
                 command_result(
                     cmd_id,
                     True,
@@ -6846,7 +6852,16 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype == "login_exit_mt5":
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
-            command_result(cmd_id, True, finalize_login_verify_exit_mt5(port, payload))
+            pl_exit = dict(payload or {})
+
+            def _login_exit_worker() -> None:
+                try:
+                    command_result(cmd_id, True, finalize_login_verify_exit_mt5(port, pl_exit))
+                except Exception as e:
+                    command_result(cmd_id, False, {"action": "login_exit_mt5", "error": str(e)[:500]}, str(e))
+
+            threading.Thread(target=_login_exit_worker, daemon=True).start()
+            return
 
         elif ctype in ("mt5_preview", "capture_mt5_window", "capture_mt5_preview"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")

@@ -2424,6 +2424,51 @@ router.post('/mt5/account/:id/edit', async (req, res) => {
 
 /** หยุด BOT + ปิด MT5 ทันทีเมื่อผู้ใช้ลบ/ยกเลิก PORT (ไม่ต้องกด Stop ก่อน) */
 async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_delete_port') {
+  const accStop = await query(
+    `
+    SELECT ma.vps_id, ma.port_id, ma.port_slot, ma.assigned_port_no, ma.windows_port_no, ma.mt5_login,
+           NULLIF(TRIM(COALESCE(vp.folder_path, '')), '') AS folder_path
+    FROM vps_system.mt5_accounts ma
+    LEFT JOIN vps_system.vps_ports vp ON vp.id = ma.port_id
+    WHERE ma.id = $1 AND ma.user_id = $2
+    LIMIT 1
+  `,
+    [accountId, userId]
+  ).catch(() => ({ rows: [] }));
+  const accRow = accStop.rows?.[0];
+  if (accRow) {
+    const stopNodeId = num(accRow.vps_id);
+    const stopPortNo =
+      num(accRow.assigned_port_no) || num(accRow.windows_port_no) || num(accRow.port_slot);
+    const folderPath = accRow.folder_path || null;
+    if (stopNodeId && stopPortNo) {
+      await query(
+        `
+        INSERT INTO vps_system.vps_agent_commands
+        (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
+        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW(), NOW())
+      `,
+        [
+          stopNodeId,
+          accRow.port_id || null,
+          JSON.stringify({
+            port: stopPortNo,
+            portSlot: accRow.port_slot,
+            assignedPortNo: accRow.assigned_port_no,
+            windowsPortNo: accRow.windows_port_no,
+            folder_path: folderPath,
+            vpsFolderPath: folderPath,
+            forceKill: true,
+            closeMt5: true,
+            mt5Login: accRow.mt5_login || null,
+            accountId,
+            reason
+          })
+        ]
+      ).catch((e) => console.error('[PORT] stop_mt5 on delete/cancel:', e.message || e));
+    }
+  }
+
   const bots = await query(
     `
     SELECT bi.id, bi.vps_id, bi.port_id, bi.assigned_port_no, bi.port_used, bi.lot_used,
