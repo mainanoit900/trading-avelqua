@@ -1799,7 +1799,11 @@ router.get('/mt5/recovery-check', async (req, res) => {
 
 function buildPortCardState(acc) {
   const accStatus = acc ? String(acc.status || '').toLowerCase() : '';
-  const canUse = !!(acc && accStatus === 'connected');
+  const hasEquity =
+    acc &&
+    ((acc.last_equity != null && acc.last_equity !== '' && Number.isFinite(Number(acc.last_equity))) ||
+      (acc.last_balance != null && acc.last_balance !== '' && Number.isFinite(Number(acc.last_balance))));
+  const canUse = !!(acc && accStatus === 'connected' && hasEquity);
   let statusLabel = 'ว่าง';
   if (canUse) statusLabel = 'พร้อมรัน';
   else if (accStatus === 'connecting' || accStatus === 'starting') statusLabel = 'กำลังเปิด MT5...';
