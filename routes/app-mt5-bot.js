@@ -25,6 +25,7 @@ const {
   clampLot,
   computePresetForBot,
   presetSummary,
+  buildRunSummary,
   isProductionBot,
   validateRunCapital,
   botUiMeta,
@@ -2909,6 +2910,7 @@ router.post('/mt5/run', async (req, res) => {
     const tStopInput = req.body.t_stop === '' || req.body.t_stop == null ? null : num(req.body.t_stop);
     const tradeLevel = normalizeTradeLevel(req.body.trade_level);
     const runTimeMode = String(req.body.run_time_mode || 'auto').toLowerCase() === '24h' ? '24h' : 'auto';
+    const syncField = String(req.body.sync_field || 'capital').toLowerCase() === 'lot' ? 'lot' : 'capital';
 
     if (!mt5AccountId) throw new Error('กรุณาเลือก PORT/บัญชี MT5');
     if (!botCode) throw new Error('กรุณาเลือก BOT');
@@ -2945,7 +2947,8 @@ router.post('/mt5/run', async (req, res) => {
       manualLot,
       lotMeta.lotMin,
       lotMeta.lotMax,
-      lotMeta.defaultLot
+      lotMeta.defaultLot,
+      syncField
     );
     if (botKind(bot) === 'queen' && num(calc.lot) <= 0) {
       throw new Error('เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ 10,000 USD)');
@@ -2954,6 +2957,7 @@ router.post('/mt5/run', async (req, res) => {
     if (lot <= 0 && botKind(bot) === 'quantum') lot = 0.01;
     const trade = calc.trade;
     const capitalUsed = num(calc.capitalUsed || calc.capital || capitalCheck.capital);
+    const runSummary = buildRunSummary(calc, tradeLevel, runTimeMode);
     const lotPlus = clampLot(lotPlusInput > 0 ? lotPlusInput : calc.lotPlus, lotMeta.lotMin, lotMeta.lotMax);
     const tStart = tStartInput == null ? num(trade.t_start) : tStartInput;
     const tStop = tStopInput == null ? num(trade.t_stop) : tStopInput;
@@ -3044,6 +3048,7 @@ router.post('/mt5/run', async (req, res) => {
       runTimeMode,
       eaTimeProfile,
       eaSetPreview,
+      runSummary,
       botKind: calc.botKind,
       ...eaSetFields,
       allowOpen24Hours: runTimeMode === '24h',

@@ -698,6 +698,7 @@
     return (
       '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
       '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
+      '<input type="hidden" name="sync_field" id="mt5RunSyncField" value="capital">' +
       '<div style="margin-bottom:14px;padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.8);border:1px solid rgba(56,189,248,.18);color:#cbd5e1;font-size:13px">' +
       'เลือก PORT จากข้อ 1: <b style="color:#fff">PORT ' + mt5Esc(selected.port_slot) + '</b>' + (selected.mt5_login ? ' / Login ' + mt5Esc(selected.mt5_login) : '') + (actualCapital > 0 ? ' / Equity ' + mt5Esc(actualCapital) : '') +
       '<br><small style="color:#94a3b8">แต่ละ PORT แยกกัน — Login หลาย PORT พร้อมกันได้ (คลิกการ์ด PORT ว่างก่อน Login)</small></div>' +
@@ -745,6 +746,8 @@
 
       if (changedField === 'manual_lot') syncField = 'lot';
       if (changedField === 'capital_manual') syncField = 'capital';
+      const syncHidden = form.querySelector('#mt5RunSyncField');
+      if (syncHidden) syncHidden.value = syncField;
       if (changedField === 'bot_code') {
         syncField = 'capital';
         const eqNow = mt5RunAccountCapital(selected);
@@ -803,6 +806,8 @@
       const capitalInput = form.querySelector('input[name="capital_manual"]');
       const botSelect = form.querySelector('select[name="bot_code"]');
       const lotInput = form.querySelector('input[name="manual_lot"]');
+      const syncHidden = form.querySelector('#mt5RunSyncField');
+      const syncField = syncHidden && syncHidden.value === 'lot' ? 'lot' : 'capital';
       const capital = mt5Num(capitalInput ? capitalInput.value : 0, mt5RunAccountCapital(selected));
       const botCode = botSelect ? botSelect.value : '';
       const preview = mt5ComputeRunPreset(
@@ -811,8 +816,16 @@
         mt5Num(lotInput ? lotInput.value : 0, 0),
         form.querySelector('select[name="trade_level"]')?.value || 'medium',
         form.querySelector('select[name="run_time_mode"]')?.value || 'auto',
-        'capital'
+        syncField
       );
+      if (capitalInput && preview.capital > 0) {
+        capitalInput.value = mt5Fixed(preview.capital);
+      }
+      if (lotInput && preview.botKind !== 'quantum') {
+        lotInput.value = mt5Fixed(preview.lot);
+      }
+      if (syncHidden) syncHidden.value = syncField;
+      mt5RenderRunPresetSummary(form, preview);
       if (!selected) {
         e.preventDefault();
         alert('กรุณาเลือก PORT ที่เชื่อมต่อแล้วก่อน Run BOT');
@@ -1488,8 +1501,8 @@ function openMt5InstanceDetail(el) {
     mt5ManageDetailGrid([
       { label: 'BOT', value: d.bot || '-' },
       { label: 'Login', value: d.login || '-' },
-      { label: 'Funding', value: d.funding || '-' },
-      { label: 'Lot', value: d.lot || '-' },
+      { label: 'เงินทุน', value: d.funding || '-' },
+      { label: 'Lot', value: d.lotText || d.lot || '-' },
       { label: 'เวลาเปิดออเดอร์', value: mt5OrderTimeText(d.orderTime || 'auto') },
       { label: 'Level', value: mt5TradeLevelText(d.level) },
       { label: 'Status', value: d.status || '-' },
@@ -1534,8 +1547,8 @@ function openMt5InstanceAnalysis(el) {
       </div>
       ${mt5ManageDetailGrid([
         { label: 'Login', value: d.login || '-' },
-        { label: 'Funding', value: d.funding || '-' },
-        { label: 'Lot', value: d.lot || '-' },
+        { label: 'เงินทุน', value: d.funding || '-' },
+        { label: 'Lot', value: d.lotText || d.lot || '-' },
         { label: 'เวลาเปิดออเดอร์', value: mt5OrderTimeText(d.orderTime || 'auto') },
         { label: 'Level', value: mt5TradeLevelText(d.level) },
         { label: 'Status', value: d.status || '-' }
@@ -1807,7 +1820,7 @@ function renderMt5DashboardTable(data, opts) {
         <tr>
           <th>BOT</th>
           <th>Login</th>
-          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th><th>เวลาเปิดออเดอร์</th>' : '<th>Funding</th><th>Lot</th><th>เวลาเปิดออเดอร์</th><th>Level</th>'}
+          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th><th>เวลาเปิดออเดอร์</th>' : '<th>เงินทุน</th><th>Lot</th><th>เวลาเปิดออเดอร์</th><th>Level</th>'}
           <th>Status</th>
           <th>${headLive ? 'อัปเดตล่าสุด (30 นาที)' : 'ล่าสุด'}</th>
           <th>Manage</th>
@@ -1827,7 +1840,8 @@ function renderMt5DashboardTable(data, opts) {
       data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
       data-login="${mt5ManageEscape(i.mt5_login || '-')}"
       data-funding="${i.display_funding != null ? i.display_funding : (i.capital_used != null ? i.capital_used : '-')}"
-      data-lot="${i.display_lot != null ? i.display_lot : (i.lot_used != null ? i.lot_used : '-')}"
+      data-lot="${mt5ManageEscape(i.display_lot_text != null ? i.display_lot_text : (i.display_lot != null ? i.display_lot : (i.lot_used != null ? i.lot_used : '-')))}"
+      data-lot-text="${mt5ManageEscape(i.display_lot_text || '')}"
       data-order-time="${mt5ManageEscape(i.order_time_label || i.run_time_mode || 'auto')}"
       data-level="${mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-'))}"
       data-status="${mt5ManageEscape(st)}"
@@ -1846,9 +1860,11 @@ function renderMt5DashboardTable(data, opts) {
       html += '<td class="mt5-order-time">' + mt5ManageEscape(mt5OrderTimeText(i.order_time_label || i.run_time_mode)) + '</td>';
     } else {
       const funding = i.display_funding != null ? i.display_funding : i.capital_used;
-      const lot = i.display_lot != null ? i.display_lot : i.lot_used;
+      const lotText = i.display_lot_text != null
+        ? i.display_lot_text
+        : (i.display_lot != null ? Number(i.display_lot).toFixed(2) : (i.lot_used != null ? i.lot_used : '-'));
       html += '<td>' + (funding != null ? Number(funding).toFixed(2) : '-') + '</td>';
-      html += '<td>' + (lot != null ? Number(lot).toFixed(2) : '-') + '</td>';
+      html += '<td>' + mt5ManageEscape(lotText) + '</td>';
       html += '<td class="mt5-order-time">' + mt5ManageEscape(mt5OrderTimeText(i.order_time_label || i.run_time_mode)) + '</td>';
       html += '<td>' + mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-')) + '</td>';
     }
