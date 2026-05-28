@@ -43,6 +43,7 @@ const {
   packagePortRangeLabel,
   computePortEntitlement
 } = require('../lib/mt5PortEntitlement');
+const { fetchEquityChartForInstance, recordEquityLog } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
 
@@ -367,10 +368,7 @@ async function handleMt5LiveStatusCallback(req, res) {
 
     await ensureEquityLogTable();
     if (instanceId && equity !== undefined && equity !== null) {
-      await query(`
-        INSERT INTO vps_system.mt5_equity_logs (instance_id, equity, created_at)
-        VALUES ($1, $2::numeric, NOW())
-      `, [instanceId, equity]).catch(() => {});
+      await recordEquityLog(instanceId, equity).catch(() => {});
     }
 
     return res.json({ ok: true });
@@ -3095,6 +3093,12 @@ router.post('/mt5/run', async (req, res) => {
       WHERE id=$1
     `, [node.id, lot]);
 
+    await client.query(`
+      UPDATE vps_system.bot_instances
+      SET start_equity = COALESCE(start_equity, $2::numeric)
+      WHERE id = $1
+    `, [inst.rows[0].id, capitalUsed > 0 ? capitalUsed : null]).catch(() => {});
+
     await client.query('COMMIT');
     flash(req, 'success', `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว`);
   } catch (e) {
@@ -3329,15 +3333,10 @@ router.post('/mt5/live-status', async (req, res) => {
           OR ($4::int IS NOT NULL AND bi.assigned_port_no=$4))
     `, [instanceId || null, balance || null, equity || null, port || null]);
 
-// ===== SAVE EQUITY HISTORY =====
-await ensureEquityLogTable();
-
-if (instanceId && equity !== undefined && equity !== null) {
-  await query(`
-    INSERT INTO vps_system.mt5_equity_logs (instance_id, equity, created_at)
-    VALUES ($1, $2::numeric, NOW())
-  `, [instanceId, equity]).catch(()=>{});
-}
+    await ensureEquityLogTable();
+    if (instanceId && equity !== undefined && equity !== null) {
+      await recordEquityLog(instanceId, equity).catch(() => {});
+    }
 
     return res.json({ ok: true });
   } catch (e) {
@@ -3466,37 +3465,16 @@ router.get('/mt5/live-dashboard', async (req, res) => {
   }
 });
 
-// ===== EQUITY CHART API =====
+// ===== EQUITY CHART API (กำไร / ขาดทุน จาก Equity ตั้งต้น · ทุก 30 นาที) =====
 router.get('/mt5/equity-chart/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);
     const userId = req.user.id;
-
-    // 🔒 กันดูของคนอื่น
-    const check = await query(`
-      SELECT id FROM vps_system.bot_instances
-      WHERE id=$1 AND user_id=$2
-    `, [id, userId]);
-
-    if (!check.rows[0]) {
-      return res.json({ ok:false });
-    }
-
-    const rows = await query(`
-      SELECT equity
-      FROM vps_system.mt5_equity_logs
-      WHERE instance_id=$1
-      ORDER BY id DESC
-      LIMIT 20
-    `, [id]);
-
-    return res.json({
-      ok: true,
-      data: rows.rows.reverse().map(r => Number(r.equity || 0))
-    });
-
-  } catch {
-    return res.json({ ok:false });
+    const payload = await fetchEquityChartForInstance(id, userId);
+    if (!payload.ok) return res.json({ ok: false });
+    return res.json(payload);
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
   }
 });
 

@@ -1521,34 +1521,82 @@ function openMt5InstanceAnalysis(el) {
   );
 }
 
-function mt5Sparkline(values) {
-  const list = Array.isArray(values) ? values.map((v) => Number(v || 0)) : [];
-  if (!list.length) {
-    return '<div class="mt5-empty">ยังไม่มีข้อมูล Equity เพียงพอสำหรับกราฟ</div>';
-  }
-  const min = Math.min(...list);
-  const max = Math.max(...list);
-  const spread = Math.max(1, max - min);
-  const points = list.map((v, idx) => {
+function mt5MiniPnlChart(values, kind, uid) {
+  const list = Array.isArray(values) ? values.map((v) => Math.max(0, Number(v || 0))) : [];
+  const isProfit = kind === 'profit';
+  const stroke = isProfit ? '#4ade80' : '#f87171';
+  const fillTop = isProfit ? 'rgba(34,197,94,.32)' : 'rgba(239,68,68,.28)';
+  const fillBottom = 'rgba(2,6,23,0)';
+  const gradId = 'mt5PnlGrad' + (uid || '') + kind;
+  const areaId = 'mt5PnlArea' + (uid || '') + kind;
+  const maxVal = Math.max(...list, 0.01);
+  const linePts = list.map((v, idx) => {
     const x = (idx / Math.max(1, list.length - 1)) * 100;
-    const y = 100 - (((v - min) / spread) * 76 + 12);
+    const y = 100 - ((v / maxVal) * 72 + 14);
     return `${x},${y}`;
-  }).join(' ');
+  });
+  const lineStr = linePts.join(' ');
+  const areaStr = list.length
+    ? `0,100 ${lineStr} 100,100`
+    : '0,100 100,100';
+  const peak = list.length ? Math.max(...list) : 0;
+  const title = isProfit ? 'กำไร (USD)' : 'ขาดทุน (USD)';
+  const sub = list.length ? `สูงสุด ${mt5Money(peak)}` : 'รอข้อมูล 30 นาที';
   return `
-    <div class="mt5-chart-meta">
-      <span>ต่ำสุด ${mt5ManageEscape(min.toFixed(2))}</span>
-      <span>สูงสุด ${mt5ManageEscape(max.toFixed(2))}</span>
-      <span>จุดข้อมูล ${mt5ManageEscape(String(list.length))}</span>
+    <div class="mt5-pnl-chart-card ${kind}">
+      <div class="mt5-pnl-chart-head">
+        <b>${title}</b>
+        <small>${sub}</small>
+      </div>
+      <svg class="mt5-pnl-mini-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="${title}">
+        <defs>
+          <linearGradient id="${gradId}" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0%" stop-color="${fillTop}"></stop>
+            <stop offset="100%" stop-color="${fillBottom}"></stop>
+          </linearGradient>
+        </defs>
+        <polygon fill="url(#${gradId})" points="${areaStr}"></polygon>
+        <polyline fill="none" stroke="${stroke}" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" points="${lineStr}"></polyline>
+      </svg>
     </div>
-    <svg class="mt5-equity-chart" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="Equity chart">
-      <defs>
-        <linearGradient id="mt5EquityLine" x1="0" x2="1">
-          <stop offset="0%" stop-color="#38bdf8"></stop>
-          <stop offset="100%" stop-color="#22c55e"></stop>
-        </linearGradient>
-      </defs>
-      <polyline fill="none" stroke="url(#mt5EquityLine)" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" points="${points}"></polyline>
-    </svg>
+  `;
+}
+
+function mt5PnlChartsPanel(json, instanceId) {
+  const profit = Array.isArray(json?.profitSeries) ? json.profitSeries : [];
+  const loss = Array.isArray(json?.lossSeries) ? json.lossSeries : [];
+  const uid = String(instanceId || '0').replace(/\W/g, '');
+  if (!profit.length && !loss.length) {
+    return '<div class="mt5-empty">ยังไม่มีจุดกราฟ — ระบบบันทึกทุก 30 นาทีหลังเปิดบอท</div>';
+  }
+  const startEq = Number(json.startEquity || 0);
+  const curEq = Number(json.currentEquity || 0);
+  const pnl = Number(json.currentPnl || 0);
+  const pnlCls = pnl >= 0 ? 'pos' : 'neg';
+  const interval = Number(json.intervalMinutes || 30);
+  return `
+    <div class="mt5-pnl-summary">
+      <div class="mt5-pnl-summary-box">
+        <small>Equity ตั้งต้น</small>
+        <b>${mt5Money(startEq)}</b>
+      </div>
+      <div class="mt5-pnl-summary-box">
+        <small>Equity ปัจจุบัน</small>
+        <b>${mt5Money(curEq)}</b>
+      </div>
+      <div class="mt5-pnl-summary-box ${pnlCls}">
+        <small>กำไร/ขาดทุนรวม</small>
+        <b>${pnl >= 0 ? '+' : ''}${mt5Money(pnl)}</b>
+      </div>
+      <div class="mt5-pnl-summary-box muted">
+        <small>อัปเดตกราฟ</small>
+        <b>ทุก ${interval} นาที</b>
+      </div>
+    </div>
+    <div class="mt5-pnl-charts-grid">
+      ${mt5MiniPnlChart(profit, 'profit', uid)}
+      ${mt5MiniPnlChart(loss, 'loss', uid)}
+    </div>
   `;
 }
 
@@ -1574,7 +1622,7 @@ async function openMt5EquityGraph(el) {
         { label: 'PORT', value: d.port || '-' },
         { label: 'Status', value: d.status || '-' }
       ])}
-      <div class="mt5-manage-chart-wrap">${mt5Sparkline(json.data || [])}</div>
+      <div class="mt5-manage-chart-wrap">${mt5PnlChartsPanel(json, d.instanceId)}</div>
     `;
     document.querySelector('#mt5ManageModal .mt5-manage-body').innerHTML = body;
   } catch (err) {
@@ -1810,7 +1858,23 @@ setInterval(refreshMt5Dashboards, MT5_DASHBOARD_REFRESH_MS);
 .mt5-manage-chart-wrap{padding:16px;border-radius:22px;border:1px solid rgba(148,163,184,.14);background:rgba(255,255,255,.04)}
 .mt5-chart-meta{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:12px;color:#cbd5e1;font-size:13px}
 .mt5-chart-meta span{padding:7px 10px;border-radius:999px;background:rgba(59,130,246,.14);border:1px solid rgba(96,165,250,.2)}
-.mt5-equity-chart{width:100%;height:220px;display:block;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.86),rgba(2,6,23,.95))}
+.mt5-manage-chart-wrap{margin-top:12px}
+.mt5-pnl-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:14px}
+.mt5-pnl-summary-box{padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.9);border:1px solid rgba(148,163,184,.16)}
+.mt5-pnl-summary-box small{display:block;color:#94a3b8;font-size:11px;margin-bottom:4px}
+.mt5-pnl-summary-box b{font-size:15px;color:#f8fafc}
+.mt5-pnl-summary-box.pos b{color:#86efac}
+.mt5-pnl-summary-box.neg b{color:#fca5a5}
+.mt5-pnl-summary-box.muted b{color:#cbd5e1;font-size:13px}
+.mt5-pnl-charts-grid{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+.mt5-pnl-chart-card{padding:12px;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.92),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.14);box-shadow:inset 0 1px 0 rgba(255,255,255,.04)}
+.mt5-pnl-chart-card.profit{border-color:rgba(34,197,94,.22)}
+.mt5-pnl-chart-card.loss{border-color:rgba(239,68,68,.22)}
+.mt5-pnl-chart-head{display:flex;align-items:baseline;justify-content:space-between;gap:8px;margin-bottom:8px}
+.mt5-pnl-chart-head b{font-size:13px;color:#e2e8f0}
+.mt5-pnl-chart-head small{font-size:11px;color:#94a3b8}
+.mt5-pnl-mini-chart{width:100%;height:120px;display:block;border-radius:12px;background:linear-gradient(180deg,rgba(2,6,23,.4),rgba(15,23,42,.2))}
+@media(max-width:720px){.mt5-pnl-summary{grid-template-columns:1fr 1fr}.mt5-pnl-charts-grid{grid-template-columns:1fr}}
 @media(max-width:700px){.mt5-manage-grid,.mt5-manage-analysis{grid-template-columns:1fr}.mt5-manage-dropdown{min-width:148px}}
 </style>
 
