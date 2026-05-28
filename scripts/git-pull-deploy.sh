@@ -95,6 +95,23 @@ if [ "$RUN_NPM_INSTALL" = "1" ] && [ -f package.json ]; then
   npm install --omit=dev
 fi
 
+RELEASE_DIR="$APP_DIR/.release-9750207"
+if [ -d "$RELEASE_DIR" ] && [ -f "$RELEASE_DIR/server.js" ]; then
+  echo "==> sync .release bundle (lib, routes, views, config)"
+  for sub in lib routes views config; do
+    if [ -d "$APP_DIR/$sub" ]; then
+      mkdir -p "$RELEASE_DIR/$sub"
+      rsync -a "$APP_DIR/$sub/" "$RELEASE_DIR/$sub/"
+    fi
+  done
+  if [ -f "$APP_DIR/server.js" ]; then
+    cp -f "$APP_DIR/server.js" "$RELEASE_DIR/server.js"
+  fi
+  if [ -f "$APP_DIR/.env" ] && [ ! -f "$RELEASE_DIR/.env" ]; then
+    cp -f "$APP_DIR/.env" "$RELEASE_DIR/.env"
+  fi
+fi
+
 if [ -f scripts/deploy-mt5-live-fix.sh ]; then
   echo "==> verify MT5 patches"
   bash scripts/deploy-mt5-live-fix.sh "$APP_DIR" || true
