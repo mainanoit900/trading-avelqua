@@ -2296,7 +2296,7 @@ console.log('[MT5 CONNECT START]', {
     `,
       [reservedPort.vps_id, accountId]
     );
-    const staggerSec = num(parallelOnVps?.[0]?.n) > 0 ? 12 : 0;
+    const staggerSec = num(parallelOnVps?.[0]?.n) > 0 ? 22 : 0;
 
     const loginPayload = {
       ...buildMt5LoginPayload({

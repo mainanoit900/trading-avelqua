@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-concurrent-login-v78"
+AGENT_BUILD_ID = "2026-05-27-login-no-bot-autostart-v79"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2967,6 +2967,71 @@ def clear_mt5_login_cache(port_dir: Path) -> None:
                 log(f"CLEAR MT5 CACHE ERROR {p}: {e}")
 
 
+def strip_expert_autostart_from_port(port_dir: Path) -> None:
+    """ลบ Expert/StartUp ออกจาก ini ทุกไฟล์ — login ห้ามเปิด EA เอง."""
+    patterns = (
+        port_dir / "startUp.ini",
+        port_dir / "startup.ini",
+        port_dir / "avelqua-login.ini",
+        mt5_startup_ini_path(port_dir),
+        port_dir / "config" / "common.ini",
+        port_dir / "config" / "settings.ini",
+        port_dir / "config" / "terminal.ini",
+        port_dir / "config" / "experts.ini",
+        port_dir / "MQL5" / "config" / "experts.ini",
+    )
+    expert_line = re.compile(r"(?im)^\s*(Expert|ExpertParameters|Template)\s*=")
+    startup_section = re.compile(r"(?im)^\s*\[StartUp\]\s*$")
+    for p in patterns:
+        if not p.is_file():
+            continue
+        try:
+            lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+        except Exception:
+            continue
+        out: List[str] = []
+        in_startup = False
+        for line in lines:
+            low = line.strip().lower()
+            if startup_section.match(line.strip()):
+                in_startup = True
+                continue
+            if in_startup and low.startswith("[") and low != "[startup]":
+                in_startup = False
+            if in_startup:
+                continue
+            if expert_line.match(line):
+                continue
+            if re.match(r"(?im)^\s*AllowLiveTrading\s*=", line):
+                out.append("AllowLiveTrading=0")
+                continue
+            if re.match(r"(?im)^\s*Enabled\s*=", line) and "[Experts]" in "\n".join(out[-3:]):
+                out.append("Enabled=0")
+                continue
+            out.append(line)
+        try:
+            p.write_text("\n".join(out) + "\n", encoding="utf-8", errors="replace")
+            log(f"STRIP EXPERT AUTOSTART {p}")
+        except Exception as e:
+            log(f"STRIP EXPERT AUTOSTART ERROR {p}: {e}")
+
+
+def prepare_port_for_login_only(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> None:
+    """ก่อน Login เท่านั้น — ห้ามโหลดกราฟ/EA เก่า (บอทต้องเปิดจากปุ่ม Run BOT เท่านั้น)."""
+    clear_mt5_chart_state(port_dir)
+    strip_expert_autostart_from_port(port_dir)
+    patch_mt5_experts_config(port_dir, False)
+    write_avelqua_trading_gate(port_dir, False, payload)
+    for rel in ("bases", "Profiles", "profiles"):
+        d = port_dir / rel
+        if d.exists():
+            try:
+                shutil.rmtree(d, ignore_errors=True)
+                log(f"LOGIN PREP REMOVE {d}")
+            except Exception as e:
+                log(f"LOGIN PREP REMOVE ERROR {d}: {e}")
+
+
 def clear_mt5_chart_state(port_dir: Path) -> None:
     """ล้าง workspace/chart state เก่าก่อนรันใหม่ เพื่อไม่ให้กราฟกองเพิ่มทุกครั้ง."""
     chart_dirs = (
@@ -3375,6 +3440,51 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
     snap = {"balance": None, "equity": None, "currency": "", "observedLogin": "", "source": ""}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
+        login_only = _is_login_only_payload(payload)
+        purpose = str(payload_get(payload or {}, "purpose") or "").lower()
+        verify_only = login_only or "attempt_verify" in purpose or "verify_snapshot" in purpose
+
+        def _fill_window_login() -> None:
+            if str(snap.get("observedLogin") or "").strip():
+                return
+            login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+            try:
+                for title in mt5_window_titles(port, payload):
+                    t = str(title or "").strip()
+                    if login_hint and login_hint in t:
+                        snap["observedLogin"] = login_hint
+                        snap["source"] = str(snap.get("source") or "window_title")
+                        return
+                    m = re.search(r"(\d{6,10})\s*[-–:]", t)
+                    if m:
+                        snap["observedLogin"] = m.group(1)
+                        snap["source"] = str(snap.get("source") or "window_title")
+                        return
+            except Exception:
+                pass
+
+        if verify_only:
+            uia_snap = account_snapshot_uia(port, payload)
+            if _snap_positive(uia_snap):
+                snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
+                _fill_window_login()
+                return snap
+            _fill_window_login()
+            latest, text = latest_log_text(port_dir)
+            if text:
+                mb = re.search(r"(?i)balance\s*[:= ]\s*([0-9][0-9,.\s]*)", text)
+                me = re.search(r"(?i)equity\s*[:= ]\s*([0-9][0-9,.\s]*)", text)
+                if mb:
+                    snap["balance"] = float(mb.group(1).replace(",", "").replace(" ", ""))
+                if me:
+                    snap["equity"] = float(me.group(1).replace(",", "").replace(" ", ""))
+                snap["source"] = snap.get("source") or "journal_log"
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
+            if _snap_positive(api_snap):
+                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+            _fill_window_login()
+            return snap
+
         for metric_file in (
             port_dir / "MQL5" / "Files" / "avelqua_account.json",
             port_dir / "MQL5" / "Files" / "avelqua_account.txt",
@@ -4427,6 +4537,8 @@ def send_connect_result(
     schedule_metric_retry: bool = True,
 ) -> None:
     try:
+        if _is_login_only_payload(payload):
+            schedule_metric_retry = False
         callback = payload_get(payload, "callbackUrl", default=DEFAULT_CALLBACK_URL)
         port = str(port or payload_get(payload, "port", "portNumber", "vpsPortNumber", "folderPort"))
         port_slot = payload_get(payload, "portSlot")
@@ -4474,6 +4586,7 @@ def send_connect_result(
         if (
             status == "connected"
             and schedule_metric_retry
+            and not _is_login_only_payload(payload)
             and body.get("balance") is None
             and body.get("equity") is None
         ):
@@ -4935,6 +5048,9 @@ def wait_mt5_login_hybrid(
         elapsed = int(time.time() - wait_start)
         now = time.time()
 
+        if _is_login_only_payload(payload):
+            ensure_login_only_no_trading(port, payload)
+
         if elapsed < 18 and (last_wizard_at <= wait_start or now - last_wizard_at >= 7.0):
             server = resolve_mt5_server(payload)
             pw = str(payload_get(payload, "mt5Password", "password") or "")
@@ -5083,8 +5199,25 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         stagger_sec = int(str(payload_get(payload, "staggerSec", "loginStaggerSec") or "0").strip() or "0")
     except Exception:
         stagger_sec = 0
+    login_only_boot = str(bot).strip().upper() in ("", "LOGIN_ONLY")
+    if stagger_sec <= 0 and login_only_boot:
+        try:
+            port_self = resolve_mt5_port_dir(port, payload)
+            others = 0
+            for folder in MT5_ROOT.glob("*PORT*"):
+                try:
+                    if folder.resolve() == port_self.resolve():
+                        continue
+                except Exception:
+                    pass
+                if mt5_running_for_port_dir(folder):
+                    others += 1
+            if others > 0:
+                stagger_sec = 22
+        except Exception:
+            pass
     if stagger_sec > 0:
-        stagger_sec = min(30, max(0, stagger_sec))
+        stagger_sec = min(35, max(0, stagger_sec))
         log(f"LOGIN STAGGER port={port} wait_sec={stagger_sec}")
         time.sleep(stagger_sec)
     if not port:
@@ -5168,9 +5301,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         if not login_only:
             clear_mt5_logs(port_dir)
         else:
-            clear_mt5_chart_state(port_dir)
-            patch_mt5_experts_config(port_dir, False)
-            write_avelqua_trading_gate(port_dir, False, payload)
+            prepare_port_for_login_only(port_dir, payload)
         clear_mt5_login_cache(port_dir)
         write_mt5_login_ini(
             port_dir, login, password, server, allow_expert_trading=False
