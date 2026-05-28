@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-login-fast-v99"
+AGENT_BUILD_ID = "2026-05-28-ea-set-web-only-v100"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4553,6 +4553,20 @@ def _ea_set_str_line(name: str, value: str) -> str:
     return f"{name}={safe}||{safe}||0||235959||1||N"
 
 
+def _bot_kind_from_payload(payload: Dict[str, Any]) -> str:
+    kind = str(payload_get(payload, "botKind", "bot_kind") or "").strip().lower()
+    if kind in ("ak", "queen", "quantum", "legacy"):
+        return kind
+    code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "").strip().upper()
+    if "QUANTUM-QUEEN" in code:
+        return "quantum"
+    if "QUEEN-SNIPER" in code:
+        return "queen"
+    if "AK-SNIPER" in code:
+        return "ak"
+    return "legacy"
+
+
 def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str, Any]]:
     preset = payload_get(payload, "presetRow", "preset_row") or {}
     runtime = payload_get(payload, "eaRuntime", "ea_runtime") or {}
@@ -4561,8 +4575,13 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str
     if not isinstance(runtime, dict):
         runtime = {}
     bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "BOT").strip() or "BOT"
+    bot_kind = _bot_kind_from_payload(payload)
     trade_level = str(payload_get(payload, "tradeLevel", "trade_level") or "medium").strip().lower() or "medium"
     capital = int(round(_ea_num(payload_get(payload, "capitalUsed", "capital"), 0)))
+
+    if bot_kind == "quantum" or payload_get(payload, "eaSetSkip", "ea_set_skip") in (True, 1, "1", "true", "yes"):
+        return "", "", {"skipped": True, "botKind": bot_kind, "capitalUsed": capital}
+
     file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
     if not file_name:
         safe_bot = re.sub(r"[^A-Za-z0-9_.-]+", "-", bot_code).strip("-") or "BOT"
@@ -4574,15 +4593,54 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str
     lot_plus = _ea_num(payload_get(payload, "lotPlus"), _ea_num(preset.get("lot_plus"), lot))
     t_start = _ea_num(payload_get(payload, "tStart"), _ea_num(preset.get("t_start"), 0))
     t_stop = _ea_num(payload_get(payload, "tStop"), _ea_num(preset.get("t_stop"), 0))
-    pip_step = _ea_num(payload_get(payload, "pipStep"), _ea_num(preset.get("pip_step"), 345))
-    tp_avg = _ea_num(payload_get(payload, "takeProfitAverage"), _ea_num(preset.get("take_profit_average"), 100))
-    cut_loss_pct = _ea_num(runtime.get("cutLossPct"), 100)
     time_prof = _ea_time_profile_from_payload(payload)
     use_time_filter = bool(time_prof.get("useTimeFilter"))
     sessions = time_prof.get("sessions") or []
 
+    if bot_kind == "queen":
+        lines = [
+            "; Avelqua - QUEEN-SNIPER (web: start lot only)",
+            f"; bot={bot_code} capital={capital or 0}",
+            f"InpLotStart={_ea_fmt(lot)}||0.05||0.01||100||0.01||N",
+        ]
+        applied = {"fileName": file_name, "lot": lot, "botKind": bot_kind}
+        return file_name, "\r\n".join(lines) + "\r\n", applied
+
+    if bot_kind == "ak":
+        lines = [
+            "; Avelqua - AK-SNIPER (web overrides only)",
+            f"; bot={bot_code} level={trade_level} capital={capital or 0}",
+            f"InpLotSize={_ea_fmt(lot)}||0.02||0.01||100||0.01||N",
+            f"InpLotPlus={_ea_fmt(lot_plus)}||0.02||0.01||100||0.01||N",
+            f"InpTrailingStartMoney={_ea_fmt(t_start)}||8||0||500||0.1||N",
+            f"InpTrailingStopMoney={_ea_fmt(t_stop)}||5||0||500||0.1||N",
+            _ea_set_bool_line("InpUseTimeFilter", use_time_filter),
+        ]
+        for idx in range(3):
+            sess = sessions[idx] if idx < len(sessions) else {"use": False, "start": "03:00", "stop": "06:00"}
+            n = idx + 1
+            sess_on = use_time_filter and bool(sess.get("use"))
+            lines.append(_ea_set_bool_line(f"InpUseSession{n}", sess_on))
+            lines.append(_ea_set_str_line(f"InpStartTime{n}", str(sess.get("start") or "03:00")))
+            lines.append(_ea_set_str_line(f"InpStopTime{n}", str(sess.get("stop") or "06:00")))
+        applied = {
+            "fileName": file_name,
+            "lot": lot,
+            "lotPlus": lot_plus,
+            "tStart": t_start,
+            "tStop": t_stop,
+            "useTimeFilter": use_time_filter,
+            "sessions": sessions,
+            "botKind": bot_kind,
+        }
+        return file_name, "\r\n".join(lines) + "\r\n", applied
+
+    pip_step = _ea_num(payload_get(payload, "pipStep"), _ea_num(preset.get("pip_step"), 345))
+    tp_avg = _ea_num(payload_get(payload, "takeProfitAverage"), _ea_num(preset.get("take_profit_average"), 100))
+    cut_loss_pct = _ea_num(runtime.get("cutLossPct"), 100)
+
     lines = [
-        "; Avelqua - auto-generated EA preset",
+        "; Avelqua - auto-generated EA preset (legacy)",
         f"; bot={bot_code} level={trade_level} capital={capital or 0}",
         _ea_set_bool_line("InpSoftClose", False),
         f"InpLotSize={_ea_fmt(lot)}||0.02||0.01||100||0.01||N",
@@ -4622,16 +4680,36 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str
         "sessions": sessions,
         "presetId": preset.get("id"),
         "capitalRecommend": preset.get("capital_recommend"),
+        "botKind": bot_kind,
     }
     return file_name, "\r\n".join(lines) + "\r\n", applied
 
 
 def _write_ea_preset_files(port_dir: Path, payload: Dict[str, Any], experts_dir: Path) -> Dict[str, Any]:
+    if payload_get(payload, "eaSetSkip", "ea_set_skip") in (True, 1, "1", "true", "yes"):
+        return {
+            "ok": True,
+            "skipped": True,
+            "fileName": "",
+            "written": [],
+            "eaSetApplied": payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
+            "botKind": _bot_kind_from_payload(payload),
+        }
+
     content = str(payload_get(payload, "eaSetContent", "ea_set_content") or "").strip()
     file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
     applied: Dict[str, Any] = {}
     if not content or not file_name:
         file_name, content, applied = _default_ea_set_payload(payload)
+        if applied.get("skipped"):
+            return {
+                "ok": True,
+                "skipped": True,
+                "fileName": "",
+                "written": [],
+                "eaSetApplied": applied,
+                "botKind": applied.get("botKind"),
+            }
     if not content or not file_name:
         return {"ok": False, "reason": "no_ea_set_content"}
 
@@ -4951,7 +5029,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     symbol = str(payload_get(payload, "symbol", default="XAUUSD") or "XAUUSD").strip() or "XAUUSD"
     period = str(payload_get(payload, "period", "chartPeriod", default=MT5_RUNBOT_PERIOD) or MT5_RUNBOT_PERIOD).strip().upper()
     startup_expert = _mt5_startup_expert_name(port_dir, launch_ea)
-    startup_set = str(set_info.get("fileName") or "").strip()
+    startup_set = ""
+    if not set_info.get("skipped"):
+        startup_set = str(set_info.get("fileName") or "").strip()
 
     write_avelqua_trading_gate(port_dir, True, payload)
     patch_mt5_experts_config(port_dir, True)

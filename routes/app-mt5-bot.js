@@ -31,6 +31,7 @@ const {
   botKind
 } = require('../lib/mt5BotPresets');
 const { buildEaTimeProfile } = require('../lib/mt5EaTimeProfile');
+const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
 const {
   PACKAGE_PORT_MAP,
   packagePortCapForGroup,
@@ -1827,6 +1828,7 @@ function buildPortCardState(acc) {
 
 router.get('/mt5/ports-state', requireLogin, async (req, res) => {
   try {
+    await ensureBotCatalog().catch((e) => console.error('[ensureBotCatalog]', e.message));
     const userId = req.user.id;
     const summary = await getPortSummaryReadOnly(userId);
     const accounts = await safeQuery(
@@ -1937,6 +1939,8 @@ router.get('/mt5', async (req, res) => {
   const userId = req.user.id;
   const historyPageSize = 5;
   const historyPage = Math.max(1, parseInt(req.query.history_page, 10) || 1);
+
+  await ensureBotCatalog().catch((e) => console.error('[ensureBotCatalog]', e.message));
 
   await query(`
     UPDATE vps_system.mt5_accounts
@@ -3010,6 +3014,18 @@ router.post('/mt5/run', async (req, res) => {
       { ...calc, trade: { ...trade, t_start: tStart, t_stop: tStop } },
       tradeLevel
     );
+    const eaSetFields = buildEaSetPayloadFields({
+      bot,
+      botKind: calc.botKind,
+      lot,
+      lotPlus,
+      capital: capitalUsed,
+      trade: { ...trade, t_start: tStart, t_stop: tStop },
+      preset: calc.preset,
+      presetSlug: calc.presetSlug,
+      eaTimeProfile,
+      runTimeMode
+    });
 
     const nodeRows = await client.query(`
       SELECT *
@@ -3078,6 +3094,8 @@ router.post('/mt5/run', async (req, res) => {
       runTimeMode,
       eaTimeProfile,
       eaSetPreview,
+      botKind: calc.botKind,
+      ...eaSetFields,
       allowOpen24Hours: runTimeMode === '24h',
       useBotSchedule: runTimeMode === 'auto',
       portId: portCtx.id || account.port_id || null,
