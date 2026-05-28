@@ -541,6 +541,22 @@ router.post('/port-health', async (req, res) => {
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
 
     const ports = Array.isArray(req.body.ports) ? req.body.ports : [];
+    const activeAttempts = await query(
+      `
+      SELECT DISTINCT at.assigned_port_no AS port_no
+      FROM vps_system.mt5_connect_attempts at
+      JOIN vps_system.mt5_accounts a ON a.id = at.account_id
+      WHERE at.vps_id = $1
+        AND at.terminal = FALSE
+        AND at.attempt_id = a.current_attempt_id
+        AND LOWER(TRIM(COALESCE(at.status, ''))) IN ('connecting', 'checking', 'starting')
+    `,
+      [node.id]
+    ).catch(() => ({ rows: [] }));
+    const activePortNos = new Set(
+      (activeAttempts.rows || []).map((r) => Number(r.port_no || 0)).filter((n) => n > 0)
+    );
+
     for (const p of ports) {
       const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
       if (!portNo) continue;
@@ -572,7 +588,11 @@ router.post('/port-health', async (req, res) => {
         WHERE vps_id=$1 AND port_no=$2
       `, [node.id, portNo, pid, mt5Login]).catch(() => {});
 
-      await ingestPortHealthEvent(node, p).catch(() => {});
+      const needsConnectIngest =
+        activePortNos.has(portNo) || (running && mt5Login);
+      if (needsConnectIngest) {
+        await ingestPortHealthEvent(node, p).catch(() => {});
+      }
     }
 
     return res.json({ ok: true, count: ports.length });

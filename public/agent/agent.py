@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-concurrent-login-v80"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-v81"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -183,8 +183,9 @@ def api(method: str, path_or_url: str, body: Optional[Dict[str, Any]] = None, ti
     except Exception:
         return {"raw": r.text}
 
-def post_json(path, payload):
-    return api("POST", path, payload)
+def post_json(path, payload, timeout: Optional[int] = None):
+    t = int(timeout or os.getenv("AVELQUA_HTTP_TIMEOUT", "25") or 25)
+    return api("POST", path, payload, timeout=t)
 
 def command_result(cmd_id: Any, ok: bool = True, result: Optional[Dict[str, Any]] = None, error: str = "") -> None:
     try:
@@ -400,9 +401,11 @@ def send_port_health():
                 "status": "running" if run else "free",
             })
 
-        post_json("/port-health", {
-            "ports": ports
-        })
+        post_json(
+            "/port-health",
+            {"ports": ports},
+            timeout=int(os.getenv("AVELQUA_PORT_HEALTH_TIMEOUT", "55") or 55),
+        )
 
         log(f"PORT HEALTH SENT count={len(ports)}")
 
@@ -7012,7 +7015,11 @@ def main() -> None:
                 max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))
                 async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
                 for _ in range(max_per_tick):
-                    res = api("GET", "/queue")
+                    res = api(
+                        "GET",
+                        "/queue",
+                        timeout=int(os.getenv("AVELQUA_QUEUE_TIMEOUT", "45") or 45),
+                    )
                     cmd = res.get("command")
                     if not cmd:
                         break
