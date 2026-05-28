@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-journal-latest-v98"
+AGENT_BUILD_ID = "2026-05-28-login-fast-v99"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1698,6 +1698,8 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
 
 
 def clear_mt5_logs(port_dir: Path) -> None:
+    """ลบเฉพาะ log เก่า — เก็บ log วันนี้ไว้ให้ journal ยืนยัน login ได้เร็วขึ้น"""
+    today_name = datetime.now().strftime("%Y%m%d")
     for d in [
         port_dir / "Logs",
         port_dir / "logs",
@@ -1707,6 +1709,8 @@ def clear_mt5_logs(port_dir: Path) -> None:
         if d.exists():
             for f in d.rglob("*.log"):
                 try:
+                    if today_name in f.name:
+                        continue
                     f.unlink()
                 except Exception:
                     pass
@@ -2216,11 +2220,19 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                 pass
         obs = str(snap.get("observedLogin") or "").strip()
         if expected_login and obs and obs != expected_login:
-            log(f"MT5 SNAPSHOT LOGIN MISMATCH PORT={port} expected={expected_login} observed={obs}")
-            snap["observedLogin"] = ""
-            if not _snap_positive(snap):
-                snap["balance"] = None
-                snap["equity"] = None
+            bot = str(payload_get(payload or {}, "botCode", default="") or "").upper()
+            netting_ui = any("netting" in str(t or "").lower() for t in mt5_window_titles(port, payload))
+            if bot == "LOGIN_ONLY" and netting_ui:
+                log(
+                    f"MT5 SNAPSHOT NETTING PORT={port} expected={expected_login} "
+                    f"observed={obs} — keep metrics (port isolated)"
+                )
+            else:
+                log(f"MT5 SNAPSHOT LOGIN MISMATCH PORT={port} expected={expected_login} observed={obs}")
+                snap["observedLogin"] = ""
+                if not _snap_positive(snap):
+                    snap["balance"] = None
+                    snap["equity"] = None
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
@@ -3017,12 +3029,38 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
     return titles
 
 
+def _snap_has_login_metrics(snap: Dict[str, Any], login: str) -> bool:
+    login = str(login or "").strip()
+    obs = str((snap or {}).get("observedLogin") or "").strip()
+    has_m = (snap or {}).get("balance") is not None or (snap or {}).get("equity") is not None
+    if not has_m:
+        return False
+    return (not obs) or (not login) or (obs == login)
+
+
 def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bool, str]:
     login = str(payload_get(payload, "mt5Login", "login", default="") or "").strip()
     server = str(payload_get(payload, "serverName", default="") or "").strip().lower()
     titles = mt5_window_titles(port, payload)
     joined = " | ".join(titles)
     low = joined.lower()
+
+    if login:
+        try:
+            port_dir = resolve_mt5_port_dir(port, payload)
+            j_out, j_chunk = _quick_journal_probe(port_dir, login, 0.0)
+            if j_out is True:
+                return True, j_chunk or "journal authorized"
+        except Exception:
+            pass
+
+    if login and joined and ("netting" in low or "metatrader 5" in low):
+        try:
+            snap = account_snapshot(port, payload)
+            if _snap_has_login_metrics(snap, login):
+                return True, joined
+        except Exception:
+            pass
 
     if login and (
         login in joined
@@ -3678,6 +3716,8 @@ def wait_mt5_login_hybrid(
     wait_start = time.time()
     ui_timeout = int(os.getenv("AVELQUA_LOGIN_UI_AUTOMATION_TIMEOUT_SEC", "10"))
     fast_equity = str(os.getenv("AVELQUA_LOGIN_FAST_EQUITY", "true")).lower() not in ("0", "false", "no")
+    last_equity_probe_at = 0.0
+    equity_probe_interval = float(os.getenv("AVELQUA_LOGIN_EQUITY_PROBE_SEC", "1.2"))
 
     while time.time() < deadline:
         elapsed = int(time.time() - wait_start)
@@ -3722,13 +3762,11 @@ def wait_mt5_login_hybrid(
             return True, JOURNAL_OK_MSG, j_chunk
 
         # Fast-path: equity/balance available => login success (skip long journal wait).
-        if fast_equity:
+        if fast_equity and (now - last_equity_probe_at >= equity_probe_interval):
+            last_equity_probe_at = now
             try:
                 snap = account_snapshot(port, payload)
-                bal = snap.get("balance")
-                eq = snap.get("equity")
-                obs = str(snap.get("observedLogin") or login).strip()
-                if (bal is not None or eq is not None) and (not obs or obs == login):
+                if _snap_has_login_metrics(snap, login):
                     return True, JOURNAL_OK_MSG, j_chunk or joined or ""
             except Exception:
                 pass
@@ -3769,13 +3807,11 @@ def wait_mt5_login_hybrid(
                 window_title=joined,
                 preview_b64=preview_b64,
             )
-            if fast_equity:
+            if fast_equity and (now - last_equity_probe_at >= equity_probe_interval):
+                last_equity_probe_at = now
                 try:
                     snap = account_snapshot(port, payload)
-                    bal = snap.get("balance")
-                    eq = snap.get("equity")
-                    obs = str(snap.get("observedLogin") or login).strip()
-                    if (bal is not None or eq is not None) and (not obs or obs == login):
+                    if _snap_has_login_metrics(snap, login):
                         return True, JOURNAL_OK_MSG, j_chunk or joined or ""
                 except Exception:
                     pass
@@ -3883,12 +3919,22 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             return str(p or "").strip().lower()
 
     port_self_n = _norm_path(str(port_dir))
+    mt5_root_low = str(Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))).lower()
+    dup_checks = 0
+    dup_max = int(os.getenv("AVELQUA_DUP_LOGIN_MAX_CHECKS", "6"))
 
     for p in list(iter_terminal_processes()):
+        if dup_checks >= dup_max:
+            break
         try:
+            name = (p.info.get("name") or "").lower()
+            if name != "terminal64.exe":
+                continue
             exe = p.info.get("exe") or ""
             exe_n = _norm_path(exe)
             if port_self_n and exe_n and exe_n.startswith(port_self_n):
+                continue
+            if mt5_root_low not in exe_n.lower():
                 continue
             args = p.info.get("cmdline") or []
             if port_self_n and any(port_self_n in _norm_path(str(a)) for a in args if a):
@@ -3897,15 +3943,16 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             port_dir_low = str(port_dir).rstrip("\\/").lower()
             if port_dir_low and port_dir_low in cmd_low:
                 continue
+            dup_checks += 1
 
             title_text = ""
             try:
                 ps = f"(Get-Process -Id {p.pid} -ErrorAction SilentlyContinue).MainWindowTitle"
-                title_text = _run_powershell(ps, timeout=3)
+                title_text = (_run_powershell(ps, timeout=2) or "").strip()
             except Exception:
                 pass
 
-            if login and title_text and title_text.strip() and login in title_text:
+            if login and title_text and login in title_text:
                 log(
                     f"BLOCK DUPLICATE LOGIN OTHER PORT login={login} pid={p.pid} "
                     f"title={(title_text or '')[:80]}"
@@ -3963,7 +4010,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "20"))
+    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "16"))
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
