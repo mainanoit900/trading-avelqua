@@ -3458,7 +3458,8 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       pageCount: dash.pageCount,
       hasPrev: safePage > 1,
       hasNext: safePage < dash.pageCount,
-      refreshSec: 60
+      refreshSec: 30 * 60,
+      metricsIntervalMinutes: 30
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });

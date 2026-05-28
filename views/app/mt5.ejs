@@ -215,7 +215,7 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>📡 Live MT5 Dashboard</h2>
-      <span>1 การรันต่อ 1 แถว · อัปเดตอัตโนมัติทุก 60 วินาที</span>
+      <span>Balance · Equity · Profit — อัปเดตล่าสุดทุก 30 นาที</span>
     </div>
 
     <div id="mt5LiveDashboard" class="mt5-table-wrap">
@@ -226,7 +226,7 @@
   <section class="mt5-card" id="mt5HistorySection">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
-      <span id="mt5HistoryMeta">1 การรันต่อ 1 แถว · อัปเดตอัตโนมัติทุก 60 วินาที</span>
+      <span id="mt5HistoryMeta">1 การรันต่อ 1 แถว · อัปเดตสถานะทุก 60 วินาที</span>
     </div>
     <div id="mt5HistoryDashboard" class="mt5-table-wrap">
       กำลังโหลดข้อมูล...
@@ -1770,7 +1770,8 @@ window.openMt5EquityGraph = openMt5EquityGraph;
 <script>
 let mt5LiveDashboardPage = 1;
 let mt5HistoryDashboardPage = 1;
-const MT5_DASHBOARD_REFRESH_MS = 60000;
+const MT5_DASHBOARD_REFRESH_MS = 30 * 60 * 1000;
+const MT5_HISTORY_REFRESH_MS = 60 * 1000;
 
 function mt5DisplayStatus(row) {
   const s = String(row?.display_status || row?.status || '').trim().toLowerCase();
@@ -1780,9 +1781,21 @@ function mt5DisplayStatus(row) {
   return s || 'connecting';
 }
 
-function mt5DashboardUpdatedAt(row) {
-  const raw = row?.last_agent_ping || row?.updated_at || row?.started_at;
+function mt5DashboardUpdatedAt(row, preferSnapshot) {
+  const raw = preferSnapshot
+    ? (row?.last_equity_snapshot_at || row?.last_agent_ping || row?.updated_at)
+    : (row?.last_agent_ping || row?.last_equity_snapshot_at || row?.updated_at || row?.started_at);
   return raw ? new Date(raw).toLocaleString('th-TH') : '-';
+}
+
+function mt5DashboardProfit(i) {
+  if (i && i.profit != null && Number.isFinite(Number(i.profit))) return Number(i.profit);
+  const balance = Number(i?.mt5_balance || 0);
+  const equity = Number(i?.mt5_equity || 0);
+  const startEq = Number(i?.start_equity || 0);
+  if (startEq > 0 && Number.isFinite(equity)) return equity - startEq;
+  if (Number.isFinite(balance) && Number.isFinite(equity)) return equity - balance;
+  return null;
 }
 
 function renderMt5DashboardTable(data, opts) {
@@ -1801,7 +1814,7 @@ function renderMt5DashboardTable(data, opts) {
           <th>Login</th>
           ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th>' : '<th>Funding</th><th>Lot</th><th>Level</th>'}
           <th>Status</th>
-          <th>ล่าสุด</th>
+          <th>${headLive ? 'อัปเดตล่าสุด (30 นาที)' : 'ล่าสุด'}</th>
           <th>Manage</th>
         </tr>
       </thead>
@@ -1812,7 +1825,8 @@ function renderMt5DashboardTable(data, opts) {
     const st = mt5DisplayStatus(i);
     const balanceNum = Number(i.mt5_balance || 0);
     const equityNum = Number(i.mt5_equity || 0);
-    const profitNum = Number.isFinite(balanceNum) && Number.isFinite(equityNum) ? (equityNum - balanceNum) : null;
+    const profitNum = mt5DashboardProfit(i);
+    const profitCls = profitNum == null ? '' : (profitNum >= 0 ? 'pos' : 'neg');
     const detailAttrs = `
       data-instance-id="${i.id || ''}"
       data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
@@ -1830,16 +1844,16 @@ function renderMt5DashboardTable(data, opts) {
     html += '<td>' + (i.mt5_login || '-') + '</td>';
     if (headLive) {
       html += '<td>' + (i.assigned_port_no || '-') + '</td>';
-      html += '<td>' + mt5Money(i.mt5_balance || 0) + '</td>';
-      html += '<td>' + mt5Money(i.mt5_equity || 0) + '</td>';
-      html += '<td>' + (profitNum == null ? '-' : mt5Money(profitNum)) + '</td>';
+      html += '<td class="mt5-metric">' + mt5Money(i.mt5_balance || 0) + '</td>';
+      html += '<td class="mt5-metric">' + mt5Money(i.mt5_equity || 0) + '</td>';
+      html += '<td class="mt5-metric ' + profitCls + '">' + (profitNum == null ? '-' : ((profitNum >= 0 ? '+' : '') + mt5Money(profitNum))) + '</td>';
     } else {
       html += '<td>' + (i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-') + '</td>';
       html += '<td>' + (i.lot_used || '-') + '</td>';
       html += '<td>' + mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-')) + '</td>';
     }
     html += '<td><span class="status ' + st + '">' + st + '</span></td>';
-    html += '<td>' + mt5DashboardUpdatedAt(i) + '</td>';
+    html += '<td class="mt5-metric-time">' + mt5DashboardUpdatedAt(i, headLive) + '</td>';
     html += '<td><details class="mt5-manage-menu"><summary>Manage</summary><div class="mt5-manage-dropdown">';
     html += '<button type="button" class="mt5-manage-item" onclick="openMt5InstanceDetail(this)" ' + detailAttrs + '>รายละเอียด</button>';
     if (headLive) {
@@ -1896,6 +1910,11 @@ async function loadMt5LiveDashboard(page) {
       box.innerHTML = '<div class="mt5-empty">โหลด Live Dashboard ไม่สำเร็จ</div>';
       return;
     }
+    const liveHead = document.querySelector('.mt5-card-head span');
+    if (liveHead && liveHead.closest('.mt5-card') && liveHead.closest('.mt5-card').querySelector('#mt5LiveDashboard')) {
+      const mins = Number(data.metricsIntervalMinutes || data.refreshSec / 60 || 30);
+      liveHead.textContent = 'Balance · Equity · Profit — อัปเดตล่าสุดทุก ' + mins + ' นาที';
+    }
     box.innerHTML = renderMt5DashboardTable(data, { mode: 'live' });
     bindMt5ManageMenus(box);
   } catch (e) {
@@ -1916,7 +1935,7 @@ async function loadMt5HistoryDashboard(page) {
     const data = await res.json();
     const meta = document.getElementById('mt5HistoryMeta');
     if (meta && data.ok) {
-      meta.textContent = '1 การรันต่อ 1 แถว · ทั้งหมด ' + (data.total || 0) + ' PORT · อัปเดตทุก 60 วินาที';
+      meta.textContent = '1 การรันต่อ 1 แถว · ทั้งหมด ' + (data.total || 0) + ' PORT · สถานะอัปเดตทุก 60 วินาที';
     }
     if (!data.ok) {
       box.innerHTML = '<div class="mt5-empty">โหลดประวัติไม่สำเร็จ</div>';
@@ -1941,7 +1960,12 @@ async function refreshMt5Dashboards() {
 
 loadMt5LiveDashboard();
 loadMt5HistoryDashboard();
-setInterval(refreshMt5Dashboards, MT5_DASHBOARD_REFRESH_MS);
+setInterval(function () {
+  loadMt5LiveDashboard(mt5LiveDashboardPage);
+}, MT5_DASHBOARD_REFRESH_MS);
+setInterval(function () {
+  loadMt5HistoryDashboard(mt5HistoryDashboardPage);
+}, MT5_HISTORY_REFRESH_MS);
 </script>
 
 <style>
@@ -1962,6 +1986,10 @@ setInterval(refreshMt5Dashboards, MT5_DASHBOARD_REFRESH_MS);
 .mt5-pager-btn.primary{background:linear-gradient(135deg,rgba(37,99,235,.9),rgba(14,165,233,.88));border-color:rgba(96,165,250,.35);color:#eff6ff}
 .mt5-pager-btn.disabled,.mt5-pager-btn:disabled{opacity:.45;cursor:not-allowed;pointer-events:none}
 .mt5-pager-meta{color:#94a3b8;font-size:12px}
+.mt5-metric{font-weight:800;font-variant-numeric:tabular-nums;color:#e2e8f0}
+.mt5-metric.pos{color:#86efac}
+.mt5-metric.neg{color:#fca5a5}
+.mt5-metric-time{font-size:11px;color:#94a3b8;white-space:nowrap}
 .mt5-manage-menu{position:relative;display:inline-block}
 .mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:72px;padding:7px 10px;border-radius:999px;cursor:pointer;color:#e2e8f0;font-weight:800;font-size:11px;letter-spacing:.02em;background:linear-gradient(135deg,rgba(30,41,59,.88),rgba(15,23,42,.92));border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 22px rgba(0,0,0,.18)}
 .mt5-manage-menu summary::after{content:'▾';font-size:10px;color:#93c5fd}
