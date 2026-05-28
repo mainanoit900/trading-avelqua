@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-post-connect-kill-v96"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-v97"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -100,6 +100,7 @@ WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
+MT5_API_LOCK = threading.Lock()
 MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
 MT5_LAUNCH_DIAG_LOCK = threading.Lock()
 
@@ -1642,28 +1643,36 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     except Exception:
         login_hint = 0
     try:
-        try:
-            mt5.shutdown()
-        except Exception:
-            pass
-        if not mt5.initialize(path=str(terminal)):
-            return {}
-        ti = None
-        try:
-            ti = mt5.terminal_info()
-        except Exception:
-            ti = None
-        ai = mt5.account_info()
-        if ai is None and login_hint:
+        with MT5_API_LOCK:
             try:
-                mt5.login(login_hint)
-                ai = mt5.account_info()
+                mt5.shutdown()
             except Exception:
-                ai = None
-        mt5.shutdown()
+                pass
+            if not mt5.initialize(path=str(terminal)):
+                return {}
+            ti = None
+            try:
+                ti = mt5.terminal_info()
+            except Exception:
+                ti = None
+            ai = mt5.account_info()
+            if ai is None and login_hint:
+                try:
+                    mt5.login(login_hint)
+                    ai = mt5.account_info()
+                except Exception:
+                    ai = None
+            try:
+                mt5.shutdown()
+            except Exception:
+                pass
         if ai is None:
             return {}
         if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
+            log(
+                f"MT5 API SNAPSHOT REJECT path={port_dir.name} "
+                f"expected={login_hint} got={getattr(ai, 'login', 0)}"
+            )
             return {}
         out = {
             "balance": float(ai.balance),
@@ -1681,7 +1690,8 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     except Exception as e:
         log(f"MT5 API SNAPSHOT ERROR: {e}")
         try:
-            mt5.shutdown()
+            with MT5_API_LOCK:
+                mt5.shutdown()
         except Exception:
             pass
         return {}
@@ -2190,16 +2200,27 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             if mc:
                 snap["currency"] = mc.group(1)
             log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap['balance']} EQUITY={snap['equity']} LOG={latest}")
+        expected_login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
         if not str(snap.get("observedLogin") or "").strip():
             try:
                 for title in mt5_window_titles(port, payload):
                     m = re.match(r"^(\d{6,10})\s*[-:]", str(title or "").strip())
                     if m:
-                        snap["observedLogin"] = m.group(1)
+                        title_login = m.group(1)
+                        if expected_login and title_login != expected_login:
+                            continue
+                        snap["observedLogin"] = title_login
                         snap["source"] = str(snap.get("source") or "window_title")
                         break
             except Exception:
                 pass
+        obs = str(snap.get("observedLogin") or "").strip()
+        if expected_login and obs and obs != expected_login:
+            log(f"MT5 SNAPSHOT LOGIN MISMATCH PORT={port} expected={expected_login} observed={obs}")
+            snap["observedLogin"] = ""
+            if not _snap_positive(snap):
+                snap["balance"] = None
+                snap["equity"] = None
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
