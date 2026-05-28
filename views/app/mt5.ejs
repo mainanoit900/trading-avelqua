@@ -1058,9 +1058,15 @@
         clearInterval(window.mt5Checker);
         return;
       }
-      if (stWait === 'connected' || (data.connected === true && data.status === 'connected')) {
+      if (
+        data.metricsReady
+        && (stWait === 'connected' || (data.connected === true && data.status === 'connected'))
+      ) {
         sessionStorage.setItem(key, modalDedupId);
-        finishMt5ConnectSuccess(data.message || 'เชื่อมต่อสำเร็จ');
+        const eqMsg = data.equity != null
+          ? `เชื่อมต่อสำเร็จ — Equity: ${data.equity}`
+          : (data.message || 'เชื่อมต่อสำเร็จ');
+        finishMt5ConnectSuccess(eqMsg);
         return;
       }
     } catch (e) {}
