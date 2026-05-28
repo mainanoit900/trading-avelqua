@@ -3,6 +3,7 @@
 # Mount: https://trading.avelqua.com/api/vps-agent
 # MT5 login: ยืนยันจาก Journal เท่านั้น (authorized on / authorization failed)
 
+import concurrent.futures
 import json
 import base64
 import os
@@ -80,7 +81,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-concurrent-login-parallel-v89"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-queue-v90"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3476,9 +3477,32 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                 if me:
                     snap["equity"] = float(me.group(1).replace(",", "").replace(" ", ""))
                 snap["source"] = snap.get("source") or "journal_log"
-            api_snap = account_snapshot_mt5_api(port_dir, payload)
-            if _snap_positive(api_snap):
-                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+            # ห้ามใช้ MT5 Python API ตอน verify — ชนกับ login worker / snapshot อื่นบน VPS เดียวกัน แล้วค้าง processing
+            for metric_file in (
+                port_dir / "MQL5" / "Files" / "avelqua_account.json",
+                port_dir / "MQL5" / "Files" / "avelqua_account.txt",
+            ):
+                if not metric_file.exists():
+                    continue
+                try:
+                    raw = metric_file.read_text(encoding="utf-8", errors="ignore").strip()
+                    if not raw:
+                        continue
+                    if metric_file.suffix.lower() == ".json":
+                        data = json.loads(raw)
+                        for key in ("balance", "equity"):
+                            val = data.get(key)
+                            if val is None or val == "":
+                                continue
+                            num = float(str(val).replace(",", "").replace(" ", ""))
+                            snap[key] = num if num > 0 else None
+                        snap["currency"] = str(data.get("currency") or "").upper()
+                        snap["observedLogin"] = str(data.get("login") or data.get("mt5_login") or "").strip()
+                        snap["source"] = snap.get("source") or "metric_file"
+                    if _snap_positive(snap):
+                        break
+                except Exception:
+                    pass
             _fill_window_login()
             login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
             obs = str(snap.get("observedLogin") or "").strip()
@@ -4066,8 +4090,8 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
 
 
 def login_ui_lock_uses_global(port: Any, bot_code: Any = None) -> bool:
-    """Per-PORT UI lock by default — parallel LOGIN_ONLY on different folders; set AVELQUA_LOGIN_UI_GLOBAL_LOCK=1 to queue."""
-    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "0")).strip().lower() in ("0", "false", "no"):
+    """One desktop per VPS: queue MT5 UI login (server also serializes login_mt5 per VPS)."""
+    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "1")).strip().lower() in ("0", "false", "no"):
         return False
     bot = str(bot_code or "").strip().upper()
     return bot in ("", "LOGIN_ONLY")
@@ -6893,21 +6917,39 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
             pl = dict(payload or {})
             ct = ctype
+            snap_timeout = max(
+                15.0,
+                float(os.getenv("AVELQUA_ACCOUNT_SNAPSHOT_TIMEOUT_SEC", "55") or 55),
+            )
 
             def _snapshot_worker() -> None:
                 snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
+                err_msg = ""
                 try:
-                    snap = account_snapshot(port, pl)
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                        fut = pool.submit(account_snapshot, port, pl)
+                        snap = fut.result(timeout=snap_timeout) or snap
+                except concurrent.futures.TimeoutError:
+                    err_msg = f"snapshot_timeout_{int(snap_timeout)}s"
+                    log(f"ACCOUNT SNAPSHOT TIMEOUT cmd={cmd_id} port={port}")
                 except Exception as sync_err:
+                    err_msg = str(sync_err)[:500]
                     log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
-                    snap["error"] = str(sync_err)[:500]
-                exit_after = _should_exit_mt5_after_snapshot(pl, snap)
+                    snap["error"] = err_msg
+                exit_after = _should_exit_mt5_after_snapshot(pl, snap) if not err_msg else False
                 if exit_after:
                     schedule_login_verify_exit_mt5(port, pl, delay_sec=0.2)
                 command_result(
                     cmd_id,
                     True,
-                    {"action": ct, "snapshot": snap, "loginExitScheduled": bool(exit_after), **snap},
+                    {
+                        "action": ct,
+                        "snapshot": snap,
+                        "loginExitScheduled": bool(exit_after),
+                        "timedOut": bool(err_msg.startswith("snapshot_timeout")),
+                        **snap,
+                    },
+                    err_msg,
                 )
 
             threading.Thread(target=_snapshot_worker, daemon=True).start()

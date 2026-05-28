@@ -717,24 +717,35 @@ router.get('/queue', async (req, res) => {
 
     const r = await query(`
       WITH next_cmd AS (
-        SELECT id
-        FROM vps_system.vps_agent_commands
-        WHERE status = 'pending'
-          AND (node_id=$1 OR vps_id=$1)
-          AND COALESCE(status, '') NOT IN ('success', 'failed', 'cancelled', 'expired')
+        SELECT c.id
+        FROM vps_system.vps_agent_commands c
+        WHERE c.status = 'pending'
+          AND (c.node_id=$1 OR c.vps_id=$1)
+          AND COALESCE(c.status, '') NOT IN ('success', 'failed', 'cancelled', 'expired')
+          AND NOT (
+            LOWER(COALESCE(c.command_type, '')) IN ('login_mt5', 'connect_mt5')
+            AND EXISTS (
+              SELECT 1
+              FROM vps_system.vps_agent_commands busy
+              WHERE (busy.node_id = $1 OR busy.vps_id = $1)
+                AND busy.id <> c.id
+                AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked')
+                AND LOWER(COALESCE(busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
+            )
+          )
         ORDER BY
           CASE
-            WHEN command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN -1
-            WHEN command_type IN ('login_exit_mt5') THEN -2
-            WHEN command_type IN ('stop_mt5', 'force_stop_mt5', 'kill_mt5') THEN -2
-            WHEN command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN 0
-            WHEN command_type IN ('port_read_file', 'read_file', 'account_snapshot', 'sync_mt5_account', 'read_account_metrics', 'mt5_preview', 'capture_mt5_window', 'capture_mt5_preview')
-              AND COALESCE(payload->>'purpose', '') ~* 'attempt_verify|equity|connect|login|preview'
+            WHEN c.command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN -1
+            WHEN c.command_type IN ('login_exit_mt5') THEN -2
+            WHEN c.command_type IN ('stop_mt5', 'force_stop_mt5', 'kill_mt5') THEN -2
+            WHEN c.command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN 0
+            WHEN c.command_type IN ('port_read_file', 'read_file', 'account_snapshot', 'sync_mt5_account', 'read_account_metrics', 'mt5_preview', 'capture_mt5_window', 'capture_mt5_preview')
+              AND COALESCE(c.payload->>'purpose', '') ~* 'attempt_verify|equity|connect|login|preview'
               THEN 0
-            WHEN UPPER(COALESCE(command_type, '')) LIKE 'STOP%' THEN 9
+            WHEN UPPER(COALESCE(c.command_type, '')) LIKE 'STOP%' THEN 9
             ELSE 1
           END,
-          id ASC
+          c.id ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1
       )

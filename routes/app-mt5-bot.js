@@ -2265,10 +2265,11 @@ console.log('[MT5 CONNECT START]', {
         account_name,
         status,
         assigned_port_no,
+        last_login_message,
         updated_at
       )
 	VALUES
-	($1,$2,$3,$4,$5,$6,'MH Markets',$7,$8,'connecting',$9,NOW())
+	($1,$2,$3,$4,$5,$6,'MH Markets',$7,$8,'connecting',$9,$10,NOW())
 	ON CONFLICT (user_id, mt5_login, server_name)
 	DO UPDATE SET
 	  mt5_password=EXCLUDED.mt5_password,
@@ -2279,7 +2280,7 @@ console.log('[MT5 CONNECT START]', {
 	  windows_port_no=EXCLUDED.assigned_port_no,
 	  status='connecting',
 	  last_error=NULL,
-	  last_login_message='กำลังเปิด MT5 และตรวจสอบ Login (ประมาณ 15–45 วินาที)',
+	  last_login_message=EXCLUDED.last_login_message,
 	  updated_at=NOW()
 	RETURNING id
     `, [
@@ -2291,7 +2292,8 @@ console.log('[MT5 CONNECT START]', {
       mt5Password,
       FIXED_SERVER,
       `PORT ${portSlot}`,
-      allocPortNo
+      allocPortNo,
+      queueHint
     ]);
 
     const accountId = accRes.rows[0].id;
@@ -2314,7 +2316,11 @@ console.log('[MT5 CONNECT START]', {
     `,
       [reservedPort.vps_id, accountId]
     );
-    const staggerSec = num(parallelOnVps?.[0]?.n) > 0 ? 8 : 0;
+    const staggerSec = num(parallelOnVps?.[0]?.n) > 0 ? 5 : 0;
+    const queueHint =
+      num(parallelOnVps?.[0]?.n) > 0
+        ? 'มี PORT อื่นกำลัง Login บน VPS เดียวกัน — ระบบคิวให้อัตโนมัติ (ประมาณ 1–2 นาที)'
+        : 'กำลังเปิด MT5 และตรวจสอบ Login (ประมาณ 15–45 วินาที)';
 
     const loginPayload = {
       ...buildMt5LoginPayload({
