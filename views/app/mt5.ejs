@@ -226,7 +226,7 @@
   <section class="mt5-card" id="mt5HistorySection">
     <div class="mt5-card-head">
       <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
-      <span id="mt5HistoryMeta">1 การรันต่อ 1 แถว · อัปเดตสถานะทุก 60 วินาที</span>
+      <span id="mt5HistoryMeta">1 การรันต่อ 1 แถว · เก็บประวัติการเปิดบอทแต่ละครั้ง</span>
     </div>
     <div id="mt5HistoryDashboard" class="mt5-table-wrap">
       กำลังโหลดข้อมูล...
@@ -1779,7 +1779,6 @@ window.openMt5EquityGraph = openMt5EquityGraph;
 let mt5LiveDashboardPage = 1;
 let mt5HistoryDashboardPage = 1;
 const MT5_DASHBOARD_REFRESH_MS = 30 * 60 * 1000;
-const MT5_HISTORY_REFRESH_MS = 60 * 1000;
 
 function mt5DisplayStatus(row) {
   const s = String(row?.display_status || row?.status || '').trim().toLowerCase();
@@ -1820,7 +1819,7 @@ function renderMt5DashboardTable(data, opts) {
         <tr>
           <th>BOT</th>
           <th>Login</th>
-          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th><th>เวลาเปิดออเดอร์</th>' : '<th>เงินทุน</th><th>Lot</th><th>เวลาเปิดออเดอร์</th><th>Level</th>'}
+          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th>' : '<th>เงินทุน</th><th>Lot</th><th>Level</th>'}
           <th>Status</th>
           <th>${headLive ? 'อัปเดตล่าสุด (30 นาที)' : 'ล่าสุด'}</th>
           <th>Manage</th>
@@ -1857,7 +1856,6 @@ function renderMt5DashboardTable(data, opts) {
       html += '<td class="mt5-metric">' + mt5Money(i.mt5_balance || 0) + '</td>';
       html += '<td class="mt5-metric">' + mt5Money(i.mt5_equity || 0) + '</td>';
       html += '<td class="mt5-metric ' + profitCls + '">' + (profitNum == null ? '-' : ((profitNum >= 0 ? '+' : '') + mt5Money(profitNum))) + '</td>';
-      html += '<td class="mt5-order-time">' + mt5ManageEscape(mt5OrderTimeText(i.order_time_label || i.run_time_mode)) + '</td>';
     } else {
       const funding = i.display_funding != null ? i.display_funding : i.capital_used;
       const lotText = i.display_lot_text != null
@@ -1865,7 +1863,6 @@ function renderMt5DashboardTable(data, opts) {
         : (i.display_lot != null ? Number(i.display_lot).toFixed(2) : (i.lot_used != null ? i.lot_used : '-'));
       html += '<td>' + (funding != null ? Number(funding).toFixed(2) : '-') + '</td>';
       html += '<td>' + mt5ManageEscape(lotText) + '</td>';
-      html += '<td class="mt5-order-time">' + mt5ManageEscape(mt5OrderTimeText(i.order_time_label || i.run_time_mode)) + '</td>';
       html += '<td>' + mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-')) + '</td>';
     }
     html += '<td><span class="status ' + st + '">' + st + '</span></td>';
@@ -1951,7 +1948,7 @@ async function loadMt5HistoryDashboard(page) {
     const data = await res.json();
     const meta = document.getElementById('mt5HistoryMeta');
     if (meta && data.ok) {
-      meta.textContent = '1 การรันต่อ 1 แถว · ทั้งหมด ' + (data.total || 0) + ' PORT · สถานะอัปเดตทุก 60 วินาที';
+      meta.textContent = '1 การรันต่อ 1 แถว · ทั้งหมด ' + (data.total || 0) + ' PORT · เก็บประวัติการเปิดบอทแต่ละครั้ง';
     }
     if (!data.ok) {
       box.innerHTML = '<div class="mt5-empty">โหลดประวัติไม่สำเร็จ</div>';
@@ -1979,9 +1976,6 @@ loadMt5HistoryDashboard();
 setInterval(function () {
   loadMt5LiveDashboard(mt5LiveDashboardPage);
 }, MT5_DASHBOARD_REFRESH_MS);
-setInterval(function () {
-  loadMt5HistoryDashboard(mt5HistoryDashboardPage);
-}, MT5_HISTORY_REFRESH_MS);
 </script>
 
 <style>
