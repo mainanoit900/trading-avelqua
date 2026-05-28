@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-27-login-no-trade-v77"
+AGENT_BUILD_ID = "2026-05-27-concurrent-login-v78"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -382,7 +382,7 @@ def send_port_health():
                 try:
                     ps = f"(Get-Process -Id {run['process_id']} -ErrorAction SilentlyContinue).MainWindowTitle"
                     title = (_run_powershell(ps, timeout=4) or "").strip()
-                    m = re.match(r"^(\d{4,})\s*[-–]", title)
+                    m = re.search(r"(\d{6,10})\s*[-–:]", title)
                     if m:
                         mt5_login = m.group(1)
                 except Exception:
@@ -2853,8 +2853,10 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
-    retries = max(1, int(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRIES", "3")))
-    retry_sleep = float(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRY_SEC", "1.2"))
+    password = str(payload_get(payload or {}, "mt5Password", "password") or "").strip()
+    server = resolve_mt5_server(payload)
+    retries = max(1, int(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRIES", "5")))
+    retry_sleep = float(os.getenv("AVELQUA_MT5_API_SNAPSHOT_RETRY_SEC", "2.0"))
     ai = None
     ti = None
     with MT5_API_SNAPSHOT_LOCK:
@@ -2875,6 +2877,12 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
                     except Exception:
                         ti = None
                     ai = mt5.account_info()
+                    if ai is None and login_hint and password:
+                        try:
+                            mt5.login(login_hint, password=password, server=server)
+                            ai = mt5.account_info()
+                        except Exception:
+                            ai = None
                     if ai is None and login_hint:
                         try:
                             mt5.login(login_hint)
@@ -3434,8 +3442,14 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             log(f"MT5 SNAPSHOT PORT={port} BALANCE={snap['balance']} EQUITY={snap['equity']} LOG={latest}")
         if not str(snap.get("observedLogin") or "").strip():
             try:
+                login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
                 for title in mt5_window_titles(port, payload):
-                    m = re.match(r"^(\d{6,10})\s*[-:]", str(title or "").strip())
+                    t = str(title or "").strip()
+                    if login_hint and login_hint in t:
+                        snap["observedLogin"] = login_hint
+                        snap["source"] = str(snap.get("source") or "window_title")
+                        break
+                    m = re.search(r"(\d{6,10})\s*[-–:]", t)
                     if m:
                         snap["observedLogin"] = m.group(1)
                         snap["source"] = str(snap.get("source") or "window_title")
@@ -5065,6 +5079,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     password = str(payload_get(payload, "mt5Password", "password") or "")
     server = resolve_mt5_server(payload)
     bot = payload_get(payload, "botCode", default="LOGIN_ONLY")
+    try:
+        stagger_sec = int(str(payload_get(payload, "staggerSec", "loginStaggerSec") or "0").strip() or "0")
+    except Exception:
+        stagger_sec = 0
+    if stagger_sec > 0:
+        stagger_sec = min(30, max(0, stagger_sec))
+        log(f"LOGIN STAGGER port={port} wait_sec={stagger_sec}")
+        time.sleep(stagger_sec)
     if not port:
         raise RuntimeError("payload.port is required")
     if not login:

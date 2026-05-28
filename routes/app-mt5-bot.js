@@ -2285,15 +2285,31 @@ console.log('[MT5 CONNECT START]', {
       await setAdminAllocationStatus(reservedPort.admin_node_id, allocPortNo, 'locked', reservedPort.allocation_id);
     }
 
-    const loginPayload = buildMt5LoginPayload({
-      accountId,
-      userId,
-      reservedPort,
-      portSlot,
-      mt5Login,
-      mt5Password,
-      serverName: FIXED_SERVER
-    });
+    const parallelOnVps = await safeQuery(
+      `
+      SELECT COUNT(*)::int AS n
+      FROM vps_system.mt5_connect_attempts
+      WHERE vps_id=$1
+        AND account_id <> $2
+        AND LOWER(TRIM(COALESCE(status,''))) IN ('connecting','checking','starting')
+        AND created_at > NOW() - INTERVAL '3 minutes'
+    `,
+      [reservedPort.vps_id, accountId]
+    );
+    const staggerSec = num(parallelOnVps?.[0]?.n) > 0 ? 12 : 0;
+
+    const loginPayload = {
+      ...buildMt5LoginPayload({
+        accountId,
+        userId,
+        reservedPort,
+        portSlot,
+        mt5Login,
+        mt5Password,
+        serverName: FIXED_SERVER
+      }),
+      staggerSec
+    };
     const payloadJson = JSON.stringify(loginPayload);
 
     async function insertConnectCommand() {
