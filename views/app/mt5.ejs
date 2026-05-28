@@ -1361,6 +1361,13 @@ function mt5TradeLevelText(level) {
   return level || '-';
 }
 
+function mt5OrderTimeText(modeOrLabel) {
+  const v = String(modeOrLabel || '').trim().toLowerCase();
+  if (v === '24h' || v === 'open 24h.' || v.includes('24')) return 'Open 24H.';
+  if (v === 'auto' || v.includes('auto')) return 'Auto trading';
+  return modeOrLabel || 'Auto trading';
+}
+
 function mt5ManageData(el) {
   return el && el.dataset ? el.dataset : {};
 }
@@ -1453,6 +1460,7 @@ function mt5GraphMetaStrip(d) {
     ['BOT', d.bot || '-'],
     ['Login', d.login || '-'],
     ['PORT', d.port || '-'],
+    ['เวลาเปิดออเดอร์', mt5OrderTimeText(d.orderTime || 'auto')],
     ['Status', d.status || '-']
   ];
   return '<div class="mt5-graph-meta">' + items.map(function (pair) {
@@ -1482,6 +1490,7 @@ function openMt5InstanceDetail(el) {
       { label: 'Login', value: d.login || '-' },
       { label: 'Funding', value: d.funding || '-' },
       { label: 'Lot', value: d.lot || '-' },
+      { label: 'เวลาเปิดออเดอร์', value: mt5OrderTimeText(d.orderTime || 'auto') },
       { label: 'Level', value: mt5TradeLevelText(d.level) },
       { label: 'Status', value: d.status || '-' },
       { label: 'PORT', value: d.port || '-' },
@@ -1527,6 +1536,7 @@ function openMt5InstanceAnalysis(el) {
         { label: 'Login', value: d.login || '-' },
         { label: 'Funding', value: d.funding || '-' },
         { label: 'Lot', value: d.lot || '-' },
+        { label: 'เวลาเปิดออเดอร์', value: mt5OrderTimeText(d.orderTime || 'auto') },
         { label: 'Level', value: mt5TradeLevelText(d.level) },
         { label: 'Status', value: d.status || '-' }
       ])}
@@ -1797,7 +1807,7 @@ function renderMt5DashboardTable(data, opts) {
         <tr>
           <th>BOT</th>
           <th>Login</th>
-          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th>' : '<th>Funding</th><th>Lot</th><th>Level</th>'}
+          ${headLive ? '<th>PORT</th><th>Balance</th><th>Equity</th><th>Profit</th><th>เวลาเปิดออเดอร์</th>' : '<th>Funding</th><th>Lot</th><th>เวลาเปิดออเดอร์</th><th>Level</th>'}
           <th>Status</th>
           <th>${headLive ? 'อัปเดตล่าสุด (30 นาที)' : 'ล่าสุด'}</th>
           <th>Manage</th>
@@ -1816,8 +1826,9 @@ function renderMt5DashboardTable(data, opts) {
       data-instance-id="${i.id || ''}"
       data-bot="${mt5ManageEscape(i.display_name || i.bot_name || i.bot_code || '-')}"
       data-login="${mt5ManageEscape(i.mt5_login || '-')}"
-      data-funding="${i.capital_used != null ? i.capital_used : '-'}"
-      data-lot="${i.lot_used != null ? i.lot_used : '-'}"
+      data-funding="${i.display_funding != null ? i.display_funding : (i.capital_used != null ? i.capital_used : '-')}"
+      data-lot="${i.display_lot != null ? i.display_lot : (i.lot_used != null ? i.lot_used : '-')}"
+      data-order-time="${mt5ManageEscape(i.order_time_label || i.run_time_mode || 'auto')}"
       data-level="${mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-'))}"
       data-status="${mt5ManageEscape(st)}"
       data-port="${i.assigned_port_no || '-'}"
@@ -1832,9 +1843,13 @@ function renderMt5DashboardTable(data, opts) {
       html += '<td class="mt5-metric">' + mt5Money(i.mt5_balance || 0) + '</td>';
       html += '<td class="mt5-metric">' + mt5Money(i.mt5_equity || 0) + '</td>';
       html += '<td class="mt5-metric ' + profitCls + '">' + (profitNum == null ? '-' : ((profitNum >= 0 ? '+' : '') + mt5Money(profitNum))) + '</td>';
+      html += '<td class="mt5-order-time">' + mt5ManageEscape(mt5OrderTimeText(i.order_time_label || i.run_time_mode)) + '</td>';
     } else {
-      html += '<td>' + (i.capital_used != null ? Number(i.capital_used).toFixed(2) : '-') + '</td>';
-      html += '<td>' + (i.lot_used || '-') + '</td>';
+      const funding = i.display_funding != null ? i.display_funding : i.capital_used;
+      const lot = i.display_lot != null ? i.display_lot : i.lot_used;
+      html += '<td>' + (funding != null ? Number(funding).toFixed(2) : '-') + '</td>';
+      html += '<td>' + (lot != null ? Number(lot).toFixed(2) : '-') + '</td>';
+      html += '<td class="mt5-order-time">' + mt5ManageEscape(mt5OrderTimeText(i.order_time_label || i.run_time_mode)) + '</td>';
       html += '<td>' + mt5ManageEscape(mt5TradeLevelText(i.trade_level || '-')) + '</td>';
     }
     html += '<td><span class="status ' + st + '">' + st + '</span></td>';
@@ -1975,6 +1990,7 @@ setInterval(function () {
 .mt5-metric.pos{color:#86efac}
 .mt5-metric.neg{color:#fca5a5}
 .mt5-metric-time{font-size:11px;color:#94a3b8;white-space:nowrap}
+.mt5-order-time{font-size:10px;color:#cbd5e1;white-space:nowrap}
 .mt5-manage-menu{position:relative;display:inline-block}
 .mt5-manage-menu summary{list-style:none;display:inline-flex;align-items:center;justify-content:center;gap:6px;min-width:72px;padding:7px 10px;border-radius:999px;cursor:pointer;color:#e2e8f0;font-weight:800;font-size:11px;letter-spacing:.02em;background:linear-gradient(135deg,rgba(30,41,59,.88),rgba(15,23,42,.92));border:1px solid rgba(148,163,184,.16);box-shadow:0 10px 22px rgba(0,0,0,.18)}
 .mt5-manage-menu summary::after{content:'▾';font-size:10px;color:#93c5fd}
