@@ -80,7 +80,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-login-exit-lock-v83"
+AGENT_BUILD_ID = "2026-05-28-concurrent-login-queue-v84"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4062,11 +4062,11 @@ def _popen_hidden(args: List[str], cwd: Optional[str] = None) -> Any:
 
 
 def login_ui_lock_uses_global(port: Any, bot_code: Any = None) -> bool:
-    """LOGIN หลาย PORT พร้อมกันใช้ lock แยกต่อ PORT (คนละ terminal) — global lock ทำให้ค้าง."""
-    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "0")).strip().lower() in ("1", "true", "yes"):
-        bot = str(bot_code or "").strip().upper()
-        return bot in ("", "LOGIN_ONLY")
-    return False
+    """VPS มีเดสก์ท็อปเดียว: ให้ login หลาย PORT 'กดพร้อมกันได้' แต่คิว UI automation ทีละตัว."""
+    if str(os.getenv("AVELQUA_LOGIN_UI_GLOBAL_LOCK", "1")).strip().lower() in ("0", "false", "no"):
+        return False
+    bot = str(bot_code or "").strip().upper()
+    return bot in ("", "LOGIN_ONLY")
 
 
 def acquire_login_ui_lock(
@@ -4102,7 +4102,7 @@ def acquire_login_ui_lock(
                 pass
         time.sleep(0.35)
     raise RuntimeError(
-        f"PORT {port_label} กำลัง Login MT5 อยู่ กรุณารอสักครู่แล้วลองใหม่ (หรือเลือก PORT อื่น)"
+        "กำลัง Login MT5 อีก PORT อยู่ ระบบกำลังคิวให้อัตโนมัติ — กรุณารอสักครู่"
     )
 
 
@@ -5308,7 +5308,12 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         args = [str(terminal), "/portable", f"/config:{cfg}"]
         log(f"START MT5 V2 reason={reason} args={args} cwd={port_dir}")
         ui_global = login_ui_lock_uses_global(port, bot)
-        token = acquire_login_ui_lock(port, timeout_sec=90, global_lock=ui_global)
+        token = acquire_login_ui_lock(
+            port,
+            timeout_sec=int(os.getenv("AVELQUA_LOGIN_UI_LOCK_TIMEOUT", "240") or 240),
+            stale_sec=int(os.getenv("AVELQUA_LOGIN_UI_LOCK_STALE", "240") or 240),
+            global_lock=ui_global,
+        )
         try:
             proc = _popen_hidden(args, cwd=str(port_dir))
             time.sleep(0.9)
