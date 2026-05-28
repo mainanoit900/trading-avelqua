@@ -215,7 +215,7 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>📡 Live MT5 Dashboard</h2>
-      <span>Balance · Equity · Profit — อัปเดตล่าสุดทุก 30 นาที</span>
+      <span id="mt5LiveDashboardMeta">Balance · Equity · Profit — อัปเดตล่าสุดทุก 30 นาที</span>
     </div>
 
     <div id="mt5LiveDashboard" class="mt5-table-wrap">
@@ -1581,7 +1581,7 @@ function mt5PnlChartsPanel(json, instanceId) {
   const pnlCls = pnl >= 0 ? 'pos' : 'neg';
   const interval = Number(json.intervalMinutes || 30);
   return `
-    <div class="mt5-pnl-widget" id="mt5PnlWidget${uid}" data-instance-id="${mt5Esc(instanceId)}">
+    <div class="mt5-pnl-widget" id="mt5PnlWidget${uid}" data-instance-id="${mt5ManageEscape(instanceId)}">
       <div class="mt5-pnl-summary">
         <div class="mt5-pnl-summary-box"><small>Equity ตั้งต้น</small><b>${mt5Money(startEq)}</b></div>
         <div class="mt5-pnl-summary-box"><small>Equity ปัจจุบัน</small><b>${mt5Money(curEq)}</b></div>
@@ -1690,7 +1690,7 @@ function mt5InitPnlChartWidget(instanceId, json) {
 
   track.innerHTML = days.map(function (d) {
     const cls = d.endPnl >= 0 ? 'pos' : 'neg';
-    return '<button type="button" class="mt5-pnl-day-chip ' + cls + '" data-day="' + mt5Esc(d.dayKey) + '">' +
+    return '<button type="button" class="mt5-pnl-day-chip ' + cls + '" data-day="' + mt5ManageEscape(d.dayKey) + '">' +
       '<span class="d">' + mt5ManageEscape(d.label) + '</span>' +
       '<span class="s">' + d.rowCount + ' จุด · P/L ' + (d.endPnl >= 0 ? '+' : '') + mt5Money(d.endPnl) + '</span>' +
       '</button>';
@@ -1910,9 +1910,9 @@ async function loadMt5LiveDashboard(page) {
       box.innerHTML = '<div class="mt5-empty">โหลด Live Dashboard ไม่สำเร็จ</div>';
       return;
     }
-    const liveHead = document.querySelector('.mt5-card-head span');
-    if (liveHead && liveHead.closest('.mt5-card') && liveHead.closest('.mt5-card').querySelector('#mt5LiveDashboard')) {
-      const mins = Number(data.metricsIntervalMinutes || data.refreshSec / 60 || 30);
+    const liveHead = document.getElementById('mt5LiveDashboardMeta');
+    if (liveHead) {
+      const mins = Number(data.metricsIntervalMinutes || (data.refreshSec ? data.refreshSec / 60 : 30) || 30);
       liveHead.textContent = 'Balance · Equity · Profit — อัปเดตล่าสุดทุก ' + mins + ' นาที';
     }
     box.innerHTML = renderMt5DashboardTable(data, { mode: 'live' });
