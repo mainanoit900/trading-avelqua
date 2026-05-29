@@ -2933,11 +2933,12 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
 });
 
 router.post('/mt5/run', async (req, res) => {
-  const client = await getClient();
+  let client = null;
   let accountLockKey = null;
   let vpsRunLockKey = null;
   let vpsLoginGateKey = null;
   let loginGateWaitedMs = 0;
+  let runGateWaitedMs = 0;
   let reservedPortForRun = null;
   try {
     await ensureBotCatalog();
@@ -2961,17 +2962,23 @@ router.post('/mt5/run', async (req, res) => {
     if (!mt5AccountId) throw new Error('กรุณาเลือก PORT/บัญชี MT5');
     if (!botCode) throw new Error('กรุณาเลือก BOT');
 
-    await client.query('BEGIN');
-
-    const summary = await getPortSummary(userId);
+    const summary = await getPortSummaryReadOnly(userId);
     const lotMeta = packageLotLimits(summary);
-    const running = await client.query(`SELECT COUNT(*)::int c FROM vps_system.bot_instances WHERE user_id=$1 AND status IN ('running','pending')`, [userId]);
-    if (num(running.rows[0]?.c) >= summary.totalPorts) throw new Error(`จำนวน BOT ที่รันเต็มแล้ว ตามสิทธิ์ ${summary.totalPorts} PORT`);
+    const running = await query(
+      `SELECT COUNT(*)::int c FROM vps_system.bot_instances WHERE user_id=$1 AND status IN ('running','pending')`,
+      [userId]
+    );
+    if (num(running.rows[0]?.c) >= summary.totalPorts) {
+      throw new Error(`จำนวน BOT ที่รันเต็มแล้ว ตามสิทธิ์ ${summary.totalPorts} PORT`);
+    }
 
-    const accountRows = await client.query(`SELECT * FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 FOR UPDATE`, [mt5AccountId, userId]);
-    const account = accountRows.rows[0];
+    let account = (
+      await query(`SELECT * FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`, [mt5AccountId, userId])
+    ).rows[0];
     if (!account) throw new Error('ไม่พบบัญชี MT5 ของคุณ');
-    if (String(account.status || '').toLowerCase() !== 'connected') throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
+    if (String(account.status || '').toLowerCase() !== 'connected') {
+      throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
+    }
 
     if (!num(account.vps_id) || !num(account.assigned_port_no)) {
       const reserve = await reserveVpsPortForConnect(userId, account.port_id, num(account.port_slot));
@@ -2982,7 +2989,7 @@ router.post('/mt5/run', async (req, res) => {
       const allocPortNo = num(
         reservedPortForRun.port_number || reservedPortForRun.port_no || account.port_slot
       );
-      await client.query(
+      await query(
         `
         UPDATE vps_system.mt5_accounts
         SET vps_id=$2,
@@ -2994,24 +3001,21 @@ router.post('/mt5/run', async (req, res) => {
       `,
         [mt5AccountId, reservedPortForRun.vps_id, reservedPortForRun.port_id, allocPortNo]
       );
-      account.vps_id = reservedPortForRun.vps_id;
-      account.port_id = reservedPortForRun.port_id;
-      account.assigned_port_no = allocPortNo;
-      account.windows_port_no = allocPortNo;
+      account = (
+        await query(`SELECT * FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`, [mt5AccountId, userId])
+      ).rows[0];
     }
 
-    const preVpsId = num(account.vps_id, 0);
-    if (!preVpsId || !num(account.assigned_port_no)) {
+    const preVpsId = num(account?.vps_id, 0);
+    const assignedPortNo = num(account?.assigned_port_no, 0);
+    if (!preVpsId || !assignedPortNo) {
       throw new Error('PORT นี้ยังไม่มีข้อมูล VPS/PORT ที่พร้อมรัน');
     }
 
-    const runGate = await acquireVpsRunBotSlot(preVpsId);
-    vpsRunLockKey = runGate.lockKey;
-    const runGateWaitedMs = runGate.waitedMs || 0;
-
-    await stopActiveInstancesForAccount(mt5AccountId, userId, client);
-
-    const botRows = await client.query(`SELECT * FROM vps_system.bot_catalog WHERE UPPER(bot_code)=UPPER($1) AND is_active=TRUE LIMIT 1`, [botCode]);
+    const botRows = await query(
+      `SELECT * FROM vps_system.bot_catalog WHERE UPPER(bot_code)=UPPER($1) AND is_active=TRUE LIMIT 1`,
+      [botCode]
+    );
     const bot = botRows.rows[0];
     if (!bot) throw new Error('ไม่พบ BOT ที่เลือก');
     if (!isProductionBot(bot)) throw new Error('BOT นี้ไม่ได้เปิดให้ใช้งานบนหน้าเว็บนี้');
@@ -3061,22 +3065,18 @@ router.post('/mt5/run', async (req, res) => {
       runTimeMode
     });
 
-    const nodeRows = await client.query(`
-      SELECT *
-      FROM vps_system.vps_nodes
-      WHERE id=$1
-      FOR UPDATE
-    `, [account.vps_id]);
-    const node = nodeRows.rows[0];
-    if (!node) throw new Error('ไม่พบ Windows VPS ของ PORT ที่เลือก');
+    const nodePreview = (
+      await query(`SELECT * FROM vps_system.vps_nodes WHERE id=$1 LIMIT 1`, [preVpsId])
+    ).rows[0];
+    if (!nodePreview) throw new Error('ไม่พบ Windows VPS ของ PORT ที่เลือก');
 
-    const assignedPortNo = num(account.assigned_port_no);
     const runBotQueueDelaySec = await computeRunBotQueueDelaySec(
-      node.id,
+      nodePreview.id,
       mt5AccountId,
       assignedPortNo
     ).catch(() => 0);
-    const portCtxRows = await client.query(`
+    const portCtxRows = await query(
+      `
       SELECT
         vp.id,
         vp.port_no,
@@ -3086,17 +3086,42 @@ router.post('/mt5/run', async (req, res) => {
          OR (vp.vps_id = $2 AND vp.port_no = $3)
       ORDER BY CASE WHEN vp.id = $1 THEN 0 ELSE 1 END
       LIMIT 1
-    `, [account.port_id || null, node.id, assignedPortNo]);
+    `,
+      [account.port_id || null, nodePreview.id, assignedPortNo]
+    );
     const portCtx = portCtxRows.rows[0] || {};
     const folderPath = String(
       portCtx.folder_path
-      || `C:\\MT5_PORTS\\${String(node.node_code || 'VPS-WIN-01').trim() || 'VPS-WIN-01'}-PORT-${String(assignedPortNo).padStart(2, '0')}`
+      || `C:\\MT5_PORTS\\${String(nodePreview.node_code || 'VPS-WIN-01').trim() || 'VPS-WIN-01'}-PORT-${String(assignedPortNo).padStart(2, '0')}`
     ).trim();
     const vpsPortName = String(
-      node.node_code && assignedPortNo
-        ? `${String(node.node_code).trim()}-PORT-${String(assignedPortNo).padStart(2, '0')}`
+      nodePreview.node_code && assignedPortNo
+        ? `${String(nodePreview.node_code).trim()}-PORT-${String(assignedPortNo).padStart(2, '0')}`
         : ''
     ).trim();
+
+    const usePhase2BotRun = String(process.env.MT5_PHASE2_BOT_RUN || '1').trim() !== '0';
+    if (usePhase2BotRun) await assertNoRecentBotRunAttempt(mt5AccountId);
+
+    const runGate = await acquireVpsRunBotSlot(preVpsId);
+    vpsRunLockKey = runGate.lockKey;
+    runGateWaitedMs = runGate.waitedMs || 0;
+
+    let loginQueueDelaySec = 0;
+    let journalTimeoutSec = 0;
+    if (usePhase2BotRun) {
+      loginQueueDelaySec = await computeLoginQueueDelaySec(
+        nodePreview.id,
+        mt5AccountId,
+        assignedPortNo
+      ).catch(() => 0);
+      journalTimeoutSec = computeJournalTimeoutSec({
+        activeLoginCount: await countActiveLoginsOnVps(nodePreview.id).catch(() => 0)
+      });
+      const loginGate = await acquireVpsLoginSlot(nodePreview.id, assignedPortNo);
+      vpsLoginGateKey = loginGate.lockKey;
+      loginGateWaitedMs = loginGate.waitedMs || 0;
+    }
 
     const payload = {
       action: 'run_mt5_bot',
@@ -3139,9 +3164,9 @@ router.post('/mt5/run', async (req, res) => {
       allowOpen24Hours: runTimeMode === '24h',
       useBotSchedule: runTimeMode === 'auto',
       portId: portCtx.id || account.port_id || null,
-      vpsId: node.id,
-      nodeId: node.id,
-      nodeCode: node.node_code || '',
+      vpsId: nodePreview.id,
+      nodeId: nodePreview.id,
+      nodeCode: nodePreview.node_code || '',
       folderPath,
       folder_path: folderPath,
       vpsFolderPath: folderPath,
@@ -3161,6 +3186,30 @@ router.post('/mt5/run', async (req, res) => {
       queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
     };
 
+    client = await getClient();
+    await client.query('BEGIN');
+
+    const accountRows = await client.query(
+      `SELECT * FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 FOR UPDATE`,
+      [mt5AccountId, userId]
+    );
+    account = accountRows.rows[0];
+    if (!account) throw new Error('ไม่พบบัญชี MT5 ของคุณ');
+    if (String(account.status || '').toLowerCase() !== 'connected') {
+      throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
+    }
+
+    await stopActiveInstancesForAccount(mt5AccountId, userId, client);
+
+    const nodeRows = await client.query(`
+      SELECT *
+      FROM vps_system.vps_nodes
+      WHERE id=$1
+      FOR UPDATE
+    `, [account.vps_id]);
+    const node = nodeRows.rows[0];
+    if (!node) throw new Error('ไม่พบ Windows VPS ของ PORT ที่เลือก');
+
     const inst = await client.query(`
       INSERT INTO vps_system.bot_instances
       (user_id, mt5_account_id, bot_id, vps_id, status, lot_used, port_used, assigned_port_no, preset_id, run_payload, started_at, trade_level, capital_used, updated_at)
@@ -3168,27 +3217,11 @@ router.post('/mt5/run', async (req, res) => {
       RETURNING *
     `, [userId, mt5AccountId, bot.id, node.id, lot, assignedPortNo, calc.preset?.id || null, JSON.stringify(payload), trade.trade_level, capitalUsed]);
 
-    const usePhase2BotRun = String(process.env.MT5_PHASE2_BOT_RUN || '1').trim() !== '0';
     let cmdId = 0;
     let loginCmdId = 0;
     let attemptId = null;
 
     if (usePhase2BotRun) {
-      await assertNoRecentBotRunAttempt(mt5AccountId);
-
-      const loginQueueDelaySec = await computeLoginQueueDelaySec(
-        node.id,
-        mt5AccountId,
-        assignedPortNo
-      ).catch(() => 0);
-      const journalTimeoutSec = computeJournalTimeoutSec({
-        activeLoginCount: await countActiveLoginsOnVps(node.id).catch(() => 0)
-      });
-
-      const loginGate = await acquireVpsLoginSlot(node.id, assignedPortNo);
-      vpsLoginGateKey = loginGate.lockKey;
-      loginGateWaitedMs = loginGate.waitedMs || 0;
-
       attemptId = await createConnectAttempt({
         accountId: mt5AccountId,
         userId,
@@ -3291,14 +3324,14 @@ router.post('/mt5/run', async (req, res) => {
         : `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว${queueNote} — รอ VPS ส่ง Balance/Equity จริง`
     );
   } catch (e) {
-    await client.query('ROLLBACK').catch(() => {});
+    if (client) await client.query('ROLLBACK').catch(() => {});
     if (reservedPortForRun) await releaseReservedPort(reservedPortForRun).catch(() => {});
     flash(req, 'error', e.message);
   } finally {
     if (vpsLoginGateKey) await releaseVpsLoginSlot(vpsLoginGateKey).catch(() => {});
     if (vpsRunLockKey) await releaseVpsRunBotSlot(vpsRunLockKey).catch(() => {});
     if (accountLockKey) await redis.del(accountLockKey).catch(() => {});
-    client.release();
+    if (client) client.release();
   }
   return res.redirect('/app/mt5');
 });
