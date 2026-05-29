@@ -1177,16 +1177,23 @@ router.post('/command-result', async (req, res) => {
     const ok = req.body.status === 'success' || req.body.ok === true;
     const result = req.body.result && typeof req.body.result === 'object' ? req.body.result : {};
     const plRow = await query(
-      `SELECT payload, command_type FROM vps_system.vps_agent_commands WHERE id=$1`,
+      `SELECT payload, command_type, status FROM vps_system.vps_agent_commands WHERE id=$1`,
       [commandId]
     ).catch(() => ({ rows: [] }));
     const pl = plRow.rows?.[0]?.payload || {};
     const ctype = String(plRow.rows?.[0]?.command_type || '').toLowerCase();
+    const curStatus = String(plRow.rows?.[0]?.status || '').toLowerCase();
+    if (curStatus === 'cancelled' || curStatus === 'expired') {
+      return res.json({ ok: true, ignored: true, reason: 'COMMAND_CANCELLED' });
+    }
 
-    await query(`
+    const updateRes = await query(`
       UPDATE vps_system.vps_agent_commands
       SET status=$1, result_message=$2, result=$3::jsonb, error=$4, finished_at=NOW(), updated_at=NOW()
       WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
+        AND LOWER(COALESCE(status, '')) IN (
+          'pending', 'queued', 'picked', 'processing', 'running', 'in_progress'
+        )
     `, [
       ok ? 'success' : 'failed',
       req.body.message || '',
@@ -1195,6 +1202,10 @@ router.post('/command-result', async (req, res) => {
       commandId,
       node.id
     ]);
+
+    if (!updateRes.rowCount) {
+      return res.json({ ok: true, ignored: true, reason: 'COMMAND_ALREADY_FINISHED' });
+    }
 
     await processCommandResultSideEffects(node, commandId, ctype, pl, result, ok, req.body.message || '');
     await ingestCommandResultEvent(node, {
@@ -1247,6 +1258,35 @@ router.post('/connect-result', async (req, res) => {
   }
 });
 
+router.get('/commands/:id/status', async (req, res) => {
+  try {
+    await ensureAgentTables();
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+
+    const commandId = Number(req.params.id);
+    if (!commandId) return res.status(400).json({ ok: false, message: 'NO_COMMAND_ID' });
+
+    const row = await query(
+      `
+      SELECT status
+      FROM vps_system.vps_agent_commands
+      WHERE id = $1
+        AND (node_id = $2 OR vps_id = $2)
+      LIMIT 1
+    `,
+      [commandId, node.id]
+    ).catch(() => ({ rows: [] }));
+
+    const status = String(row.rows?.[0]?.status || '').toLowerCase();
+    const active = ['pending', 'queued', 'picked', 'processing', 'running', 'in_progress'].includes(status);
+    return res.json({ ok: true, status, active });
+  } catch (e) {
+    console.error('[COMMANDS ID STATUS ERROR]', e);
+    return res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
 router.post('/commands/:id/result', async (req, res) => {
   try {
     await ensureAgentTables();
@@ -1264,11 +1304,15 @@ router.post('/commands/:id/result', async (req, res) => {
       : String(errMsg || req.body.message || 'failed').slice(0, 2000);
 
     const pay = await query(
-      `SELECT payload, command_type FROM vps_system.vps_agent_commands WHERE id=$1`,
+      `SELECT payload, command_type, status FROM vps_system.vps_agent_commands WHERE id=$1`,
       [commandId]
     ).catch(() => ({ rows: [] }));
     const pl = pay.rows?.[0]?.payload || {};
     const ctype = String(pay.rows?.[0]?.command_type || '').toLowerCase();
+    const curStatus = String(pay.rows?.[0]?.status || '').toLowerCase();
+    if (curStatus === 'cancelled' || curStatus === 'expired') {
+      return res.json({ ok: true, ignored: true, reason: 'COMMAND_CANCELLED' });
+    }
 
     const updateRes = await query(`
       UPDATE vps_system.vps_agent_commands
@@ -1278,20 +1322,23 @@ router.post('/commands/:id/result', async (req, res) => {
           error=$4,
           finished_at=NOW(),
           updated_at=NOW()
-      WHERE id=$5 AND (node_id=$6 OR vps_id=$6)
+      WHERE id=$5
+        AND (node_id=$6 OR vps_id=$6)
+        AND LOWER(COALESCE(status, '')) IN (
+          'pending', 'queued', 'picked', 'processing', 'running', 'in_progress'
+        )
     `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId, node.id]);
 
     if (!updateRes.rowCount) {
-      await query(`
-        UPDATE vps_system.vps_agent_commands
-        SET status=$1,
-            result_message=$2,
-            result=$3::jsonb,
-            error=$4,
-            finished_at=NOW(),
-            updated_at=NOW()
-        WHERE id=$5
-      `, [ok ? 'success' : 'failed', msg, prepareCommandResultForDb(result), ok ? null : msg, commandId]);
+      const again = await query(
+        `SELECT status FROM vps_system.vps_agent_commands WHERE id=$1 LIMIT 1`,
+        [commandId]
+      ).catch(() => ({ rows: [] }));
+      const againStatus = String(again.rows?.[0]?.status || '').toLowerCase();
+      if (againStatus === 'cancelled' || againStatus === 'expired') {
+        return res.json({ ok: true, ignored: true, reason: 'COMMAND_CANCELLED' });
+      }
+      return res.json({ ok: true, ignored: true, reason: 'COMMAND_ALREADY_FINISHED' });
     }
 
     try {

@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-concurrent-equity-v113"
+AGENT_BUILD_ID = "2026-05-29-cancel-inflight-v114"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -296,6 +296,20 @@ def command_result(cmd_id: Any, ok: bool = True, result: Optional[Dict[str, Any]
         log(f"RESULT SENT CommandID={cmd_id} Ok={ok}")
     except Exception as e:
         log(f"RESULT ERROR CommandID={cmd_id}: {e}")
+
+
+def command_still_active(cmd_id: Any) -> bool:
+    if not cmd_id:
+        return True
+    try:
+        data = api("GET", f"/commands/{cmd_id}/status", timeout=8)
+        if data.get("active") is False:
+            return False
+        status = str(data.get("status") or "").lower()
+        return status in ("pending", "queued", "picked", "processing", "running", "in_progress")
+    except Exception as e:
+        log(f"COMMAND STATUS CHECK ERROR cmd_id={cmd_id}: {e}")
+        return True
 
 
 def _sample_network_mbps() -> Tuple[float, float]:
@@ -2515,7 +2529,11 @@ def remove_mt5_login_ini(port_dir: Path) -> None:
                 pass
 
 
-def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+def account_snapshot(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    cmd_id: Any = None,
+) -> Dict[str, Any]:
     snap = {"balance": None, "equity": None, "currency": "", "observedLogin": "", "source": ""}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
@@ -2595,6 +2613,11 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
         if login_equity_purpose:
             iso_attempts = max(1, int(os.getenv("AVELQUA_LOGIN_EQUITY_ISOLATED_ATTEMPTS", "3")))
             for iso_i in range(iso_attempts):
+                if cmd_id and not command_still_active(cmd_id):
+                    log(f"ACCOUNT SNAPSHOT ABORT cmd_id={cmd_id} cancelled")
+                    snap["error"] = "command_cancelled"
+                    snap["source"] = "command_cancelled"
+                    return snap
                 api_snap = account_snapshot_mt5_api_isolated(port_dir, payload)
                 if api_snap.get("loginMismatch"):
                     snap["loginMismatch"] = True
@@ -6343,6 +6366,14 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 command_result(cmd_id, True, res)
 
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
+            if cmd_id and not command_still_active(cmd_id):
+                log(f"ACCOUNT SNAPSHOT SKIP cmd_id={cmd_id} cancelled")
+                command_result(
+                    cmd_id,
+                    True,
+                    {"action": ctype, "cancelled": True, "snapshot": {"error": "command_cancelled"}},
+                )
+                return
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
             snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
             purpose_low = str(payload_get(payload, "purpose") or "").lower()
@@ -6361,7 +6392,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 import concurrent.futures
 
                 with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
-                    future = pool.submit(account_snapshot, port, payload)
+                    future = pool.submit(account_snapshot, port, payload, cmd_id)
                     snap = future.result(timeout=max(15.0, snap_timeout))
             except concurrent.futures.TimeoutError:
                 log(f"ACCOUNT SNAPSHOT TIMEOUT port={port} purpose={payload_get(payload, 'purpose')}")
