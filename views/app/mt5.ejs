@@ -907,7 +907,9 @@
       lotInput.max = String(mt5Num(cfg.packageLotMax, 0.05));
 
       let capital = mt5Num(capitalInput.value, 0);
-      if (!capital && actualCapital > 0) capital = actualCapital;
+      if (!capital && actualCapital > 0 && changedField !== 'capital_manual') {
+        capital = actualCapital;
+      }
       const manualLot = mt5Num(lotInput.value, 0);
       const preview = mt5ComputeRunPreset(
         botCode,
@@ -920,7 +922,10 @@
 
       if (syncField === 'lot' && mt5BotKind(botCode) === 'ak') {
         capitalInput.value = preview.capital > 0 ? mt5Fixed(preview.capital) : '';
-      } else if (mt5BotKind(botCode) !== 'quantum') {
+      } else if (syncField === 'capital' && mt5BotKind(botCode) === 'ak' && preview.packageCapped && preview.capital > 0) {
+        capitalInput.value = mt5Fixed(preview.capital);
+      }
+      if (mt5BotKind(botCode) !== 'quantum') {
         lotInput.value = mt5Fixed(preview.lot);
       }
 
@@ -1021,6 +1026,39 @@
   let mt5RunPrepareStartedAt = Date.now();
   let mt5RunPrepareTimer = null;
 
+  function mt5CaptureRunFormDraft(form) {
+    if (!form) return null;
+    const accountId = form.querySelector('#mt5RunAccountId')?.value || '';
+    if (!accountId) return null;
+    return {
+      account_id: String(accountId),
+      bot_code: form.querySelector('select[name="bot_code"]')?.value || '',
+      capital_manual: form.querySelector('input[name="capital_manual"]')?.value || '',
+      manual_lot: form.querySelector('input[name="manual_lot"]')?.value || '',
+      trade_level: form.querySelector('select[name="trade_level"]')?.value || 'medium',
+      run_time_mode: form.querySelector('select[name="run_time_mode"]')?.value || 'auto',
+      sync_field: form.querySelector('#mt5RunSyncField')?.value || 'capital'
+    };
+  }
+
+  function mt5RestoreRunFormDraft(form, draft) {
+    if (!form || !draft) return;
+    const accountId = form.querySelector('#mt5RunAccountId')?.value || '';
+    if (!accountId || String(draft.account_id) !== String(accountId)) return;
+    const botSelect = form.querySelector('select[name="bot_code"]');
+    const capitalInput = form.querySelector('input[name="capital_manual"]');
+    const lotInput = form.querySelector('input[name="manual_lot"]');
+    const levelSelect = form.querySelector('select[name="trade_level"]');
+    const timeSelect = form.querySelector('select[name="run_time_mode"]');
+    const syncHidden = form.querySelector('#mt5RunSyncField');
+    if (botSelect && draft.bot_code) botSelect.value = draft.bot_code;
+    if (capitalInput && draft.capital_manual !== '') capitalInput.value = draft.capital_manual;
+    if (lotInput && draft.manual_lot !== '') lotInput.value = draft.manual_lot;
+    if (levelSelect && draft.trade_level) levelSelect.value = draft.trade_level;
+    if (timeSelect && draft.run_time_mode) timeSelect.value = draft.run_time_mode;
+    if (syncHidden && draft.sync_field) syncHidden.value = draft.sync_field;
+  }
+
   function mt5StartRunPrepareTimer() {
     const box = document.getElementById('mt5RunPrepareBox');
     const secEl = document.getElementById('mt5RunPrepareSec');
@@ -1047,7 +1085,7 @@
         return [a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.last_equity, a.last_balance];
       }),
       activeInstances: (mt5RunState.activeInstances || []).map(function (row) {
-        return [row.id, row.mt5_account_id, row.status, row.assigned_port_no, row.connecting_elapsed_sec, row.agent_command_status];
+        return [row.id, row.mt5_account_id, row.status, row.assigned_port_no];
       }),
       bots: (bots || []).map(function (b) {
         return [b.code || b.bot_code || '', b.label || b.display_name || b.bot_name || ''];
@@ -1094,10 +1132,17 @@
         mt5RunState.activeInstances = Array.isArray(cfg.activeInstances) ? cfg.activeInstances.slice() : [];
         const nextSignature = mt5RunDataSignature(cfg.connectedAccounts, cfg.bots || []);
         if (nextSignature !== mt5RunRenderSignature || !document.getElementById('mt5RunForm')) {
+          const runDraft = mt5CaptureRunFormDraft(document.getElementById('mt5RunForm'));
           mt5RunRenderSignature = nextSignature;
           mt5StopRunPrepareTimer();
           runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
           bindMt5RunForm();
+          const restoredForm = document.getElementById('mt5RunForm');
+          mt5RestoreRunFormDraft(restoredForm, runDraft);
+          if (restoredForm && runDraft) {
+            const capField = restoredForm.querySelector('input[name="capital_manual"]');
+            if (capField) capField.dispatchEvent(new Event('input', { bubbles: true }));
+          }
         } else if (typeof window.mt5UpdateSharedPortSelections === 'function') {
           window.mt5UpdateSharedPortSelections();
         }
@@ -1107,10 +1152,17 @@
         if (hasConnectingRun) {
           const sel = mt5SelectedRunInstance();
           if (sel && String(sel.status || '') === 'connecting' && !document.getElementById('mt5RunConnectingMeta')) {
+            const runDraft = mt5CaptureRunFormDraft(document.getElementById('mt5RunForm'));
             mt5RunRenderSignature = '';
             mt5StopRunPrepareTimer();
             runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
             bindMt5RunForm();
+            const restoredForm = document.getElementById('mt5RunForm');
+            mt5RestoreRunFormDraft(restoredForm, runDraft);
+            if (restoredForm && runDraft) {
+              const capField = restoredForm.querySelector('input[name="capital_manual"]');
+              if (capField) capField.dispatchEvent(new Event('input', { bubbles: true }));
+            }
           }
         }
         if (typeof mt5SyncLiveFastPoll === 'function') {
