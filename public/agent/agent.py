@@ -3166,7 +3166,10 @@ def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bo
         for t in titles:
             found = _leading_login_from_title(t)
             if found and found != login:
-                return False, f"บัญชีบน MT5 ไม่ตรง (เห็น {found} แต่กรอก {login})", joined
+                return False, (
+                    f"บัญชีบน MT5 ไม่ตรง (เห็น {found} แต่กรอก {login})"
+                    + (f" — title: {joined}" if joined else "")
+                )
 
     if login:
         try:
