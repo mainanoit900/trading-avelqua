@@ -557,8 +557,38 @@
     return kind === 'queen' || kind === 'quantum';
   }
 
+  function mt5SyncRunConnectedAccounts() {
+    const cfg = window.__mt5RunConfig || {};
+    const fresh = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
+    if (fresh.length) {
+      mt5RunState.connectedAccounts = fresh;
+    }
+    return Array.isArray(mt5RunState.connectedAccounts) ? mt5RunState.connectedAccounts : [];
+  }
+
+  function mt5ApplyRunAccountToForm(acc) {
+    const form = document.getElementById('mt5RunForm');
+    if (!form || !acc) return false;
+    const id = Number(acc.id || 0);
+    if (!id) return false;
+    mt5RunState.selectedAccountId = id;
+    sessionStorage.setItem('mt5RunAccountId', String(id));
+    const hidden = form.querySelector('#mt5RunAccountId');
+    if (hidden) hidden.value = String(id);
+    const summary = form.querySelector('#mt5RunPortSummaryText');
+    if (summary) {
+      const eq = mt5RunAccountCapital(acc);
+      summary.innerHTML =
+        '<b style="color:#7dd3fc">PORT ' + mt5Esc(acc.port_slot) + '</b> · Login <b style="color:#fff">' + mt5Esc(acc.mt5_login || '-') + '</b>' +
+        (eq > 0 ? (' · Equity <b style="color:#fff">' + mt5Esc(eq) + '</b>') : '');
+    }
+    const botSelect = form.querySelector('select[name="bot_code"]');
+    if (botSelect) botSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    return true;
+  }
+
   function mt5SelectedRunAccount() {
-    const connected = Array.isArray(mt5RunState.connectedAccounts) ? mt5RunState.connectedAccounts : [];
+    const connected = mt5SyncRunConnectedAccounts();
     const explicitId = Number(mt5RunState.selectedAccountId || 0);
     if (explicitId) {
       const byId = connected.find(function (a) { return Number(a.id) === explicitId; });
@@ -790,7 +820,7 @@
         '<button class="mt5-btn mini delete" type="submit" onclick="event.stopPropagation()">ลบ</button></form>'
       : '';
     const actions = p.accountId ? '<div class="port-actions" onclick="event.stopPropagation()">' + del + '</div>' : '';
-    const pickable = !!(p.canUse || (!p.accountId && p.canPick));
+    const pickable = !!(p.canUse || (p.accountId && String(p.status || '').toLowerCase() === 'connected') || (!p.accountId && p.canPick));
     const pickCls = pickable ? ' port-card-pick' : '';
     const pickTitle = p.canUse ? ' title="คลิกเลือก PORT นี้เพื่อ Run BOT"' : (pickable ? ' title="คลิกเลือก PORT นี้เพื่อ Login MT5"' : '');
     const pickAttr = pickable
@@ -1026,6 +1056,8 @@
   }
   window.renderMt5RunFormHtml = renderMt5RunFormHtml;
   window.bindMt5RunForm = bindMt5RunForm;
+  window.mt5SyncRunConnectedAccounts = mt5SyncRunConnectedAccounts;
+  window.mt5ApplyRunAccountToForm = mt5ApplyRunAccountToForm;
 
   let mt5RunRenderSignature = '';
   let mt5RunPrepareStartedAt = Date.now();
@@ -1149,8 +1181,14 @@
             const capField = restoredForm.querySelector('input[name="capital_manual"]');
             if (capField) capField.dispatchEvent(new Event('input', { bubbles: true }));
           }
-        } else if (typeof window.mt5UpdateSharedPortSelections === 'function') {
-          window.mt5UpdateSharedPortSelections();
+        } else {
+          mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
+          if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
+          const selId = Number(mt5RunState.selectedAccountId || 0);
+          if (selId) {
+            const selAcc = mt5RunState.connectedAccounts.find(function (a) { return Number(a.id) === selId; });
+            if (selAcc && typeof window.mt5ApplyRunAccountToForm === 'function') window.mt5ApplyRunAccountToForm(selAcc);
+          }
         }
         const hasConnectingRun = (cfg.activeInstances || []).some(function (row) {
           return String(row.status || '') === 'connecting';
@@ -1467,8 +1505,20 @@ function mt5SelectRunAccount(accountId) {
   if (!id) return;
   const runState = window.mt5RunState;
   if (!runState) return;
+  if (typeof window.mt5SyncRunConnectedAccounts === 'function') window.mt5SyncRunConnectedAccounts();
   runState.selectedAccountId = id;
   sessionStorage.setItem('mt5RunAccountId', String(id));
+  let acc = (runState.connectedAccounts || []).find(function (a) { return Number(a.id) === id; });
+  if (!acc) {
+    const cfg = window.__mt5RunConfig || {};
+    const fresh = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts : [];
+    acc = fresh.find(function (a) { return Number(a.id) === id; });
+    if (acc) runState.connectedAccounts = fresh.slice();
+  }
+  if (acc && typeof window.mt5ApplyRunAccountToForm === 'function' && window.mt5ApplyRunAccountToForm(acc)) {
+    if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
+    return;
+  }
   const panel = document.getElementById('mt5RunPanel');
   if (panel && typeof window.renderMt5RunFormHtml === 'function' && typeof window.bindMt5RunForm === 'function') {
     panel.innerHTML = window.renderMt5RunFormHtml(runState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
