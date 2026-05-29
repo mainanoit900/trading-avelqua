@@ -554,6 +554,7 @@ const {
 } = require('../lib/adminVpsPortPicker');
 const { fetchVpsActiveLoginLoadMap } = require('../lib/vpsLoginLoad');
 const { setAdminAllocationStatus, parsePortNumber, resolveSystemVpsId, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
+const { buildStopMt5ReleasePayload } = require('../lib/mt5PortCleanup');
 
 async function reserveMt5Port(userId) {
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -2124,11 +2125,10 @@ console.log('[MT5 CONNECT START]', {
       );
     }
 
-const {
-  findMt5LoginInUse,
-  mt5LoginInUseMessage
-} = require('../lib/mt5LoginDuplicate');
-const { buildStopMt5ReleasePayload } = require('../lib/mt5PortCleanup');
+    const {
+      findMt5LoginInUse,
+      mt5LoginInUseMessage
+    } = require('../lib/mt5LoginDuplicate');
     const dupLogin = await findMt5LoginInUse(
       mt5Login,
       FIXED_SERVER,
