@@ -10,6 +10,10 @@ function getUserLockKey(userId) {
   return `lock:user:${userId}`;
 }
 
+function getUserRunAccountLockKey(userId, mt5AccountId) {
+  return `lock:user:${userId}:run:acct:${mt5AccountId}`;
+}
+
 function getConnectSlotLockKey(userId, portSlot) {
   return `lock:user:${userId}:mt5:slot:${portSlot}`;
 }
@@ -48,6 +52,7 @@ const {
   computePortEntitlement
 } = require('../lib/mt5PortEntitlement');
 const { fetchEquityChartForInstance, recordEquityLog, seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
+const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBotGate');
 
 const router = express.Router();
 
@@ -2857,18 +2862,17 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
 
 router.post('/mt5/run', async (req, res) => {
   const client = await getClient();
-  let lockKey = null;
+  let accountLockKey = null;
+  let vpsRunLockKey = null;
   try {
     await ensureBotCatalog();
     const userId = req.user.id;
-// ===== REDIS LOCK RUN =====
-    lockKey = getUserLockKey(userId);
-    const locked = await redis.set(lockKey, '1', 'NX', 'EX', 15);
-
-    if (!locked) {
-      throw new Error('⏳ ระบบกำลัง Run BOT อยู่...');
-    }
     const mt5AccountId = num(req.body.mt5_account_id);
+    accountLockKey = getUserRunAccountLockKey(userId, mt5AccountId);
+    const accountLocked = await redis.set(accountLockKey, '1', 'NX', 'EX', 45);
+    if (!accountLocked) {
+      throw new Error('⏳ PORT นี้กำลังส่งคำสั่ง Run อยู่ — รอสักครู่');
+    }
     const botCode = clean(req.body.bot_code).toUpperCase();
     const capitalManual = num(req.body.capital_manual);
     const manualLot = num(req.body.manual_lot);
@@ -2881,6 +2885,17 @@ router.post('/mt5/run', async (req, res) => {
 
     if (!mt5AccountId) throw new Error('กรุณาเลือก PORT/บัญชี MT5');
     if (!botCode) throw new Error('กรุณาเลือก BOT');
+
+    const accountPrecheck = await query(
+      `SELECT vps_id FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
+      [mt5AccountId, userId]
+    );
+    const preVpsId = num(accountPrecheck.rows?.[0]?.vps_id, 0);
+    if (!preVpsId) throw new Error('PORT นี้ยังไม่มีข้อมูล VPS/PORT ที่พร้อมรัน');
+
+    const runGate = await acquireVpsRunBotSlot(preVpsId);
+    vpsRunLockKey = runGate.lockKey;
+    const runGateWaitedMs = runGate.waitedMs || 0;
 
     await client.query('BEGIN');
 
@@ -3066,12 +3081,21 @@ router.post('/mt5/run', async (req, res) => {
 
     await client.query('COMMIT');
 
-    flash(req, 'success', `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว — รอ VPS ส่ง Balance/Equity จริง`);
+    const queueNote =
+      runGateWaitedMs > 500
+        ? ` (คิว VPS ~${Math.ceil(runGateWaitedMs / 1000)} วินาที)`
+        : '';
+    flash(
+      req,
+      'success',
+      `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว${queueNote} — รอ VPS ส่ง Balance/Equity จริง`
+    );
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     flash(req, 'error', e.message);
   } finally {
-    if (lockKey) await redis.del(lockKey).catch(() => {});
+    if (vpsRunLockKey) await releaseVpsRunBotSlot(vpsRunLockKey).catch(() => {});
+    if (accountLockKey) await redis.del(accountLockKey).catch(() => {});
     client.release();
   }
   return res.redirect('/app/mt5');

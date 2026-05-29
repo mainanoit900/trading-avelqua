@@ -722,6 +722,17 @@ router.get('/queue', async (req, res) => {
           AND (c.node_id=$1 OR c.vps_id=$1)
           AND COALESCE(c.status, '') NOT IN ('success', 'failed', 'cancelled', 'expired')
           AND NOT (
+            LOWER(COALESCE(c.command_type, '')) IN ('run_mt5_bot', 'run_mt5')
+            AND EXISTS (
+              SELECT 1
+              FROM vps_system.vps_agent_commands busy
+              WHERE (busy.node_id = $1 OR busy.vps_id = $1)
+                AND busy.id <> c.id
+                AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked', 'running')
+                AND LOWER(COALESCE(busy.command_type, '')) IN ('run_mt5_bot', 'run_mt5')
+            )
+          )
+          AND NOT (
             LOWER(COALESCE(c.command_type, '')) IN ('login_mt5', 'connect_mt5')
             AND EXISTS (
               SELECT 1
