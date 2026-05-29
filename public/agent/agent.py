@@ -1646,9 +1646,6 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
-    if count_running_mt5_terminals() > 1:
-        log(f"MT5 API SNAPSHOT SKIP concurrent terminals path={port_dir.name}")
-        return {}
     try:
         with mt5_api_global_file_lock(timeout_sec=45.0) as got_lock:
             if not got_lock:
