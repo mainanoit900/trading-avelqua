@@ -751,32 +751,27 @@ router.get('/queue', async (req, res) => {
                 AND busy.id <> c.id
                 AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked', 'running')
                 AND LOWER(COALESCE(busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
-                AND (
-                  (COALESCE(c.port_id, 0) > 0 AND busy.port_id = c.port_id)
-                  OR (
-                    COALESCE(
-                      NULLIF(c.payload->>'port', '')::int,
-                      NULLIF(c.payload->>'portNumber', '')::int,
-                      NULLIF(c.payload->>'port_no', '')::int,
-                      NULLIF(c.payload->>'portNo', '')::int,
-                      0
-                    ) > 0
-                    AND COALESCE(
-                      NULLIF(busy.payload->>'port', '')::int,
-                      NULLIF(busy.payload->>'portNumber', '')::int,
-                      NULLIF(busy.payload->>'port_no', '')::int,
-                      NULLIF(busy.payload->>'portNo', '')::int,
-                      0
-                    ) = COALESCE(
-                      NULLIF(c.payload->>'port', '')::int,
-                      NULLIF(c.payload->>'portNumber', '')::int,
-                      NULLIF(c.payload->>'port_no', '')::int,
-                      NULLIF(c.payload->>'portNo', '')::int,
-                      0
-                    )
-                  )
-                )
             )
+          )
+          AND NOT (
+            EXISTS (
+              SELECT 1
+              FROM vps_system.vps_agent_commands login_busy
+              WHERE (login_busy.node_id = $1 OR login_busy.vps_id = $1)
+                AND LOWER(COALESCE(login_busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
+                AND LOWER(COALESCE(login_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
+            )
+            AND LOWER(COALESCE(c.command_type, '')) IN (
+              'account_snapshot',
+              'sync_mt5_account',
+              'read_account_metrics',
+              'port_read_file',
+              'read_file',
+              'mt5_preview',
+              'capture_mt5_window',
+              'capture_mt5_preview'
+            )
+            AND COALESCE(c.payload->>'purpose', '') !~* 'login_equity|attempt_verify'
           )
         ORDER BY
           CASE
@@ -785,7 +780,7 @@ router.get('/queue', async (req, res) => {
             WHEN c.command_type IN ('account_snapshot', 'sync_mt5_account', 'read_account_metrics')
               AND COALESCE(c.payload->>'purpose', '') ~* 'login_equity'
               THEN -3
-            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN 0
+            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN -1
             WHEN c.command_type IN ('login_exit_mt5', 'stop_mt5', 'force_stop_mt5', 'kill_mt5')
               AND COALESCE(c.payload->>'purpose', '') = 'post_connect_exit'
               THEN 10
@@ -797,6 +792,16 @@ router.get('/queue', async (req, res) => {
             WHEN UPPER(COALESCE(c.command_type, '')) LIKE 'STOP%' THEN 9
             ELSE 1
           END,
+          CASE
+            WHEN c.command_type IN ('login_mt5', 'connect_mt5') THEN COALESCE(
+              NULLIF(c.payload->>'port', '')::int,
+              NULLIF(c.payload->>'portNumber', '')::int,
+              NULLIF(c.payload->>'port_no', '')::int,
+              NULLIF(c.payload->>'portNo', '')::int,
+              9999
+            )
+            ELSE 0
+          END ASC,
           c.id ASC
         FOR UPDATE SKIP LOCKED
         LIMIT 1

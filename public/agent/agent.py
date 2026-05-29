@@ -273,9 +273,58 @@ def metrics() -> Dict[str, Any]:
     }
 
 
+def read_worker_state(port: Any) -> Dict[str, Any]:
+    try:
+        path = worker_state_path(port)
+        if not path.exists():
+            return {}
+        return json.loads(path.read_text(encoding="utf-8", errors="ignore") or "{}")
+    except Exception:
+        return {}
+
+
+def any_login_connect_worker_running() -> bool:
+    """มี worker login/connect กำลังรัน — หยุดส่ง metrics ชั่วคราว"""
+    reap_connect_workers()
+    with ACTIVE_CONNECT_WORKERS_LOCK:
+        for port_key, proc in list(ACTIVE_CONNECT_WORKERS.items()):
+            if proc.poll() is not None:
+                continue
+            try:
+                port_no = int(port_key)
+            except Exception:
+                port_no = 0
+            st = read_worker_state(port_no)
+            ctype = str(st.get("command_type") or "").lower()
+            if ctype in ("login_mt5", "connect_mt5"):
+                return True
+    return False
+
+
+def background_param_tasks_paused() -> bool:
+    return any_login_connect_worker_running()
+
+
 def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dict[str, Any]]:
-    body = metrics()
-    body["status"] = status
+    if background_param_tasks_paused():
+        body = {
+            "status": status,
+            "cpu_percent": 0.0,
+            "ram_percent": 0.0,
+            "ping_ms": 0.0,
+            "net_down_mbps": 0.0,
+            "net_up_mbps": 0.0,
+            "service_name": SERVICE_NAME,
+            "computer_name": platform.node(),
+            "agent_type": "python",
+            "agent_version": AGENT_VERSION,
+            "agent_build_id": AGENT_BUILD_ID,
+            "journal_gate": True,
+            "login_metrics_paused": True,
+        }
+    else:
+        body = metrics()
+        body["status"] = status
     if last_error:
         body["last_error"] = last_error
     try:
@@ -5788,7 +5837,8 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
             result = spawn_connect_worker(cmd_id, ctype, payload)
-            command_result(cmd_id, True, {**(result or {}), "status": "dispatched"})
+            if str(ctype).lower() in ("run_mt5_bot", "run_mt5"):
+                command_result(cmd_id, True, {**(result or {}), "status": "dispatched"})
             return
 
         elif ctype in (
@@ -5947,8 +5997,10 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
         except Exception:
             delay_sec = 0.0
         if delay_sec > 0 and str(ctype or "").lower() in ("connect_mt5", "login_mt5"):
-            log(f"CONNECT WORKER QUEUE DELAY port={port} sec={delay_sec:.1f}")
-            time.sleep(min(delay_sec, 30.0))
+            max_delay = float(os.getenv("AVELQUA_LOGIN_QUEUE_DELAY_MAX_SEC", "300"))
+            wait_sec = min(delay_sec, max_delay)
+            log(f"CONNECT WORKER QUEUE DELAY port={port} sec={wait_sec:.1f}")
+            time.sleep(wait_sec)
         log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
         if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
             worker_result = run_bot_command(payload)
@@ -6026,20 +6078,26 @@ def main() -> None:
                 )
                 last_hb = now
 
-            send_port_health()
+            if not background_param_tasks_paused():
+                send_port_health()
 
-            if not disabled:
+            if not disabled and not background_param_tasks_paused():
                 poll_running_mt5_list()
 
             try:
                 max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))
                 async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
+                login_tick_used = False
                 for _ in range(max_per_tick):
                     res = api("GET", "/queue")
                     cmd = res.get("command")
                     if not cmd:
                         break
                     ctype = str(cmd.get("command_type") or "").lower()
+                    if ctype in ("login_mt5", "connect_mt5"):
+                        if login_tick_used:
+                            break
+                        login_tick_used = True
                     handle_command(cmd)
                     if ctype not in async_types:
                         break

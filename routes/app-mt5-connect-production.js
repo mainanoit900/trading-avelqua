@@ -869,7 +869,7 @@ async function handleMt5ConnectProduction(req, res) {
       serverName
     });
 
-    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id, allocPortNo);
+    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id);
     vpsLoginGateKey = loginGate.lockKey;
     loginGateWaitedMs = loginGate.waitedMs || 0;
 
@@ -879,7 +879,8 @@ async function handleMt5ConnectProduction(req, res) {
 
     const queueDelaySec = await computeLoginQueueDelaySec(
       reservedPort.vps_id,
-      accountId
+      accountId,
+      allocPortNo
     ).catch(() => 0);
 
     const payload = {
@@ -921,9 +922,11 @@ async function handleMt5ConnectProduction(req, res) {
       ? `${reservedPort.node_name} / ${reservedPort.port_name || 'PORT-' + portLabel}`
       : `PORT ${portLabel}`;
     const queueNote =
-      loginGateWaitedMs > 500
-        ? ` (คิว Login VPS ~${Math.ceil(loginGateWaitedMs / 1000)} วินาที)`
-        : '';
+      queueDelaySec > 0
+        ? ` (คิว Login ตามลำดับ FolderPort ~${queueDelaySec} วินาที)`
+        : loginGateWaitedMs > 500
+          ? ` (คิว Login VPS ~${Math.ceil(loginGateWaitedMs / 1000)} วินาที)`
+          : '';
 
     return res.json({
       ok: true,
