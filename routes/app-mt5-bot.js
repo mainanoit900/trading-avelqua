@@ -46,7 +46,7 @@ const {
   stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
 const { createConnectAttempt } = require('../lib/mt5ConnectAttempt');
-const { queueBotRunCommands } = require('../lib/mt5BotRunPhase2');
+const { queueBotRunCommands, assertNoRecentBotRunAttempt } = require('../lib/mt5BotRunPhase2');
 const {
   PACKAGE_PORT_MAP,
   packagePortCapForGroup,
@@ -3097,6 +3097,8 @@ router.post('/mt5/run', async (req, res) => {
     let attemptId = null;
 
     if (usePhase2BotRun) {
+      await assertNoRecentBotRunAttempt(mt5AccountId);
+
       const loginQueueDelaySec = await computeLoginQueueDelaySec(
         node.id,
         mt5AccountId,

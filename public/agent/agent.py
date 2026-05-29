@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-mismatch-retry-v106"
+AGENT_BUILD_ID = "2026-05-29-phase2-fixes-v107"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -6002,10 +6002,27 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         ):
             if ctype == "login_exit_mt5":
                 exit_payload = dict(payload or {})
+                port = payload_get(exit_payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
+                if should_keep_mt5_open_after_login(exit_payload):
+                    log(
+                        f"BOT_RUN MODE: skip login_exit_mt5 close port={port} "
+                        f"purpose={payload_get(exit_payload, 'purposeType', 'purpose')}"
+                    )
+                    command_result(
+                        cmd_id,
+                        True,
+                        {
+                            "action": "login_exit_kept_open",
+                            "reason": "bot_run_mode",
+                            "port": port,
+                            "purposeType": payload_get(exit_payload, "purposeType", "purpose_type"),
+                        },
+                    )
+                    return
                 exit_payload.setdefault("forceKill", True)
                 exit_payload.setdefault("closeMt5", True)
                 exit_payload.setdefault("killMt5", True)
-                port = payload_get(exit_payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
+                log(f"LOGIN_ONLY: closing MT5 port={port}")
                 command_result(cmd_id, True, stop_mt5_port_only(port, exit_payload))
                 return
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
