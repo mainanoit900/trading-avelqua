@@ -553,7 +553,7 @@ const {
   formatPickMessage: formatAdminPickMessage
 } = require('../lib/adminVpsPortPicker');
 const { fetchVpsActiveLoginLoadMap } = require('../lib/vpsLoginLoad');
-const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
+const { setAdminAllocationStatus, parsePortNumber, resolveSystemVpsId, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
 
 async function reserveMt5Port(userId) {
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -2124,10 +2124,11 @@ console.log('[MT5 CONNECT START]', {
       );
     }
 
-    const {
-      findMt5LoginInUse,
-      mt5LoginInUseMessage
-    } = require('../lib/mt5LoginDuplicate');
+const {
+  findMt5LoginInUse,
+  mt5LoginInUseMessage
+} = require('../lib/mt5LoginDuplicate');
+const { buildStopMt5ReleasePayload } = require('../lib/mt5PortCleanup');
     const dupLogin = await findMt5LoginInUse(
       mt5Login,
       FIXED_SERVER,
@@ -2429,19 +2430,18 @@ async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_d
         [
           stopNodeId,
           accRow.port_id || null,
-          JSON.stringify({
-            port: stopPortNo,
-            portSlot: accRow.port_slot,
-            assignedPortNo: accRow.assigned_port_no,
-            windowsPortNo: accRow.windows_port_no,
-            folder_path: folderPath,
-            vpsFolderPath: folderPath,
-            forceKill: true,
-            closeMt5: true,
-            mt5Login: accRow.mt5_login || null,
-            accountId,
-            reason
-          })
+          JSON.stringify(
+            buildStopMt5ReleasePayload({
+              portNo: stopPortNo,
+              portSlot: accRow.port_slot,
+              assignedPortNo: accRow.assigned_port_no,
+              windowsPortNo: accRow.windows_port_no,
+              folderPath,
+              accountId,
+              mt5Login: accRow.mt5_login,
+              reason
+            })
+          )
         ]
       ).catch((e) => console.error('[PORT] stop_mt5 on delete/cancel:', e.message || e));
     }
@@ -2577,15 +2577,17 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
       `, [
         stopNodeId,
         oldPort.port_id || null,
-        JSON.stringify({
-          port: stopPortNo,
-          portSlot: oldPort.port_slot,
-          assignedPortNo: oldPort.assigned_port_no,
-          windowsPortNo: oldPort.windows_port_no,
-          folder_path: folderPath,
-          vpsFolderPath: folderPath,
-          reason: 'user_cancel_port_before_clear'
-        })
+        JSON.stringify(
+          buildStopMt5ReleasePayload({
+            portNo: stopPortNo,
+            portSlot: oldPort.port_slot,
+            assignedPortNo: oldPort.assigned_port_no,
+            windowsPortNo: oldPort.windows_port_no,
+            folderPath,
+            accountId: id,
+            reason: 'user_cancel_port_before_clear'
+          })
+        )
       ]);
       if (oldPort.port_id) {
         await query(`
@@ -2594,6 +2596,8 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
           WHERE id=$1
         `, [oldPort.port_id]).catch(() => {});
       }
+      const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({}));
+      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath).catch(() => {});
     }
 
     // STEP 3: ค่อยล้างค่าใน DB
@@ -2671,16 +2675,17 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       `, [
         stopNodeId,
         oldPort.port_id || null,
-        JSON.stringify({
-          port: stopPortNo,
-          portSlot: oldPort.port_slot,
-          assignedPortNo: oldPort.assigned_port_no,
-          windowsPortNo: oldPort.windows_port_no,
-          folder_path: folderPath,
-          vpsFolderPath: folderPath,
-          forceKill: true,
-          reason: 'user_delete_port'
-        })
+        JSON.stringify(
+          buildStopMt5ReleasePayload({
+            portNo: stopPortNo,
+            portSlot: oldPort.port_slot,
+            assignedPortNo: oldPort.assigned_port_no,
+            windowsPortNo: oldPort.windows_port_no,
+            folderPath,
+            accountId: id,
+            reason: 'user_delete_port'
+          })
+        )
       ]).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
       if (oldPort.port_id) {
         await query(`
@@ -2699,6 +2704,8 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
           console.error('[DELETE] release vps_ports error:', err.message || err)
         );
       }
+      const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({}));
+      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath).catch(() => {});
     }
 
     // STEP 3: ค่อยล้างค่าใน DB
