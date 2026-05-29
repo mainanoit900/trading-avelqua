@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-concurrent-login-v111"
+AGENT_BUILD_ID = "2026-05-29-concurrent-equity-v112"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1847,7 +1847,15 @@ def account_snapshot_mt5_api_isolated(port_dir: Path, payload: Optional[Dict[str
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
+    password = str(payload_get(payload or {}, "mt5Password", "password") or "")
+    server = resolve_mt5_server(payload)
     port_root = str(port_dir).lower().replace("/", "\\").rstrip("\\")
+    running_n = max(1, count_running_mt5_terminals())
+    base_timeout = float(os.getenv("AVELQUA_MT5_API_ISOLATED_TIMEOUT_SEC", "30"))
+    timeout_sec = min(
+        75.0,
+        base_timeout + max(0, running_n - 1) * float(os.getenv("AVELQUA_MT5_API_ISOLATED_EXTRA_SEC_PER_TERMINAL", "18")),
+    )
     script = f"""
 import json
 import os
@@ -1858,6 +1866,8 @@ except Exception:
     raise SystemExit(0)
 terminal = {json.dumps(str(terminal))}
 login_hint = {login_hint}
+login_password = {json.dumps(password)}
+server_name = {json.dumps(server)}
 port_root = os.path.normcase({json.dumps(port_root)})
 try:
     try:
@@ -1874,6 +1884,9 @@ try:
         print(json.dumps({{}}))
         raise SystemExit(0)
     ai = mt5.account_info()
+    if ai is None and login_hint and login_password:
+        mt5.login(login_hint, login_password, server_name)
+        ai = mt5.account_info()
     if ai is None:
         mt5.shutdown()
         print(json.dumps({{}}))
@@ -1897,13 +1910,14 @@ try:
 except Exception as e:
     print(json.dumps({{"error": str(e)[:200]}}))
 """
-    try:
+
+    def _run_once() -> Dict[str, Any]:
         flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
         proc = subprocess.run(
             [sys.executable, "-c", script],
             capture_output=True,
             text=True,
-            timeout=float(os.getenv("AVELQUA_MT5_API_ISOLATED_TIMEOUT_SEC", "25")),
+            timeout=timeout_sec,
             creationflags=flags,
         )
         raw_lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
@@ -1912,14 +1926,33 @@ except Exception as e:
         data = json.loads(raw_lines[-1])
         if not isinstance(data, dict):
             return {}
-        if data.get("loginMismatch"):
-            return data
-        if _snap_positive(data):
-            log(
-                f"MT5 API ISOLATED SNAPSHOT path={port_dir.name} "
-                f"BALANCE={data.get('balance')} EQUITY={data.get('equity')}"
-            )
-            return data
+        return data
+
+    try:
+        for attempt_no in (1, 2):
+            try:
+                data = _run_once()
+            except subprocess.TimeoutExpired:
+                if attempt_no < 2:
+                    log(
+                        f"MT5 API ISOLATED SNAPSHOT RETRY path={port_dir.name} "
+                        f"timeout={timeout_sec:.0f}s running_mt5={running_n}"
+                    )
+                    time.sleep(1.5)
+                    continue
+                raise
+            if data.get("loginMismatch"):
+                return data
+            if _snap_positive(data):
+                log(
+                    f"MT5 API ISOLATED SNAPSHOT path={port_dir.name} "
+                    f"BALANCE={data.get('balance')} EQUITY={data.get('equity')}"
+                )
+                return data
+            if attempt_no < 2 and login_hint and password:
+                time.sleep(1.5)
+                continue
+            return {}
         return {}
     except Exception as e:
         log(f"MT5 API ISOLATED SNAPSHOT ERROR path={port_dir.name}: {e}")
@@ -2548,6 +2581,10 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             if str(uia_snap.get("observedLogin") or "").strip():
                 snap["observedLogin"] = str(uia_snap.get("observedLogin") or "").strip()
                 snap["source"] = "uia_partial"
+                if "login_equity" in purpose and not _snap_positive(snap):
+                    settle = float(os.getenv("AVELQUA_LOGIN_EQUITY_UIA_SETTLE_SEC", "2"))
+                    if settle > 0:
+                        time.sleep(settle)
 
         api_snap: Dict[str, Any] = {}
         if "login_equity" in purpose and terminal_up:
