@@ -210,7 +210,7 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>3) เลือก BOT แล้วกด Run</h2>
-      <span>เทรดทองคำ XAUUSD เท่านั้น</span>
+      <span>เลือก PORT ที่ข้อ 1 · เทรดทองคำ XAUUSD เท่านั้น</span>
     </div>
 
     <div id="mt5RunPanel">
@@ -811,7 +811,7 @@
     const expired = !!meta.packageExpired;
     const selected = mt5SelectedRunAccount();
     if (!selected) {
-      return '<div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน — แล้วคลิก PORT ในข้อ 1 หรือเลือกจาก dropdown เพื่อ Run BOT</div>';
+      return '<div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน — แล้วคลิก PORT <b style="color:#7dd3fc">พร้อมรัน</b> ในข้อ 1 เพื่อเลือกก่อน Run BOT</div>';
     }
     const lotMin = mt5Num(meta.packageLotMin, 0.01);
     const lotMax = mt5Num(meta.packageLotMax, 0.05);
@@ -827,26 +827,21 @@
     const initialBotCode = (bots && bots[0]) ? String(bots[0].code || bots[0].bot_code || '').trim() : 'AK-SNIPER-VIP-VER4.0';
     const initialMinCap = mt5MinCapitalForBot(initialBotCode);
     const initialCapitalLabel = mt5CapitalLabelForBot(initialBotCode);
-    const portPickerHtml =
-      '<div style="margin-bottom:14px"><label>เลือก PORT สำหรับ Run BOT</label>' +
-      '<select id="mt5RunPortSelect" class="form-control" style="margin-top:6px" required>' +
-      connected.map(function (a) {
-        const eq = mt5RunAccountCapital(a);
-        const label = 'PORT ' + a.port_slot + (a.mt5_login ? (' · ' + a.mt5_login) : '') + (eq > 0 ? (' · Equity ' + eq) : '');
-        const sel = Number(a.id) === Number(selected.id) ? ' selected' : '';
-        return '<option value="' + mt5Esc(a.id) + '"' + sel + '>' + mt5Esc(label) + '</option>';
-      }).join('') +
-      '</select></div>';
+    const portSummaryHtml =
+      '<div style="margin-bottom:14px">' +
+      '<label>PORT สำหรับ Run BOT</label>' +
+      '<div id="mt5RunPortSummary" style="margin-top:6px;padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.8);border:1px solid rgba(56,189,248,.35);color:#cbd5e1;font-size:13px">' +
+      '<span id="mt5RunPortSummaryText">' +
+      '<b style="color:#7dd3fc">PORT ' + mt5Esc(selected.port_slot) + '</b> · Login <b style="color:#fff">' + mt5Esc(selected.mt5_login || '-') + '</b>' +
+      (actualCapital > 0 ? (' · Equity <b style="color:#fff">' + mt5Esc(actualCapital) + '</b>') : '') +
+      '</span>' +
+      '<small style="display:block;margin-top:6px;color:#64748b">เปลี่ยน PORT ได้ที่ข้อ 1 — คลิกการ์ด PORT พร้อมรัน</small>' +
+      '</div></div>';
     return (
       '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
       '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
       '<input type="hidden" name="sync_field" id="mt5RunSyncField" value="capital">' +
-      portPickerHtml +
-      '<div id="mt5RunPortSummary" style="margin-bottom:14px;padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.8);border:1px solid rgba(56,189,248,.18);color:#cbd5e1;font-size:13px">' +
-      '<span id="mt5RunPortSummaryText">' +
-      'Login <b style="color:#fff">' + mt5Esc(selected.mt5_login || '-') + '</b>' +
-      (actualCapital > 0 ? (' · Equity <b style="color:#fff">' + mt5Esc(actualCapital) + '</b>') : '') +
-      '</span></div>' +
+      portSummaryHtml +
       '<div id="mt5RunSelectedMeta" style="display:none"></div>' +
       '<div id="mt5RunPresetSummary" class="mt5-run-preset-summary" style="margin-bottom:14px;padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.75);border:1px solid rgba(148,163,184,.2)"></div>' +
       '<div class="mt5-form-row">' +
@@ -883,29 +878,6 @@
     const form = document.getElementById('mt5RunForm');
     if (!form) return;
     let syncField = 'capital';
-
-    const portSelect = form.querySelector('#mt5RunPortSelect');
-    if (portSelect) {
-      portSelect.addEventListener('change', function () {
-        const id = Number(portSelect.value || 0);
-        if (!id) return;
-        mt5RunState.selectedAccountId = id;
-        sessionStorage.setItem('mt5RunAccountId', String(id));
-        const connected = Array.isArray(mt5RunState.connectedAccounts) ? mt5RunState.connectedAccounts : [];
-        const acc = connected.find(function (a) { return Number(a.id) === id; });
-        const hidden = form.querySelector('#mt5RunAccountId');
-        if (hidden) hidden.value = String(id);
-        const summary = form.querySelector('#mt5RunPortSummaryText');
-        if (acc && summary) {
-          const eq = mt5RunAccountCapital(acc);
-          summary.innerHTML =
-            'Login <b style="color:#fff">' + mt5Esc(acc.mt5_login || '-') + '</b>' +
-            (eq > 0 ? (' · Equity <b style="color:#fff">' + mt5Esc(eq) + '</b>') : '');
-        }
-        applyPresetDefaults('bot_code');
-        if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
-      });
-    }
 
     function applyPresetDefaults(changedField) {
       const selected = mt5SelectedRunAccount();
