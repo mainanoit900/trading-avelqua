@@ -34,6 +34,7 @@ const {
   computeJournalTimeoutSec,
   countActiveLoginsOnVps
 } = require('../lib/mt5MultiPortLogin');
+const { startBotRunPhase2 } = require('../lib/mt5BotRunPhase2');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -880,7 +881,8 @@ async function handleMt5ConnectProduction(req, res) {
       assignedPortNo: allocPortNo,
       folderPath: reservedPort.folder_path,
       mt5Login,
-      serverName
+      serverName,
+      purposeType: 'login_only'
     });
 
     const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id, allocPortNo);
@@ -912,7 +914,9 @@ async function handleMt5ConnectProduction(req, res) {
         serverName
       }),
       queueDelaySec: Math.max(0, Number(queueDelaySec) || 0),
-      journalTimeoutSec
+      journalTimeoutSec,
+      purposeType: 'login_only',
+      keepMt5Open: false
     };
 
     const ins = await insertPendingAgentCommand({
@@ -992,9 +996,27 @@ async function handleMt5ConnectStatusProduction(req, res) {
   }
 }
 
+async function handleMt5StartBot(req, res) {
+  try {
+    await ensureMt5ConnectAttemptTables();
+    const userId = req.user.id;
+    const results = await startBotRunPhase2(userId, req.body || {});
+    return res.json({
+      ok: true,
+      message: `Starting ${results.length} bot(s)`,
+      phase: 'bot_run',
+      starts: results
+    });
+  } catch (e) {
+    console.error('[MT5 START BOT]', e);
+    return res.status(400).json({ ok: false, message: e.message || String(e) });
+  }
+}
+
 // ใช้ได้ทั้ง endpoint ใหม่และ endpoint เดิมของหน้าเว็บ
 router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction);
 router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
+router.post('/mt5/start-bot', requireLogin, handleMt5StartBot);
 router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
 router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
 
