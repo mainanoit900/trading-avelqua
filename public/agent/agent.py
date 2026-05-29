@@ -72,6 +72,7 @@ def login_ui_lock_path(port: Any) -> Path:
     return AGENT_DIR / f"login-ui-port-{p:02d}.lock"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = float(os.getenv("AVELQUA_LOOP_SECONDS", "0.8"))
+QUEUE_WAIT_MS = int(os.getenv("AVELQUA_QUEUE_WAIT_MS", "8000"))
 HEARTBEAT_SECONDS = int(os.getenv("AVELQUA_HEARTBEAT_SECONDS", "15"))
 CONNECT_TIMEOUT_SECONDS = int(os.getenv("AVELQUA_CONNECT_TIMEOUT_SECONDS", "45"))
 JOURNAL_POLL_INTERVAL_SEC = float(os.getenv("AVELQUA_JOURNAL_POLL_SEC", "0.4"))
@@ -81,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-login-concurrent-v102"
+AGENT_BUILD_ID = "2026-05-29-login-pubsub-v103"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -96,6 +97,98 @@ AGENT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 WORKER_STATE_DIR = AGENT_DIR / "workers"
 WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
+
+CMD_WAKE_EVENT = threading.Event()
+_NODE_ID = 0
+_REDIS_LISTENER_STARTED = False
+
+def _remember_node_id(payload: Optional[Dict[str, Any]]) -> None:
+    global _NODE_ID
+    if not payload:
+        return
+    try:
+        nid = int(payload.get("node_id") or payload.get("nodeId") or 0)
+    except Exception:
+        nid = 0
+    if nid > 0:
+        _NODE_ID = nid
+
+
+def _start_cmd_wake_listener() -> None:
+    global _REDIS_LISTENER_STARTED
+    if _REDIS_LISTENER_STARTED:
+        return
+    url = os.getenv("AVELQUA_REDIS_URL", "").strip()
+    if not url:
+        return
+    _REDIS_LISTENER_STARTED = True
+    threading.Thread(target=_redis_cmd_listener_loop, name="avelqua-cmd-wake", daemon=True).start()
+
+
+def _redis_cmd_listener_loop() -> None:
+    global _NODE_ID
+    url = os.getenv("AVELQUA_REDIS_URL", "").strip()
+    if not url:
+        return
+    try:
+        import redis  # type: ignore
+    except Exception:
+        log("REDIS CMD LISTENER skipped: install redis package on agent VPS")
+        return
+
+    while True:
+        nid = int(_NODE_ID or os.getenv("AVELQUA_NODE_ID", "0") or 0)
+        if nid <= 0:
+            time.sleep(2.0)
+            continue
+        channel = f"vps:cmd:{nid}"
+        try:
+            client = redis.from_url(url, decode_responses=True)
+            pubsub = client.pubsub(ignore_subscribe_messages=True)
+            pubsub.subscribe(channel)
+            log(f"REDIS CMD LISTENER subscribe {channel}")
+            for msg in pubsub.listen():
+                if str(msg.get("type") or "") == "message":
+                    CMD_WAKE_EVENT.set()
+        except Exception as e:
+            log(f"REDIS CMD LISTENER ERROR: {e}")
+            time.sleep(5.0)
+
+
+def poll_agent_command_batch(max_per_tick: int) -> bool:
+    """Poll /queue (optionally long-wait). Returns True if at least one command was handled."""
+    wait_ms = max(0, int(os.getenv("AVELQUA_QUEUE_WAIT_MS", str(QUEUE_WAIT_MS)) or 0))
+    use_wait = wait_ms > 0
+    if CMD_WAKE_EVENT.is_set():
+        CMD_WAKE_EVENT.clear()
+        use_wait = False
+    queue_path = f"/queue?wait_ms={wait_ms}" if use_wait else "/queue"
+    req_timeout = max(25, (wait_ms // 1000) + 12) if use_wait else 25
+
+    handled_any = False
+    async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
+    worker_tick_used = False
+    for _ in range(max(1, max_per_tick)):
+        res = api("GET", queue_path, timeout=req_timeout)
+        cmd = res.get("command")
+        if not cmd:
+            if res.get("pendingCount"):
+                log(f"QUEUE POLL empty pending={res.get('pendingCount')}")
+            break
+        handled_any = True
+        log(f"QUEUE PICK id={cmd.get('id')} type={cmd.get('command_type')}")
+        ctype = str(cmd.get("command_type") or "").lower()
+        if ctype in async_types:
+            if worker_tick_used:
+                break
+            worker_tick_used = True
+        handle_command(cmd)
+        if ctype not in async_types:
+            break
+        queue_path = "/queue"
+        req_timeout = 25
+    return handled_any
+
 
 # ตัวอย่าง bytes_sent/recv ครั้งก่อน — คำนวณ Mbps ระหว่าง heartbeat
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
@@ -340,6 +433,8 @@ def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dic
     try:
         res = api("POST", "/heartbeat", body)
         log(f"HEARTBEAT status={body['status']} agent_enabled={res.get('agent_enabled')}")
+        _remember_node_id(res)
+        _start_cmd_wake_listener()
         if (
             os.getenv("AVELQUA_SELF_DEPLOY_ON_HEARTBEAT", "false").lower() in ("1", "true", "yes")
             and res.get("deploy_required")
@@ -6121,29 +6216,17 @@ def main() -> None:
 
             try:
                 max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))
-                async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
-                worker_tick_used = False
-                for _ in range(max_per_tick):
-                    res = api("GET", "/queue")
-                    cmd = res.get("command")
-                    if not cmd:
-                        if res.get("pendingCount"):
-                            log(f"QUEUE POLL empty pending={res.get('pendingCount')}")
-                        break
-                    log(f"QUEUE PICK id={cmd.get('id')} type={cmd.get('command_type')}")
-                    ctype = str(cmd.get("command_type") or "").lower()
-                    if ctype in async_types:
-                        if worker_tick_used:
-                            break
-                        worker_tick_used = True
-                    handle_command(cmd)
-                    if ctype not in async_types:
-                        break
-
+                handled_cmds = poll_agent_command_batch(max_per_tick)
             except Exception as e:
                 log(f"COMMAND POLL ERROR: {e}")
+                handled_cmds = False
 
-            time.sleep(float(os.getenv("AVELQUA_LOOP_SECONDS", str(LOOP_SECONDS))))
+            if handled_cmds:
+                time.sleep(0.05)
+            elif QUEUE_WAIT_MS > 0:
+                time.sleep(0.15)
+            else:
+                time.sleep(float(os.getenv("AVELQUA_LOOP_SECONDS", str(LOOP_SECONDS))))
 
         except Exception as e:
             log(f"MAIN LOOP ERROR: {e}")

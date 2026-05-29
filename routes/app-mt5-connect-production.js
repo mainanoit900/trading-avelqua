@@ -162,6 +162,14 @@ async function ensureEquityOnConnect(account, userId) {
       RETURNING id
     `, [vpsId, JSON.stringify(payload)]).catch(() => ({ rows: [] }));
     cmdId = Number(ins.rows?.[0]?.id || 0);
+    if (cmdId) {
+      const { notifyVpsAgentCommandQueued } = require('../lib/vpsAgentCommandNotify');
+      notifyVpsAgentCommandQueued({
+        vpsId,
+        commandId: cmdId,
+        commandType: 'account_snapshot'
+      }).catch(() => {});
+    }
   }
   if (!cmdId) return false;
 
