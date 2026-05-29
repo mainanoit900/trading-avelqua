@@ -781,6 +781,12 @@
       grid + '</div>' + warn + '</div>';
   }
 
+  function mt5IsBlockingRunWarning(preview) {
+    if (!preview || !preview.warning) return false;
+    if (preview.packageCapped) return false;
+    return true;
+  }
+
   function mt5ApplyRunFormVisibility(form) {
     if (!form) return;
     const botSelect = form.querySelector('select[name="bot_code"]');
@@ -841,12 +847,26 @@
       form.querySelector('select[name="run_time_mode"]')?.value || 'auto',
       'capital'
     );
-    const blocked = !!(preview.warning) || capital < mt5Num(preview.minCapital, 100);
+    const blocked = mt5IsBlockingRunWarning(preview) || capital < mt5Num(preview.minCapital, 100);
     btn.disabled = !!meta.packageExpired || hasActive || blocked;
+    const note = form.querySelector('.mt5-run-action-note');
+    let blockReason = '';
+    if (meta.packageExpired) blockReason = 'แพ็คเกจหมดอายุ';
+    else if (hasActive) blockReason = 'BOT กำลังทำงานอยู่ที่ PORT นี้';
+    else if (blocked) blockReason = preview.warning || 'เงินทุนไม่ถึงขั้นต่ำของบอท';
     if (blocked && !meta.packageExpired && !hasActive) {
-      btn.title = preview.warning || 'เงินทุนไม่ถึงขั้นต่ำ';
+      btn.title = blockReason;
     } else {
       btn.removeAttribute('title');
+    }
+    if (blockReason) btn.setAttribute('data-block-reason', blockReason);
+    else btn.removeAttribute('data-block-reason');
+    if (note && btn.disabled && blockReason) {
+      note.textContent = blockReason;
+      note.style.color = '#fbbf24';
+    } else if (note) {
+      note.style.color = '';
+      note.textContent = hasActive ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก';
     }
   }
 
@@ -1018,6 +1038,17 @@
     });
 
     form.addEventListener('click', function (ev) {
+      const runBtn = ev.target && ev.target.closest ? ev.target.closest('.mt5-run-submit-btn') : null;
+      if (runBtn && runBtn.disabled) {
+        ev.preventDefault();
+        const reason = runBtn.getAttribute('data-block-reason') || runBtn.title || 'ไม่สามารถ Run BOT ได้ — ตรวจสอบเงินทุน Lot และ PORT';
+        if (typeof window.mt5UiAlert === 'function') {
+          window.mt5UiAlert({ variant: 'warning', title: 'Run BOT', message: reason });
+        } else {
+          alert(reason);
+        }
+        return;
+      }
       const stopBtn = ev.target && ev.target.closest ? ev.target.closest('.mt5-stop-btn') : null;
       if (!stopBtn || stopBtn.disabled) return;
       ev.preventDefault();
@@ -1062,7 +1093,7 @@
           await mt5UiAlert({ variant: 'warning', title: 'เลือก PORT', message: 'กรุณาเลือก PORT ที่เชื่อมต่อแล้วก่อน Run BOT' });
           return;
         }
-        if (preview.warning) {
+        if (preview.warning && mt5IsBlockingRunWarning(preview)) {
           await mt5UiAlert({ variant: 'warning', title: 'แจ้งเตือน', message: preview.warning });
           return;
         }
