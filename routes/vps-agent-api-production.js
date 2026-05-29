@@ -328,7 +328,9 @@ router.get('/agent-script', async (req, res) => {
   }
 });
 
-async function ensureAgentTables() {
+const { runSchemaOnce } = require('../lib/schemaOnce');
+
+async function ensureAgentTablesCore() {
   await query(`CREATE SCHEMA IF NOT EXISTS vps_system`).catch(() => {});
   await ensureMt5ConnectAttemptTables().catch(() => {});
 
@@ -430,6 +432,10 @@ async function ensureAgentTables() {
       created_at TIMESTAMPTZ DEFAULT NOW()
     )
   `).catch(() => {});
+}
+
+function ensureAgentTables() {
+  return runSchemaOnce('vps-system-agent-tables', ensureAgentTablesCore);
 }
 
 async function findNode(req) {
@@ -994,4 +1000,5 @@ router.post('/commands/:id/result', async (req, res) => {
   }
 });
 
+router.ensureAgentTables = ensureAgentTables;
 module.exports = router;

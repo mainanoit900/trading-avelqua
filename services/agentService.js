@@ -1,4 +1,5 @@
 const { query, getClient } = require('../config/database');
+const { runSchemaOnce } = require('../lib/schemaOnce');
 
 const DEFAULT_BOT_SETTINGS = {
   default_symbol: 'XAUUSD',
@@ -17,7 +18,7 @@ function cleanNodeId(value) {
   return Number.isFinite(n) && n > 0 ? n : null;
 }
 
-async function ensureAgentTables() {
+async function ensureAgentTablesCore() {
   await query(`
     CREATE TABLE IF NOT EXISTS agent_commands (
       id BIGSERIAL PRIMARY KEY,
@@ -81,6 +82,10 @@ async function ensureAgentTables() {
     )
   `);
   await query(`CREATE INDEX IF NOT EXISTS idx_vps_agent_logs_created ON vps_agent_logs(created_at DESC)`);
+}
+
+function ensureAgentTables() {
+  return runSchemaOnce('legacy-agent-tables', ensureAgentTablesCore);
 }
 
 async function getBotSettings() {

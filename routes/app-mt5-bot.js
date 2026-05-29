@@ -3099,18 +3099,16 @@ router.post('/mt5/run', async (req, res) => {
       WHERE id=$1
     `, [node.id, lot]);
 
-    const accEq = await client.query(
+    const instanceId = inst.rows[0].id;
+    await client.query('COMMIT');
+
+    const accEq = await query(
       `SELECT last_balance, last_equity FROM vps_system.mt5_accounts WHERE id=$1`,
       [mt5AccountId]
     );
     const accRow = accEq.rows?.[0] || {};
-    await seedInstanceLiveMetrics(
-      inst.rows[0].id,
-      accRow.last_balance,
-      accRow.last_equity
-    ).catch(() => {});
+    await seedInstanceLiveMetrics(instanceId, accRow.last_balance, accRow.last_equity).catch(() => {});
 
-    await client.query('COMMIT');
     flash(req, 'success', `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว`);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});

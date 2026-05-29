@@ -632,8 +632,20 @@ await query(`
 
 }
 
+async function ensureMt5RuntimeSchema() {
+  const { ensureMt5PreviewColumns } = require('./lib/mt5Preview');
+  const { ensureMt5ConnectAttemptTables } = require('./lib/mt5ConnectAttempt');
+  const vpsAgentRoutes = require('./routes/vps-agent-api-production');
+  await ensureMt5PreviewColumns().catch(() => {});
+  await ensureMt5ConnectAttemptTables().catch(() => {});
+  if (typeof vpsAgentRoutes.ensureAgentTables === 'function') {
+    await vpsAgentRoutes.ensureAgentTables().catch(() => {});
+  }
+}
+
 ensureOptionalTables()
   .then(() => repairVpsAgentCommandSequences())
+  .then(() => ensureMt5RuntimeSchema())
   .then(() => {
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
