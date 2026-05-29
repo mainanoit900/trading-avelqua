@@ -1346,13 +1346,15 @@
         return;
       }
       if (
-        data.metricsReady
-        && (stWait === 'connected' || (data.connected === true && data.status === 'connected'))
+        data.connected === true
+        && (stWait === 'connected' || data.status === 'connected')
+        && !data.pending
+        && !data.checking
       ) {
         sessionStorage.setItem(key, modalDedupId);
         const eqMsg = data.equity != null
           ? `เชื่อมต่อสำเร็จ — Equity: ${data.equity}`
-          : (data.message || 'เชื่อมต่อสำเร็จ');
+          : (data.message || 'เชื่อมต่อสำเร็จ — ยืนยัน Login แล้ว');
         finishMt5ConnectSuccess(eqMsg);
         return;
       }
