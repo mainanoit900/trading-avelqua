@@ -100,7 +100,9 @@ WORKER_STATE_DIR.mkdir(parents=True, exist_ok=True)
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
-MT5_API_LOCK = threading.Lock()
+MT5_API_LOCK = threading.Lock()  # legacy fallback when port unknown
+_MT5_API_LOCKS: Dict[int, threading.Lock] = {}
+_MT5_API_LOCKS_GUARD = threading.Lock()
 MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
 MT5_LAUNCH_DIAG_LOCK = threading.Lock()
 
@@ -1643,7 +1645,8 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     except Exception:
         login_hint = 0
     try:
-        with MT5_API_LOCK:
+        port_num = payload_get(payload or {}, "port", "portNumber", "port_no")
+        with mt5_api_lock(port_num):
             try:
                 mt5.shutdown()
             except Exception:
@@ -1690,7 +1693,8 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     except Exception as e:
         log(f"MT5 API SNAPSHOT ERROR: {e}")
         try:
-            with MT5_API_LOCK:
+            port_num = payload_get(payload or {}, "port", "portNumber", "port_no")
+            with mt5_api_lock(port_num):
                 mt5.shutdown()
         except Exception:
             pass
@@ -2975,6 +2979,50 @@ def _run_powershell(command: str, timeout: int = 8) -> str:
         return ""
 
 
+def mt5_api_lock(port: Any = None) -> threading.Lock:
+    try:
+        key = max(0, int(port or 0))
+    except Exception:
+        key = 0
+    if key <= 0:
+        return MT5_API_LOCK
+    with _MT5_API_LOCKS_GUARD:
+        lock = _MT5_API_LOCKS.get(key)
+        if lock is None:
+            lock = threading.Lock()
+            _MT5_API_LOCKS[key] = lock
+        return lock
+
+
+def _leading_login_from_title(title: str) -> str:
+    t = str(title or "").strip()
+    if not t:
+        return ""
+    m = re.match(r"^(\d{6,10})\s*[-:]", t)
+    return m.group(1) if m else ""
+
+
+def window_title_for_login(port: Any, payload: Optional[Dict[str, Any]] = None) -> str:
+    """Pick title bar text for the expected login — never show another account's number."""
+    login = str(payload_get(payload or {}, "mt5Login", "login", default="") or "").strip()
+    titles = mt5_window_titles(port, payload)
+    if not titles:
+        return ""
+    if login:
+        for t in titles:
+            if login in t:
+                return t.strip()
+        for t in titles:
+            if _leading_login_from_title(t) == login:
+                return t.strip()
+        for t in titles:
+            found = _leading_login_from_title(t)
+            if found and found != login:
+                log(f"WINDOW TITLE MISMATCH port={port} expected={login} saw={found}")
+    clean_titles = [t.strip() for t in titles if t.strip()]
+    return " | ".join(clean_titles)
+
+
 def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[str]:
     """Return MainWindowTitle values for terminal64.exe matched to this PORT folder."""
     titles: List[str] = []
@@ -3030,7 +3078,7 @@ def mt5_window_titles(port: Any, payload: Optional[Dict[str, Any]] = None) -> Li
             ).decode(errors="ignore")
             for line in out.splitlines():
                 low = line.lower()
-                if "terminal64.exe" in low and (root in low or not pid_set):
+                if "terminal64.exe" in low and root in low:
                     titles.append(line.strip())
         except Exception:
             pass
@@ -3050,8 +3098,14 @@ def mt5_login_verified_by_window(port: Any, payload: Dict[str, Any]) -> Tuple[bo
     login = str(payload_get(payload, "mt5Login", "login", default="") or "").strip()
     server = str(payload_get(payload, "serverName", default="") or "").strip().lower()
     titles = mt5_window_titles(port, payload)
-    joined = " | ".join(titles)
+    joined = window_title_for_login(port, payload) or " | ".join(titles)
     low = joined.lower()
+
+    if login and titles:
+        for t in titles:
+            found = _leading_login_from_title(t)
+            if found and found != login:
+                return False, f"บัญชีบน MT5 ไม่ตรง (เห็น {found} แต่กรอก {login})", joined
 
     if login:
         try:
@@ -3732,7 +3786,7 @@ def wait_mt5_login_hybrid(
         now = time.time()
 
         titles = mt5_window_titles(port, payload)
-        joined = " | ".join(titles)
+        joined = window_title_for_login(port, payload) or " | ".join(titles)
 
         # UI automation is slow — run only while MT5 window is not visible yet.
         if (
@@ -4024,7 +4078,7 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
         port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
     )
-    titles = " | ".join(mt5_window_titles(port, payload))
+    titles = window_title_for_login(port, payload)
     preview_final = capture_mt5_window_base64(port, payload)
 
     if not ok:

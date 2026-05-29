@@ -27,6 +27,7 @@ const {
   getConnectStatusForUser
 } = require('../lib/mt5ConnectAttempt');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
+const { userPortLockKey } = require('../lib/mt5MultiPortLogin');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -181,8 +182,8 @@ async function ensureEquityOnConnect(account, userId) {
   return false;
 }
 
-function userLockKey(userId) {
-  return `mt5:connect:user:${userId}`;
+function userLockKey(userId, portSlot = 0) {
+  return userPortLockKey(userId, portSlot);
 }
 
 function mt5LoginLockKey(mt5Login, serverName) {
@@ -626,10 +627,6 @@ async function handleMt5ConnectProduction(req, res) {
     if (!isAllowedMt5LoginUser(mt5Login)) throw new Error(mt5LoginUserValidationMessage());
     if (!mt5Password) throw new Error('กรุณากรอกรหัสผ่าน MT5');
 
-    lockKey = userLockKey(userId);
-    const locked = await redis.set(lockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
-    if (!locked) throw new Error('ระบบกำลังเชื่อมต่อบัญชีนี้อยู่ กรุณารอสักครู่');
-
     loginLockKey = mt5LoginLockKey(mt5Login, serverName);
     const loginLocked = await redis.set(loginLockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
     if (!loginLocked) throw new Error('บัญชี MT5 นี้กำลังถูกเชื่อมต่ออยู่ กรุณารอสักครู่');
@@ -712,6 +709,12 @@ async function handleMt5ConnectProduction(req, res) {
       const reserve = await reserveBestPort(userId);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
+    }
+
+    lockKey = userLockKey(userId, portSlot);
+    const locked = await redis.set(lockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
+    if (!locked) {
+      throw new Error(`PORT ${portSlot} กำลังเชื่อมต่ออยู่ กรุณารอสักครู่`);
     }
 
     const allocPortNo = num(
