@@ -5836,9 +5836,7 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, delete_file(payload))
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
-            result = spawn_connect_worker(cmd_id, ctype, payload)
-            if str(ctype).lower() in ("run_mt5_bot", "run_mt5"):
-                command_result(cmd_id, True, {**(result or {}), "status": "dispatched"})
+            spawn_connect_worker(cmd_id, ctype, payload)
             return
 
         elif ctype in (
@@ -5996,7 +5994,12 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
             delay_sec = float(payload_get(payload, "queueDelaySec", "queue_delay_sec") or 0)
         except Exception:
             delay_sec = 0.0
-        if delay_sec > 0 and str(ctype or "").lower() in ("connect_mt5", "login_mt5"):
+        if delay_sec > 0 and str(ctype or "").lower() in (
+            "connect_mt5",
+            "login_mt5",
+            "run_mt5_bot",
+            "run_mt5",
+        ):
             max_delay = float(os.getenv("AVELQUA_LOGIN_QUEUE_DELAY_MAX_SEC", "300"))
             wait_sec = min(delay_sec, max_delay)
             log(f"CONNECT WORKER QUEUE DELAY port={port} sec={wait_sec:.1f}")
@@ -6087,17 +6090,17 @@ def main() -> None:
             try:
                 max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))
                 async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
-                login_tick_used = False
+                worker_tick_used = False
                 for _ in range(max_per_tick):
                     res = api("GET", "/queue")
                     cmd = res.get("command")
                     if not cmd:
                         break
                     ctype = str(cmd.get("command_type") or "").lower()
-                    if ctype in ("login_mt5", "connect_mt5"):
-                        if login_tick_used:
+                    if ctype in async_types:
+                        if worker_tick_used:
                             break
-                        login_tick_used = True
+                        worker_tick_used = True
                     handle_command(cmd)
                     if ctype not in async_types:
                         break

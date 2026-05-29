@@ -53,6 +53,7 @@ const {
 } = require('../lib/mt5PortEntitlement');
 const { fetchEquityChartForInstance, recordEquityLog, seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
 const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBotGate');
+const { computeRunBotQueueDelaySec } = require('../lib/mt5MultiPortLogin');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 
 const router = express.Router();
@@ -2989,6 +2990,11 @@ router.post('/mt5/run', async (req, res) => {
     if (!node) throw new Error('ไม่พบ Windows VPS ของ PORT ที่เลือก');
 
     const assignedPortNo = num(account.assigned_port_no);
+    const runBotQueueDelaySec = await computeRunBotQueueDelaySec(
+      node.id,
+      mt5AccountId,
+      assignedPortNo
+    ).catch(() => 0);
     const portCtxRows = await client.query(`
       SELECT
         vp.id,
@@ -3070,7 +3076,8 @@ router.post('/mt5/run', async (req, res) => {
       port: assignedPortNo,
       portSlot: account.port_slot || 1,
       keepMt5Open: true,
-      stopTradingOnly: false
+      stopTradingOnly: false,
+      queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
     };
 
     const inst = await client.query(`

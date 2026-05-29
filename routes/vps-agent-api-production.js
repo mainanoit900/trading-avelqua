@@ -762,6 +762,8 @@ router.get('/queue', async (req, res) => {
                 AND LOWER(COALESCE(login_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
             )
             AND LOWER(COALESCE(c.command_type, '')) IN (
+              'run_mt5_bot',
+              'run_mt5',
               'account_snapshot',
               'sync_mt5_account',
               'read_account_metrics',
@@ -793,11 +795,13 @@ router.get('/queue', async (req, res) => {
             ELSE 1
           END,
           CASE
-            WHEN c.command_type IN ('login_mt5', 'connect_mt5') THEN COALESCE(
+            WHEN c.command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5') THEN COALESCE(
               NULLIF(c.payload->>'port', '')::int,
               NULLIF(c.payload->>'portNumber', '')::int,
               NULLIF(c.payload->>'port_no', '')::int,
               NULLIF(c.payload->>'portNo', '')::int,
+              NULLIF(c.payload->>'folderPort', '')::int,
+              NULLIF(c.payload->>'vpsPortNumber', '')::int,
               9999
             )
             ELSE 0
