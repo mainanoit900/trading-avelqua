@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-two-phase-login-v105"
+AGENT_BUILD_ID = "2026-05-29-mismatch-retry-v106"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1833,6 +1833,18 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
                 ti = mt5.terminal_info()
             except Exception:
                 ti = None
+            port_root = str(port_dir).lower().replace("/", "\\").rstrip("\\")
+            ti_path = str(getattr(ti, "path", "") or "").lower().replace("/", "\\")
+            if ti_path and port_root and port_root not in ti_path:
+                log(
+                    f"MT5 API SNAPSHOT PATH MISMATCH path={port_dir.name} "
+                    f"terminal_path={ti_path}"
+                )
+                try:
+                    mt5.shutdown()
+                except Exception:
+                    pass
+                return {}
             ai = mt5.account_info()
             if ai is None and login_hint:
                 try:
@@ -1893,6 +1905,15 @@ def clear_mt5_logs(port_dir: Path) -> None:
                     f.unlink()
                 except Exception:
                     pass
+
+
+def clear_mt5_port_session(port_dir: Path) -> None:
+    """ล้าง INI/cache บัญชีเก่าบน PORT ก่อน login ใหม่ (กัน session ค้างข้าม user)."""
+    try:
+        remove_mt5_login_ini(port_dir)
+        clear_mt5_login_cache(port_dir)
+    except Exception as e:
+        log(f"CLEAR MT5 SESSION ERROR {port_dir}: {e}")
 
 
 def clear_mt5_login_cache(port_dir: Path) -> None:
@@ -6015,9 +6036,39 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, stop_payload))
             elif folder:
-                command_result(cmd_id, True, stop_mt5_by_folder(folder))
+                res = stop_mt5_by_folder(folder)
+                reason_blob = str(
+                    payload_get(payload, "reason", "purpose") or ""
+                ).lower()
+                if (
+                    str(payload_get(payload, "clearSession") or "").lower() in ("1", "true", "yes")
+                    or "title_mismatch" in reason_blob
+                    or "mismatch_retry" in reason_blob
+                ):
+                    try:
+                        port_dir = Path(folder)
+                        clear_mt5_port_session(port_dir)
+                        log(f"CLEAR MT5 SESSION AFTER STOP folder={folder} reason={reason_blob}")
+                    except Exception as e:
+                        log(f"CLEAR MT5 SESSION AFTER STOP ERROR: {e}")
+                command_result(cmd_id, True, res)
             else:
-                command_result(cmd_id, True, stop_mt5_port_only(port, stop_payload))
+                res = stop_mt5_port_only(port, stop_payload)
+                reason_blob = str(
+                    payload_get(payload, "reason", "purpose") or ""
+                ).lower()
+                if (
+                    str(payload_get(payload, "clearSession") or "").lower() in ("1", "true", "yes")
+                    or "title_mismatch" in reason_blob
+                    or "mismatch_retry" in reason_blob
+                ):
+                    try:
+                        port_dir = resolve_mt5_port_dir(port, stop_payload)
+                        clear_mt5_port_session(port_dir)
+                        log(f"CLEAR MT5 SESSION AFTER STOP port={port} reason={reason_blob}")
+                    except Exception as e:
+                        log(f"CLEAR MT5 SESSION AFTER STOP ERROR: {e}")
+                command_result(cmd_id, True, res)
 
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
