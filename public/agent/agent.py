@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-cancel-inflight-v114"
+AGENT_BUILD_ID = "2026-05-29-concurrent-equity-v115"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2610,6 +2610,28 @@ def account_snapshot(
 
         api_snap: Dict[str, Any] = {}
         login_equity_purpose = "login_equity" in purpose
+        if login_equity_purpose and terminal_up:
+            login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+            password = str(payload_get(payload or {}, "mt5Password", "password") or "")
+            server = resolve_mt5_server(payload)
+            if login_hint and password:
+                try:
+                    procs = mt5_port_processes(port, payload)
+                    pid = None
+                    if procs:
+                        pid = procs[0].get("pid") or procs[0].get("process_id")
+                    automate_mt5_login_server_form(
+                        login_hint,
+                        password,
+                        server,
+                        port_dir=port_dir,
+                        process_id=pid,
+                    )
+                    settle = float(os.getenv("AVELQUA_LOGIN_EQUITY_UI_AUTOFILL_SEC", "2"))
+                    if settle > 0:
+                        time.sleep(settle)
+                except Exception as ui_err:
+                    log(f"LOGIN EQUITY UI AUTOFILL port={port} err={ui_err}")
         if login_equity_purpose:
             iso_attempts = max(1, int(os.getenv("AVELQUA_LOGIN_EQUITY_ISOLATED_ATTEMPTS", "3")))
             for iso_i in range(iso_attempts):
