@@ -1204,10 +1204,13 @@
     const stepTotal = Math.max(1, Number(step.total || 4));
     const isFailed = String(step.key || '').toLowerCase() === 'failed';
     const isConnected = String(step.key || '').toLowerCase() === 'connected';
+    const phase = String(data.phase || data.purposeType || '').toLowerCase();
     const width = isFailed ? 100 : Math.max(14, Math.min(100, Math.round((stepIndex / stepTotal) * 100)));
 
     metaBox.style.display = 'block';
-    badge.textContent = step.label || 'กำลังตรวจสอบการเชื่อมต่อ';
+    badge.textContent = phase === 'bot_run'
+      ? ((step.label || 'กำลังตรวจสอบการเชื่อมต่อ') + ' · Phase 2')
+      : (step.label || 'กำลังตรวจสอบการเชื่อมต่อ');
     detail.textContent = step.detail || data.message || 'กำลังตรวจสอบการเชื่อมต่อ...';
     elapsed.textContent = 'ใช้เวลา ' + String(Number(data.elapsedSec || 0)) + ' วินาที';
     remaining.textContent = data.pending || data.checking
@@ -1351,9 +1354,13 @@
       ) {
         sessionStorage.setItem(key, modalDedupId);
         const eqMsg = data.equity != null
-          ? `เชื่อมต่อสำเร็จ — Equity: ${data.equity}`
+          ? (String(data.phase || data.purposeType || '').toLowerCase() === 'bot_run'
+            ? `Phase 2 สำเร็จ — Equity: ${data.equity} — กำลังรัน BOT`
+            : `Phase 1 สำเร็จ — Equity: ${data.equity} — พร้อม Run BOT`)
           : (data.balance != null
-            ? `เชื่อมต่อสำเร็จ — Balance: ${data.balance}`
+            ? (String(data.phase || data.purposeType || '').toLowerCase() === 'bot_run'
+              ? `Phase 2 สำเร็จ — Balance: ${data.balance} — กำลังรัน BOT`
+              : `Phase 1 สำเร็จ — Balance: ${data.balance} — พร้อม Run BOT`)
             : (data.message || 'เชื่อมต่อสำเร็จ'));
         finishMt5ConnectSuccess(eqMsg);
         return;

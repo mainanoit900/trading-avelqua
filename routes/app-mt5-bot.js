@@ -45,6 +45,8 @@ const {
   finalizeBotInstanceRecord,
   stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
+const { createConnectAttempt } = require('../lib/mt5ConnectAttempt');
+const { queueBotRunCommands } = require('../lib/mt5BotRunPhase2');
 const {
   PACKAGE_PORT_MAP,
   packagePortCapForGroup,
@@ -53,7 +55,7 @@ const {
 } = require('../lib/mt5PortEntitlement');
 const { fetchEquityChartForInstance, recordEquityLog, seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
 const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBotGate');
-const { computeRunBotQueueDelaySec } = require('../lib/mt5MultiPortLogin');
+const { computeRunBotQueueDelaySec, computeLoginQueueDelaySec, computeJournalTimeoutSec, countActiveLoginsOnVps } = require('../lib/mt5MultiPortLogin');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 
 const router = express.Router();
@@ -2882,6 +2884,8 @@ router.post('/mt5/run', async (req, res) => {
   const client = await getClient();
   let accountLockKey = null;
   let vpsRunLockKey = null;
+  let vpsLoginGateKey = null;
+  let loginGateWaitedMs = 0;
   try {
     await ensureBotCatalog();
     const userId = req.user.id;
@@ -3087,13 +3091,102 @@ router.post('/mt5/run', async (req, res) => {
       RETURNING *
     `, [userId, mt5AccountId, bot.id, node.id, lot, assignedPortNo, calc.preset?.id || null, JSON.stringify(payload), trade.trade_level, capitalUsed]);
 
-    const cmd = await client.query(`
+    const usePhase2BotRun = String(process.env.MT5_PHASE2_BOT_RUN || '1').trim() !== '0';
+    let cmdId = 0;
+    let loginCmdId = 0;
+    let attemptId = null;
+
+    if (usePhase2BotRun) {
+      const loginQueueDelaySec = await computeLoginQueueDelaySec(
+        node.id,
+        mt5AccountId,
+        assignedPortNo
+      ).catch(() => 0);
+      const journalTimeoutSec = computeJournalTimeoutSec({
+        activeLoginCount: await countActiveLoginsOnVps(node.id).catch(() => 0)
+      });
+
+      const loginGate = await acquireVpsLoginSlot(node.id, assignedPortNo);
+      vpsLoginGateKey = loginGate.lockKey;
+      loginGateWaitedMs = loginGate.waitedMs || 0;
+
+      attemptId = await createConnectAttempt({
+        accountId: mt5AccountId,
+        userId,
+        vpsId: node.id,
+        portId: portCtx.id || account.port_id || null,
+        portSlot: account.port_slot || assignedPortNo,
+        assignedPortNo,
+        folderPath,
+        mt5Login: account.mt5_login,
+        serverName: FIXED_SERVER,
+        purposeType: 'bot_run'
+      });
+
+      const runPayload = {
+        ...payload,
+        instanceId: inst.rows[0].id,
+        attemptId,
+        queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
+      };
+      const loginPayload = {
+        ...runPayload,
+        botCode: 'LOGIN_ONLY',
+        action: 'login_mt5',
+        commandType: 'login_mt5',
+        queueDelaySec: Math.max(0, Number(loginQueueDelaySec) || 0),
+        journalTimeoutSec
+      };
+
+      const queued = await queueBotRunCommands({
+        attemptId,
+        vpsId: node.id,
+        portId: portCtx.id || account.port_id || null,
+        loginPayload,
+        runPayload,
+        client
+      });
+      loginCmdId = queued.loginCommandId;
+      cmdId = queued.runCommandId;
+
+      if (attemptId && loginCmdId) {
+        await client.query(
+          `UPDATE vps_system.mt5_connect_attempts SET command_id=$2, updated_at=NOW() WHERE attempt_id=$1`,
+          [attemptId, loginCmdId]
+        );
+      }
+
+      await client.query(
+        `
+        UPDATE vps_system.mt5_accounts
+        SET status='connecting',
+            last_login_message='Phase 2: กำลังเปิด MT5 เพื่อรัน BOT...',
+            current_attempt_id=$2,
+            updated_at=NOW()
+        WHERE id=$1
+      `,
+        [mt5AccountId, attemptId]
+      );
+    } else {
+      const cmd = await client.query(`
       INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, command_type, payload, status, created_at)
       VALUES ($1,$1,'run_mt5_bot',$2::jsonb,'pending',NOW())
       RETURNING id
     `, [node.id, JSON.stringify({ ...payload, instanceId: inst.rows[0].id })]);
+      cmdId = num(cmd.rows?.[0]?.id);
+    }
 
-    await client.query(`UPDATE vps_system.bot_instances SET run_payload=$2::jsonb, updated_at=NOW() WHERE id=$1`, [inst.rows[0].id, JSON.stringify({ ...payload, commandId: cmd.rows[0].id })]);
+    await client.query(`UPDATE vps_system.bot_instances SET run_payload=$2::jsonb, updated_at=NOW() WHERE id=$1`, [
+      inst.rows[0].id,
+      JSON.stringify({
+        ...payload,
+        instanceId: inst.rows[0].id,
+        commandId: cmdId,
+        loginCommandId: loginCmdId || undefined,
+        attemptId: attemptId || undefined,
+        purposeType: usePhase2BotRun ? 'bot_run' : 'legacy_run'
+      })
+    ]);
     await client.query(`
       UPDATE vps_system.vps_nodes
       SET used_ports=COALESCE(used_ports,0)+1,
@@ -3108,16 +3201,21 @@ router.post('/mt5/run', async (req, res) => {
     const queueNote =
       runGateWaitedMs > 500
         ? ` (คิว VPS ~${Math.ceil(runGateWaitedMs / 1000)} วินาที)`
-        : '';
+        : loginGateWaitedMs > 500
+          ? ` (คิว Login VPS ~${Math.ceil(loginGateWaitedMs / 1000)} วินาที)`
+          : '';
     flash(
       req,
       'success',
-      `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว${queueNote} — รอ VPS ส่ง Balance/Equity จริง`
+      usePhase2BotRun
+        ? `Phase 2: ส่งคำสั่ง Login + Run ${bot.display_name || bot.bot_name} ไปยัง PORT ${assignedPortNo} แล้ว${queueNote} — MT5 จะเปิดค้างไว้รัน BOT`
+        : `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว${queueNote} — รอ VPS ส่ง Balance/Equity จริง`
     );
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     flash(req, 'error', e.message);
   } finally {
+    if (vpsLoginGateKey) await releaseVpsLoginSlot(vpsLoginGateKey).catch(() => {});
     if (vpsRunLockKey) await releaseVpsRunBotSlot(vpsRunLockKey).catch(() => {});
     if (accountLockKey) await redis.del(accountLockKey).catch(() => {});
     client.release();
