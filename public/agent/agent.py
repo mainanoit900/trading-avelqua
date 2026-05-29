@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-concurrent-equity-v115"
+AGENT_BUILD_ID = "2026-05-29-concurrent-login-v117"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -168,7 +168,6 @@ def poll_agent_command_batch(max_per_tick: int) -> bool:
     handled_any = False
     async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
     async_ports_used: set = set()
-    worker_tick_used = False
     for _ in range(max(1, max_per_tick)):
         res = api("GET", queue_path, timeout=req_timeout)
         cmd = res.get("command")
@@ -182,13 +181,7 @@ def poll_agent_command_batch(max_per_tick: int) -> bool:
         if ctype in async_types:
             pno = _worker_port_num(cmd.get("payload") or {})
             if pno > 0:
-                if pno in async_ports_used:
-                    break
                 async_ports_used.add(pno)
-            elif worker_tick_used:
-                break
-            else:
-                worker_tick_used = True
         handle_command(cmd)
         if ctype not in async_types:
             break
