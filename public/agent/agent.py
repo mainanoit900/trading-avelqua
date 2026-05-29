@@ -5,6 +5,7 @@
 
 import json
 import base64
+import contextlib
 import os
 import platform
 import re
@@ -101,6 +102,7 @@ _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
 MT5_API_LOCK = threading.Lock()  # legacy fallback when port unknown
+MT5_API_FILE_LOCK = AGENT_DIR / "mt5-api-global.lock"
 _MT5_API_LOCKS: Dict[int, threading.Lock] = {}
 _MT5_API_LOCKS_GUARD = threading.Lock()
 MT5_LAUNCH_DIAG: Dict[str, Dict[str, Any]] = {}
@@ -1644,9 +1646,14 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
+    if count_running_mt5_terminals() > 1:
+        log(f"MT5 API SNAPSHOT SKIP concurrent terminals path={port_dir.name}")
+        return {}
     try:
-        port_num = payload_get(payload or {}, "port", "portNumber", "port_no")
-        with mt5_api_lock(port_num):
+        with mt5_api_global_file_lock(timeout_sec=45.0) as got_lock:
+            if not got_lock:
+                log(f"MT5 API SNAPSHOT SKIP lock timeout path={port_dir.name}")
+                return {}
             try:
                 mt5.shutdown()
             except Exception:
@@ -1671,12 +1678,13 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
                 pass
         if ai is None:
             return {}
-        if login_hint and int(getattr(ai, "login", 0) or 0) not in (0, login_hint):
+        got_login = int(getattr(ai, "login", 0) or 0)
+        if login_hint and got_login not in (0, login_hint):
             log(
                 f"MT5 API SNAPSHOT REJECT path={port_dir.name} "
-                f"expected={login_hint} got={getattr(ai, 'login', 0)}"
+                f"expected={login_hint} got={got_login}"
             )
-            return {}
+            return {"loginMismatch": True, "observedLogin": str(got_login), "source": "mt5_api_reject"}
         out = {
             "balance": float(ai.balance),
             "equity": float(ai.equity),
@@ -1693,8 +1701,7 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     except Exception as e:
         log(f"MT5 API SNAPSHOT ERROR: {e}")
         try:
-            port_num = payload_get(payload or {}, "port", "portNumber", "port_no")
-            with mt5_api_lock(port_num):
+            with mt5_api_global_file_lock(timeout_sec=5.0):
                 mt5.shutdown()
         except Exception:
             pass
@@ -2205,6 +2212,11 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             except Exception as e:
                 log(f"MT5 SNAPSHOT FILE ERROR PORT={port} FILE={metric_file.name}: {e}")
         api_snap = account_snapshot_mt5_api(port_dir, payload)
+        if api_snap.get("loginMismatch"):
+            snap["loginMismatch"] = True
+            snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
+            snap["source"] = str(api_snap.get("source") or "mt5_api_reject")
+            return snap
         if _snap_positive(api_snap):
             snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
             return snap
@@ -2992,6 +3004,58 @@ def mt5_api_lock(port: Any = None) -> threading.Lock:
             lock = threading.Lock()
             _MT5_API_LOCKS[key] = lock
         return lock
+
+
+@contextlib.contextmanager
+def mt5_api_global_file_lock(timeout_sec: float = 45.0):
+    """Serialize MetaTrader5 Python API across all agent worker processes."""
+    lock_file = MT5_API_FILE_LOCK
+    deadline = time.time() + max(5.0, float(timeout_sec))
+    token = f"{os.getpid()}:{time.time()}"
+    acquired = False
+    while time.time() < deadline:
+        try:
+            fd = os.open(str(lock_file), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            try:
+                os.write(fd, token.encode("utf-8", errors="ignore"))
+            finally:
+                os.close(fd)
+            acquired = True
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - lock_file.stat().st_mtime
+                if age > 120:
+                    lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
+            time.sleep(0.25)
+    try:
+        yield acquired
+    finally:
+        if not acquired:
+            return
+        try:
+            if lock_file.exists():
+                current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+                if current == token or current.startswith(f"{os.getpid()}:"):
+                    lock_file.unlink(missing_ok=True)
+        except Exception:
+            pass
+
+
+def count_running_mt5_terminals() -> int:
+    n = 0
+    try:
+        for p in iter_terminal_processes():
+            try:
+                if (p.info.get("name") or "").lower() == "terminal64.exe":
+                    n += 1
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return n
 
 
 def _leading_login_from_title(title: str) -> str:

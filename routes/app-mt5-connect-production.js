@@ -433,6 +433,7 @@ async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) 
       finished_at = COALESCE(finished_at, NOW())
     WHERE command_type IN ('login_mt5', 'connect_mt5')
       AND status IN ('pending', 'queued')
+      AND COALESCE(payload->>'purpose', '') NOT IN ('title_mismatch_retry', 'title_mismatch_retry_stop')
       AND (
         ($1::bigint IS NOT NULL AND port_id = $1)
         OR ($2::bigint IS NOT NULL AND (payload->>'accountId')::bigint = $2)
