@@ -5846,7 +5846,11 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, delete_file(payload))
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
-            spawn_connect_worker(cmd_id, ctype, payload)
+            try:
+                spawn_connect_worker(cmd_id, ctype, payload)
+            except Exception as spawn_err:
+                log(f"CONNECT WORKER SPAWN FAILED cmd_id={cmd_id}: {spawn_err}")
+                command_result(cmd_id, False, {}, str(spawn_err))
             return
 
         elif ctype in (
@@ -6118,7 +6122,10 @@ def main() -> None:
                     res = api("GET", "/queue")
                     cmd = res.get("command")
                     if not cmd:
+                        if res.get("pendingCount"):
+                            log(f"QUEUE POLL empty pending={res.get('pendingCount')}")
                         break
+                    log(f"QUEUE PICK id={cmd.get('id')} type={cmd.get('command_type')}")
                     ctype = str(cmd.get("command_type") or "").lower()
                     if ctype in async_types:
                         if worker_tick_used:

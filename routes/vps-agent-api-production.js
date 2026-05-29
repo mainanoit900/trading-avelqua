@@ -732,7 +732,7 @@ router.get('/queue', async (req, res) => {
         AND finished_at IS NULL
         AND command_type IN ('login_mt5', 'connect_mt5')
         AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
-            < NOW() - INTERVAL '8 minutes'
+            < NOW() - INTERVAL '90 seconds'
     `, [node.id]).catch(() => {});
 
     await query(`
@@ -783,6 +783,37 @@ router.get('/queue', async (req, res) => {
                 AND busy.id <> c.id
                 AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked', 'running')
                 AND LOWER(COALESCE(busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
+                AND (
+                  (COALESCE(c.port_id, 0) > 0 AND busy.port_id = c.port_id)
+                  OR (
+                    COALESCE(
+                      NULLIF(c.payload->>'port', '')::int,
+                      NULLIF(c.payload->>'portNumber', '')::int,
+                      NULLIF(c.payload->>'port_no', '')::int,
+                      NULLIF(c.payload->>'portNo', '')::int,
+                      NULLIF(c.payload->>'folderPort', '')::int,
+                      NULLIF(c.payload->>'vpsPortNumber', '')::int,
+                      0
+                    ) > 0
+                    AND COALESCE(
+                      NULLIF(c.payload->>'port', '')::int,
+                      NULLIF(c.payload->>'portNumber', '')::int,
+                      NULLIF(c.payload->>'port_no', '')::int,
+                      NULLIF(c.payload->>'portNo', '')::int,
+                      NULLIF(c.payload->>'folderPort', '')::int,
+                      NULLIF(c.payload->>'vpsPortNumber', '')::int,
+                      0
+                    ) = COALESCE(
+                      NULLIF(busy.payload->>'port', '')::int,
+                      NULLIF(busy.payload->>'portNumber', '')::int,
+                      NULLIF(busy.payload->>'port_no', '')::int,
+                      NULLIF(busy.payload->>'portNo', '')::int,
+                      NULLIF(busy.payload->>'folderPort', '')::int,
+                      NULLIF(busy.payload->>'vpsPortNumber', '')::int,
+                      0
+                    )
+                  )
+                )
             )
           )
           AND NOT (
@@ -869,9 +900,30 @@ router.get('/queue', async (req, res) => {
     const row = r.rows?.[0] || null;
 
     if (!row) {
+      const pendingCount = await query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM vps_system.vps_agent_commands
+        WHERE status = 'pending'
+          AND (node_id = $1 OR vps_id = $1)
+      `,
+        [node.id]
+      ).catch(() => ({ rows: [{ c: 0 }] }));
+      const processingLogin = await query(
+        `
+        SELECT COUNT(*)::int AS c
+        FROM vps_system.vps_agent_commands
+        WHERE (node_id = $1 OR vps_id = $1)
+          AND command_type IN ('login_mt5', 'connect_mt5')
+          AND status IN ('processing', 'picked', 'running')
+      `,
+        [node.id]
+      ).catch(() => ({ rows: [{ c: 0 }] }));
       return res.json({
         ok: true,
-        command: null
+        command: null,
+        pendingCount: Number(pendingCount.rows?.[0]?.c || 0),
+        processingLoginCount: Number(processingLogin.rows?.[0]?.c || 0)
       });
     }
 
