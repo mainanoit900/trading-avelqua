@@ -222,7 +222,10 @@ router.get('/mt5/agent-running-list', async (req, res) => {
              bi.user_id AS "userId",
              bi.run_payload AS "runPayload"
       FROM vps_system.bot_instances bi
-      WHERE LOWER(TRIM(COALESCE(bi.status, ''))) IN ('running','pending','restarting','starting','connecting')
+      WHERE bi.user_id = $1
+        AND LOWER(TRIM(COALESCE(bi.status, ''))) IN ('running','pending','restarting','starting','connecting')
+        AND bi.stopped_at IS NULL
+        AND COALESCE(bi.run_payload->>'userStopped', '') NOT IN ('true', '1', 'yes')
         AND bi.assigned_port_no IS NOT NULL
       ORDER BY bi.started_at DESC NULLS LAST, bi.id DESC
       LIMIT 100

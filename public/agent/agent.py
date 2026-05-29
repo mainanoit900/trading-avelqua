@@ -1961,6 +1961,22 @@ def avelqua_gate_target_dirs(port_dir: Path) -> List[Path]:
     return out
 
 
+def read_avelqua_trading_gate(port_dir: Path) -> bool:
+    """False = user/agent halted trading (Stop BOT)."""
+    for files_dir in avelqua_gate_target_dirs(port_dir):
+        try:
+            flag_file = files_dir / "avelqua_trading_enabled.txt"
+            if flag_file.is_file():
+                return str(flag_file.read_text(encoding="ascii", errors="ignore")).strip() == "1"
+            gate_file = files_dir / "avelqua_trading_gate.json"
+            if gate_file.is_file():
+                data = json.loads(gate_file.read_text(encoding="utf-8", errors="ignore") or "{}")
+                return bool(data.get("tradingEnabled") or data.get("allowExpertTrading"))
+        except Exception:
+            continue
+    return True
+
+
 def write_avelqua_trading_gate(port_dir: Path, enabled: bool, payload: Optional[Dict[str, Any]] = None) -> None:
     flag = "1" if enabled else "0"
     body = {
@@ -5311,10 +5327,9 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         if not port:
             return
         instance_id = payload_get(payload, "instanceId")
-        st = mt5_port_status_one(port, payload)
         port_dir = resolve_mt5_port_dir(port, payload)
-        if bool(st.get("running")) and mt5_log_has_auto_trading_disabled(port_dir):
-            ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)
+        trading_allowed = read_avelqua_trading_gate(port_dir)
+        st = mt5_port_status_one(port, payload)
         snap = account_snapshot(port, payload)
         bal = float(snap.get("balance") or 0)
         eq = float(snap.get("equity") or 0)
@@ -5325,9 +5340,13 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
             except Exception:
                 profit = None
         mt5_running = bool(st["running"])
-        ea_base = _ea_live_status_for_payload(port_dir, payload, mt5_running)
-        live_status = "running" if mt5_running and ea_base == "ready" else ("stopped" if not mt5_running else "starting")
-        ea_status = "running" if live_status == "running" else ea_base
+        if not trading_allowed:
+            live_status = "stopped"
+            ea_status = "trading_halted"
+        else:
+            ea_base = _ea_live_status_for_payload(port_dir, payload, mt5_running)
+            live_status = "running" if mt5_running and ea_base == "ready" else ("stopped" if not mt5_running else "starting")
+            ea_status = "running" if live_status == "running" else ea_base
         send_mt5_live_status(
             instance_id,
             port,
