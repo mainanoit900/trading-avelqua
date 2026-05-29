@@ -2152,6 +2152,35 @@ console.log('[MT5 CONNECT START]', {
       throw new Error(`⏳ PORT ${portSlot} กำลังเชื่อมต่ออยู่ — รอสักครู่ หรือเลือก PORT อื่น (login พร้อมกันได้คนละ PORT)`);
     }
 
+    const {
+      tryCachedEquityFastConnect,
+      fastConnectErrorMessage
+    } = require('../lib/mt5CachedEquityLogin');
+    const fast = await tryCachedEquityFastConnect({
+      userId,
+      mt5Login,
+      mt5Password,
+      serverName: FIXED_SERVER,
+      portSlot
+    });
+    if (fast.ok) {
+      if (lockKey) await redis.del(lockKey).catch(() => {});
+      lockKey = null;
+      return res.json({
+        ok: true,
+        status: 'connected',
+        connected: true,
+        fastPath: true,
+        accountId: fast.accountId,
+        portSlot: fast.portSlot || portSlot,
+        balance: fast.balance,
+        equity: fast.equity,
+        message: fast.message
+      });
+    }
+    const fastErr = fastConnectErrorMessage(fast.reason, mt5Login);
+    if (fastErr) throw new Error(fastErr);
+
     console.log('[STEP] BEFORE RESERVE', { portSlot, requestedSlot: req.body.port_slot });
 
     const reserve = await reserveVpsPortForConnect(userId, slotAccount?.port_id, portSlot);

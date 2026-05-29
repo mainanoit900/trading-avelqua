@@ -35,6 +35,10 @@ const {
   countActiveLoginsOnVps
 } = require('../lib/mt5MultiPortLogin');
 const { startBotRunPhase2 } = require('../lib/mt5BotRunPhase2');
+const {
+  tryCachedEquityFastConnect,
+  fastConnectErrorMessage
+} = require('../lib/mt5CachedEquityLogin');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -718,15 +722,47 @@ async function handleMt5ConnectProduction(req, res) {
         throw new Error(`PORT ${requestedSlot} ไม่ว่าง กรุณาเลือก PORT ที่ยังไม่ใช้งาน`);
       }
       portSlot = requestedSlot;
-      const reserve = await reserveBestPort(userId);
-      if (!reserve.ok) throw new Error(reserve.message);
-      reservedPort = reserve.port;
     } else if (retryPort) {
       portSlot = Number(retryPort.port_slot) || 0;
       if (portSlot && !(await isUserPortSlotAvailable(userId, portSlot, totalPorts))) {
         portSlot = await getNextUserSlot(userId, totalPorts);
       }
       if (!portSlot) portSlot = await getNextUserSlot(userId, totalPorts);
+    } else {
+      portSlot = await getNextUserSlot(userId, totalPorts);
+      if (!portSlot) {
+        throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
+      }
+    }
+
+    const fast = await tryCachedEquityFastConnect({
+      userId,
+      mt5Login,
+      mt5Password,
+      serverName,
+      portSlot
+    });
+    if (fast.ok) {
+      return res.json({
+        ok: true,
+        status: 'connected',
+        connected: true,
+        fastPath: true,
+        accountId: fast.accountId,
+        portSlot: fast.portSlot || portSlot,
+        balance: fast.balance,
+        equity: fast.equity,
+        message: fast.message
+      });
+    }
+    const fastErr = fastConnectErrorMessage(fast.reason, mt5Login);
+    if (fastErr) throw new Error(fastErr);
+
+    if (requestedSlot > 0) {
+      const reserve = await reserveBestPort(userId);
+      if (!reserve.ok) throw new Error(reserve.message);
+      reservedPort = reserve.port;
+    } else if (retryPort) {
       reservedPort = {
         port_id: retryPort.port_id,
         vps_id: retryPort.vps_id,
@@ -740,10 +776,6 @@ async function handleMt5ConnectProduction(req, res) {
         mt5Login
       });
     } else {
-      portSlot = await getNextUserSlot(userId, totalPorts);
-      if (!portSlot) {
-        throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
-      }
       const reserve = await reserveBestPort(userId);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
