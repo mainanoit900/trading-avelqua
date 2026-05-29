@@ -264,6 +264,126 @@
 
   window.showMt5ConnectModal = showMt5ConnectModal;
 
+  let mt5UiModalResolve = null;
+  let mt5UiModalMode = 'confirm';
+
+  function mt5EnsureUiModal() {
+    if (document.getElementById('mt5UiModal')) return;
+    const el = document.createElement('div');
+    el.id = 'mt5UiModal';
+    el.className = 'mt5-ui-modal';
+    el.setAttribute('aria-hidden', 'true');
+    el.innerHTML =
+      '<div class="mt5-ui-backdrop" data-mt5-ui-close="0"></div>' +
+      '<div class="mt5-ui-card" role="dialog" aria-modal="true">' +
+      '<div class="mt5-ui-icon" id="mt5UiIcon">✨</div>' +
+      '<h3 id="mt5UiTitle">ยืนยัน</h3>' +
+      '<p id="mt5UiMessage"></p>' +
+      '<div class="mt5-ui-actions" id="mt5UiActions">' +
+      '<button type="button" class="mt5-ui-btn ghost" id="mt5UiCancelBtn">ยกเลิก</button>' +
+      '<button type="button" class="mt5-ui-btn primary" id="mt5UiOkBtn">ตกลง</button>' +
+      '</div></div>';
+    document.body.appendChild(el);
+    const close = function (value) {
+      el.classList.remove('show');
+      el.setAttribute('aria-hidden', 'true');
+      document.body.classList.remove('mt5-ui-open');
+      const fn = mt5UiModalResolve;
+      mt5UiModalResolve = null;
+      if (fn) fn(value);
+    };
+    el.querySelector('[data-mt5-ui-close]').addEventListener('click', function () {
+      close(mt5UiModalMode === 'confirm' ? false : undefined);
+    });
+    document.getElementById('mt5UiCancelBtn').addEventListener('click', function () {
+      close(false);
+    });
+    document.getElementById('mt5UiOkBtn').addEventListener('click', function () {
+      close(mt5UiModalMode === 'confirm' ? true : undefined);
+    });
+    document.addEventListener('keydown', function (ev) {
+      if (ev.key === 'Escape' && el.classList.contains('show')) {
+        close(mt5UiModalMode === 'confirm' ? false : undefined);
+      }
+    });
+  }
+
+  function mt5OpenUiModal(opts) {
+    mt5EnsureUiModal();
+    const modal = document.getElementById('mt5UiModal');
+    const card = modal.querySelector('.mt5-ui-card');
+    const variant = String(opts.variant || 'default');
+    card.className = 'mt5-ui-card ' + variant;
+    const icons = { danger: '⏹', warning: '⚠️', success: '▶', default: '✨' };
+    document.getElementById('mt5UiIcon').textContent = opts.icon || icons[variant] || icons.default;
+    document.getElementById('mt5UiTitle').textContent = opts.title || 'ยืนยัน';
+    document.getElementById('mt5UiMessage').textContent = opts.message || '';
+    const cancelBtn = document.getElementById('mt5UiCancelBtn');
+    const okBtn = document.getElementById('mt5UiOkBtn');
+    const isAlert = opts.mode === 'alert';
+    cancelBtn.style.display = isAlert ? 'none' : '';
+    okBtn.textContent = opts.okText || (isAlert ? 'ตกลง' : 'ยืนยัน');
+    cancelBtn.textContent = opts.cancelText || 'ยกเลิก';
+    okBtn.className = 'mt5-ui-btn primary ' + (variant === 'danger' ? 'danger' : (variant === 'warning' ? 'warning' : 'success'));
+    modal.classList.add('show');
+    modal.setAttribute('aria-hidden', 'false');
+    document.body.classList.add('mt5-ui-open');
+    setTimeout(function () { okBtn.focus(); }, 80);
+  }
+
+  window.mt5UiConfirm = function (opts) {
+    return new Promise(function (resolve) {
+      mt5UiModalMode = 'confirm';
+      mt5UiModalResolve = resolve;
+      mt5OpenUiModal(Object.assign({ mode: 'confirm' }, opts || {}));
+    });
+  };
+
+  window.mt5UiAlert = function (opts) {
+    return new Promise(function (resolve) {
+      mt5UiModalMode = 'alert';
+      mt5UiModalResolve = resolve;
+      mt5OpenUiModal(Object.assign({ mode: 'alert', variant: 'warning' }, opts || {}));
+    });
+  };
+
+  window.mt5StopBot = async function (instanceId, btn) {
+    const id = Number(instanceId);
+    if (!Number.isFinite(id) || id <= 0) return;
+    if (btn && btn.dataset.stopping === '1') return;
+    const ok = await mt5UiConfirm({
+      variant: 'danger',
+      title: 'หยุด BOT',
+      message: 'ยืนยันหยุด BOT และปิด MT5? หลังจากนั้นสามารถเลือกบอทหรือ Run ใหม่ได้',
+      okText: 'หยุด BOT',
+      cancelText: 'ยกเลิก'
+    });
+    if (!ok) return;
+    if (btn) {
+      btn.dataset.stopping = '1';
+      btn.disabled = true;
+      btn.textContent = 'กำลังหยุด...';
+    }
+    try {
+      const body = new URLSearchParams();
+      body.set('close_mt5', '1');
+      await fetch('/app/mt5/stop/' + encodeURIComponent(String(id)), {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded', Accept: 'text/html' },
+        body: body.toString()
+      });
+      window.location.assign('/app/mt5');
+    } catch (err) {
+      if (btn) {
+        btn.dataset.stopping = '0';
+        btn.disabled = false;
+        btn.textContent = 'Stop BOT';
+      }
+      await mt5UiAlert({ variant: 'danger', title: 'ส่งคำสั่งไม่สำเร็จ', message: String(err && err.message ? err.message : err) });
+    }
+  };
+
   window.__mt5PageMeta = {
     packageExpired: <%= packageExpired ? 'true' : 'false' %>,
     packageLotMin: <%= packageLotMin %>,
@@ -717,9 +837,9 @@
       '<div class="mt5-run-action-box">' +
       '<label>คำสั่ง BOT</label>' +
       '<div class="mt5-run-action-buttons">' +
-      '<button type="submit" class="mt5-btn run mt5-run-primary"' + ((expired || hasActiveInstance) ? ' disabled' : '') + ' onclick="return confirm(\'ยืนยัน Run BOT ใช่ไหม?\')">' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
+      '<button type="submit" class="mt5-btn run mt5-run-primary mt5-run-submit-btn"' + ((expired || hasActiveInstance) ? ' disabled' : '') + '>' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
       (hasActiveInstance
-        ? '<input type="hidden" name="close_mt5" value="1"><button class="mt5-btn mt5-run-secondary" type="submit" formmethod="post" formaction="/app/mt5/stop/' + mt5Esc(activeInstance.id) + '" formnovalidate onclick="return confirm(\'ยืนยันหยุด BOT และปิด MT5? หลังจากนั้นสามารถเลือกบอทหรือ Run ใหม่ได้\')">Stop BOT</button>'
+        ? '<button type="button" class="mt5-btn mt5-run-secondary mt5-stop-btn" data-stop-id="' + mt5Esc(activeInstance.id) + '">Stop BOT</button>'
         : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
       '</div>' +
       '<small class="mt5-run-action-note">' + (hasActiveInstance ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
@@ -801,7 +921,21 @@
       });
     });
 
+    form.addEventListener('click', function (ev) {
+      const stopBtn = ev.target && ev.target.closest ? ev.target.closest('.mt5-stop-btn') : null;
+      if (!stopBtn || stopBtn.disabled) return;
+      ev.preventDefault();
+      ev.stopPropagation();
+      mt5StopBot(stopBtn.getAttribute('data-stop-id'), stopBtn);
+    });
+
+    let mt5RunSubmitBypass = false;
     form.addEventListener('submit', function (e) {
+      if (mt5RunSubmitBypass) {
+        mt5RunSubmitBypass = false;
+        return;
+      }
+      e.preventDefault();
       const selected = mt5SelectedRunAccount();
       const capitalInput = form.querySelector('input[name="capital_manual"]');
       const botSelect = form.querySelector('select[name="bot_code"]');
@@ -826,22 +960,36 @@
       }
       if (syncHidden) syncHidden.value = syncField;
       mt5RenderRunPresetSummary(form, preview);
-      if (!selected) {
-        e.preventDefault();
-        alert('กรุณาเลือก PORT ที่เชื่อมต่อแล้วก่อน Run BOT');
-        return false;
-      }
-      if (preview.warning) {
-        e.preventDefault();
-        alert(preview.warning);
-        return false;
-      }
-      if (capital < mt5Num(preview.minCapital, 100)) {
-        e.preventDefault();
-        alert('เงินทุนไม่ถึงขั้นต่ำของบอทที่เลือก');
-        return false;
-      }
-      return true;
+
+      (async function () {
+        if (!selected) {
+          await mt5UiAlert({ variant: 'warning', title: 'เลือก PORT', message: 'กรุณาเลือก PORT ที่เชื่อมต่อแล้วก่อน Run BOT' });
+          return;
+        }
+        if (preview.warning) {
+          await mt5UiAlert({ variant: 'warning', title: 'แจ้งเตือน', message: preview.warning });
+          return;
+        }
+        if (capital < mt5Num(preview.minCapital, 100)) {
+          await mt5UiAlert({ variant: 'warning', title: 'เงินทุนไม่พอ', message: 'เงินทุนไม่ถึงขั้นต่ำของบอทที่เลือก' });
+          return;
+        }
+        const ok = await mt5UiConfirm({
+          variant: 'success',
+          title: 'Run BOT',
+          message: 'ยืนยัน Run BOT ใช่ไหม?',
+          okText: 'Run BOT',
+          cancelText: 'ยกเลิก'
+        });
+        if (!ok) return;
+        const runBtn = form.querySelector('.mt5-run-submit-btn');
+        if (runBtn) {
+          runBtn.disabled = true;
+          runBtn.textContent = 'กำลังส่งคำสั่ง...';
+        }
+        mt5RunSubmitBypass = true;
+        form.submit();
+      })();
     });
 
     applyPresetDefaults('bot_code');
@@ -2111,6 +2259,27 @@ setInterval(function () {
 </style>
 
 <style>
+.mt5-ui-modal{position:fixed;inset:0;z-index:1000001;display:none;align-items:center;justify-content:center;padding:20px}
+.mt5-ui-modal.show{display:flex}
+body.mt5-ui-open{overflow:hidden}
+.mt5-ui-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.78);backdrop-filter:blur(12px)}
+.mt5-ui-card{position:relative;width:min(440px,92vw);border-radius:28px;padding:30px 28px 26px;background:linear-gradient(155deg,#0f172a 0%,#020617 58%,#111827 100%);border:1px solid rgba(148,163,184,.22);box-shadow:0 32px 110px rgba(0,0,0,.62),inset 0 1px 0 rgba(255,255,255,.06);color:#fff;text-align:center;animation:mt5LuxPop .24s cubic-bezier(.2,.9,.2,1)}
+.mt5-ui-card.success{border-color:rgba(34,197,94,.42);box-shadow:0 32px 110px rgba(0,0,0,.62),0 0 56px rgba(34,197,94,.16)}
+.mt5-ui-card.danger{border-color:rgba(248,113,113,.42);box-shadow:0 32px 110px rgba(0,0,0,.62),0 0 56px rgba(239,68,68,.14)}
+.mt5-ui-card.warning{border-color:rgba(250,204,21,.38);box-shadow:0 32px 110px rgba(0,0,0,.62),0 0 56px rgba(250,204,21,.12)}
+.mt5-ui-icon{width:64px;height:64px;margin:0 auto 14px;border-radius:20px;display:flex;align-items:center;justify-content:center;font-size:30px;background:linear-gradient(135deg,rgba(250,204,21,.18),rgba(59,130,246,.12));border:1px solid rgba(255,255,255,.08)}
+.mt5-ui-card.danger .mt5-ui-icon{background:linear-gradient(135deg,rgba(239,68,68,.22),rgba(127,29,29,.18))}
+.mt5-ui-card.warning .mt5-ui-icon{background:linear-gradient(135deg,rgba(250,204,21,.22),rgba(180,83,9,.14))}
+.mt5-ui-card.success .mt5-ui-icon{background:linear-gradient(135deg,rgba(34,197,94,.22),rgba(20,184,166,.14))}
+.mt5-ui-card h3{margin:0 0 10px;font-size:22px;font-weight:900;letter-spacing:.01em}
+.mt5-ui-card p{margin:0;color:#cbd5e1;font-size:15px;line-height:1.65}
+.mt5-ui-actions{display:flex;gap:10px;justify-content:center;margin-top:24px;flex-wrap:wrap}
+.mt5-ui-btn{border:0;border-radius:14px;padding:12px 20px;font-weight:900;font-size:14px;cursor:pointer;min-width:108px;transition:.16s transform,.16s filter}
+.mt5-ui-btn:hover{transform:translateY(-1px);filter:brightness(1.05)}
+.mt5-ui-btn.ghost{background:rgba(51,65,85,.9);color:#e2e8f0;border:1px solid rgba(148,163,184,.2)}
+.mt5-ui-btn.primary.success{background:linear-gradient(135deg,#22c55e,#14b8a6);color:#052e16;box-shadow:0 12px 28px rgba(34,197,94,.28)}
+.mt5-ui-btn.primary.danger{background:linear-gradient(135deg,#ef4444,#b91c1c);color:#fff;box-shadow:0 12px 28px rgba(239,68,68,.32)}
+.mt5-ui-btn.primary.warning{background:linear-gradient(135deg,#facc15,#f59e0b);color:#422006;box-shadow:0 12px 28px rgba(250,204,21,.24)}
 .mt5-lux-modal{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center}
 .mt5-lux-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.72);backdrop-filter:blur(10px)}
 .mt5-lux-card{position:relative;width:min(460px,92vw);border-radius:28px;padding:32px;background:linear-gradient(145deg,#111827,#020617);box-shadow:0 30px 100px rgba(0,0,0,.65);color:#fff;text-align:center;animation:mt5LuxPop .22s ease-out}
