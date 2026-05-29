@@ -2171,6 +2171,7 @@ console.log('[MT5 CONNECT START]', {
         status: 'connected',
         connected: true,
         fastPath: true,
+        metricsReady: true,
         accountId: fast.accountId,
         portSlot: fast.portSlot || portSlot,
         balance: fast.balance,

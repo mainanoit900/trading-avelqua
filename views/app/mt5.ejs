@@ -1607,7 +1607,7 @@ if (mt5ConnectForm) {
       }
       const pop = typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
 
-      if (json.ok === true && json.status === 'connected' && json.metricsReady) {
+      if (json.ok === true && json.status === 'connected' && (json.metricsReady || json.fastPath)) {
         if (typeof window.finishMt5ConnectSuccess === 'function') {
           window.finishMt5ConnectSuccess(json.message || 'เชื่อมต่อสำเร็จ');
         } else {
@@ -1616,7 +1616,7 @@ if (mt5ConnectForm) {
         return false;
       }
 
-      if (json.ok === true && (json.status === 'queued' || json.status === 'pending' || json.status === 'upgrading' || json.accountId)) {
+      if (json.ok === true && (json.status === 'queued' || json.status === 'pending' || json.status === 'upgrading' || (json.accountId && json.status !== 'connected'))) {
         if (json.accountId) {
           mt5PollAccountId = String(json.accountId);
           sessionStorage.setItem('mt5PollAccountId', mt5PollAccountId);

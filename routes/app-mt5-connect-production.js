@@ -748,6 +748,7 @@ async function handleMt5ConnectProduction(req, res) {
         status: 'connected',
         connected: true,
         fastPath: true,
+        metricsReady: true,
         accountId: fast.accountId,
         portSlot: fast.portSlot || portSlot,
         balance: fast.balance,
