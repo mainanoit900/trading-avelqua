@@ -26,6 +26,7 @@ const {
   finalizeAttemptFailed,
   getConnectStatusForUser
 } = require('../lib/mt5ConnectAttempt');
+const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -429,7 +430,7 @@ async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) 
       result_message = 'ยกเลิกเพราะมีคำสั่ง login ใหม่ (รหัสผ่านล่าสุด)',
       updated_at = NOW(),
       finished_at = COALESCE(finished_at, NOW())
-    WHERE command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
+    WHERE command_type IN ('login_mt5', 'connect_mt5')
       AND status IN ('pending', 'queued')
       AND (
         ($1::bigint IS NOT NULL AND port_id = $1)
@@ -456,7 +457,7 @@ async function findInFlightLoginCommand({ userId, mt5Login, serverName } = {}) {
       payload->>'attemptId' AS attempt_id,
       payload->>'serverName' AS server_name
     FROM vps_system.vps_agent_commands
-    WHERE command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5')
+    WHERE command_type IN ('login_mt5', 'connect_mt5')
       AND LOWER(COALESCE(status, '')) IN ('pending', 'queued', 'processing', 'picked', 'running')
       AND COALESCE(payload->>'userId', '') = $1::text
       AND TRIM(COALESCE(payload->>'mt5Login', '')) = $2
@@ -608,8 +609,10 @@ async function getNextUserSlot(userId, totalPorts) {
 async function handleMt5ConnectProduction(req, res) {
   let lockKey = null;
   let loginLockKey = null;
+  let vpsLoginGateKey = null;
   let reservedPort = null;
   let attemptId = null;
+  let loginGateWaitedMs = 0;
 
   try {
     await ensureRuntimeColumns();
@@ -840,6 +843,10 @@ async function handleMt5ConnectProduction(req, res) {
       serverName
     });
 
+    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id);
+    vpsLoginGateKey = loginGate.lockKey;
+    loginGateWaitedMs = loginGate.waitedMs || 0;
+
     const payload = buildMt5LoginPayload({
       accountId,
       attemptId,
@@ -875,6 +882,10 @@ async function handleMt5ConnectProduction(req, res) {
     const pickName = reservedPort.node_name
       ? `${reservedPort.node_name} / ${reservedPort.port_name || 'PORT-' + portLabel}`
       : `PORT ${portLabel}`;
+    const queueNote =
+      loginGateWaitedMs > 500
+        ? ` (คิว Login VPS ~${Math.ceil(loginGateWaitedMs / 1000)} วินาที)`
+        : '';
 
     return res.json({
       ok: true,
@@ -886,7 +897,7 @@ async function handleMt5ConnectProduction(req, res) {
       portId: reservedPort.port_id,
       portNo: allocPortNo,
       portSlot,
-      message: `กำลังเปิด MT5 — ${pickName} (${serverName})`
+      message: `กำลังเปิด MT5 — ${pickName} (${serverName})${queueNote}`
     });
   } catch (e) {
     if (attemptId) {
@@ -899,6 +910,7 @@ async function handleMt5ConnectProduction(req, res) {
     if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
     return res.json({ ok: false, status: 'failed', message: e.message });
   } finally {
+    if (vpsLoginGateKey) await releaseVpsLoginSlot(vpsLoginGateKey).catch(() => {});
     if (loginLockKey) await redis.del(loginLockKey).catch(() => {});
     if (lockKey) await redis.del(lockKey).catch(() => {});
   }

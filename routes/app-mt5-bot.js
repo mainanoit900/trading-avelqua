@@ -53,6 +53,7 @@ const {
 } = require('../lib/mt5PortEntitlement');
 const { fetchEquityChartForInstance, recordEquityLog, seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
 const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBotGate');
+const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 
 const router = express.Router();
 
@@ -2036,6 +2037,7 @@ router.get('/mt5', async (req, res) => {
 
 router.post('/mt5/connect', async (req, res) => {
   let lockKey = null;
+  let vpsLoginGateKey = null;
   let reservedPort = null;
   let pendingAccountId = null;
 
@@ -2157,7 +2159,7 @@ console.log('[MT5 CONNECT START]', {
         AND (payload->>'userId')::text = $2::text
         AND (payload->>'portSlot')::text = $3::text
         AND (payload->>'mt5Login')::text = $4::text
-        AND command_type IN ('connect_mt5','login_mt5','run_mt5_bot','run_mt5')
+        AND command_type IN ('connect_mt5','login_mt5')
         AND created_at > NOW() - INTERVAL '3 minutes'
       LIMIT 1
     `,
@@ -2231,6 +2233,9 @@ console.log('[MT5 CONNECT START]', {
     pendingAccountId = accountId;
 
     console.log('[STEP] BEFORE INSERT COMMAND');
+
+    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id);
+    vpsLoginGateKey = loginGate.lockKey;
 
     if (reservedPort.admin_node_id && allocPortNo) {
       await setAdminAllocationStatus(reservedPort.admin_node_id, allocPortNo, 'locked', reservedPort.allocation_id);
@@ -2350,6 +2355,7 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
     });
 
   } finally {
+    if (vpsLoginGateKey) await releaseVpsLoginSlot(vpsLoginGateKey).catch(() => {});
     if (lockKey) await redis.del(lockKey).catch(() => {});
   }
 });
