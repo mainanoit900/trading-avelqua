@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-equity-uia-first-v109"
+AGENT_BUILD_ID = "2026-05-29-equity-api-isolated-v110"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1828,6 +1828,97 @@ if (-not $eq) {{ $eq = $bal }}
     return out
 
 
+def account_snapshot_mt5_api_isolated(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Read Balance/Equity in a child process — avoids global MT5 API lock contention."""
+    if os.name != "nt":
+        return {}
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {}
+    login_hint = 0
+    try:
+        login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
+    except Exception:
+        login_hint = 0
+    port_root = str(port_dir).lower().replace("/", "\\").rstrip("\\")
+    script = f"""
+import json
+import os
+try:
+    import MetaTrader5 as mt5
+except Exception:
+    print(json.dumps({{}}))
+    raise SystemExit(0)
+terminal = {json.dumps(str(terminal))}
+login_hint = {login_hint}
+port_root = os.path.normcase({json.dumps(port_root)})
+try:
+    try:
+        mt5.shutdown()
+    except Exception:
+        pass
+    if not mt5.initialize(path=terminal):
+        print(json.dumps({{}}))
+        raise SystemExit(0)
+    ti = mt5.terminal_info()
+    ti_path = os.path.normcase(str(getattr(ti, "path", "") or ""))
+    if ti_path and port_root and not ti_path.startswith(port_root):
+        mt5.shutdown()
+        print(json.dumps({{}}))
+        raise SystemExit(0)
+    ai = mt5.account_info()
+    if ai is None:
+        mt5.shutdown()
+        print(json.dumps({{}}))
+        raise SystemExit(0)
+    got = int(getattr(ai, "login", 0) or 0)
+    if login_hint and got not in (0, login_hint):
+        print(json.dumps({{
+            "loginMismatch": True,
+            "observedLogin": str(got),
+            "source": "mt5_api_isolated",
+        }}))
+    else:
+        print(json.dumps({{
+            "balance": float(ai.balance),
+            "equity": float(ai.equity),
+            "observedLogin": str(got),
+            "currency": str(getattr(ai, "currency", "") or ""),
+            "source": "mt5_api_isolated",
+        }}))
+    mt5.shutdown()
+except Exception as e:
+    print(json.dumps({{"error": str(e)[:200]}}))
+"""
+    try:
+        flags = subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0
+        proc = subprocess.run(
+            [sys.executable, "-c", script],
+            capture_output=True,
+            text=True,
+            timeout=float(os.getenv("AVELQUA_MT5_API_ISOLATED_TIMEOUT_SEC", "25")),
+            creationflags=flags,
+        )
+        raw_lines = [ln.strip() for ln in (proc.stdout or "").splitlines() if ln.strip()]
+        if not raw_lines:
+            return {}
+        data = json.loads(raw_lines[-1])
+        if not isinstance(data, dict):
+            return {}
+        if data.get("loginMismatch"):
+            return data
+        if _snap_positive(data):
+            log(
+                f"MT5 API ISOLATED SNAPSHOT path={port_dir.name} "
+                f"BALANCE={data.get('balance')} EQUITY={data.get('equity')}"
+            )
+            return data
+        return {}
+    except Exception as e:
+        log(f"MT5 API ISOLATED SNAPSHOT ERROR path={port_dir.name}: {e}")
+        return {}
+
+
 def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Read Balance/Equity via MetaTrader5 Python API when available."""
     try:
@@ -2434,6 +2525,7 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
             except Exception as e:
                 log(f"MT5 SNAPSHOT FILE ERROR PORT={port} FILE={metric_file.name}: {e}")
 
+        uia_has_metrics = False
         if uia_first:
             uia_snap = account_snapshot_uia(port, payload)
             if uia_snap.get("loginMismatch"):
@@ -2441,7 +2533,8 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                 snap["observedLogin"] = str(uia_snap.get("observedLogin") or "").strip()
                 snap["source"] = "uia_reject"
                 return snap
-            if _snap_positive(uia_snap):
+            uia_has_metrics = _snap_positive(uia_snap)
+            if uia_has_metrics:
                 snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
                 snap["source"] = str(snap.get("source") or "uia")
                 return snap
@@ -2449,16 +2542,23 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                 snap["observedLogin"] = str(uia_snap.get("observedLogin") or "").strip()
                 snap["source"] = "uia_partial"
 
-        skip_api = (
-            uia_first
-            and "login_equity" in purpose
-            and str(os.getenv("AVELQUA_LOGIN_EQUITY_SKIP_API", "1")).lower() not in ("0", "false", "no")
-        )
         api_snap: Dict[str, Any] = {}
-        if not skip_api:
+        if "login_equity" in purpose and terminal_up:
+            api_snap = account_snapshot_mt5_api_isolated(port_dir, payload)
+            if api_snap.get("loginMismatch"):
+                snap["loginMismatch"] = True
+                snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
+                snap["source"] = str(api_snap.get("source") or "mt5_api_isolated_reject")
+                return snap
+            if _snap_positive(api_snap):
+                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                return snap
+
+        skip_inproc_api = uia_has_metrics and "login_equity" in purpose
+        if not skip_inproc_api:
             api_snap = account_snapshot_mt5_api(port_dir, payload)
-        elif terminal_up:
-            log(f"MT5 SNAPSHOT API SKIP port={port} purpose={purpose} (UIA-first)")
+        elif terminal_up and "login_equity" in purpose:
+            log(f"MT5 SNAPSHOT INPROC API SKIP port={port} (UIA has metrics)")
         if api_snap.get("loginMismatch"):
             snap["loginMismatch"] = True
             snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
