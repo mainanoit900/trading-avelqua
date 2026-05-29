@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-concurrent-login-v117"
+AGENT_BUILD_ID = "2026-05-29-equity-before-close-v118"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3838,14 +3838,19 @@ def send_connect_result(
             "agentBuildId": AGENT_BUILD_ID,
         }
         if status in ("connected", "checking", "starting") and port:
-            snap = account_snapshot(port, payload)
-            body["balance"] = snap.get("balance")
-            body["equity"] = snap.get("equity")
-            body["accountCurrency"] = snap.get("currency", "")
-            obs = str(snap.get("observedLogin") or "").strip()
-            if obs:
-                body["observedLogin"] = obs
-                body["observed_login"] = obs
+            include_snap = status == "connected" and (
+                bool(journal_evidence and journal_evidence.strip())
+                or bool(window_verified)
+            )
+            if include_snap:
+                snap = account_snapshot(port, payload)
+                body["balance"] = snap.get("balance")
+                body["equity"] = snap.get("equity")
+                body["accountCurrency"] = snap.get("currency", "")
+                obs = str(snap.get("observedLogin") or "").strip()
+                if obs:
+                    body["observedLogin"] = obs
+                    body["observed_login"] = obs
         api("POST", callback, body)
         log(
             f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} "
