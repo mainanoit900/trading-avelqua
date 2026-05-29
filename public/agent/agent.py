@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-equity-api-isolated-v110"
+AGENT_BUILD_ID = "2026-05-29-concurrent-login-v111"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -167,6 +167,7 @@ def poll_agent_command_batch(max_per_tick: int) -> bool:
 
     handled_any = False
     async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
+    async_ports_used: set = set()
     worker_tick_used = False
     for _ in range(max(1, max_per_tick)):
         res = api("GET", queue_path, timeout=req_timeout)
@@ -179,9 +180,15 @@ def poll_agent_command_batch(max_per_tick: int) -> bool:
         log(f"QUEUE PICK id={cmd.get('id')} type={cmd.get('command_type')}")
         ctype = str(cmd.get("command_type") or "").lower()
         if ctype in async_types:
-            if worker_tick_used:
+            pno = _worker_port_num(cmd.get("payload") or {})
+            if pno > 0:
+                if pno in async_ports_used:
+                    break
+                async_ports_used.add(pno)
+            elif worker_tick_used:
                 break
-            worker_tick_used = True
+            else:
+                worker_tick_used = True
         handle_command(cmd)
         if ctype not in async_types:
             break
@@ -6155,7 +6162,22 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
             try:
-                spawn_connect_worker(cmd_id, ctype, payload)
+                worker_info = spawn_connect_worker(cmd_id, ctype, payload)
+                if ctype in ("connect_mt5", "login_mt5"):
+                    pno = _worker_port_num(payload)
+                    log(
+                        f"CONNECT WORKER QUEUED port={pno} cmd_id={cmd_id} "
+                        f"pid={worker_info.get('worker_pid')} log={worker_info.get('log_file')}"
+                    )
+                    try:
+                        send_connect_result(
+                            payload,
+                            "starting",
+                            f"VPS รับคำสั่งแล้ว — กำลังเปิด MT5 PORT {pno}...",
+                            pno,
+                        )
+                    except Exception as ack_err:
+                        log(f"CONNECT ACK ERROR cmd_id={cmd_id}: {ack_err}")
             except Exception as spawn_err:
                 log(f"CONNECT WORKER SPAWN FAILED cmd_id={cmd_id}: {spawn_err}")
                 command_result(cmd_id, False, {}, str(spawn_err))
@@ -6371,6 +6393,7 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
     worker_result: Optional[Dict[str, Any]] = None
     close_mt5_in_finally = False
     try:
+        log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
         delay_sec = 0.0
         try:
             delay_sec = float(payload_get(payload, "queueDelaySec", "queue_delay_sec") or 0)
@@ -6385,8 +6408,18 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
             max_delay = float(os.getenv("AVELQUA_LOGIN_QUEUE_DELAY_MAX_SEC", "300"))
             wait_sec = min(delay_sec, max_delay)
             log(f"CONNECT WORKER QUEUE DELAY port={port} sec={wait_sec:.1f}")
+            if wait_sec > 0:
+                try:
+                    send_connect_result(
+                        payload,
+                        "starting",
+                        f"รอคิว Login PORT {port} ~{int(wait_sec)} วิ...",
+                        port,
+                    )
+                except Exception:
+                    pass
             time.sleep(wait_sec)
-        log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
+        log(f"CONNECT WORKER RUN port={port} cmd_id={cmd_id} type={ctype}")
         if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
             worker_result = run_bot_command(payload)
             command_result(cmd_id, True, worker_result)

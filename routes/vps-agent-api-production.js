@@ -53,6 +53,29 @@ function sanitizeJournalText(text) {
     .slice(-8000);
 }
 
+/** payload / port_id → FolderPort number for queue concurrency rules */
+function commandPortNumberExpr(alias) {
+  return `COALESCE(
+    NULLIF(${alias}.payload->>'port', '')::int,
+    NULLIF(${alias}.payload->>'portNumber', '')::int,
+    NULLIF(${alias}.payload->>'port_no', '')::int,
+    NULLIF(${alias}.payload->>'portNo', '')::int,
+    NULLIF(${alias}.payload->>'folderPort', '')::int,
+    NULLIF(${alias}.payload->>'vpsPortNumber', '')::int,
+    0
+  )`;
+}
+
+/** True when two queued commands target the same VPS FolderPort */
+function commandsSharePortSql(cmdAlias, busyAlias) {
+  const cmdPort = commandPortNumberExpr(cmdAlias);
+  const busyPort = commandPortNumberExpr(busyAlias);
+  return `(
+    (COALESCE(${cmdAlias}.port_id, 0) > 0 AND ${busyAlias}.port_id = ${cmdAlias}.port_id)
+    OR (${cmdPort} > 0 AND ${cmdPort} = ${busyPort})
+  )`;
+}
+
 function sanitizeResultValue(value, depth = 0) {
   if (depth > 8) return null;
   if (value == null) return value;
@@ -840,8 +863,10 @@ router.get('/queue', async (req, res) => {
               SELECT 1
               FROM vps_system.vps_agent_commands login_busy
               WHERE (login_busy.node_id = $1 OR login_busy.vps_id = $1)
+                AND login_busy.id <> c.id
                 AND LOWER(COALESCE(login_busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
                 AND LOWER(COALESCE(login_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
+                AND ${commandsSharePortSql('c', 'login_busy')}
             )
             AND LOWER(COALESCE(c.command_type, '')) IN ('run_mt5_bot', 'run_mt5')
           )
@@ -850,10 +875,12 @@ router.get('/queue', async (req, res) => {
               SELECT 1
               FROM vps_system.vps_agent_commands prio_busy
               WHERE (prio_busy.node_id = $1 OR prio_busy.vps_id = $1)
+                AND prio_busy.id <> c.id
                 AND LOWER(COALESCE(prio_busy.command_type, '')) IN (
                   'login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5'
                 )
                 AND LOWER(COALESCE(prio_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
+                AND ${commandsSharePortSql('c', 'prio_busy')}
             )
             AND LOWER(COALESCE(c.command_type, '')) IN (
               'account_snapshot',
@@ -992,8 +1019,10 @@ router.get('/queue', async (req, res) => {
               SELECT 1
               FROM vps_system.vps_agent_commands login_busy
               WHERE (login_busy.node_id = $1 OR login_busy.vps_id = $1)
+                AND login_busy.id <> c.id
                 AND LOWER(COALESCE(login_busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
                 AND LOWER(COALESCE(login_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
+                AND ${commandsSharePortSql('c', 'login_busy')}
             )
             AND LOWER(COALESCE(c.command_type, '')) IN ('run_mt5_bot', 'run_mt5')
           )
@@ -1002,10 +1031,12 @@ router.get('/queue', async (req, res) => {
               SELECT 1
               FROM vps_system.vps_agent_commands prio_busy
               WHERE (prio_busy.node_id = $1 OR prio_busy.vps_id = $1)
+                AND prio_busy.id <> c.id
                 AND LOWER(COALESCE(prio_busy.command_type, '')) IN (
                   'login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5'
                 )
                 AND LOWER(COALESCE(prio_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
+                AND ${commandsSharePortSql('c', 'prio_busy')}
             )
             AND LOWER(COALESCE(c.command_type, '')) IN (
               'account_snapshot',

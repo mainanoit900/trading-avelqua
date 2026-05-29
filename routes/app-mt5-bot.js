@@ -2248,7 +2248,7 @@ console.log('[MT5 CONNECT START]', {
 
     console.log('[STEP] BEFORE INSERT COMMAND');
 
-    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id);
+    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id, allocPortNo);
     vpsLoginGateKey = loginGate.lockKey;
 
     if (reservedPort.admin_node_id && allocPortNo) {
