@@ -81,7 +81,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-28-ea-set-web-only-v100"
+AGENT_BUILD_ID = "2026-05-29-login-restore-v101"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4204,7 +4204,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         process_id=proc_pid,
     )
 
-    journal_timeout = int(os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "16"))
+    journal_timeout = int(
+        payload_get(payload, "journalTimeoutSec", "journal_timeout_sec")
+        or os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "45")
+    )
     log(f"MT5 LOGIN VERIFY PORT={port} LOGIN={login} timeout_sec={journal_timeout}")
 
     ok, msg, journal_chunk = wait_mt5_login_hybrid(
@@ -4238,6 +4241,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
                 "journalEvidence": journal_chunk,
                 "verificationPending": True,
                 "loginVerified": False,
+                "windowVerified": bool(titles and login in str(titles)),
+                "windowTitle": titles,
             }
         try:
             kill_mt5_by_folder(port_dir)

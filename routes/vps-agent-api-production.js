@@ -719,12 +719,14 @@ router.get('/queue', async (req, res) => {
             < NOW() - INTERVAL '45 seconds'
     `, [node.id]).catch(() => {});
 
+    const loginStuckSec = Math.max(120, Number(process.env.MT5_LOGIN_STUCK_REQUEUE_SEC || 300));
     await query(`
       UPDATE vps_system.vps_agent_commands
       SET
         status = 'pending',
         locked_at = NULL,
         started_at = NULL,
+        finished_at = NULL,
         updated_at = NOW(),
         result_message = COALESCE(NULLIF(result_message, ''), 'requeued_stuck_login')
       WHERE status IN ('processing', 'picked', 'running')
@@ -732,8 +734,8 @@ router.get('/queue', async (req, res) => {
         AND finished_at IS NULL
         AND command_type IN ('login_mt5', 'connect_mt5')
         AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
-            < NOW() - INTERVAL '90 seconds'
-    `, [node.id]).catch(() => {});
+            < NOW() - ($2::text || ' seconds')::interval
+    `, [node.id, String(loginStuckSec)]).catch(() => {});
 
     await query(`
       WITH verify_dup AS (

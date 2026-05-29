@@ -27,7 +27,13 @@ const {
   getConnectStatusForUser
 } = require('../lib/mt5ConnectAttempt');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
-const { userPortLockKey, computeLoginQueueDelaySec } = require('../lib/mt5MultiPortLogin');
+const { insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
+const {
+  userPortLockKey,
+  computeLoginQueueDelaySec,
+  computeJournalTimeoutSec,
+  countActiveLoginsOnVps
+} = require('../lib/mt5MultiPortLogin');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -882,6 +888,9 @@ async function handleMt5ConnectProduction(req, res) {
       accountId,
       allocPortNo
     ).catch(() => 0);
+    const journalTimeoutSec = computeJournalTimeoutSec({
+      activeLoginCount: await countActiveLoginsOnVps(reservedPort.vps_id).catch(() => 0)
+    });
 
     const payload = {
       ...buildMt5LoginPayload({
@@ -894,15 +903,18 @@ async function handleMt5ConnectProduction(req, res) {
         mt5Password,
         serverName
       }),
-      queueDelaySec: Math.max(0, Number(queueDelaySec) || 0)
+      queueDelaySec: Math.max(0, Number(queueDelaySec) || 0),
+      journalTimeoutSec
     };
 
-    const cmd = await query(`
-      INSERT INTO vps_system.vps_agent_commands
-      (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
-      VALUES ($1,$1,$2,'login_mt5',$3::jsonb,'pending',NOW(),NOW())
-      RETURNING id
-    `, [reservedPort.vps_id, reservedPort.port_id, JSON.stringify(payload)]);
+    const ins = await insertPendingAgentCommand({
+      vpsId: reservedPort.vps_id,
+      nodeId: reservedPort.vps_id,
+      portId: reservedPort.port_id,
+      commandType: 'login_mt5',
+      payload
+    });
+    const cmd = { rows: [{ id: ins?.id }] };
     if (attemptId && cmd.rows?.[0]?.id) {
       await query(`
         UPDATE vps_system.mt5_connect_attempts
