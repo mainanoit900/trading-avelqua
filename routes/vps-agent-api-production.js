@@ -751,6 +751,31 @@ router.get('/queue', async (req, res) => {
                 AND busy.id <> c.id
                 AND LOWER(COALESCE(busy.status, '')) IN ('processing', 'picked', 'running')
                 AND LOWER(COALESCE(busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
+                AND (
+                  (COALESCE(c.port_id, 0) > 0 AND busy.port_id = c.port_id)
+                  OR (
+                    COALESCE(
+                      NULLIF(c.payload->>'port', '')::int,
+                      NULLIF(c.payload->>'portNumber', '')::int,
+                      NULLIF(c.payload->>'port_no', '')::int,
+                      NULLIF(c.payload->>'portNo', '')::int,
+                      0
+                    ) > 0
+                    AND COALESCE(
+                      NULLIF(busy.payload->>'port', '')::int,
+                      NULLIF(busy.payload->>'portNumber', '')::int,
+                      NULLIF(busy.payload->>'port_no', '')::int,
+                      NULLIF(busy.payload->>'portNo', '')::int,
+                      0
+                    ) = COALESCE(
+                      NULLIF(c.payload->>'port', '')::int,
+                      NULLIF(c.payload->>'portNumber', '')::int,
+                      NULLIF(c.payload->>'port_no', '')::int,
+                      NULLIF(c.payload->>'portNo', '')::int,
+                      0
+                    )
+                  )
+                )
             )
           )
         ORDER BY

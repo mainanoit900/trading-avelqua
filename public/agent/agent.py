@@ -601,7 +601,7 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
                 stopped.append(p.pid)
         except Exception as e:
             log(f"STOP PROCESS ERROR PID={getattr(p, 'pid', '')}: {e}")
-    time.sleep(2)
+    time.sleep(float(os.getenv("AVELQUA_STOP_MT5_SLEEP_SEC", "1.0")))
 
     # kill ghost terminal ของ PORT นี้อีกรอบ
     for p in list(iter_terminal_processes()):
@@ -3967,6 +3967,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     log(f"USING PORT DIR={port_dir}")
     log(f"MT5 TERMINAL={terminal}")
+
+    try:
+        kill_mt5_by_folder(port_dir)
+        remove_mt5_login_ini(port_dir)
+        clear_mt5_login_cache(port_dir)
+        stop_mt5_port_only(port, payload)
+        time.sleep(float(os.getenv("AVELQUA_PRELOGIN_CLEAN_SEC", "0.6")))
+    except Exception as e:
+        log(f"PRE-LAUNCH CLEAN ERROR port={port}: {e}")
 
     config_file = write_mt5_login_ini(port_dir, login, password, server)
 
