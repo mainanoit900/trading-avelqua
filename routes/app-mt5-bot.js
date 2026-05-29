@@ -216,12 +216,15 @@ await query(`
 router.get('/mt5/agent-running-list', async (req, res) => {
   try {
     const rows = await query(`
-      SELECT id AS "instanceId",
-             assigned_port_no AS port
-      FROM vps_system.bot_instances
-      WHERE status IN ('running','pending','restarting')
-        AND assigned_port_no IS NOT NULL
-      ORDER BY id DESC
+      SELECT bi.id AS "instanceId",
+             bi.assigned_port_no AS port,
+             bi.mt5_account_id AS "accountId",
+             bi.user_id AS "userId",
+             bi.run_payload AS "runPayload"
+      FROM vps_system.bot_instances bi
+      WHERE LOWER(TRIM(COALESCE(bi.status, ''))) IN ('running','pending','restarting','starting','connecting')
+        AND bi.assigned_port_no IS NOT NULL
+      ORDER BY bi.started_at DESC NULLS LAST, bi.id DESC
       LIMIT 100
     `);
 
@@ -3345,6 +3348,9 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       (row) => String(row.display_status || row.status || '').toLowerCase() === 'connecting'
     );
 
+    const metricsRefreshSec = dash.metricsRefreshSec || 90;
+    const chartMins = dash.chartSnapshotMinutes || 30;
+
     return res.json({
       ok: true,
       instances: dash.instances,
@@ -3354,10 +3360,12 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       pageCount: dash.pageCount,
       hasPrev: safePage > 1,
       hasNext: safePage < dash.pageCount,
-      refreshSec: 30 * 60,
-      metricsIntervalMinutes: 30,
+      refreshSec: metricsRefreshSec,
+      metricsRefreshSec,
+      chartSnapshotMinutes: chartMins,
+      metricsIntervalMinutes: chartMins,
       hasConnecting,
-      pollFastSec: hasConnecting ? 5 : null,
+      pollFastSec: hasConnecting ? 5 : metricsRefreshSec,
       connectingTypicalSec: 60,
       connectingMaxSec: 180
     });

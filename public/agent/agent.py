@@ -5344,18 +5344,37 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
         log(f"WATCH INSTANCE ERROR: {e}")
 
 
+_watch_instances_last_at = 0.0
+
+
 def poll_running_mt5_list() -> None:
-    # TEMP: Watchdog / AUTO RECONNECT OFF — MT5 only when web sends command via /queue.
-    # No watch_mt5_processes(); no start_mt5_v2(...) / start_mt5_command(...) from this loop.
-    # try:
-    #     running = api("GET", "https://trading.avelqua.com/app/mt5/agent-running-list")
-    #     if running.get("ok") is True:
-    #         for item in running.get("items", []):
-    #             # watch_mt5_processes()
-    #             # watch_mt5_instance(item)
-    # except Exception as e:
-    #     log(f"WATCH MT5 ERROR: {e}")
-    pass
+    """ส่ง live-status + Balance/Equity ทุก ~90 วินาที (ไม่เปิด MT5 ใหม่)"""
+    global _watch_instances_last_at
+    interval = float(os.getenv("AVELQUA_INSTANCE_WATCH_SEC", "90"))
+    now = time.time()
+    if now - _watch_instances_last_at < interval:
+        return
+    _watch_instances_last_at = now
+    try:
+        running = api("GET", "https://trading.avelqua.com/app/mt5/agent-running-list")
+        if running.get("ok") is not True:
+            return
+        for item in running.get("items", []):
+            payload = dict(item.get("runPayload") or item.get("run_payload") or {})
+            if not payload_get(payload, "instanceId", "instance_id"):
+                iid = item.get("instanceId") or item.get("instance_id")
+                if iid:
+                    payload["instanceId"] = iid
+            if not payload_get(payload, "port", "portNumber", "port_no"):
+                port = item.get("port") or item.get("portNumber")
+                if port:
+                    payload["port"] = port
+            if payload_get(payload, "instanceId", "instance_id") and payload_get(
+                payload, "port", "portNumber", "port_no"
+            ):
+                watch_mt5_instance(payload)
+    except Exception as e:
+        log(f"WATCH MT5 ERROR: {e}")
 
 
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
@@ -5856,9 +5875,7 @@ def main() -> None:
             send_port_health()
 
             if not disabled:
-                # TEMP: auto reconnect / agent-running-list watchdog off (was: poll_running_mt5_list())
-                # poll_running_mt5_list()
-                pass
+                poll_running_mt5_list()
 
             try:
                 max_per_tick = max(1, int(os.getenv("AVELQUA_MAX_COMMANDS_PER_TICK", "6")))

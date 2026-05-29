@@ -601,6 +601,9 @@ router.post('/port-health', async (req, res) => {
       }
     }
 
+    const { reconcileBotsFromPortHealth } = require('../lib/mt5BotPortHealthSync');
+    await reconcileBotsFromPortHealth(node.id, ports).catch(() => {});
+
     return res.json({ ok: true, count: ports.length });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
