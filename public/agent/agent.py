@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-equity-keep-open-v108"
+AGENT_BUILD_ID = "2026-05-29-equity-uia-first-v109"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1802,19 +1802,27 @@ $blob = ($names -join ' ')
 $bal = $null; $eq = $null
 if ($blob -match '(?i)Balance[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{ $bal = ($matches[1] -replace '\\s','') }}
 if ($blob -match '(?i)Equity[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{ $eq = ($matches[1] -replace '\\s','') }}
-if (-not $eq -and $bal -and $blob -match '(?i)(?:Profit|Floating|P/L)[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{
+if (-not $bal -and $blob -match '(?i)(?:Credit|Free\\s*Margin|Margin)[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{ $bal = ($matches[1] -replace '\\s','') }}
+if (-not $eq -and $bal -and $blob -match '(?i)(?:Profit|Floating|P/L|Profit/Loss)[^0-9-]*(-?[0-9][0-9\\s,\\.]+)') {{
   $pr = ($matches[1] -replace '\\s','')
   try {{ $eq = [string]([decimal]$bal + [decimal]$pr) }} catch {{ }}
 }}
-@{{ balance = $bal; equity = $eq }} | ConvertTo-Json -Compress
+if (-not $bal -and $blob -match '(?i)(?:USD|EUR|GBP|THB)\\s*(-?[0-9][0-9\\s,\\.]+)') {{ $bal = ($matches[1] -replace '\\s','') }}
+if (-not $eq) {{ $eq = $bal }}
+@{{ balance = $bal; equity = $eq; observedLogin = $login }} | ConvertTo-Json -Compress
 """
         raw = _run_powershell(ps, timeout=12).strip()
         if raw and raw.startswith("{"):
             data = json.loads(raw)
             out["balance"] = _parse_money_token(data.get("balance"))
             out["equity"] = _parse_money_token(data.get("equity"))
+            obs = str(data.get("observedLogin") or login or "").strip()
+            if obs:
+                out["observedLogin"] = obs
             if _snap_positive(out):
                 log(f"MT5 SNAPSHOT UIA PORT={port} BALANCE={out.get('balance')} EQUITY={out.get('equity')}")
+            elif obs:
+                log(f"MT5 SNAPSHOT UIA PORT={port} login={obs} (no balance yet)")
     except Exception as e:
         log(f"MT5 SNAPSHOT UIA ERROR PORT={port}: {e}")
     return out
@@ -1834,8 +1842,12 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
     except Exception:
         login_hint = 0
+    purpose = str(payload_get(payload or {}, "purpose") or "").lower()
+    api_timeout = 45.0
+    if "login_equity" in purpose:
+        api_timeout = float(os.getenv("AVELQUA_LOGIN_EQUITY_API_LOCK_SEC", "12"))
     try:
-        with mt5_api_global_file_lock(timeout_sec=45.0) as got_lock:
+        with mt5_api_global_file_lock(timeout_sec=api_timeout) as got_lock:
             if not got_lock:
                 log(f"MT5 API SNAPSHOT SKIP lock timeout path={port_dir.name}")
                 return {}
@@ -2372,6 +2384,10 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
     snap = {"balance": None, "equity": None, "currency": "", "observedLogin": "", "source": ""}
     try:
         port_dir = resolve_mt5_port_dir(port, payload)
+        purpose = str(payload_get(payload or {}, "purpose") or "").lower()
+        terminal_up = mt5_running_for_port_dir(port_dir)
+        uia_first = terminal_up or "login_equity" in purpose
+
         for metric_file in (
             port_dir / "MQL5" / "Files" / "avelqua_account.json",
             port_dir / "MQL5" / "Files" / "avelqua_account.txt",
@@ -2417,7 +2433,32 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                     return snap
             except Exception as e:
                 log(f"MT5 SNAPSHOT FILE ERROR PORT={port} FILE={metric_file.name}: {e}")
-        api_snap = account_snapshot_mt5_api(port_dir, payload)
+
+        if uia_first:
+            uia_snap = account_snapshot_uia(port, payload)
+            if uia_snap.get("loginMismatch"):
+                snap["loginMismatch"] = True
+                snap["observedLogin"] = str(uia_snap.get("observedLogin") or "").strip()
+                snap["source"] = "uia_reject"
+                return snap
+            if _snap_positive(uia_snap):
+                snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
+                snap["source"] = str(snap.get("source") or "uia")
+                return snap
+            if str(uia_snap.get("observedLogin") or "").strip():
+                snap["observedLogin"] = str(uia_snap.get("observedLogin") or "").strip()
+                snap["source"] = "uia_partial"
+
+        skip_api = (
+            uia_first
+            and "login_equity" in purpose
+            and str(os.getenv("AVELQUA_LOGIN_EQUITY_SKIP_API", "1")).lower() not in ("0", "false", "no")
+        )
+        api_snap: Dict[str, Any] = {}
+        if not skip_api:
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
+        elif terminal_up:
+            log(f"MT5 SNAPSHOT API SKIP port={port} purpose={purpose} (UIA-first)")
         if api_snap.get("loginMismatch"):
             snap["loginMismatch"] = True
             snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
@@ -2426,10 +2467,17 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
         if _snap_positive(api_snap):
             snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
             return snap
-        uia_snap = account_snapshot_uia(port, payload)
-        if _snap_positive(uia_snap):
-            snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
-            return snap
+        if not uia_first:
+            uia_snap = account_snapshot_uia(port, payload)
+            if _snap_positive(uia_snap):
+                snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
+                return snap
+        elif not _snap_positive(snap):
+            uia_snap = account_snapshot_uia(port, payload)
+            if _snap_positive(uia_snap):
+                snap.update({k: v for k, v in uia_snap.items() if v is not None and v != ""})
+                snap["source"] = str(snap.get("source") or "uia_retry")
+                return snap
         latest, text = latest_log_text(port_dir)
         if text:
             mb = re.search(r"(?i)balance\s*[:= ]\s*([0-9][0-9,.\s]*)", text)
@@ -3581,15 +3629,20 @@ def send_connect_result(
             "agentVersion": AGENT_BUILD_ID,
             "agentBuildId": AGENT_BUILD_ID,
         }
-        if status == "connected" and port:
+        if status in ("connected", "checking", "starting") and port:
             snap = account_snapshot(port, payload)
             body["balance"] = snap.get("balance")
             body["equity"] = snap.get("equity")
             body["accountCurrency"] = snap.get("currency", "")
-            body["observedLogin"] = snap.get("observedLogin", "")
-            body["observed_login"] = snap.get("observedLogin", "")
+            obs = str(snap.get("observedLogin") or "").strip()
+            if obs:
+                body["observedLogin"] = obs
+                body["observed_login"] = obs
         api("POST", callback, body)
-        log(f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} login={body['mt5Login']} port={port}")
+        log(
+            f"CONNECT CALLBACK SENT status={status} userId={body['userId']} portSlot={port_slot} "
+            f"login={body['mt5Login']} port={port} balance={body.get('balance')} equity={body.get('equity')}"
+        )
         if (
             status == "connected"
             and schedule_metric_retry
