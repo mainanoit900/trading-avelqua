@@ -4527,8 +4527,9 @@ def _ea_time_profile_from_payload(payload: Dict[str, Any]) -> Dict[str, Any]:
     out_sessions: List[Dict[str, Any]] = []
     for i, default in enumerate(default_sessions):
         row = sessions[i] if i < len(sessions) and isinstance(sessions[i], dict) else {}
+        sess_use = bool(row.get("use", default.get("use", True))) if use_filter else False
         out_sessions.append({
-            "use": bool(row.get("use", default.get("use", True))),
+            "use": sess_use,
             "start": str(row.get("start") or default.get("start") or "03:00"),
             "stop": str(row.get("stop") or default.get("stop") or "06:00"),
         })
@@ -4575,9 +4576,15 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str
         return "", "", {"skipped": True, "botKind": bot_kind, "capitalUsed": capital}
 
     file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
+    run_mode = str(payload_get(payload, "runTimeMode", "run_time_mode") or "auto").strip().lower()
+    mode_suffix = "24h" if run_mode == "24h" else "auto"
     if not file_name:
         safe_bot = re.sub(r"[^A-Za-z0-9_.-]+", "-", bot_code).strip("-") or "BOT"
-        file_name = f"Avelqua_{safe_bot}_{trade_level}_{capital or 0}.set"
+        file_name = f"Avelqua_{safe_bot}_{trade_level}_{capital or 0}_{mode_suffix}.set"
+    elif not file_name.lower().endswith(f"_{mode_suffix}.set"):
+        base = file_name[:-4] if file_name.lower().endswith(".set") else file_name
+        if not base.lower().endswith(f"_{mode_suffix}"):
+            file_name = f"{base}_{mode_suffix}.set"
     if not file_name.lower().endswith(".set"):
         file_name = f"{file_name}.set"
 
@@ -4753,7 +4760,8 @@ def _write_ea_preset_files(port_dir: Path, payload: Dict[str, Any], experts_dir:
             "lot": payload_get(payload, "lot"),
             "capitalUsed": payload_get(payload, "capitalUsed", "capital"),
             "eaSetApplied": applied or payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
-            "runTimeMode": payload_get(payload, "runTimeMode"),
+            "runTimeMode": payload_get(payload, "runTimeMode", "run_time_mode"),
+            "useTimeFilter": applied.get("useTimeFilter") if isinstance(applied, dict) else None,
             "writtenAt": datetime.now().isoformat(timespec="seconds"),
         }
         files_dir = port_dir / "MQL5" / "Files"
