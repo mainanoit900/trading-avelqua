@@ -761,9 +761,19 @@ router.get('/queue', async (req, res) => {
                 AND LOWER(COALESCE(login_busy.command_type, '')) IN ('login_mt5', 'connect_mt5')
                 AND LOWER(COALESCE(login_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
             )
+            AND LOWER(COALESCE(c.command_type, '')) IN ('run_mt5_bot', 'run_mt5')
+          )
+          AND NOT (
+            EXISTS (
+              SELECT 1
+              FROM vps_system.vps_agent_commands prio_busy
+              WHERE (prio_busy.node_id = $1 OR prio_busy.vps_id = $1)
+                AND LOWER(COALESCE(prio_busy.command_type, '')) IN (
+                  'login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5'
+                )
+                AND LOWER(COALESCE(prio_busy.status, '')) IN ('pending', 'processing', 'picked', 'running')
+            )
             AND LOWER(COALESCE(c.command_type, '')) IN (
-              'run_mt5_bot',
-              'run_mt5',
               'account_snapshot',
               'sync_mt5_account',
               'read_account_metrics',

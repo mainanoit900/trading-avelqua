@@ -283,8 +283,13 @@ def read_worker_state(port: Any) -> Dict[str, Any]:
         return {}
 
 
-def any_login_connect_worker_running() -> bool:
-    """มี worker login/connect กำลังรัน — หยุดส่ง metrics ชั่วคราว"""
+PRIORITY_WORKER_TYPES = frozenset(
+    {"login_mt5", "connect_mt5", "run_mt5_bot", "run_mt5"}
+)
+
+
+def any_priority_connect_worker_running() -> bool:
+    """มี worker Login หรือ RunBot กำลังรัน — หยุดส่ง metrics ชั่วคราว"""
     reap_connect_workers()
     with ACTIVE_CONNECT_WORKERS_LOCK:
         for port_key, proc in list(ACTIVE_CONNECT_WORKERS.items()):
@@ -296,13 +301,17 @@ def any_login_connect_worker_running() -> bool:
                 port_no = 0
             st = read_worker_state(port_no)
             ctype = str(st.get("command_type") or "").lower()
-            if ctype in ("login_mt5", "connect_mt5"):
+            if ctype in PRIORITY_WORKER_TYPES:
                 return True
     return False
 
 
+def any_login_connect_worker_running() -> bool:
+    return any_priority_connect_worker_running()
+
+
 def background_param_tasks_paused() -> bool:
-    return any_login_connect_worker_running()
+    return any_priority_connect_worker_running()
 
 
 def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dict[str, Any]]:
@@ -320,6 +329,7 @@ def send_heartbeat(status: str = "online", last_error: str = "") -> Optional[Dic
             "agent_version": AGENT_VERSION,
             "agent_build_id": AGENT_BUILD_ID,
             "journal_gate": True,
+            "metrics_paused": True,
             "login_metrics_paused": True,
         }
     else:
