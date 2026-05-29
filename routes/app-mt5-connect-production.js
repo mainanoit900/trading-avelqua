@@ -869,7 +869,7 @@ async function handleMt5ConnectProduction(req, res) {
       serverName
     });
 
-    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id);
+    const loginGate = await acquireVpsLoginSlot(reservedPort.vps_id, allocPortNo);
     vpsLoginGateKey = loginGate.lockKey;
     loginGateWaitedMs = loginGate.waitedMs || 0;
 

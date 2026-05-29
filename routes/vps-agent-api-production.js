@@ -704,6 +704,38 @@ router.get('/queue', async (req, res) => {
     `, [node.id]).catch(() => {});
 
     await query(`
+      UPDATE vps_system.vps_agent_commands
+      SET
+        status = 'pending',
+        locked_at = NULL,
+        started_at = NULL,
+        updated_at = NOW(),
+        result_message = COALESCE(NULLIF(result_message, ''), 'requeued_stuck_snapshot')
+      WHERE status IN ('processing', 'picked', 'running')
+        AND (node_id = $1 OR vps_id = $1)
+        AND finished_at IS NULL
+        AND command_type IN ('account_snapshot', 'sync_mt5_account', 'read_account_metrics')
+        AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
+            < NOW() - INTERVAL '45 seconds'
+    `, [node.id]).catch(() => {});
+
+    await query(`
+      UPDATE vps_system.vps_agent_commands
+      SET
+        status = 'pending',
+        locked_at = NULL,
+        started_at = NULL,
+        updated_at = NOW(),
+        result_message = COALESCE(NULLIF(result_message, ''), 'requeued_stuck_login')
+      WHERE status IN ('processing', 'picked', 'running')
+        AND (node_id = $1 OR vps_id = $1)
+        AND finished_at IS NULL
+        AND command_type IN ('login_mt5', 'connect_mt5')
+        AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
+            < NOW() - INTERVAL '8 minutes'
+    `, [node.id]).catch(() => {});
+
+    await query(`
       WITH verify_dup AS (
         SELECT id,
           ROW_NUMBER() OVER (

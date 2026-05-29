@@ -5901,8 +5901,21 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
             snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
+            snap_timeout = float(
+                os.getenv(
+                    "AVELQUA_ACCOUNT_SNAPSHOT_CMD_TIMEOUT_SEC",
+                    "50" if str(payload_get(payload, "purpose") or "").lower().find("login_equity") >= 0 else "90",
+                )
+            )
             try:
-                snap = account_snapshot(port, payload)
+                import concurrent.futures
+
+                with concurrent.futures.ThreadPoolExecutor(max_workers=1) as pool:
+                    future = pool.submit(account_snapshot, port, payload)
+                    snap = future.result(timeout=max(15.0, snap_timeout))
+            except concurrent.futures.TimeoutError:
+                log(f"ACCOUNT SNAPSHOT TIMEOUT port={port} purpose={payload_get(payload, 'purpose')}")
+                snap["error"] = "account_snapshot_timeout"
             except Exception as sync_err:
                 log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
                 snap["error"] = str(sync_err)[:500]
