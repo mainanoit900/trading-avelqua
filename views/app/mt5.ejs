@@ -25,6 +25,13 @@
 .mt5-connecting-timer{display:block;margin-top:4px;font-size:11px;color:#7dd3fc;line-height:1.35;font-weight:700;font-variant-numeric:tabular-nums}
 .mt5-run-connecting-meta{margin-top:6px;padding:8px 10px;border-radius:12px;background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.22);color:#bae6fd;font-size:12px;line-height:1.45}
 .mt5-run-connecting-meta b{color:#e0f2fe}
+.mt5-run-prepare-box{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:140px;padding:28px 20px;border-radius:20px;background:linear-gradient(145deg,rgba(15,23,42,.92),rgba(2,6,23,.88));border:1px solid rgba(56,189,248,.22);text-align:center}
+.mt5-run-prepare-ring{width:44px;height:44px;border-radius:50%;border:3px solid rgba(56,189,248,.2);border-top-color:#38bdf8;animation:mt5PrepareSpin .85s linear infinite}
+.mt5-run-prepare-title{margin:0;font-size:16px;font-weight:900;color:#e2e8f0}
+.mt5-run-prepare-timer{margin:0;font-size:14px;color:#7dd3fc}
+.mt5-run-prepare-timer b{font-size:20px;color:#fff;font-variant-numeric:tabular-nums}
+.mt5-run-prepare-hint{margin:0;font-size:12px;color:#94a3b8}
+@keyframes mt5PrepareSpin{to{transform:rotate(360deg)}}
 .status.stopped{background:rgba(148,163,184,.14);color:#cbd5e1;border:1px solid rgba(148,163,184,.28)}
 .status.fail{background:rgba(239,68,68,.16);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
 </style>
@@ -210,7 +217,12 @@
     <% if (!connectedRunAccounts || connectedRunAccounts.length === 0) { %>
       <div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน แล้วระบบจะแสดงตัวเลือก Run BOT</div>
     <% } else { %>
-      <div class="mt5-empty">กำลังเตรียมฟอร์ม Run BOT...</div>
+      <div id="mt5RunPrepareBox" class="mt5-run-prepare-box">
+        <div class="mt5-run-prepare-ring" aria-hidden="true"></div>
+        <p class="mt5-run-prepare-title">กำลังเตรียมฟอร์ม Run BOT...</p>
+        <p class="mt5-run-prepare-timer">ใช้เวลา <b id="mt5RunPrepareSec">0</b> วินาที</p>
+        <p class="mt5-run-prepare-hint">โหลด PORT · บอท · สถานะล่าสุด</p>
+      </div>
     <% } %>
     </div>
   </section>
@@ -840,13 +852,13 @@
       '<div class="mt5-run-action-box">' +
       '<label>คำสั่ง BOT</label>' +
       '<div class="mt5-run-action-buttons">' +
-      '<button type="submit" class="mt5-btn run mt5-run-primary mt5-run-submit-btn"' + ((expired || hasActiveInstance) ? ' disabled' : '') + '>' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? 'BOT กำลังรันอยู่' : 'Run BOT')) + '</button>' +
+      '<button type="submit" class="mt5-btn run mt5-run-primary mt5-run-submit-btn"' + ((expired || hasActiveInstance) ? ' disabled' : '') + '>' + (expired ? 'แพ็คเกจหมดอายุ' : (hasActiveInstance ? (String(activeInstance.status || '') === 'running' ? 'BOT กำลังรันอยู่' : 'BOT กำลังเชื่อมต่อ...') : 'Run BOT')) + '</button>' +
       (hasActiveInstance
         ? '<button type="button" class="mt5-btn mt5-run-secondary mt5-stop-btn" data-stop-id="' + mt5Esc(activeInstance.id) + '">Stop BOT</button>'
         : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
       '</div>' +
       '<small class="mt5-run-action-note">' + (hasActiveInstance ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
-      (hasActiveInstance && activeInstance && mt5DisplayStatus(activeInstance) === 'connecting'
+      (hasActiveInstance && activeInstance && String(activeInstance.status || '') === 'connecting'
         ? ('<div class="mt5-run-connecting-meta" id="mt5RunConnectingMeta" data-since="' + mt5Esc(activeInstance.connecting_since || activeInstance.started_at || '') + '" data-hint="' + mt5Esc(activeInstance.connecting_hint || mt5ConnectingHint(activeInstance)) + '">' +
           '<b>กำลังเปิดบอท</b> — ใช้เวลา <b>' + mt5ConnectingElapsedSec(activeInstance.connecting_since || activeInstance.started_at) + '</b> วินาที · ' + mt5Esc(activeInstance.connecting_hint || mt5ConnectingHint(activeInstance)) +
           ' · โดยทั่วไป 30–90 วิ</div>')
@@ -1006,6 +1018,28 @@
   window.bindMt5RunForm = bindMt5RunForm;
 
   let mt5RunRenderSignature = '';
+  let mt5RunPrepareStartedAt = Date.now();
+  let mt5RunPrepareTimer = null;
+
+  function mt5StartRunPrepareTimer() {
+    const box = document.getElementById('mt5RunPrepareBox');
+    const secEl = document.getElementById('mt5RunPrepareSec');
+    if (!box || !secEl) return;
+    if (mt5RunPrepareTimer) clearInterval(mt5RunPrepareTimer);
+    mt5RunPrepareStartedAt = Date.now();
+    mt5RunPrepareTimer = setInterval(function () {
+      const sec = Math.max(0, Math.floor((Date.now() - mt5RunPrepareStartedAt) / 1000));
+      secEl.textContent = String(sec);
+    }, 1000);
+    secEl.textContent = '0';
+  }
+
+  function mt5StopRunPrepareTimer() {
+    if (mt5RunPrepareTimer) {
+      clearInterval(mt5RunPrepareTimer);
+      mt5RunPrepareTimer = null;
+    }
+  }
 
   function mt5RunDataSignature(accounts, bots) {
     return JSON.stringify({
@@ -1013,7 +1047,7 @@
         return [a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.last_equity, a.last_balance];
       }),
       activeInstances: (mt5RunState.activeInstances || []).map(function (row) {
-        return [row.id, row.mt5_account_id, row.status, row.assigned_port_no];
+        return [row.id, row.mt5_account_id, row.status, row.assigned_port_no, row.connecting_elapsed_sec, row.agent_command_status];
       }),
       bots: (bots || []).map(function (b) {
         return [b.code || b.bot_code || '', b.label || b.display_name || b.bot_name || ''];
@@ -1061,18 +1095,20 @@
         const nextSignature = mt5RunDataSignature(cfg.connectedAccounts, cfg.bots || []);
         if (nextSignature !== mt5RunRenderSignature || !document.getElementById('mt5RunForm')) {
           mt5RunRenderSignature = nextSignature;
+          mt5StopRunPrepareTimer();
           runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
           bindMt5RunForm();
         } else if (typeof window.mt5UpdateSharedPortSelections === 'function') {
           window.mt5UpdateSharedPortSelections();
         }
         const hasConnectingRun = (cfg.activeInstances || []).some(function (row) {
-          return mt5DisplayStatus(row) === 'connecting';
+          return String(row.status || '') === 'connecting';
         });
         if (hasConnectingRun) {
           const sel = mt5SelectedRunInstance();
-          if (sel && mt5DisplayStatus(sel) === 'connecting' && !document.getElementById('mt5RunConnectingMeta')) {
+          if (sel && String(sel.status || '') === 'connecting' && !document.getElementById('mt5RunConnectingMeta')) {
             mt5RunRenderSignature = '';
+            mt5StopRunPrepareTimer();
             runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
             bindMt5RunForm();
           }
@@ -1139,9 +1175,11 @@
     window.history.replaceState({}, '', '/app/mt5');
   }
   clearLegacyMt5QueryState();
+  mt5StartRunPrepareTimer();
   const initialRunPanel = document.getElementById('mt5RunPanel');
-  if (initialRunPanel) {
+  if (initialRunPanel && mt5RunState.connectedAccounts && mt5RunState.connectedAccounts.length) {
     mt5RunRenderSignature = mt5RunDataSignature(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
+    mt5StopRunPrepareTimer();
     initialRunPanel.innerHTML = renderMt5RunFormHtml(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
     bindMt5RunForm();
   }
