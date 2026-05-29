@@ -389,6 +389,22 @@ async function ensureAgentTablesCore() {
     )
   `).catch(() => {});
 
+  const inflightStatusWhere = `
+    LOWER(TRIM(COALESCE(status, ''))) IN (
+      'pending', 'processing', 'picked', 'running', 'in_progress'
+    )
+  `;
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vac_inflight_vps_lookup
+    ON vps_system.vps_agent_commands (vps_id, command_type, created_at DESC)
+    WHERE ${inflightStatusWhere}
+  `).catch(() => {});
+  await query(`
+    CREATE INDEX IF NOT EXISTS idx_vac_inflight_node_lookup
+    ON vps_system.vps_agent_commands (node_id, command_type, created_at DESC)
+    WHERE ${inflightStatusWhere}
+  `).catch(() => {});
+
   await query(`
     CREATE TABLE IF NOT EXISTS vps_system.vps_node_logs (
       id BIGSERIAL PRIMARY KEY,
