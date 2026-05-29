@@ -1710,21 +1710,18 @@ function mt5GroupPointsByDay(points) {
   (points || []).forEach(function (p) {
     const dt = new Date(p.at || 0);
     if (Number.isNaN(dt.getTime())) return;
-    const key = [
-      dt.getFullYear(),
-      String(dt.getMonth() + 1).padStart(2, '0'),
-      String(dt.getDate()).padStart(2, '0')
-    ].join('-');
+    const key = mt5DayKeyBangkok(dt);
+    if (!key) return;
     if (!map[key]) {
       map[key] = {
         dayKey: key,
-        label: dt.toLocaleDateString('th-TH', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric' }),
+        label: mt5FormatThaiDayLabel(key),
         rows: []
       };
     }
     map[key].rows.push({
       at: p.at,
-      time: dt.toLocaleTimeString('th-TH', { hour: '2-digit', minute: '2-digit' }),
+      time: mt5FormatThaiTime(dt),
       equity: Number(p.equity || 0),
       profit: Number(p.profit || 0),
       loss: Number(p.loss || 0),
@@ -1927,6 +1924,60 @@ window.openMt5EquityGraph = openMt5EquityGraph;
 let mt5LiveDashboardPage = 1;
 let mt5HistoryDashboardPage = 1;
 const MT5_DASHBOARD_REFRESH_MS = 30 * 60 * 1000;
+const MT5_TH_TZ = 'Asia/Bangkok';
+
+function mt5FormatThaiDateTime(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: MT5_TH_TZ,
+    year: 'numeric',
+    month: 'short',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false
+  }).format(d);
+}
+
+function mt5DayKeyBangkok(value) {
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: MT5_TH_TZ,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit'
+  }).format(d);
+}
+
+function mt5FormatThaiDayLabel(dayKey) {
+  if (!dayKey) return '-';
+  const parts = String(dayKey).split('-').map(Number);
+  if (parts.length < 3 || parts.some(function (n) { return !Number.isFinite(n); })) return dayKey;
+  const noonBangkokUtc = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2], 5, 0, 0));
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: MT5_TH_TZ,
+    weekday: 'short',
+    year: 'numeric',
+    month: 'short',
+    day: 'numeric'
+  }).format(noonBangkokUtc);
+}
+
+function mt5FormatThaiTime(value) {
+  if (!value) return '-';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '-';
+  return new Intl.DateTimeFormat('th-TH', {
+    timeZone: MT5_TH_TZ,
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false
+  }).format(d);
+}
 
 function mt5DisplayStatus(row) {
   const s = String(row?.display_status || row?.status || '').trim().toLowerCase();
@@ -1940,7 +1991,7 @@ function mt5DashboardUpdatedAt(row, preferSnapshot) {
   const raw = preferSnapshot
     ? (row?.live_metrics_at || row?.last_equity_snapshot_at || row?.last_agent_ping || row?.updated_at)
     : (row?.last_agent_ping || row?.last_equity_snapshot_at || row?.updated_at || row?.started_at);
-  return raw ? new Date(raw).toLocaleString('th-TH') : '-';
+  return mt5FormatThaiDateTime(raw);
 }
 
 function mt5DashboardProfit(i, preferLive) {
