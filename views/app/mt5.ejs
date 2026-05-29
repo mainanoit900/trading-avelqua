@@ -560,6 +560,11 @@
   function mt5SelectedRunAccount() {
     const connected = Array.isArray(mt5RunState.connectedAccounts) ? mt5RunState.connectedAccounts : [];
     const connectSlot = Number(document.getElementById('mt5SelectedPortSlot')?.value || 0);
+    const explicitId = Number(mt5RunState.selectedAccountId || 0);
+    if (explicitId) {
+      const byId = connected.find(function (a) { return Number(a.id) === explicitId; });
+      if (byId) return byId;
+    }
     if (connectSlot) {
       const bySlot = connected.find(function (a) { return Number(a.port_slot) === connectSlot; });
       if (bySlot) {
@@ -813,7 +818,15 @@
     const meta = window.__mt5RunConfig || {};
     const expired = !!meta.packageExpired;
     const selected = mt5SelectedRunAccount();
+    const connectSlot = Number(document.getElementById('mt5SelectedPortSlot')?.value || 0);
     if (!selected) {
+      if (connectSlot) {
+        return (
+          '<div class="mt5-empty">' +
+          'เลือก <b>PORT ' + mt5Esc(connectSlot) + '</b> แล้ว — กรุณา Login MT5 ในข้อ 2 ก่อน แล้วฟอร์ม Run BOT จะแสดงที่นี่' +
+          '</div>'
+        );
+      }
       return '<div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน แล้วระบบจะแสดงตัวเลือก Run BOT</div>';
     }
     const lotMin = mt5Num(meta.packageLotMin, 0.01);
@@ -830,13 +843,27 @@
     const initialBotCode = (bots && bots[0]) ? String(bots[0].code || bots[0].bot_code || '').trim() : 'AK-SNIPER-VIP-VER4.0';
     const initialMinCap = mt5MinCapitalForBot(initialBotCode);
     const initialCapitalLabel = mt5CapitalLabelForBot(initialBotCode);
+    const portPickerHtml = connected.length > 1
+      ? (
+        '<div style="margin-bottom:14px"><label>เลือก PORT สำหรับ Run BOT</label>' +
+        '<select id="mt5RunPortSelect" class="form-control" style="margin-top:6px">' +
+        connected.map(function (a) {
+          const eq = mt5RunAccountCapital(a);
+          const label = 'PORT ' + a.port_slot + (a.mt5_login ? (' · ' + a.mt5_login) : '') + (eq > 0 ? (' · Equity ' + eq) : '');
+          const sel = Number(a.id) === Number(selected.id) ? ' selected' : '';
+          return '<option value="' + mt5Esc(a.id) + '"' + sel + '>' + mt5Esc(label) + '</option>';
+        }).join('') +
+        '</select></div>'
+      )
+      : '';
     return (
       '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
       '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
       '<input type="hidden" name="sync_field" id="mt5RunSyncField" value="capital">' +
+      portPickerHtml +
       '<div style="margin-bottom:14px;padding:10px 12px;border-radius:14px;background:rgba(15,23,42,.8);border:1px solid rgba(56,189,248,.18);color:#cbd5e1;font-size:13px">' +
-      'เลือก PORT จากข้อ 1: <b style="color:#fff">PORT ' + mt5Esc(selected.port_slot) + '</b>' + (selected.mt5_login ? ' / Login ' + mt5Esc(selected.mt5_login) : '') + (actualCapital > 0 ? ' / Equity ' + mt5Esc(actualCapital) : '') +
-      '<br><small style="color:#94a3b8">แต่ละ PORT แยกกัน — Login หลาย PORT พร้อมกันได้ (คลิกการ์ด PORT ว่างก่อน Login)</small></div>' +
+      'PORT ที่ Run: <b style="color:#fff">PORT ' + mt5Esc(selected.port_slot) + '</b>' + (selected.mt5_login ? ' / Login ' + mt5Esc(selected.mt5_login) : '') + (actualCapital > 0 ? ' / Equity ' + mt5Esc(actualCapital) : '') +
+      '<br><small style="color:#94a3b8">คลิกการ์ด PORT ในข้อ 1 หรือเลือกจากรายการด้านบน — แต่ละ PORT แยกกัน</small></div>' +
       '<div id="mt5RunSelectedMeta" style="display:none"></div>' +
       '<div id="mt5RunPresetSummary" class="mt5-run-preset-summary" style="margin-bottom:14px;padding:12px 14px;border-radius:14px;background:rgba(15,23,42,.75);border:1px solid rgba(148,163,184,.2)"></div>' +
       '<div class="mt5-form-row">' +
@@ -873,6 +900,16 @@
     const form = document.getElementById('mt5RunForm');
     if (!form) return;
     let syncField = 'capital';
+
+    const portSelect = form.querySelector('#mt5RunPortSelect');
+    if (portSelect) {
+      portSelect.addEventListener('change', function () {
+        const id = Number(portSelect.value || 0);
+        if (id && typeof window.mt5SelectRunAccount === 'function') {
+          window.mt5SelectRunAccount(id);
+        }
+      });
+    }
 
     function applyPresetDefaults(changedField) {
       const selected = mt5SelectedRunAccount();
@@ -1135,6 +1172,7 @@
           const runDraft = mt5CaptureRunFormDraft(document.getElementById('mt5RunForm'));
           mt5RunRenderSignature = nextSignature;
           mt5StopRunPrepareTimer();
+          mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
           runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
           bindMt5RunForm();
           const restoredForm = document.getElementById('mt5RunForm');
@@ -1184,6 +1222,15 @@
     sessionStorage.removeItem('mt5PollAccountId');
     if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     await refreshMt5PortCards();
+    const connectSlot = Number(document.getElementById('mt5SelectedPortSlot')?.value || 0);
+    const cfg = window.__mt5RunConfig || {};
+    const connected = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts : [];
+    const fresh = connectSlot
+      ? connected.find(function (a) { return Number(a.port_slot) === connectSlot; })
+      : null;
+    if (fresh && typeof window.mt5SelectRunAccount === 'function') {
+      window.mt5SelectRunAccount(fresh.id);
+    }
     showMt5ConnectModal('success', msg);
     if (window.history && window.history.replaceState) {
       window.history.replaceState({}, '', '/app/mt5');
@@ -1459,6 +1506,11 @@ function mt5SelectRunAccount(accountId) {
   if (!runState) return;
   runState.selectedAccountId = id;
   sessionStorage.setItem('mt5RunAccountId', String(id));
+  const connected = Array.isArray(runState.connectedAccounts) ? runState.connectedAccounts : [];
+  const acc = connected.find(function (a) { return Number(a.id) === id; });
+  if (acc && mt5SelectedPortSlot) {
+    mt5SelectedPortSlot.value = String(Number(acc.port_slot || 0) || '');
+  }
   if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
   const panel = document.getElementById('mt5RunPanel');
   if (panel && typeof window.renderMt5RunFormHtml === 'function' && typeof window.bindMt5RunForm === 'function') {
@@ -1466,6 +1518,7 @@ function mt5SelectRunAccount(accountId) {
     window.bindMt5RunForm();
   }
 }
+window.mt5SelectRunAccount = mt5SelectRunAccount;
 
 function mt5UpdateSharedPortSelections() {
   const connectSlot = Number(mt5SelectedPortSlot?.value || 0);
