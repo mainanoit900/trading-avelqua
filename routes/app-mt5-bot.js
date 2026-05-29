@@ -46,6 +46,7 @@ const {
   stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
 const { createConnectAttempt, repairUserMt5AccountStatuses } = require('../lib/mt5ConnectAttempt');
+const { abortConnectForRemovedAccount } = require('../lib/vpsAgentCommandQueue');
 const { queueBotRunCommands, assertNoRecentBotRunAttempt } = require('../lib/mt5BotRunPhase2');
 const {
   PACKAGE_PORT_MAP,
@@ -2561,6 +2562,12 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
       num(oldPort.port_slot);
     const folderPath = oldPort.folder_path || null;
 
+    await abortConnectForRemovedAccount(id, {
+      vpsId: stopNodeId || null,
+      portId: oldPort.port_id || null,
+      message: 'ยกเลิกเพราะผู้ใช้ยกเลิก PORT'
+    }).catch((e) => console.error('[CANCEL] abort connect error:', e.message || e));
+
     // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน
     if (stopNodeId && stopPortNo) {
       await query(`
@@ -2648,6 +2655,12 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       num(oldPort.windows_port_no) ||
       num(oldPort.port_slot);
     const folderPath = oldPort.folder_path || null;
+
+    await abortConnectForRemovedAccount(id, {
+      vpsId: stopNodeId || null,
+      portId: oldPort.port_id || null,
+      message: 'ยกเลิกเพราะผู้ใช้ลบ PORT'
+    }).catch((e) => console.error('[DELETE] abort connect error:', e.message || e));
 
     // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
     if (stopNodeId && stopPortNo) {

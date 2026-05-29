@@ -1485,6 +1485,22 @@ function mt5BindPortSlotPicks() {
     el.dataset.delBound = '1';
     el.addEventListener('click', function (e) { e.stopPropagation(); });
     el.addEventListener('mousedown', function (e) { e.stopPropagation(); });
+    if (el.classList.contains('port-delete-form')) {
+      el.addEventListener('submit', function () {
+        try {
+          const m = String(el.getAttribute('action') || '').match(/\/account\/(\d+)\/delete/);
+          const deletedId = m ? String(m[1]) : '';
+          if (deletedId && sessionStorage.getItem('mt5PollAccountId') === deletedId) {
+            sessionStorage.removeItem('mt5PollAccountId');
+          }
+          if (window.mt5Checker) {
+            clearInterval(window.mt5Checker);
+            window.mt5Checker = null;
+          }
+          mt5Checking = false;
+        } catch (e) {}
+      });
+    }
   });
   document.querySelectorAll('.port-card-pick').forEach(function (el) {
     if (el.dataset.pickBound === '1') return;
