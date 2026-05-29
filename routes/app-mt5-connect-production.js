@@ -916,7 +916,8 @@ async function handleMt5ConnectProduction(req, res) {
       queueDelaySec: Math.max(0, Number(queueDelaySec) || 0),
       journalTimeoutSec,
       purposeType: 'login_only',
-      keepMt5Open: false
+      // Phase 1: เปิด MT5 ค้างไว้ให้ web ดึง Equity ก่อน — ปิดผ่าน login_exit_mt5 หลัง metrics OK
+      keepMt5Open: true
     };
 
     const ins = await insertPendingAgentCommand({

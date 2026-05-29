@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-phase2-fixes-v107"
+AGENT_BUILD_ID = "2026-05-29-equity-keep-open-v108"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -671,6 +671,23 @@ def should_keep_mt5_open_after_login(payload: Optional[Dict[str, Any]] = None) -
     )
 
 
+def should_defer_mt5_close_for_equity_fetch(payload: Optional[Dict[str, Any]] = None) -> bool:
+    """Phase 1 login_only: อย่าปิด MT5 ใน agent — รอ web ดึง Equity แล้วส่ง login_exit_mt5."""
+    if should_keep_mt5_open_after_login(payload):
+        return True
+    pt = str(payload_get(payload or {}, "purposeType", "purpose_type") or "").strip().lower()
+    if pt == "login_only":
+        return True
+    purpose = str(payload_get(payload or {}, "purpose") or "").strip().lower()
+    if purpose in ("login_equity_fetch", "post_connect_exit"):
+        return purpose == "login_equity_fetch"
+    bot = str(payload_get(payload or {}, "botCode", "bot_code") or "").strip().upper()
+    ctype = str(payload_get(payload or {}, "commandType", "command_type", "action") or "").strip().lower()
+    if bot == "LOGIN_ONLY" and ctype in ("login_mt5", "connect_mt5", ""):
+        return True
+    return False
+
+
 def close_mt5_after_login_success(
     port: Any,
     port_dir: Path,
@@ -681,9 +698,9 @@ def close_mt5_after_login_success(
     reason: str = "login_success",
 ) -> Dict[str, Any]:
     """ปิด MT5 ของ PORT นี้ทันทีหลัง login สำเร็จ (ไม่กลืน error เงียบ)"""
-    if should_keep_mt5_open_after_login(payload):
-        log(f"SKIP CLOSE MT5 port={port} reason={reason} keep_open=bot_run")
-        return {"skipped": True, "reason": "keep_mt5_open"}
+    if should_defer_mt5_close_for_equity_fetch(payload):
+        log(f"SKIP CLOSE MT5 port={port} reason={reason} defer=equity_or_bot_run")
+        return {"skipped": True, "reason": "defer_equity_fetch"}
     kill_payload = dict(payload or {})
     kill_payload.setdefault("forceKill", True)
     kill_payload.setdefault("closeMt5", True)
@@ -6224,7 +6241,11 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
             worker_result = start_mt5_bot(payload)
             command_result(cmd_id, True, worker_result)
             if ctype in ("connect_mt5", "login_mt5") and isinstance(worker_result, dict):
-                if worker_result.get("loginVerified") is True and not should_keep_mt5_open_after_login(payload):
+                if (
+                    worker_result.get("loginVerified") is True
+                    and not should_keep_mt5_open_after_login(payload)
+                    and not should_defer_mt5_close_for_equity_fetch(payload)
+                ):
                     close_mt5_in_finally = True
         return 0
     except Exception as e:
