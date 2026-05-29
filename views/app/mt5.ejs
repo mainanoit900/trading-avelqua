@@ -1346,15 +1346,15 @@
         return;
       }
       if (
-        data.connected === true
-        && (stWait === 'connected' || data.status === 'connected')
-        && !data.pending
-        && !data.checking
+        data.metricsReady
+        && (stWait === 'connected' || (data.connected === true && data.status === 'connected'))
       ) {
         sessionStorage.setItem(key, modalDedupId);
         const eqMsg = data.equity != null
           ? `เชื่อมต่อสำเร็จ — Equity: ${data.equity}`
-          : (data.message || 'เชื่อมต่อสำเร็จ — ยืนยัน Login แล้ว');
+          : (data.balance != null
+            ? `เชื่อมต่อสำเร็จ — Balance: ${data.balance}`
+            : (data.message || 'เชื่อมต่อสำเร็จ'));
         finishMt5ConnectSuccess(eqMsg);
         return;
       }
@@ -1584,7 +1584,7 @@ if (mt5ConnectForm) {
       }
       const pop = typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
 
-      if (json.ok === true && json.status === 'connected') {
+      if (json.ok === true && json.status === 'connected' && json.metricsReady) {
         if (typeof window.finishMt5ConnectSuccess === 'function') {
           window.finishMt5ConnectSuccess(json.message || 'เชื่อมต่อสำเร็จ');
         } else {
