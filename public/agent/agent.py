@@ -5938,6 +5938,14 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
     worker_result: Optional[Dict[str, Any]] = None
     close_mt5_in_finally = False
     try:
+        delay_sec = 0.0
+        try:
+            delay_sec = float(payload_get(payload, "queueDelaySec", "queue_delay_sec") or 0)
+        except Exception:
+            delay_sec = 0.0
+        if delay_sec > 0 and str(ctype or "").lower() in ("connect_mt5", "login_mt5"):
+            log(f"CONNECT WORKER QUEUE DELAY port={port} sec={delay_sec:.1f}")
+            time.sleep(min(delay_sec, 30.0))
         log(f"CONNECT WORKER START port={port} cmd_id={cmd_id} type={ctype}")
         if ctype in ("run_mt5_bot", "run_mt5") and _is_modern_run_bot_payload(payload):
             worker_result = run_bot_command(payload)

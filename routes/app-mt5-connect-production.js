@@ -27,7 +27,7 @@ const {
   getConnectStatusForUser
 } = require('../lib/mt5ConnectAttempt');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
-const { userPortLockKey } = require('../lib/mt5MultiPortLogin');
+const { userPortLockKey, computeLoginQueueDelaySec } = require('../lib/mt5MultiPortLogin');
 
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
@@ -419,6 +419,28 @@ async function reserveBestPort(userId) {
   } finally {
     client.release();
   }
+}
+
+async function cancelPendingPostConnectExitOnPort(vpsId, portId) {
+  const nid = num(vpsId, 0);
+  const pid = num(portId, 0);
+  if (!nid || !pid) return;
+  await query(
+    `
+    UPDATE vps_system.vps_agent_commands
+    SET
+      status = 'cancelled',
+      result_message = 'cancelled_for_new_login',
+      updated_at = NOW(),
+      finished_at = COALESCE(finished_at, NOW())
+    WHERE (vps_id = $1 OR node_id = $1)
+      AND port_id = $2
+      AND command_type IN ('login_exit_mt5', 'stop_mt5')
+      AND LOWER(COALESCE(status, '')) = 'pending'
+      AND COALESCE(payload->>'purpose', '') = 'post_connect_exit'
+  `,
+    [nid, pid]
+  ).catch(() => {});
 }
 
 async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) {
@@ -851,16 +873,28 @@ async function handleMt5ConnectProduction(req, res) {
     vpsLoginGateKey = loginGate.lockKey;
     loginGateWaitedMs = loginGate.waitedMs || 0;
 
-    const payload = buildMt5LoginPayload({
-      accountId,
-      attemptId,
-      userId,
-      reservedPort,
-      portSlot,
-      mt5Login,
-      mt5Password,
-      serverName
-    });
+    await cancelPendingPostConnectExitOnPort(reservedPort.vps_id, reservedPort.port_id).catch(
+      () => {}
+    );
+
+    const queueDelaySec = await computeLoginQueueDelaySec(
+      reservedPort.vps_id,
+      accountId
+    ).catch(() => 0);
+
+    const payload = {
+      ...buildMt5LoginPayload({
+        accountId,
+        attemptId,
+        userId,
+        reservedPort,
+        portSlot,
+        mt5Login,
+        mt5Password,
+        serverName
+      }),
+      queueDelaySec: Math.max(0, Number(queueDelaySec) || 0)
+    };
 
     const cmd = await query(`
       INSERT INTO vps_system.vps_agent_commands

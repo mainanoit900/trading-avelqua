@@ -781,12 +781,16 @@ router.get('/queue', async (req, res) => {
         ORDER BY
           CASE
             WHEN c.command_type IN ('deploy_agent', 'update_agent_script', 'update_python_agent', 'restart_agent') THEN -1
-            WHEN c.command_type IN ('login_exit_mt5') THEN -2
-            WHEN c.command_type IN ('stop_mt5', 'force_stop_mt5', 'kill_mt5') THEN -2
-            WHEN c.command_type IN ('login_mt5', 'connect_mt5', 'run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN 0
+            WHEN c.command_type IN ('login_mt5', 'connect_mt5') THEN -4
             WHEN c.command_type IN ('account_snapshot', 'sync_mt5_account', 'read_account_metrics')
               AND COALESCE(c.payload->>'purpose', '') ~* 'login_equity'
               THEN -3
+            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN 0
+            WHEN c.command_type IN ('login_exit_mt5', 'stop_mt5', 'force_stop_mt5', 'kill_mt5')
+              AND COALESCE(c.payload->>'purpose', '') = 'post_connect_exit'
+              THEN 10
+            WHEN c.command_type IN ('login_exit_mt5') THEN 2
+            WHEN c.command_type IN ('stop_mt5', 'force_stop_mt5', 'kill_mt5') THEN 2
             WHEN c.command_type IN ('port_read_file', 'read_file', 'account_snapshot', 'sync_mt5_account', 'read_account_metrics', 'mt5_preview', 'capture_mt5_window', 'capture_mt5_preview')
               AND COALESCE(c.payload->>'purpose', '') ~* 'attempt_verify|equity|connect|login|preview'
               THEN 0
