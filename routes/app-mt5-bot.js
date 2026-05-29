@@ -3341,6 +3341,10 @@ router.get('/mt5/live-dashboard', async (req, res) => {
     const dash = await fetchLiveDashboardInstances(userId, { limit: pageSize, offset });
     const safePage = Math.min(page, dash.pageCount || 1);
 
+    const hasConnecting = (dash.instances || []).some(
+      (row) => String(row.display_status || row.status || '').toLowerCase() === 'connecting'
+    );
+
     return res.json({
       ok: true,
       instances: dash.instances,
@@ -3351,7 +3355,11 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       hasPrev: safePage > 1,
       hasNext: safePage < dash.pageCount,
       refreshSec: 30 * 60,
-      metricsIntervalMinutes: 30
+      metricsIntervalMinutes: 30,
+      hasConnecting,
+      pollFastSec: hasConnecting ? 5 : null,
+      connectingTypicalSec: 60,
+      connectingMaxSec: 180
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
