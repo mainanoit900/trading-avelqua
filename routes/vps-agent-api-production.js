@@ -211,20 +211,27 @@ async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
 
   const balance = positiveMoney(result?.balance ?? result?.mt5_balance ?? result?.mt5Balance);
   const equity = positiveMoney(result?.equity ?? result?.mt5_equity ?? result?.mt5Equity);
-  const eaStatus = String(result?.eaStatus ?? result?.ea_status ?? '').trim();
   const failMsg = String(message || result?.message || result?.error || 'run_mt5_bot failed').trim() || 'run_mt5_bot failed';
 
   if (ok) {
+    const { resolveRunBotInstanceState } = require('../lib/mt5InstanceDashboard');
+    const resolved = resolveRunBotInstanceState(result || {});
+    const runMeta = JSON.stringify({
+      algoEnabled: resolved.algoEnabled,
+      tradeGateOk: resolved.tradeGateOk,
+      runConfirmedAt: resolved.dbStatus === 'running' ? new Date().toISOString() : null
+    });
     await query(`
       UPDATE vps_system.bot_instances
-      SET status='running',
-          ea_status=COALESCE(NULLIF($2::text, ''), 'ready'),
+      SET status=$3,
+          ea_status=COALESCE(NULLIF($2::text, ''), 'starting'),
           last_error=NULL,
           last_agent_ping=NOW(),
           last_heartbeat=NOW(),
-          updated_at=NOW()
+          updated_at=NOW(),
+          run_payload=COALESCE(run_payload, '{}'::jsonb) || $4::jsonb
       WHERE id=$1
-    `, [instanceId, eaStatus]).catch(() => {});
+    `, [instanceId, resolved.eaStatus, resolved.dbStatus, runMeta]).catch(() => {});
     const { seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
     await seedInstanceLiveMetrics(instanceId, balance, equity).catch(() => {});
   } else {

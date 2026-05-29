@@ -2114,6 +2114,9 @@ function mt5ConnectingElapsedSec(since) {
 
 function mt5ConnectingHint(row) {
   if (row && row.connecting_hint) return String(row.connecting_hint);
+  const ea = String(row?.ea_status || '').trim().toLowerCase();
+  if (ea === 'attach_required') return 'รอ EA ติดกับชาร์ต';
+  if (ea === 'ready' || ea === 'starting') return 'รอเปิด Auto Trading / EA';
   const cmd = String(row?.agent_command_status || '').trim().toLowerCase();
   if (!cmd || cmd === 'pending') return 'รอ VPS รับคำสั่ง';
   if (['processing', 'picked', 'running', 'in_progress'].includes(cmd)) return 'VPS กำลังเปิดบอท';

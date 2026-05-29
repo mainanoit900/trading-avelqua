@@ -4963,6 +4963,58 @@ def _ea_live_status_for_payload(port_dir: Path, payload: Optional[Dict[str, Any]
     return "ready" if _pick_launchable_ea_file(ea_info) else "attach_required"
 
 
+def _resolve_run_bot_live_status(
+    port_dir: Path,
+    payload: Optional[Dict[str, Any]],
+    trading_permissions: Dict[str, Any],
+    trade_gate: Dict[str, Any],
+) -> tuple[str, str]:
+    ea_base = _ea_live_status_for_payload(port_dir, payload, True)
+    if ea_base == "attach_required":
+        return "starting", "attach_required"
+    algo_ok = bool(trading_permissions.get("ok"))
+    trade_ok = bool(trade_gate.get("ok"))
+    if algo_ok and trade_ok and ea_base == "ready":
+        return "running", "running"
+    if ea_base == "ready":
+        return "starting", "starting"
+    return "starting", ea_base or "starting"
+
+
+def _send_run_bot_status_upgrade(port: Any, payload: Dict[str, Any], port_dir: Path) -> None:
+    try:
+        trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=3, wait_between_sec=2.0)
+        trade_gate: Dict[str, Any] = {}
+        try:
+            trade_gate = mt5_test_trade(port, payload)
+        except Exception as gate_err:
+            trade_gate = {"ok": False, "error": str(gate_err)[:300]}
+        live_status, ea_status = _resolve_run_bot_live_status(port_dir, payload, trading_permissions, trade_gate)
+        snap = account_snapshot(port, payload)
+        bal = snap.get("balance")
+        eq = snap.get("equity")
+        profit = None
+        if bal is not None and eq is not None:
+            try:
+                profit = round(float(eq) - float(bal), 2)
+            except Exception:
+                profit = None
+        instance_id = payload_get(payload, "instanceId", "instance_id")
+        send_mt5_live_status(
+            instance_id,
+            port,
+            live_status,
+            ea_status,
+            bal or 0,
+            eq or 0,
+            "",
+            payload,
+            profit=profit,
+        )
+    except Exception as e:
+        log(f"RUN BOT STATUS UPGRADE ERROR PORT={port}: {e}")
+
+
 def _is_modern_run_bot_payload(payload: Dict[str, Any]) -> bool:
     if payload_get(payload, "instanceId", "instance_id"):
         return True
@@ -5094,11 +5146,14 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             profit = None
 
     instance_id = payload_get(payload, "instanceId", "instance_id")
+    live_status, ea_live = _resolve_run_bot_live_status(
+        port_dir, payload, trading_permissions, trade_gate
+    )
     send_mt5_live_status(
         instance_id,
         port,
-        "running",
-        "ready",
+        live_status,
+        ea_live,
         bal or 0,
         eq or 0,
         "",
@@ -5107,15 +5162,21 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     send_account_metrics(payload, bal, eq, snap.get("currency", ""))
     schedule_account_metrics_retry(payload, port, (8, 20, 45, 90))
-    threading.Thread(target=lambda: (time.sleep(8), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(
+        target=lambda: (time.sleep(8), _send_run_bot_status_upgrade(port, payload, port_dir)),
+        daemon=True,
+    ).start()
     threading.Thread(target=lambda: (time.sleep(20), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
     threading.Thread(target=lambda: (time.sleep(35), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(6), watch_mt5_instance(payload)), daemon=True).start()
+    threading.Thread(
+        target=lambda: (time.sleep(6), watch_mt5_instance(payload)),
+        daemon=True,
+    ).start()
 
     return {
         "action": "run_bot",
         "ok": True,
-        "status": "running",
+        "status": live_status,
         "message": f"BOT auto-attached on {symbol} ({period}) and preset loaded",
         "folderPath": str(port_dir),
         "portNumber": normalize_port(port),
@@ -5128,7 +5189,7 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "balance": bal,
         "equity": eq,
         "profit": profit,
-        "eaStatus": "ready",
+        "eaStatus": ea_live,
         "botCode": bot_code,
         "expertsPath": str(experts_dir),
         "eaFiles": ea_info,
@@ -5255,11 +5316,15 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
                 profit = round(float(snap.get("equity")) - float(snap.get("balance")), 2)
             except Exception:
                 profit = None
+        mt5_running = bool(st["running"])
+        ea_base = _ea_live_status_for_payload(port_dir, payload, mt5_running)
+        live_status = "running" if mt5_running and ea_base == "ready" else ("stopped" if not mt5_running else "starting")
+        ea_status = "running" if live_status == "running" else ea_base
         send_mt5_live_status(
             instance_id,
             port,
-            "running" if st["running"] else "stopped",
-            _ea_live_status_for_payload(port_dir, payload, bool(st["running"])),
+            live_status,
+            ea_status,
             bal,
             eq,
             "",
