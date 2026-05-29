@@ -45,7 +45,7 @@ const {
   finalizeBotInstanceRecord,
   stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
-const { createConnectAttempt } = require('../lib/mt5ConnectAttempt');
+const { createConnectAttempt, repairUserMt5AccountStatuses } = require('../lib/mt5ConnectAttempt');
 const { queueBotRunCommands, assertNoRecentBotRunAttempt } = require('../lib/mt5BotRunPhase2');
 const {
   PACKAGE_PORT_MAP,
@@ -1920,6 +1920,8 @@ router.get('/mt5', async (req, res) => {
       AND LOWER(TRIM(COALESCE(status,''))) = 'failed'
       AND updated_at < NOW() - INTERVAL '5 minutes'
   `, [userId]).catch(() => {});
+
+  await repairUserMt5AccountStatuses(userId).catch(() => {});
 
   const summary = await getPortSummaryReadOnly(userId);
 
