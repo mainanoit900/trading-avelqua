@@ -3349,7 +3349,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
     );
 
     const metricsRefreshSec = dash.metricsRefreshSec || 90;
-    const chartMins = dash.chartSnapshotMinutes || 30;
+    const chartSec = dash.chartSnapshotSec || metricsRefreshSec;
 
     return res.json({
       ok: true,
@@ -3362,8 +3362,9 @@ router.get('/mt5/live-dashboard', async (req, res) => {
       hasNext: safePage < dash.pageCount,
       refreshSec: metricsRefreshSec,
       metricsRefreshSec,
-      chartSnapshotMinutes: chartMins,
-      metricsIntervalMinutes: chartMins,
+      chartSnapshotSec: chartSec,
+      chartSnapshotMinutes: chartSec / 60,
+      metricsIntervalMinutes: chartSec / 60,
       hasConnecting,
       pollFastSec: hasConnecting ? 5 : metricsRefreshSec,
       connectingTypicalSec: 60,
@@ -3374,7 +3375,7 @@ router.get('/mt5/live-dashboard', async (req, res) => {
   }
 });
 
-// ===== EQUITY CHART API (กำไร / ขาดทุน จาก Equity ตั้งต้น · ทุก 30 นาที) =====
+// ===== EQUITY CHART API (กำไร / ขาดทุน จาก Equity ตั้งต้น · ทุก 90 วินาที) =====
 router.get('/mt5/equity-chart/:id', async (req, res) => {
   try {
     const id = Number(req.params.id);

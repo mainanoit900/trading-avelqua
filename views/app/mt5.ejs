@@ -230,7 +230,7 @@
   <section class="mt5-card">
     <div class="mt5-card-head">
       <h2>📡 Live MT5 Dashboard</h2>
-      <span id="mt5LiveDashboardMeta">Status อัปเดตทุก 5 วินาทีขณะเชื่อมต่อ · Balance · Equity · Profit ทุก 90 วินาที · กราฟ Equity ทุก 30 นาที</span>
+      <span id="mt5LiveDashboardMeta">Status อัปเดตทุก 5 วินาทีขณะเชื่อมต่อ · Balance · Equity · Profit และกราฟ Equity ทุก 90 วินาที</span>
     </div>
 
     <div id="mt5LiveDashboard" class="mt5-table-wrap">
@@ -1867,20 +1867,23 @@ function mt5PnlChartsPanel(json, instanceId) {
   const uid = String(instanceId || '0').replace(/\W/g, '');
   const days = Array.isArray(json?.days) && json.days.length ? json.days : mt5GroupPointsByDay(json?.points || []);
   if (!days.length) {
-    return '<div class="mt5-empty">ยังไม่มีจุดกราฟ — ระบบบันทึกทุก 30 นาทีหลังเปิดบอท</div>';
+    return '<div class="mt5-empty">ยังไม่มีจุดกราฟ — ระบบบันทึกทุก 90 วินาทีหลังเปิดบอท</div>';
   }
   const startEq = Number(json.startEquity || 0);
   const curEq = Number(json.currentEquity || 0);
   const pnl = Number(json.currentPnl || 0);
   const pnlCls = pnl >= 0 ? 'pos' : 'neg';
-  const interval = Number(json.intervalMinutes || 30);
+  const intervalSec = Number(json.intervalSeconds || (json.intervalMinutes ? json.intervalMinutes * 60 : 90) || 90);
+  const intervalLabel = intervalSec >= 60 && intervalSec % 60 === 0
+    ? (intervalSec / 60) + ' น.'
+    : intervalSec + ' วิ';
   return `
     <div class="mt5-pnl-widget" id="mt5PnlWidget${uid}" data-instance-id="${mt5ManageEscape(instanceId)}">
       <div class="mt5-pnl-summary">
         <div class="mt5-pnl-summary-box"><small>Eq ตั้งต้น</small><b>${mt5Money(startEq)}</b></div>
         <div class="mt5-pnl-summary-box"><small>Eq ปัจจุบัน</small><b>${mt5Money(curEq)}</b></div>
         <div class="mt5-pnl-summary-box ${pnlCls}"><small>P/L รวม</small><b>${pnl >= 0 ? '+' : ''}${mt5Money(pnl)}</b></div>
-        <div class="mt5-pnl-summary-box muted"><small>บันทึก</small><b>${interval} น.</b></div>
+        <div class="mt5-pnl-summary-box muted"><small>บันทึก</small><b>${intervalLabel}</b></div>
       </div>
       <div class="mt5-pnl-day-head">
         <b id="mt5PnlDayTitle${uid}">—</b>
@@ -2334,10 +2337,8 @@ async function loadMt5LiveDashboard(page) {
     const liveHead = document.getElementById('mt5LiveDashboardMeta');
     if (liveHead) {
       const metricsSec = Number(data.metricsRefreshSec || data.refreshSec || 90);
-      const chartMins = Number(data.chartSnapshotMinutes || data.metricsIntervalMinutes || 30);
       liveHead.textContent =
-        'Status อัปเดตทุก 5 วินาทีขณะเชื่อมต่อ · Balance · Equity · Profit ทุก ' + metricsSec +
-        ' วินาที · กราฟ Equity ทุก ' + chartMins + ' นาที';
+        'Status อัปเดตทุก 5 วินาทีขณะเชื่อมต่อ · Balance · Equity · Profit และกราฟ Equity ทุก ' + metricsSec + ' วินาที';
     }
     box.innerHTML = renderMt5DashboardTable(data, { mode: 'live' });
     bindMt5ManageMenus(box);
