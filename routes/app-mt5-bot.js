@@ -323,58 +323,9 @@ async function requireAgentToken(req, res, next) {
 
 async function handleMt5LiveStatusCallback(req, res) {
   try {
-    const {
-      instanceId,
-      port,
-      status,
-      eaStatus,
-      balance,
-      equity,
-      error
-    } = req.body || {};
-
-    if (!instanceId && !port) {
-      return res.json({ ok: false, message: 'instanceId or port required' });
-    }
-
-    await query(`
-      UPDATE vps_system.bot_instances
-      SET status = COALESCE($2, status),
-          ea_status = COALESCE($3, ea_status),
-          mt5_balance = COALESCE($4::numeric, mt5_balance),
-          mt5_equity = COALESCE($5::numeric, mt5_equity),
-          last_error = COALESCE($6, last_error),
-          last_agent_ping = NOW(),
-          last_heartbeat = NOW(),
-          updated_at = NOW()
-      WHERE ($1::bigint IS NOT NULL AND id=$1)
-         OR ($7::int IS NOT NULL AND assigned_port_no=$7)
-    `, [
-      instanceId || null,
-      status || null,
-      eaStatus || null,
-      balance || null,
-      equity || null,
-      error || null,
-      port || null
-    ]);
-
-    await query(`
-      UPDATE vps_system.mt5_accounts a
-      SET last_balance = COALESCE($2::numeric, a.last_balance),
-          last_equity = COALESCE($3::numeric, a.last_equity),
-          last_seen_at = NOW()
-      FROM vps_system.bot_instances bi
-      WHERE bi.mt5_account_id = a.id
-        AND (($1::bigint IS NOT NULL AND bi.id=$1)
-          OR ($4::int IS NOT NULL AND bi.assigned_port_no=$4))
-    `, [instanceId || null, balance || null, equity || null, port || null]);
-
-    if (instanceId && equity !== undefined && equity !== null && Number(equity) > 0) {
-      await seedInstanceLiveMetrics(instanceId, balance, equity).catch(() => {});
-    }
-
-    return res.json({ ok: true });
+    const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
+    const result = await applyMt5LiveStatus(req.body || {});
+    return res.json(result);
   } catch (e) {
     return res.json({ ok: false, message: e.message });
   }
@@ -428,6 +379,20 @@ async function handleMt5AccountMetricsCallback(req, res) {
       [accountId, userId, portNumber]
     );
     const instId = activeInst.rows?.[0]?.id;
+    if (instId && (balance != null || equity != null)) {
+      await query(
+        `
+        UPDATE vps_system.bot_instances
+        SET mt5_balance = COALESCE($2::numeric, mt5_balance),
+            mt5_equity = COALESCE($3::numeric, mt5_equity),
+            last_agent_ping = NOW(),
+            last_heartbeat = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        `,
+        [instId, balance, equity]
+      ).catch(() => {});
+    }
     if (instId && equity != null && Number(equity) > 0) {
       await seedInstanceLiveMetrics(instId, balance, equity).catch(() => {});
     }
@@ -3099,17 +3064,9 @@ router.post('/mt5/run', async (req, res) => {
       WHERE id=$1
     `, [node.id, lot]);
 
-    const instanceId = inst.rows[0].id;
     await client.query('COMMIT');
 
-    const accEq = await query(
-      `SELECT last_balance, last_equity FROM vps_system.mt5_accounts WHERE id=$1`,
-      [mt5AccountId]
-    );
-    const accRow = accEq.rows?.[0] || {};
-    await seedInstanceLiveMetrics(instanceId, accRow.last_balance, accRow.last_equity).catch(() => {});
-
-    flash(req, 'success', `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว`);
+    flash(req, 'success', `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว — รอ VPS ส่ง Balance/Equity จริง`);
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     flash(req, 'error', e.message);
@@ -3278,130 +3235,6 @@ router.get('/mt5/dashboard', async (req, res) => {
 
   } catch (e) {
     res.json({ ok: false });
-  }
-});
-
-// ===== MT5 LIVE STATUS API =====
-router.post('/mt5/live-status', async (req, res) => {
-  try {
-    const {
-      instanceId,
-      port,
-      status,
-      eaStatus,
-      balance,
-      equity,
-      error
-    } = req.body || {};
-
-    if (!instanceId && !port) {
-      return res.json({ ok: false, message: 'instanceId or port required' });
-    }
-
-    const rawStatus = String(status || '').trim().toLowerCase();
-    let dbStatus = status || null;
-    if (rawStatus === 'stopped') dbStatus = 'stopped';
-    else if (rawStatus === 'failed' || rawStatus === 'fail') dbStatus = 'failed';
-    else if (rawStatus === 'running') dbStatus = 'running';
-    else if (['pending', 'connecting', 'starting', 'restarting'].includes(rawStatus)) dbStatus = 'pending';
-
-    if (instanceId) {
-      await query(`
-        UPDATE vps_system.bot_instances
-        SET status = COALESCE($2, status),
-            ea_status = COALESCE($3, ea_status),
-            mt5_balance = COALESCE($4::numeric, mt5_balance),
-            mt5_equity = COALESCE($5::numeric, mt5_equity),
-            last_error = COALESCE($6, last_error),
-            last_agent_ping = NOW(),
-            last_heartbeat = NOW(),
-            updated_at = NOW()
-        WHERE id = $1
-      `, [
-        instanceId,
-        dbStatus,
-        eaStatus || null,
-        balance || null,
-        equity || null,
-        error || null
-      ]);
-    }
-
-    await query(`
-      UPDATE vps_system.mt5_accounts a
-      SET last_balance = COALESCE($2::numeric, a.last_balance),
-          last_equity = COALESCE($3::numeric, a.last_equity),
-          last_seen_at = NOW()
-      FROM vps_system.bot_instances bi
-      WHERE bi.mt5_account_id = a.id
-        AND (($1::bigint IS NOT NULL AND bi.id=$1)
-          OR ($4::int IS NOT NULL AND bi.assigned_port_no=$4))
-    `, [instanceId || null, balance || null, equity || null, port || null]);
-
-    await ensureEquityLogTable();
-    if (instanceId && equity !== undefined && equity !== null) {
-      await recordEquityLog(instanceId, equity).catch(() => {});
-    }
-
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.json({ ok: false, message: e.message });
-  }
-});
-
-router.post('/mt5/account-metrics', async (req, res) => {
-  try {
-    const accountId = Number(req.body?.accountId || req.body?.account_id || 0) || null;
-    const userId = Number(req.body?.userId || req.body?.user_id || 0) || null;
-    const portNumber = Number(req.body?.portNumber || req.body?.port || req.body?.port_no || 0) || null;
-    const balance = req.body?.balance ?? null;
-    const equity = req.body?.equity ?? null;
-
-    if (!accountId && !(userId && portNumber)) {
-      return res.json({ ok: false, message: 'accountId or userId+portNumber required' });
-    }
-
-    await query(`
-      WITH target AS (
-        SELECT id
-        FROM vps_system.mt5_accounts
-        WHERE ($1::bigint IS NOT NULL AND id = $1)
-           OR (
-             $2::bigint IS NOT NULL
-             AND $3::int IS NOT NULL
-             AND user_id = $2
-             AND (assigned_port_no = $3 OR port_slot = $3)
-           )
-        ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END, updated_at DESC NULLS LAST, id DESC
-        LIMIT 1
-      )
-      UPDATE vps_system.mt5_accounts a
-      SET last_balance = COALESCE($4::numeric, a.last_balance),
-          last_equity = COALESCE($5::numeric, a.last_equity),
-          last_seen_at = NOW(),
-          updated_at = NOW()
-      WHERE a.id IN (SELECT id FROM target)
-    `, [accountId, userId, portNumber, balance, equity]);
-
-    await query(`
-      UPDATE vps_system.bot_instances bi
-      SET mt5_balance = COALESCE($2::numeric, bi.mt5_balance),
-          mt5_equity = COALESCE($3::numeric, bi.mt5_equity),
-          last_agent_ping = NOW(),
-          last_heartbeat = NOW(),
-          updated_at = NOW()
-      WHERE ($1::bigint IS NOT NULL AND bi.mt5_account_id = $1)
-         OR (
-           $4::bigint IS NOT NULL
-           AND $5::int IS NOT NULL
-           AND bi.user_id = $4
-           AND bi.assigned_port_no = $5
-         )
-    `, [accountId, balance, equity, userId, portNumber]).catch(() => {});
-
-    return res.json({ ok: true });
-  } catch (e) {
-    return res.json({ ok: false, message: e.message });
   }
 });
 

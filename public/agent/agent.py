@@ -2220,19 +2220,11 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                 pass
         obs = str(snap.get("observedLogin") or "").strip()
         if expected_login and obs and obs != expected_login:
-            bot = str(payload_get(payload or {}, "botCode", default="") or "").upper()
-            netting_ui = any("netting" in str(t or "").lower() for t in mt5_window_titles(port, payload))
-            if bot == "LOGIN_ONLY" and netting_ui:
-                log(
-                    f"MT5 SNAPSHOT NETTING PORT={port} expected={expected_login} "
-                    f"observed={obs} — keep metrics (port isolated)"
-                )
-            else:
-                log(f"MT5 SNAPSHOT LOGIN MISMATCH PORT={port} expected={expected_login} observed={obs}")
-                snap["observedLogin"] = ""
-                if not _snap_positive(snap):
-                    snap["balance"] = None
-                    snap["equity"] = None
+            log(f"MT5 SNAPSHOT LOGIN MISMATCH PORT={port} expected={expected_login} observed={obs}")
+            snap["observedLogin"] = ""
+            snap["balance"] = None
+            snap["equity"] = None
+            snap["source"] = ""
     except Exception as e:
         log(f"MT5 SNAPSHOT ERROR PORT={port}: {e}")
     return snap
@@ -5228,6 +5220,7 @@ def send_mt5_live_status(
             "instanceId": instance_id,
             "port": port,
             "accountId": payload_get(payload or {}, "accountId", "account_id") if payload else None,
+            "userId": payload_get(payload or {}, "userId", "user_id") if payload else None,
             "status": status,
             "eaStatus": ea_status,
             "balance": bal_out,
