@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-concurrent-equity-v112"
+AGENT_BUILD_ID = "2026-05-29-concurrent-equity-v113"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1886,7 +1886,11 @@ try:
     ai = mt5.account_info()
     if ai is None and login_hint and login_password:
         mt5.login(login_hint, login_password, server_name)
+    for _wait in range(16):
         ai = mt5.account_info()
+        if ai is not None:
+            break
+        time.sleep(0.5)
     if ai is None:
         mt5.shutdown()
         print(json.dumps({{}}))
@@ -2587,7 +2591,29 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                         time.sleep(settle)
 
         api_snap: Dict[str, Any] = {}
-        if "login_equity" in purpose and terminal_up:
+        login_equity_purpose = "login_equity" in purpose
+        if login_equity_purpose:
+            iso_attempts = max(1, int(os.getenv("AVELQUA_LOGIN_EQUITY_ISOLATED_ATTEMPTS", "3")))
+            for iso_i in range(iso_attempts):
+                api_snap = account_snapshot_mt5_api_isolated(port_dir, payload)
+                if api_snap.get("loginMismatch"):
+                    snap["loginMismatch"] = True
+                    snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
+                    snap["source"] = str(api_snap.get("source") or "mt5_api_isolated_reject")
+                    return snap
+                if _snap_positive(api_snap):
+                    snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                    return snap
+                if iso_i + 1 < iso_attempts:
+                    wait_sec = 2.0 + iso_i * 2.0
+                    log(
+                        f"MT5 API ISOLATED RETRY port={port} attempt={iso_i + 2}/"
+                        f"{iso_attempts} wait={wait_sec:.0f}s"
+                    )
+                    time.sleep(wait_sec)
+            if not _snap_positive(api_snap):
+                log(f"MT5 API ISOLATED EMPTY port={port} path={port_dir.name}")
+        elif terminal_up:
             api_snap = account_snapshot_mt5_api_isolated(port_dir, payload)
             if api_snap.get("loginMismatch"):
                 snap["loginMismatch"] = True
@@ -2598,11 +2624,11 @@ def account_snapshot(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dic
                 snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
                 return snap
 
-        skip_inproc_api = uia_has_metrics and "login_equity" in purpose
+        skip_inproc_api = login_equity_purpose
         if not skip_inproc_api:
             api_snap = account_snapshot_mt5_api(port_dir, payload)
-        elif terminal_up and "login_equity" in purpose:
-            log(f"MT5 SNAPSHOT INPROC API SKIP port={port} (UIA has metrics)")
+        elif terminal_up and login_equity_purpose:
+            log(f"MT5 SNAPSHOT INPROC API SKIP port={port} (login_equity uses isolated only)")
         if api_snap.get("loginMismatch"):
             snap["loginMismatch"] = True
             snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
@@ -6319,12 +6345,18 @@ def handle_command(cmd: Dict[str, Any]) -> None:
         elif ctype in ("sync_mt5_account", "account_snapshot", "read_account_metrics"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
             snap: Dict[str, Any] = {"balance": None, "equity": None, "currency": ""}
-            snap_timeout = float(
-                os.getenv(
-                    "AVELQUA_ACCOUNT_SNAPSHOT_CMD_TIMEOUT_SEC",
-                    "50" if str(payload_get(payload, "purpose") or "").lower().find("login_equity") >= 0 else "90",
+            purpose_low = str(payload_get(payload, "purpose") or "").lower()
+            login_equity = "login_equity" in purpose_low
+            running_n = max(1, count_running_mt5_terminals())
+            if login_equity:
+                snap_timeout = float(
+                    os.getenv(
+                        "AVELQUA_LOGIN_EQUITY_SNAPSHOT_CMD_TIMEOUT_SEC",
+                        str(min(180, 70 + max(0, running_n - 1) * 35)),
+                    )
                 )
-            )
+            else:
+                snap_timeout = float(os.getenv("AVELQUA_ACCOUNT_SNAPSHOT_CMD_TIMEOUT_SEC", "90"))
             try:
                 import concurrent.futures
 
