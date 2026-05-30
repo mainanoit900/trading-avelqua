@@ -22,7 +22,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
           <p>วิเคราะห์จากประวัติ PnL ของแต่ละ Login + มุมมองตลาดทอง (Python AI) — คาดการณ์กำไร/ขาดทุนเฉพาะวันจันทร์–ศุกร์</p>
         <% } else { %>
           <h2>ปฏิทินกำไร / ขาดทุน</h2>
-          <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= calendarRefreshSec %> วินาที (วันจันทร์–ศุกร์) · เสาร์–อาทิตย์ตลาดทองปิด ไม่อัปเดต</p>
+          <p>กำไร/ขาดทุน = Equity ปัจจุบัน − Equity ตอนเชื่อมต่อ Login · อัปเดตทุก <%= calendarRefreshSec %> วิ (จ–ศ) · เสาร์–อาทิตย์ตลาดปิด</p>
         <% } %>
       </div>
       <div class="cal-live-badge" id="calLiveBadge" hidden>
@@ -56,15 +56,23 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
   <% if (calActiveTab === 'calendar') { %>
   <section class="cal-stats" aria-label="สรุปเดือน">
     <article class="cal-stat">
-      <span>กำไร/ขาดทุนรวมเดือน</span>
+      <span>กำไร/ขาดทุนสะสม Live</span>
+      <strong id="calLivePnl" class="neu">-</strong>
+    </article>
+    <article class="cal-stat">
+      <span>Equity ตอนเชื่อมต่อ</span>
+      <strong id="calBaseline" class="neu">-</strong>
+    </article>
+    <article class="cal-stat">
+      <span>เปลี่ยนแปลงในเดือนนี้</span>
       <strong id="calMonthTotal" class="neu">-</strong>
     </article>
     <article class="cal-stat">
-      <span>วันที่ได้กำไร</span>
+      <span>วันที่ได้กำไร (ในเดือน)</span>
       <strong id="calProfitDays" class="neu">0</strong>
     </article>
     <article class="cal-stat">
-      <span>วันที่ขาดทุน</span>
+      <span>วันที่ขาดทุน (ในเดือน)</span>
       <strong id="calLossDays" class="neu">0</strong>
     </article>
   </section>
@@ -97,7 +105,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
           <tr>
             <th>เวลา</th>
             <th>Equity</th>
-            <th>กำไร/ขาดทุนวัน</th>
+            <th>กำไร/ขาดทุน (จากเชื่อมต่อ)</th>
             <th>กำไร</th>
             <th>ขาดทุน</th>
             <th>สถานะ</th>
@@ -198,6 +206,8 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       monthLabel: document.getElementById('calMonthLabel'),
       grid: document.getElementById('calGrid'),
       monthTotal: document.getElementById('calMonthTotal'),
+      livePnl: document.getElementById('calLivePnl'),
+      baseline: document.getElementById('calBaseline'),
       profitDays: document.getElementById('calProfitDays'),
       lossDays: document.getElementById('calLossDays'),
       selectedHint: document.getElementById('calSelectedHint'),
@@ -340,6 +350,13 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       var total = Number((data.calendar && data.calendar.monthTotal) || 0);
       el.monthTotal.textContent = fmtMoney(total);
       el.monthTotal.className = pnlClass(total);
+      if (el.livePnl) {
+        el.livePnl.textContent = data.livePnl != null ? fmtMoney(data.livePnl) : '-';
+        el.livePnl.className = pnlClass(data.livePnl);
+      }
+      if (el.baseline) {
+        el.baseline.textContent = data.connectBaseline != null ? fmtMoney(data.connectBaseline) : '-';
+      }
       el.profitDays.textContent = String((data.calendar && data.calendar.profitDays) || 0);
       el.lossDays.textContent = String((data.calendar && data.calendar.lossDays) || 0);
       el.monthLabel.textContent = data.monthLabel || data.month || '-';

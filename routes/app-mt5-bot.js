@@ -194,6 +194,11 @@ await query(`
         assigned_port_no=EXCLUDED.assigned_port_no,
         last_balance=COALESCE(EXCLUDED.last_balance, vps_system.mt5_accounts.last_balance),
         last_equity=COALESCE(EXCLUDED.last_equity, vps_system.mt5_accounts.last_equity),
+        connect_baseline_equity=CASE
+          WHEN EXCLUDED.last_equity IS NOT NULL AND EXCLUDED.last_equity > 0
+          THEN EXCLUDED.last_equity
+          ELSE vps_system.mt5_accounts.connect_baseline_equity
+        END,
         status='connected',
         updated_at=NOW()
     `, [
@@ -386,6 +391,11 @@ async function handleMt5AccountMetricsCallback(req, res) {
       UPDATE vps_system.mt5_accounts a
       SET last_balance = COALESCE($4::numeric, a.last_balance),
           last_equity = COALESCE($5::numeric, a.last_equity),
+          connect_baseline_equity = CASE
+            WHEN $5::numeric IS NOT NULL AND $5::numeric > 0
+            THEN COALESCE(a.connect_baseline_equity, $5::numeric)
+            ELSE a.connect_baseline_equity
+          END,
           last_seen_at = NOW(),
           updated_at = NOW()
       WHERE a.id IN (SELECT id FROM target)
@@ -762,6 +772,7 @@ async function ensureMt5AccountRuntimeColumns(db = { query }) {
   await runner.query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS windows_port_no int`).catch(() => {});
   await runner.query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_balance numeric`).catch(() => {});
   await runner.query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS last_equity numeric`).catch(() => {});
+  await runner.query(`ALTER TABLE vps_system.mt5_accounts ADD COLUMN IF NOT EXISTS connect_baseline_equity numeric`).catch(() => {});
 }
 
 // ===== PUSH COMMAND QUEUE =====
