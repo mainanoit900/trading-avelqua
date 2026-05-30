@@ -462,6 +462,64 @@ async function cancelPendingPostConnectExitOnPort(vpsId, portId) {
   ).catch(() => {});
 }
 
+/** ล้าง session MT5 เก่าบน FolderPort ก่อน login ถ้า port health รายงานเลขบัญชีคนละตัว */
+async function queueStaleSessionCleanupBeforeLogin({
+  vpsId,
+  portId,
+  portNo,
+  folderPath,
+  mt5Login,
+  accountId
+} = {}) {
+  const nid = num(vpsId, 0);
+  const pno = num(portNo, 0);
+  const expected = String(mt5Login || '').trim();
+  if (!nid || !pno || !expected) return false;
+
+  const r = await query(
+    `
+    SELECT running, mt5_login, payload
+    FROM vps_system.vps_port_health
+    WHERE node_id = $1
+      AND port_number = $2
+      AND updated_at > NOW() - INTERVAL '30 minutes'
+    ORDER BY updated_at DESC
+    LIMIT 1
+  `,
+    [nid, pno]
+  ).catch(() => ({ rows: [] }));
+
+  const row = r.rows?.[0];
+  if (!row?.running) return false;
+
+  let reported = String(row.mt5_login || '').trim();
+  if (!reported && row.payload) {
+    const pl = typeof row.payload === 'object' ? row.payload : {};
+    reported = String(pl.mt5_login || pl.mt5Login || '').trim();
+  }
+  if (!reported || reported === expected) return false;
+
+  const { buildStopMt5ReleasePayload } = require('../lib/mt5PortCleanup');
+  const payload = {
+    ...buildStopMt5ReleasePayload({
+      portNo: pno,
+      folderPath,
+      accountId,
+      mt5Login: expected,
+      reason: 'stale_session_before_login'
+    }),
+    wrongLogin: reported
+  };
+  await insertPendingAgentCommand({
+    vpsId: nid,
+    nodeId: nid,
+    portId: portId ? num(portId, 0) : null,
+    commandType: 'stop_mt5',
+    payload
+  }).catch(() => {});
+  return true;
+}
+
 async function cancelPendingLoginCommands({ portId, accountId, mt5Login } = {}) {
   if (!mt5Login && !accountId && !portId) return;
   await query(
@@ -932,6 +990,15 @@ async function handleMt5ConnectProduction(req, res) {
     await cancelPendingPostConnectExitOnPort(reservedPort.vps_id, reservedPort.port_id).catch(
       () => {}
     );
+
+    await queueStaleSessionCleanupBeforeLogin({
+      vpsId: reservedPort.vps_id,
+      portId: reservedPort.port_id,
+      portNo: allocPortNo,
+      folderPath: reservedPort.folder_path,
+      mt5Login,
+      accountId
+    }).catch(() => false);
 
     const queueDelaySec = await computeLoginQueueDelaySec(
       reservedPort.vps_id,

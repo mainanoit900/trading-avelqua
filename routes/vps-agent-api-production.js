@@ -321,6 +321,10 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
   if (accountId == null || String(accountId) === '') return;
 
   if (ctype !== 'login_mt5') return;
+  const { loginCommandResultVerified } = require('../lib/mt5LoginCommandVerify');
+  const expectedLogin = String(pl?.mt5Login || pl?.mt5_login || result?.login || '').trim();
+  if (!loginCommandResultVerified(result, expectedLogin)) return;
+
   const attemptId = String(pl.attemptId || pl.attempt_id || '').trim();
 
   await query(
