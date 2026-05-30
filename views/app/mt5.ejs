@@ -569,17 +569,14 @@
   }
 
   function mt5InitialRunDefaults(selected, botCode) {
-    const eq = mt5RunAccountCapital(selected);
-    const kind = mt5BotKind(botCode);
+    const minCap = mt5MinCapitalForBot(botCode);
+    const preview = mt5ComputeRunPreset(botCode, minCap, 0, 'medium', 'auto', 'capital');
     const cfg = window.__mt5RunConfig || {};
-    if (kind === 'ak') {
-      const minCap = mt5MinCapitalForBot(botCode);
-      const preview = mt5ComputeRunPreset(botCode, minCap, 0, 'medium', 'auto', 'capital');
-      return { capital: preview.capital, lot: preview.lot };
-    }
     return {
-      capital: mt5DefaultCapitalForBot(botCode, eq),
-      lot: mt5Num(cfg.packageDefaultLot, cfg.packageLotMax || 0.05)
+      capital: preview.capital > 0 ? preview.capital : minCap,
+      lot: mt5BotKind(botCode) === 'quantum'
+        ? mt5Num(cfg.packageDefaultLot, cfg.packageLotMax || 0.05)
+        : (preview.lot > 0 ? preview.lot : mt5Num(cfg.packageDefaultLot, cfg.packageLotMin || 0.01))
     };
   }
 
@@ -1071,20 +1068,18 @@
       if (syncHidden) syncHidden.value = syncField;
       if (changedField === 'bot_code') {
         syncField = 'capital';
-        if (!capitalInput.value || mt5Num(capitalInput.value, 0) <= 0) {
-          const minCap = mt5MinCapitalForBot(botSelect.value);
-          const preview = mt5ComputeRunPreset(
-            botSelect.value,
-            minCap,
-            0,
-            levelSelect ? levelSelect.value : 'medium',
-            timeSelect ? timeSelect.value : 'auto',
-            'capital'
-          );
-          capitalInput.value = preview.capital > 0 ? mt5Fixed(preview.capital) : '';
-          if (mt5BotKind(botSelect.value) !== 'quantum') {
-            lotInput.value = mt5Fixed(preview.lot);
-          }
+        const minCap = mt5MinCapitalForBot(botSelect.value);
+        const botPreview = mt5ComputeRunPreset(
+          botSelect.value,
+          minCap,
+          0,
+          levelSelect ? levelSelect.value : 'medium',
+          timeSelect ? timeSelect.value : 'auto',
+          'capital'
+        );
+        capitalInput.value = botPreview.capital > 0 ? mt5Fixed(botPreview.capital) : (minCap > 0 ? mt5Fixed(minCap) : '');
+        if (mt5BotKind(botSelect.value) !== 'quantum') {
+          lotInput.value = mt5Fixed(botPreview.lot);
         }
       }
 
