@@ -31,7 +31,7 @@ const {
   formatSubscriptionDateTime
 } = require('../lib/subscriptionPackage');
 const { isIdentityVerified, requireIdentityVerified } = require('../middleware/requireIdentity');
-const { fetchCalendarPerformance } = require('../lib/mt5CalendarPerformance');
+const { fetchCalendarPerformance, fetchMt5LoginPortfolio } = require('../lib/mt5CalendarPerformance');
 const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
 
@@ -2036,11 +2036,26 @@ router.post('/broker-accounts/:id/delete', async (req, res) => {
   return res.redirect('/app/broker-accounts');
 });
 
+router.get('/broker-accounts/data', async (req, res) => {
+  try {
+    const data = await fetchMt5LoginPortfolio(req.user.id);
+    if (!data.ok) {
+      return res.status(400).json(data);
+    }
+    return res.json(data);
+  } catch (e) {
+    console.error('[broker-accounts/data]', e);
+    return res.status(500).json({ ok: false, message: e.message || 'server_error' });
+  }
+});
+
 router.get('/broker-accounts', async (req, res) => {
   const base = await getBaseData(req);
   return res.render('app/broker-accounts', {
-    pageTitle: 'Broker Accounts',
+    pageTitle: 'บัญชีโบรกเกอร์ MT5',
+    pageCss: 'app-broker-accounts.css',
     currentPath: '/app/broker-accounts',
+    refreshSec: MT5_CALENDAR_REFRESH_SEC,
     ...flash(req),
     ...base
   });

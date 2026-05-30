@@ -1,4 +1,205 @@
+<%
+const baRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) || 90;
+%>
+
 <%- include('../partials/app-shell') %>
-<section class="card form-card"><div class="card-head"><h3>เพิ่มบัญชีโบรกเกอร์</h3></div><form method="POST" action="/app/broker-accounts" class="form-grid two"><label>Broker<input type="text" name="broker_name" required /></label><label>Login<input type="text" name="account_login" required /></label><label>Password<input type="text" name="account_password" required /></label><label>Server<input type="text" name="server_name" required /></label><div class="form-actions full"><button class="btn primary">บันทึก</button></div></form></section>
-<section class="card"><div class="table-wrap"><table><thead><tr><th>Broker</th><th>Login</th><th>Server</th><th>Created</th><th></th></tr></thead><tbody><% if (!(brokerAccounts || []).length) { %><tr><td colspan="5" class="empty-cell">ยังไม่มีบัญชี</td></tr><% } %><% (brokerAccounts || []).forEach(function(a){ %><tr><td><%= a.broker_name %></td><td><%= a.account_login %></td><td><%= a.server_name %></td><td><%= a.created_at ? new Date(a.created_at).toLocaleString('th-TH') : '-' %><div class="cell-sub">#<%= a.display_id || a.id %></div></td><td><form method="POST" action="/app/broker-accounts/<%= a.id %>/delete" onsubmit="return confirm('ยืนยันลบ?')"><button class="btn danger">ลบ</button></form></td></tr><% }) %></tbody></table></div></section>
+
+<div class="ba-page" id="baPage">
+  <section class="ba-hero">
+    <div class="ba-hero-top">
+      <div>
+        <p class="ba-eyebrow">MT5 Broker Accounts</p>
+        <h2>บัญชีโบรกเกอร์ · Login / Port</h2>
+        <p>แสดง Equity เริ่มต้นตอนเชื่อมต่อ · Equity ปัจจุบัน · กำไร/ขาดทุน (ปัจจุบัน − เริ่มต้น) · อัปเดตทุก <%= baRefreshSec %> วินาที</p>
+      </div>
+      <div class="ba-live-badge" id="baLiveBadge" hidden>
+        <span class="ba-live-dot" aria-hidden="true"></span>
+        <span>Live · <%= baRefreshSec %>s</span>
+      </div>
+      <div class="ba-closed-badge" id="baClosedBadge" hidden>
+        <span>ตลาดปิด · เสาร์–อาทิตย์</span>
+      </div>
+    </div>
+    <div class="ba-actions">
+      <a href="/app/mt5" class="ba-link-btn">+ เชื่อมต่อ MT5 Login ใหม่</a>
+      <a href="/app/calendar" class="ba-link-btn">📅 ดูปฏิทิน PnL</a>
+    </div>
+  </section>
+
+  <section class="ba-stats" aria-label="สรุปรวม">
+    <article class="ba-stat">
+      <span>กำไร/ขาดทุนรวม (Login ที่เชื่อมต่อ)</span>
+      <strong id="baTotalPnl" class="neu">-</strong>
+    </article>
+    <article class="ba-stat">
+      <span>Login ที่ใช้งาน</span>
+      <strong id="baActiveCount" class="neu">0</strong>
+    </article>
+    <article class="ba-stat">
+      <span>Equity เริ่มต้นรวม</span>
+      <strong id="baTotalBaseline" class="neu">-</strong>
+    </article>
+    <article class="ba-stat">
+      <span>Equity ปัจจุบันรวม</span>
+      <strong id="baTotalCurrent" class="neu">-</strong>
+    </article>
+  </section>
+
+  <section class="ba-panel" aria-label="รายการ Login">
+    <div class="ba-panel-head">
+      <div>
+        <h3>รายการ MT5 Login</h3>
+        <p>แต่ละ Login คือ Port โปรเกอร์ · กำไร/ขาดทุน = Equity ปัจจุบัน − Equity ตอนเชื่อมต่อ</p>
+        <p class="ba-updated" id="baUpdatedAt">กำลังโหลด...</p>
+      </div>
+    </div>
+    <div class="ba-table-wrap">
+      <table class="ba-table">
+        <thead>
+          <tr>
+            <th>Port</th>
+            <th>Login</th>
+            <th>Broker / Server</th>
+            <th>Equity เริ่มต้น</th>
+            <th>Equity ปัจจุบัน</th>
+            <th>กำไร/ขาดทุน</th>
+            <th>สถานะ</th>
+          </tr>
+        </thead>
+        <tbody id="baTableBody">
+          <tr><td colspan="7" class="ba-empty">กำลังโหลด...</td></tr>
+        </tbody>
+        <tfoot id="baTableFoot" hidden>
+          <tr>
+            <td colspan="3">รวม Login ที่เชื่อมต่อ</td>
+            <td id="baFootBaseline">-</td>
+            <td id="baFootCurrent">-</td>
+            <td id="baFootPnl">-</td>
+            <td id="baFootCount">-</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  const REFRESH_SEC = <%= baRefreshSec %>;
+  const fmtMoney = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return '-';
+    return n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  };
+  const fmtPnl = (v) => {
+    const n = Number(v);
+    if (!Number.isFinite(n)) return { text: '-', cls: 'neu' };
+    const sign = n > 0 ? '+' : '';
+    const cls = n > 0 ? 'pos' : n < 0 ? 'neg' : 'neu';
+    return { text: sign + fmtMoney(n), cls };
+  };
+  const fmtTime = (iso) => {
+    if (!iso) return '-';
+    try {
+      return new Date(iso).toLocaleString('th-TH', { dateStyle: 'medium', timeStyle: 'short' });
+    } catch (_) {
+      return '-';
+    }
+  };
+  const statusLabel = (connected) => connected ? 'เชื่อมต่อ' : 'ไม่ได้เชื่อมต่อ';
+
+  const els = {
+    live: document.getElementById('baLiveBadge'),
+    closed: document.getElementById('baClosedBadge'),
+    totalPnl: document.getElementById('baTotalPnl'),
+    activeCount: document.getElementById('baActiveCount'),
+    totalBaseline: document.getElementById('baTotalBaseline'),
+    totalCurrent: document.getElementById('baTotalCurrent'),
+    body: document.getElementById('baTableBody'),
+    foot: document.getElementById('baTableFoot'),
+    footBaseline: document.getElementById('baFootBaseline'),
+    footCurrent: document.getElementById('baFootCurrent'),
+    footPnl: document.getElementById('baFootPnl'),
+    footCount: document.getElementById('baFootCount'),
+    updatedAt: document.getElementById('baUpdatedAt')
+  };
+
+  let timer = null;
+
+  function applyPnl(el, pnl) {
+    const f = fmtPnl(pnl);
+    el.textContent = f.text;
+    el.className = f.cls;
+  }
+
+  function render(data) {
+    const summary = data.summary || {};
+    const items = Array.isArray(data.items) ? data.items : [];
+
+    if (data.marketOpen) {
+      els.live.hidden = false;
+      els.closed.hidden = true;
+    } else {
+      els.live.hidden = true;
+      els.closed.hidden = false;
+    }
+
+    applyPnl(els.totalPnl, summary.totalPnl);
+    els.activeCount.textContent = String(summary.activeCount || 0) + ' / ' + String(summary.totalAccounts || 0);
+    els.totalBaseline.textContent = fmtMoney(summary.totalBaselineEquity);
+    els.totalCurrent.textContent = fmtMoney(summary.totalCurrentEquity);
+    els.updatedAt.textContent = 'อัปเดตล่าสุด · ' + fmtTime(data.updatedAt);
+
+    if (!items.length) {
+      els.body.innerHTML = '<tr><td colspan="7" class="ba-empty">ยังไม่มี MT5 Login — <a href="/app/mt5">เชื่อมต่อที่หน้า MT5</a></td></tr>';
+      els.foot.hidden = true;
+      return;
+    }
+
+    els.body.innerHTML = items.map(function (row) {
+      const pnl = fmtPnl(row.pnl);
+      const port = row.port ? String(row.port) : '-';
+      const brokerLine = (row.broker || '-') + '<br><span style="color:#64748b;font-size:12px">' + (row.server || '-') + '</span>';
+      const statusCls = row.isConnected ? 'on' : 'off';
+      return '<tr>'
+        + '<td><span class="ba-port">' + port + '</span></td>'
+        + '<td><strong>' + (row.mt5Login || '-') + '</strong></td>'
+        + '<td>' + brokerLine + '</td>'
+        + '<td>' + fmtMoney(row.baselineEquity) + '</td>'
+        + '<td>' + fmtMoney(row.currentEquity) + '</td>'
+        + '<td class="ba-pnl ' + pnl.cls + '">' + pnl.text + '</td>'
+        + '<td><span class="ba-status ' + statusCls + '">' + statusLabel(row.isConnected) + '</span></td>'
+        + '</tr>';
+    }).join('');
+
+    const footPnl = fmtPnl(summary.totalPnl);
+    els.foot.hidden = !(summary.activeCount > 0);
+    els.footBaseline.textContent = fmtMoney(summary.totalBaselineEquity);
+    els.footCurrent.textContent = fmtMoney(summary.totalCurrentEquity);
+    els.footPnl.className = 'ba-pnl ' + footPnl.cls;
+    els.footPnl.textContent = footPnl.text;
+    els.footCount.textContent = String(summary.activeCount || 0) + ' Login';
+  }
+
+  async function load() {
+    try {
+      const res = await fetch('/app/broker-accounts/data', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+      const data = await res.json();
+      if (!res.ok || !data.ok) throw new Error(data.message || 'load_failed');
+      render(data);
+    } catch (e) {
+      els.updatedAt.textContent = 'โหลดไม่สำเร็จ · ลองใหม่ใน ' + REFRESH_SEC + ' วิ';
+    }
+  }
+
+  function schedule() {
+    if (timer) clearInterval(timer);
+    timer = setInterval(load, REFRESH_SEC * 1000);
+  }
+
+  load();
+  schedule();
+})();
+</script>
+
 <%- include('../partials/app-shell-end') %>
