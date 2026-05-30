@@ -8,7 +8,7 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
 const localeList = (typeof supportedLocales !== 'undefined' && supportedLocales) ? supportedLocales : ['th', 'en', 'lo', 'vi', 'my'];
 const labelsMap = (typeof localeLabels !== 'undefined' && localeLabels) ? localeLabels : { th: 'ไทย', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
 const langShort = { th: 'TH', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
-const cssVer = '5';
+const cssVer = '6';
 %>
 
 <!DOCTYPE html>
@@ -174,8 +174,11 @@ const cssVer = '5';
                 <span class="login-social-label">Google</span>
               </a>
               <a href="/auth/line" class="login-social-btn login-social-line">
-                <span class="login-social-icon">
-                  <img src="/public/images/line.png" alt="LINE" width="32" height="32">
+                <span class="login-social-icon login-social-icon-line" aria-hidden="true">
+                  <svg viewBox="0 0 48 48" xmlns="http://www.w3.org/2000/svg" role="img" aria-label="LINE">
+                    <rect width="48" height="48" rx="12" fill="#06C755"/>
+                    <path fill="#FFFFFF" d="M24 8.5c-7.18 0-13 4.72-13 10.54 0 3.39 1.79 6.43 4.59 8.44-.2 1.23-.64 3.1-1.08 4.41-.17.55-.26.83-.11.88.15.05.4-.16 1.61-1.42 1.03-1.08 1.78-2.15 2.09-2.64.55.08 1.12.13 1.71.13 7.18 0 13-4.72 13-10.54S31.18 8.5 24 8.5zm-3.95 13.36h-1.61v-7.06h1.61v7.06zm3.23 0h-1.61v-7.06h1.61v7.06zm3.23 0h-1.53l-2.47-4v4h-1.61v-7.06h1.53l2.47 4v-4h1.61v7.06zm4.85 0h-3.39v-7.06h3.39v1.31h-1.78v1.26h1.66v1.25h-1.66v1.24h1.78v1.31z"/>
+                  </svg>
                 </span>
                 <span class="login-social-label">LINE</span>
               </a>

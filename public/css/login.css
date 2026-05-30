@@ -542,21 +542,35 @@ body{
 }
 
 .login-social-icon{
-  flex:0 0 44px;
-  width:44px;
-  height:44px;
+  flex:0 0 48px;
+  width:48px;
+  height:48px;
   display:grid;
   place-items:center;
   border-radius:12px;
-  background:rgba(255,255,255,.06);
-  border:1px solid var(--line-soft);
+  background:#fff;
+  border:1px solid rgba(255,255,255,.12);
+  overflow:hidden;
 }
 
 .login-social-icon img{
-  width:32px;
-  height:32px;
+  width:34px;
+  height:34px;
   object-fit:contain;
   display:block;
+}
+
+.login-social-icon-line{
+  padding:0;
+  background:transparent;
+  border:none;
+}
+
+.login-social-icon-line svg{
+  width:48px;
+  height:48px;
+  display:block;
+  border-radius:12px;
 }
 
 .login-social-label{
@@ -566,8 +580,8 @@ body{
 }
 
 .login-social-line{
-  border-color:rgba(6,199,85,.28);
-  background:rgba(6,199,85,.08);
+  border-color:rgba(6,199,85,.35);
+  background:rgba(6,199,85,.10);
 }
 
 .login-social-line:hover{
