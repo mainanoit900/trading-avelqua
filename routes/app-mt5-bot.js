@@ -689,6 +689,11 @@ async function releaseReservedPort(reservedPort) {
   }
 }
 
+function vpsPortFolderRegexForSlot(slot) {
+  const s = Math.max(1, num(slot));
+  return `-PORT-${String(s).padStart(2, '0')}([^0-9]|$)`;
+}
+
 async function reserveVpsPortForConnect(userId, existingPortId, portSlot = 0) {
   const pid = num(existingPortId);
   if (pid > 0) {
@@ -754,17 +759,18 @@ async function reserveVpsPortForConnect(userId, existingPortId, portSlot = 0) {
         AND COALESCE(TRIM(p.folder_path), '') <> ''
         AND (
           p.port_no = $1
-          OR p.folder_path ~* ('PORT[-_ ]*0?' || $1::text || '([^0-9]|$)')
+          OR p.port_no = (100 + $1)
+          OR p.folder_path ~* $2
         )
       ORDER BY
-        CASE WHEN p.port_no = $1 THEN 0 ELSE 1 END,
+        CASE WHEN p.port_no = (100 + $1) THEN 0 WHEN p.port_no = $1 THEN 1 ELSE 2 END,
         COALESCE(n.cpu_percent, 0) ASC,
         COALESCE(n.ping_ms, 0) ASC,
         p.port_no ASC
       LIMIT 1
       FOR UPDATE OF p SKIP LOCKED
     `,
-      [slot]
+      [slot, vpsPortFolderRegexForSlot(slot)]
     ).catch(() => ({ rows: [] }));
 
     const pick = preferred.rows?.[0];
@@ -1925,9 +1931,18 @@ router.get('/mt5', async (req, res) => {
 
   await query(`
     UPDATE vps_system.mt5_accounts
-    SET status='deleted', updated_at=NOW()
-    WHERE user_id=$1
-      AND LOWER(TRIM(COALESCE(status,''))) = 'failed'
+    SET status = CASE
+          WHEN last_equity IS NOT NULL OR last_balance IS NOT NULL THEN 'connected'
+          ELSE 'ready'
+        END,
+        last_login_message = CASE
+          WHEN last_equity IS NOT NULL OR last_balance IS NOT NULL
+          THEN COALESCE(NULLIF(last_login_message, ''), 'พร้อมรัน — ใช้ข้อมูลเดิม')
+          ELSE COALESCE(NULLIF(last_login_message, ''), 'ลองเชื่อมต่อใหม่ได้')
+        END,
+        updated_at = NOW()
+    WHERE user_id = $1
+      AND LOWER(TRIM(COALESCE(status, ''))) = 'failed'
       AND updated_at < NOW() - INTERVAL '5 minutes'
   `, [userId]).catch(() => {});
 
@@ -3235,9 +3250,21 @@ router.post('/mt5/run', async (req, res) => {
     const inst = await client.query(`
       INSERT INTO vps_system.bot_instances
       (user_id, mt5_account_id, bot_id, vps_id, status, lot_used, port_used, assigned_port_no, preset_id, run_payload, started_at, trade_level, capital_used, updated_at)
-      VALUES ($1,$2,$3,$4,'pending',$5,1,$6,$7,$8::jsonb,NOW(),$9,$10,NOW())
+      VALUES ($1,$2,$3,$4,'pending',$5,$6,$7,$8,$9::jsonb,NOW(),$10,$11,NOW())
       RETURNING *
-    `, [userId, mt5AccountId, bot.id, node.id, lot, assignedPortNo, calc.preset?.id || null, JSON.stringify(payload), trade.trade_level, capitalUsed]);
+    `, [
+      userId,
+      mt5AccountId,
+      bot.id,
+      node.id,
+      lot,
+      num(account.port_slot, 1) || 1,
+      assignedPortNo,
+      calc.preset?.id || null,
+      JSON.stringify(payload),
+      trade.trade_level,
+      capitalUsed
+    ]);
 
     let cmdId = 0;
     let loginCmdId = 0;
