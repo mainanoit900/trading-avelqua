@@ -4,7 +4,7 @@
   const shellCurrentPath = (typeof currentPath !== 'undefined' && currentPath) ? currentPath : '';
   const shellPageCss = (typeof pageCss !== 'undefined' && pageCss) ? pageCss : '';
   const shellPageCssHref = shellPageCss ? (shellPageCss.startsWith('/') ? shellPageCss : '/public/css/' + shellPageCss) : '';
-  const shellCssVer = '202605303';
+  const shellCssVer = '202605304';
 %>
 <!DOCTYPE html>
 <html lang="<%= shellLang %>">
@@ -31,7 +31,9 @@
 <body>
   <%
     const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
-    const shellUser = (typeof user !== 'undefined' && user) ? user : ((typeof currentUser !== 'undefined' && currentUser) ? currentUser : null);
+    const shellUser = (typeof user !== 'undefined' && user)
+      ? user
+      : ((typeof currentUser !== 'undefined' && currentUser) ? currentUser : null);
     const shellIdentityVerified = !!(
       shellUser &&
       (
@@ -146,16 +148,9 @@
 
 <%
   // กัน Error: user is not defined เวลาบาง route ไม่ได้ส่ง user เข้ามา
-  const identityOk = !!(
-    shellUser && (
-      shellUser.identity_verified === true ||
-      shellUser.identity_verified === 't' ||
-      shellUser.identity_verified === 1 ||
-      shellUser.identityVerified === true
-    )
-  );
+  const shellIdentityOk = shellIdentityVerified;
 
-  const identityMenuText = identityOk
+  const identityMenuText = shellIdentityOk
     ? safeT('identity.verified_short', 'ยืนยันสำเร็จ')
     : safeT('identity.pending_menu', 'รอยืนยันตัวตน');
 %>
@@ -164,7 +159,7 @@
   href="/app/identity"
 >
   <span class="menu-icon-shield">🛂</span>
-  <span data-i18n="<%= identityOk ? 'identity.verified_short' : 'identity.pending_menu' %>"><%= identityMenuText %></span>
+  <span data-i18n="<%= shellIdentityOk ? 'identity.verified_short' : 'identity.pending_menu' %>"><%= identityMenuText %></span>
 </a>
 
       </nav>

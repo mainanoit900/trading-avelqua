@@ -1948,6 +1948,7 @@ router.get('/mt5', async (req, res) => {
     pageTitle: 'เชื่อมต่อ MT5',
     pageCss: 'app-mt5-bot.css',
     currentPath: '/app/mt5',
+    user: req.user || req.session?.user || null,
     ...flashData,
     error: flashData.error || '',
     fixedServer: FIXED_SERVER,

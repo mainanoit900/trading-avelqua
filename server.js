@@ -10,6 +10,7 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 
 const { injectUser } = require('./middleware/requireAuth');
+const { appUserLocals } = require('./middleware/appUserLocals');
 const { languageMiddleware, normalizeLocale, localeCache, reloadLocaleCache } = require('./services/i18n');
 const { query, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
@@ -150,6 +151,9 @@ app.use(passport.initialize());
 app.use(passport.session());
 app.use(languageMiddleware);
 app.use(injectUser);
+
+// ทุกหน้า /app ใช้ user จาก DB ล่าสุด — sidebar / identity gate ไม่เพี้ยน (เช่น MT5 ไม่ส่ง user)
+app.use('/app', appUserLocals);
 
 app.get('/set-language/:lang', (req, res) => {
   const nextLang = normalizeLocale(req.params.lang);
