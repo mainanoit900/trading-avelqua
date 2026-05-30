@@ -473,6 +473,15 @@
     return mt5Num(account.last_equity, mt5Num(account.last_balance, 0));
   }
 
+  function mt5CapitalExceedsEquity(capital, account) {
+    const equity = mt5RunAccountCapital(account);
+    const cap = mt5Num(capital, 0);
+    if (equity <= 0 || cap <= 0) return false;
+    return cap > equity + 0.0001;
+  }
+
+  const MT5_EQUITY_CAPITAL_MSG = 'เงินทุนไม่พอกับการเทรด';
+
   function mt5NormalizeTradeLevel(level) {
     const value = String(level || '').trim().toLowerCase();
     if (value === 'high' || value === 'fast') return 'high';
@@ -930,13 +939,16 @@
       'capital'
     );
     const blocked = mt5IsBlockingRunWarning(preview) || capital < mt5Num(preview.minCapital, 100);
-    btn.disabled = !!meta.packageExpired || hasActive || blocked;
+    const selectedAccount = mt5SelectedRunAccount();
+    const exceedsEquity = mt5CapitalExceedsEquity(capital, selectedAccount);
+    btn.disabled = !!meta.packageExpired || hasActive || blocked || exceedsEquity;
     const note = form.querySelector('.mt5-run-action-note');
     let blockReason = '';
     if (meta.packageExpired) blockReason = 'แพ็คเกจหมดอายุ';
     else if (hasActive) blockReason = mt5ActiveRunPortText() || 'BOT กำลังทำงานอยู่ที่ PORT นี้';
+    else if (exceedsEquity) blockReason = MT5_EQUITY_CAPITAL_MSG;
     else if (blocked) blockReason = preview.warning || 'เงินทุนไม่ถึงขั้นต่ำของบอท';
-    if (blocked && !meta.packageExpired && !hasActive) {
+    if ((blocked || exceedsEquity) && !meta.packageExpired && !hasActive) {
       btn.title = blockReason;
     } else {
       btn.removeAttribute('title');
@@ -1140,6 +1152,20 @@
       });
     });
 
+    const capitalInputEl = form.querySelector('input[name="capital_manual"]');
+    if (capitalInputEl) {
+      capitalInputEl.addEventListener('blur', function () {
+        const selected = mt5SelectedRunAccount();
+        const cap = mt5Num(capitalInputEl.value, 0);
+        if (!mt5CapitalExceedsEquity(cap, selected)) return;
+        if (typeof window.mt5UiAlert === 'function') {
+          window.mt5UiAlert({ variant: 'warning', title: 'แจ้งเตือน', message: MT5_EQUITY_CAPITAL_MSG });
+        } else {
+          alert(MT5_EQUITY_CAPITAL_MSG);
+        }
+      });
+    }
+
     form.addEventListener('click', function (ev) {
       const runBtn = ev.target && ev.target.closest ? ev.target.closest('.mt5-run-submit-btn') : null;
       if (runBtn && runBtn.disabled) {
@@ -1198,6 +1224,10 @@
         }
         if (submitCapital < mt5Num(preview.minCapital, 100)) {
           await mt5UiAlert({ variant: 'warning', title: 'เงินทุนไม่พอ', message: 'เงินทุนไม่ถึงขั้นต่ำของบอทที่เลือก' });
+          return;
+        }
+        if (mt5CapitalExceedsEquity(submitCapital, selected)) {
+          await mt5UiAlert({ variant: 'warning', title: 'แจ้งเตือน', message: MT5_EQUITY_CAPITAL_MSG });
           return;
         }
         const ok = await mt5UiConfirm({
