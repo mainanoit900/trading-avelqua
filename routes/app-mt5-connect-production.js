@@ -482,7 +482,6 @@ async function queueStaleSessionCleanupBeforeLogin({
     FROM vps_system.vps_port_health
     WHERE node_id = $1
       AND port_number = $2
-      AND updated_at > NOW() - INTERVAL '30 minutes'
     ORDER BY updated_at DESC
     LIMIT 1
   `,

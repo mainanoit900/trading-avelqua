@@ -763,7 +763,7 @@ router.get('/queue', async (req, res) => {
             < NOW() - INTERVAL '45 seconds'
     `, [node.id]).catch(() => {});
 
-    const loginStuckSec = Math.max(120, Number(process.env.MT5_LOGIN_STUCK_REQUEUE_SEC || 300));
+    const loginStuckSec = Math.max(90, Number(process.env.MT5_LOGIN_STUCK_REQUEUE_SEC || 120));
     await query(`
       UPDATE vps_system.vps_agent_commands
       SET
