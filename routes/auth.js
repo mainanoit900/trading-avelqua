@@ -10,8 +10,26 @@ const { sendMailSafe } = require('../services/mailService');
 const {
   ensureUserReferralCode
 } = require('../services/scoinService');
+const { translate, normalizeLocale } = require('../services/i18n');
 
 const router = express.Router();
+
+function reqLang(req) {
+  return normalizeLocale(req.session?.lang || req.lang || 'th');
+}
+
+function authT(req, key, fallback = '') {
+  return translate(reqLang(req), key, fallback);
+}
+
+function renderLogin(req, res, extra = {}) {
+  return res.render('login', {
+    error: '',
+    success: '',
+    lang: reqLang(req),
+    ...extra
+  });
+}
 
 function normalizeEmail(email) {
   return String(email || '').trim().toLowerCase();
@@ -44,7 +62,7 @@ function baseView(req, extra = {}) {
     error: req.session.error || '',
     success: req.session.success || '',
     user: req.user || req.session.user || null,
-    lang: req.session?.lang || 'th',
+    lang: reqLang(req),
     ...extra
   };
 }
@@ -245,43 +263,41 @@ router.post('/login', requireGuest, async (req, res) => {
     const user = result.rows[0];
 
     if (!user) {
-      return res.render('login', { error: 'ไม่พบบัญชี', success: '', lang: req.session?.lang || 'th' });
+      return renderLogin(req, res, { error: authT(req, 'login.error.account_not_found', 'ไม่พบบัญชี') });
     }
 
     if (String(user.status || 'active') === 'banned' || String(user.status || '') === 'disabled') {
-      return res.render('login', { error: 'บัญชีนี้ถูกระงับการใช้งาน', success: '', lang: req.session?.lang || 'th' });
+      return renderLogin(req, res, { error: authT(req, 'login.error.account_banned', 'บัญชีนี้ถูกระงับการใช้งาน') });
     }
 
     if (!user.password_hash) {
-      return res.render('login', { error: 'บัญชีนี้เข้าสู่ระบบด้วย Google หรือ LINE', success: '', lang: req.session?.lang || 'th' });
+      return renderLogin(req, res, { error: authT(req, 'login.error.oauth_only', 'บัญชีนี้เข้าสู่ระบบด้วย Google หรือ LINE') });
     }
 
     if (!user.email_verified) {
-      return res.render('login', {
-        error: 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ',
-        success: '',
-        lang: req.session?.lang || 'th',
+      return renderLogin(req, res, {
+        error: authT(req, 'login.error.email_not_verified', 'กรุณายืนยันอีเมลก่อนเข้าสู่ระบบ'),
         unverifiedEmail: user.email
       });
     }
 
     const ok = await bcrypt.compare(password, user.password_hash);
     if (!ok) {
-      return res.render('login', { error: 'รหัสผ่านไม่ถูกต้อง', success: '', lang: req.session?.lang || 'th' });
+      return renderLogin(req, res, { error: authT(req, 'login.error.wrong_password', 'รหัสผ่านไม่ถูกต้อง') });
     }
 
     await query(`UPDATE users SET last_login_at = NOW() WHERE id = $1`, [user.id]).catch(() => {});
 
     req.login(user, (err) => {
       if (err) {
-        return res.render('login', { error: 'Login error', success: '', lang: req.session?.lang || 'th' });
+        return renderLogin(req, res, { error: authT(req, 'login.error.login_failed', 'เข้าสู่ระบบไม่สำเร็จ') });
       }
       req.session.user = user;
       return res.redirect(String(user.role || 'user') === 'admin' ? '/admin' : '/app');
     });
   } catch (error) {
     console.error(error);
-    return res.render('login', { error: 'ระบบผิดพลาด', success: '', lang: req.session?.lang || 'th' });
+    return renderLogin(req, res, { error: authT(req, 'login.error.system_error', 'ระบบผิดพลาด') });
   }
 });
 
@@ -406,7 +422,7 @@ router.get('/verify-email', requireGuest, async (req, res) => {
     const token = String(req.query.token || '').trim();
 
     if (!token) {
-      req.session.error = 'ลิงก์ยืนยันไม่ถูกต้อง';
+      req.session.error = authT(req, 'login.error.verify_link_invalid', 'ลิงก์ยืนยันไม่ถูกต้อง');
       return res.redirect('/login');
     }
 
@@ -423,7 +439,7 @@ router.get('/verify-email', requireGuest, async (req, res) => {
     const user = result.rows[0];
 
     if (!user) {
-      req.session.error = 'ลิงก์ยืนยันหมดอายุหรือไม่ถูกต้อง';
+      req.session.error = authT(req, 'login.error.verify_link_expired', 'ลิงก์ยืนยันหมดอายุหรือไม่ถูกต้อง');
       return res.redirect('/login');
     }
 
@@ -438,11 +454,11 @@ router.get('/verify-email', requireGuest, async (req, res) => {
       [user.id]
     );
 
-    req.session.success = 'ยืนยันอีเมลสำเร็จ ตอนนี้คุณสามารถเข้าสู่ระบบได้แล้ว';
+    req.session.success = authT(req, 'login.success.email_verified', 'ยืนยันอีเมลสำเร็จ ตอนนี้คุณสามารถเข้าสู่ระบบได้แล้ว');
     return res.redirect('/login');
   } catch (error) {
     console.error(error);
-    req.session.error = 'ยืนยันอีเมลไม่สำเร็จ';
+    req.session.error = authT(req, 'login.error.verify_failed', 'ยืนยันอีเมลไม่สำเร็จ');
     return res.redirect('/login');
   }
 });
@@ -452,29 +468,19 @@ router.post('/resend-verification', requireGuest, async (req, res) => {
     const email = normalizeEmail(req.body.email);
 
     if (!email) {
-      return res.render('login', {
-        error: 'กรุณากรอกอีเมลก่อน',
-        success: '',
-        lang: req.session?.lang || 'th'
-      });
+      return renderLogin(req, res, { error: authT(req, 'login.error.email_required', 'กรุณากรอกอีเมลก่อน') });
     }
 
     const result = await query(`SELECT * FROM users WHERE LOWER(email) = $1 LIMIT 1`, [email]);
     const user = result.rows[0];
 
     if (!user) {
-      return res.render('login', {
-        error: 'ไม่พบบัญชีอีเมลนี้',
-        success: '',
-        lang: req.session?.lang || 'th'
-      });
+      return renderLogin(req, res, { error: authT(req, 'login.error.email_not_found_resend', 'ไม่พบบัญชีอีเมลนี้') });
     }
 
     if (user.email_verified) {
-      return res.render('login', {
-        error: '',
-        success: 'อีเมลนี้ยืนยันแล้ว สามารถเข้าสู่ระบบได้เลย',
-        lang: req.session?.lang || 'th'
+      return renderLogin(req, res, {
+        success: authT(req, 'login.success.email_already_verified', 'อีเมลนี้ยืนยันแล้ว สามารถเข้าสู่ระบบได้เลย')
       });
     }
 
@@ -495,18 +501,14 @@ router.post('/resend-verification', requireGuest, async (req, res) => {
       token: verifyToken
     });
 
-    return res.render('login', {
-      error: '',
-      success: 'ส่งอีเมลยืนยันใหม่แล้ว กรุณาตรวจสอบกล่องจดหมาย',
-      lang: req.session?.lang || 'th',
+    return renderLogin(req, res, {
+      success: authT(req, 'login.success.verification_resent', 'ส่งอีเมลยืนยันใหม่แล้ว กรุณาตรวจสอบกล่องจดหมาย'),
       unverifiedEmail: user.email
     });
   } catch (error) {
     console.error(error);
-    return res.render('login', {
-      error: 'ส่งอีเมลยืนยันใหม่ไม่สำเร็จ',
-      success: '',
-      lang: req.session?.lang || 'th'
+    return renderLogin(req, res, {
+      error: authT(req, 'login.error.verification_resend_failed', 'ส่งอีเมลยืนยันใหม่ไม่สำเร็จ')
     });
   }
 });
@@ -521,7 +523,7 @@ if (ref) {
   persistReferralCode(req, res, ref);
 }
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_CALLBACK_URL) {
-    req.session.error = 'ยังไม่ได้ตั้งค่า Google Login';
+    req.session.error = authT(req, 'login.error.google_not_configured', 'ยังไม่ได้ตั้งค่า Google Login');
     return res.redirect('/login');
   }
 
@@ -530,7 +532,7 @@ if (ref) {
 
 router.get('/auth/google/callback', requireGuest, (req, res, next) => {
   if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_CALLBACK_URL) {
-    req.session.error = 'ยังไม่ได้ตั้งค่า Google Login';
+    req.session.error = authT(req, 'login.error.google_not_configured', 'ยังไม่ได้ตั้งค่า Google Login');
     return res.redirect('/login');
   }
 
@@ -586,7 +588,7 @@ if (ref) {
 }
   try {
     if (!lineAuthConfigReady()) {
-      req.session.error = 'ยังไม่ได้ตั้งค่า LINE Login';
+      req.session.error = authT(req, 'login.error.line_not_configured', 'ยังไม่ได้ตั้งค่า LINE Login');
       return res.redirect('/login');
     }
 
@@ -596,7 +598,7 @@ if (ref) {
     return res.redirect(buildLineAuthorizeUrl(state));
   } catch (error) {
     console.error('LINE auth start error:', error);
-    req.session.error = 'เริ่มต้น LINE Login ไม่สำเร็จ';
+    req.session.error = authT(req, 'login.error.line_start_failed', 'เริ่มต้น LINE Login ไม่สำเร็จ');
     return res.redirect('/login');
   }
 });
@@ -604,7 +606,7 @@ if (ref) {
 router.get('/auth/line/callback', requireGuest, async (req, res) => {
   try {
     if (!lineAuthConfigReady()) {
-      req.session.error = 'ยังไม่ได้ตั้งค่า LINE Login';
+      req.session.error = authT(req, 'login.error.line_not_configured', 'ยังไม่ได้ตั้งค่า LINE Login');
       return res.redirect('/login');
     }
 
@@ -615,14 +617,14 @@ router.get('/auth/line/callback', requireGuest, async (req, res) => {
     req.session.lineAuthState = '';
 
     if (!code || !state || !savedState || state !== savedState) {
-      req.session.error = 'LINE callback ไม่ถูกต้อง';
+      req.session.error = authT(req, 'login.error.line_callback_invalid', 'LINE callback ไม่ถูกต้อง');
       return res.redirect('/login');
     }
 
     const tokenData = await exchangeLineCodeForToken(code);
 
     if (!tokenData.id_token) {
-      req.session.error = 'ไม่ได้รับ LINE ID token';
+      req.session.error = authT(req, 'login.error.line_no_token', 'ไม่ได้รับ LINE ID token');
       return res.redirect('/login');
     }
 
@@ -633,7 +635,7 @@ router.get('/auth/line/callback', requireGuest, async (req, res) => {
     const fullName = String(lineProfile.name || '').trim();
 
     if (!lineUid) {
-      req.session.error = 'ไม่สามารถอ่านข้อมูลบัญชี LINE ได้';
+      req.session.error = authT(req, 'login.error.line_profile_failed', 'ไม่สามารถอ่านข้อมูลบัญชี LINE ได้');
       return res.redirect('/login');
     }
 
@@ -674,7 +676,7 @@ router.get('/auth/line/callback', requireGuest, async (req, res) => {
     req.login(user, async (err) => {
       if (err) {
         console.error('LINE req.login error:', err);
-        req.session.error = 'เข้าสู่ระบบ LINE ไม่สำเร็จ';
+        req.session.error = authT(req, 'login.error.line_login_failed', 'เข้าสู่ระบบ LINE ไม่สำเร็จ');
         return res.redirect('/login');
       }
 
@@ -706,7 +708,7 @@ router.get('/auth/line/callback', requireGuest, async (req, res) => {
 
   } catch (error) {
     console.error('LINE callback error:', error);
-    req.session.error = error.message || 'LINE Login ไม่สำเร็จ';
+    req.session.error = error.message || authT(req, 'login.error.line_login_failed', 'เข้าสู่ระบบ LINE ไม่สำเร็จ');
     return res.redirect('/login');
   }
 });

@@ -26,6 +26,13 @@ function buildCache() {
   return cache;
 }
 
+function reloadLocaleCache() {
+  const fresh = buildCache();
+  for (const locale of SUPPORTED_LOCALES) {
+    localeCache[locale] = fresh[locale];
+  }
+}
+
 const localeCache = buildCache();
 
 function getValue(dict, key) {
@@ -83,5 +90,6 @@ module.exports = {
   normalizeLocale,
   translate,
   languageMiddleware,
-  withLang
+  withLang,
+  reloadLocaleCache
 };

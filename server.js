@@ -10,7 +10,7 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 
 const { injectUser } = require('./middleware/requireAuth');
-const { languageMiddleware, normalizeLocale, localeCache } = require('./services/i18n');
+const { languageMiddleware, normalizeLocale, localeCache, reloadLocaleCache } = require('./services/i18n');
 const { query, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
 
@@ -154,6 +154,7 @@ app.use(injectUser);
 app.get('/set-language/:lang', (req, res) => {
   const nextLang = normalizeLocale(req.params.lang);
   if (req.session) req.session.lang = nextLang;
+  reloadLocaleCache();
 
   const rawTarget = String(req.query.redirect || req.get('referer') || '/');
   let safeTarget = rawTarget.startsWith('/') ? rawTarget : '/';
