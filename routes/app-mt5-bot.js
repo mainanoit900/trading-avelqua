@@ -58,6 +58,7 @@ const { fetchEquityChartForInstance, recordEquityLog, seedInstanceLiveMetrics } 
 const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBotGate');
 const { computeRunBotQueueDelaySec, computeLoginQueueDelaySec, computeJournalTimeoutSec, countActiveLoginsOnVps } = require('../lib/mt5MultiPortLogin');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
+const { repairUserMt5PortBindings } = require('../lib/mt5CachedEquityLogin');
 
 const router = express.Router();
 
@@ -1825,6 +1826,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
   try {
     await ensureBotCatalog().catch((e) => console.error('[ensureBotCatalog]', e.message));
     const userId = req.user.id;
+    await repairUserMt5PortBindings(userId).catch(() => {});
     const summary = await getPortSummaryReadOnly(userId);
     const accounts = await safeQuery(
       `
@@ -1924,6 +1926,7 @@ router.get('/mt5', async (req, res) => {
   `, [userId]).catch(() => {});
 
   await repairUserMt5AccountStatuses(userId).catch(() => {});
+  await repairUserMt5PortBindings(userId).catch(() => {});
 
   const summary = await getPortSummaryReadOnly(userId);
 
