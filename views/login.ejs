@@ -8,7 +8,7 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
 const localeList = (typeof supportedLocales !== 'undefined' && supportedLocales) ? supportedLocales : ['th', 'en', 'lo', 'vi', 'my'];
 const labelsMap = (typeof localeLabels !== 'undefined' && localeLabels) ? localeLabels : { th: 'ไทย', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
 const langShort = { th: 'TH', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
-const cssVer = '3';
+const cssVer = '4';
 %>
 
 <!DOCTYPE html>
@@ -16,145 +16,165 @@ const cssVer = '3';
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-  <meta name="theme-color" content="#07111f">
+  <meta name="theme-color" content="#050a14">
   <link rel="icon" type="image/x-icon" href="/public/favicon.ico?v=2">
   <link rel="shortcut icon" href="/public/favicon.ico?v=2">
   <link rel="apple-touch-icon" href="/public/favicon.ico?v=2">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <title><%= safeT('login.title', 'เข้าสู่ระบบ') %> | <%= brandName %></title>
   <link rel="stylesheet" href="/public/css/login.css?v=<%= cssVer %>">
 </head>
 <body>
   <div class="login-page">
-    <div class="login-lang-switch" aria-label="Language">
-      <% localeList.forEach(function(code) { %>
-        <a
-          href="/set-language/<%= code %>?redirect=/login"
-          class="login-lang-btn <%= langNow === code ? 'active' : '' %>"
-          title="<%= labelsMap[code] || code %>"
-        ><%= langShort[code] || String(code).toUpperCase() %></a>
-      <% }) %>
-    </div>
+    <div class="login-bg-glow login-bg-glow-a"></div>
+    <div class="login-bg-glow login-bg-glow-b"></div>
 
-    <div class="login-layout">
-      <section class="login-side">
-        <div class="login-brand">
-          <img src="/public/images/logo.png" alt="<%= brandName %>" class="login-brand-logo">
-          <div class="login-brand-text">
-            <strong><%= brandName %></strong>
-            <span><%= safeT('login.customer_portal', 'Customer Portal') %></span>
-          </div>
-        </div>
+    <div class="login-frame">
+      <header class="login-toolbar">
+        <a href="/?lang=<%= langNow %>" class="login-toolbar-brand">
+          <img src="/public/images/logo.png" alt="<%= brandName %>" width="36" height="36">
+          <span><%= brandName %></span>
+        </a>
+        <nav class="login-lang-switch" aria-label="Language">
+          <% localeList.forEach(function(code) { %>
+            <a
+              href="/set-language/<%= code %>?redirect=/login"
+              class="login-lang-btn <%= langNow === code ? 'active' : '' %>"
+              title="<%= labelsMap[code] || code %>"
+            ><%= langShort[code] || String(code).toUpperCase() %></a>
+          <% }) %>
+        </nav>
+      </header>
 
-        <div class="login-hero">
-          <div class="login-chip"><%= safeT('login.badge', 'SECURE LOGIN') %></div>
-          <h1><%= safeT('login.hero_title', 'เข้าสู่ระบบเพื่อจัดการทุกอย่างในที่เดียว') %></h1>
-          <p><%= safeT('login.desc', 'เข้าสู่ระบบเพื่อจัดการพอร์ต ดูแพ็กเกจ และติดตามผลการใช้งานทั้งหมดในระบบเดียว') %></p>
-
-          <div class="login-points">
-            <div class="login-point">
-              <strong><%= safeT('login.feature_1_title', 'จัดการพอร์ต MT5') %></strong>
-              <span><%= safeT('login.feature_1_desc', 'เชื่อมต่อ รันบอท และติดตามผลแบบเรียลไทม์') %></span>
-            </div>
-            <div class="login-point">
-              <strong><%= safeT('login.feature_2_title', 'กระเป๋า Scoin') %></strong>
-              <span><%= safeT('login.feature_2_desc', 'ซื้อ ขาย โอน และดูประวัติธุรกรรมได้ครบ') %></span>
-            </div>
-            <div class="login-point">
-              <strong><%= safeT('login.feature_3_title', 'ปลอดภัยและทันสมัย') %></strong>
-              <span><%= safeT('login.feature_3_desc', 'รองรับอีเมล Google และ LINE ใช้งานได้ทุกอุปกรณ์') %></span>
-            </div>
-          </div>
-        </div>
-
-        <div class="login-side-foot">
-          © <%= new Date().getFullYear() %> <%= brandName %> · <%= safeT('login.side_note', 'ระบบลูกค้าออนไลน์') %>
-        </div>
-      </section>
-
-      <section class="login-main">
-        <div class="login-card">
-          <div class="login-card-head">
-            <img src="/public/images/logo.png" alt="<%= brandName %>" class="login-card-logo">
-            <h2><%= safeT('login.title', 'เข้าสู่ระบบ') %></h2>
-            <p><%= safeT('login.form_desc', 'กรอกอีเมลและรหัสผ่าน หรือเลือกเข้าสู่ระบบด้วย Google / LINE') %></p>
+      <div class="login-layout">
+        <section class="login-visual" aria-hidden="false">
+          <div class="login-visual-art">
+            <div class="login-visual-ring"></div>
+            <img src="/public/images/logo.png" alt="" class="login-visual-logo">
           </div>
 
-          <% if (safeError) { %>
-            <div class="login-alert error"><%= safeError %></div>
-          <% } %>
+          <div class="login-visual-copy">
+            <p class="login-eyebrow"><%= safeT('login.badge', 'SECURE LOGIN') %></p>
+            <h1><%= safeT('login.hero_title', 'เข้าสู่ระบบเพื่อจัดการทุกอย่างในที่เดียว') %></h1>
+            <p class="login-lead"><%= safeT('login.desc', 'เข้าสู่ระบบเพื่อจัดการพอร์ต ดูแพ็กเกจ และติดตามผลการใช้งานทั้งหมดในระบบเดียว') %></p>
+          </div>
 
-          <% if (safeSuccess) { %>
-            <div class="login-alert success"><%= safeSuccess %></div>
-          <% } %>
+          <ul class="login-features">
+            <li>
+              <span class="login-feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 19V5M4 19h16M8 15l3-4 3 2 4-6" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div>
+                <strong><%= safeT('login.feature_1_title', 'จัดการพอร์ต MT5') %></strong>
+                <span><%= safeT('login.feature_1_desc', 'เชื่อมต่อ รันบอท และติดตามผลแบบเรียลไทม์') %></span>
+              </div>
+            </li>
+            <li>
+              <span class="login-feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M4 7h16v10H4zM4 11h16M8 15h2" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>
+              </span>
+              <div>
+                <strong><%= safeT('login.feature_2_title', 'กระเป๋า Scoin') %></strong>
+                <span><%= safeT('login.feature_2_desc', 'ซื้อ ขาย โอน และดูประวัติธุรกรรมได้ครบ') %></span>
+              </div>
+            </li>
+            <li>
+              <span class="login-feature-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none"><path d="M12 3l7 3v6c0 4.5-3 7.5-7 9-4-1.5-7-4.5-7-9V6l7-3z" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/></svg>
+              </span>
+              <div>
+                <strong><%= safeT('login.feature_3_title', 'ปลอดภัยและทันสมัย') %></strong>
+                <span><%= safeT('login.feature_3_desc', 'รองรับอีเมล Google และ LINE ใช้งานได้ทุกอุปกรณ์') %></span>
+              </div>
+            </li>
+          </ul>
 
-          <form method="POST" action="/login" class="login-form">
-            <div class="login-field">
-              <label for="loginEmail"><%= safeT('common.email', 'อีเมล') %></label>
-              <input
-                id="loginEmail"
-                type="email"
-                name="email"
-                class="login-input"
-                placeholder="<%= safeT('login.email_placeholder', 'กรอกอีเมล') %>"
-                autocomplete="email"
-                required
-              >
-            </div>
+          <p class="login-visual-foot">© <%= new Date().getFullYear() %> <%= brandName %></p>
+        </section>
 
-            <div class="login-field">
-              <label for="password"><%= safeT('login.password', 'รหัสผ่าน') %></label>
-              <div class="login-password-wrap">
+        <section class="login-panel">
+          <div class="login-panel-inner">
+            <header class="login-panel-head">
+              <p class="login-panel-eyebrow"><%= safeT('login.customer_portal', 'Customer Portal') %></p>
+              <h2><%= safeT('login.title', 'เข้าสู่ระบบ') %></h2>
+              <p><%= safeT('login.form_desc', 'กรอกอีเมลและรหัสผ่าน หรือเลือกเข้าสู่ระบบด้วย Google / LINE') %></p>
+            </header>
+
+            <% if (safeError) { %>
+              <div class="login-alert error"><%= safeError %></div>
+            <% } %>
+
+            <% if (safeSuccess) { %>
+              <div class="login-alert success"><%= safeSuccess %></div>
+            <% } %>
+
+            <form method="POST" action="/login" class="login-form">
+              <div class="login-field">
+                <label for="loginEmail"><%= safeT('common.email', 'อีเมล') %></label>
                 <input
-                  type="password"
-                  id="password"
-                  name="password"
-                  class="login-input login-input-password"
-                  placeholder="<%= safeT('login.password_placeholder', 'กรอกรหัสผ่าน') %>"
-                  autocomplete="current-password"
+                  id="loginEmail"
+                  type="email"
+                  name="email"
+                  class="login-input"
+                  placeholder="<%= safeT('login.email_placeholder', 'กรอกอีเมล') %>"
+                  autocomplete="email"
                   required
                 >
-                <button
-                  type="button"
-                  class="login-password-toggle"
-                  onclick="togglePass()"
-                  aria-label="<%= safeT('register.toggle_password', 'แสดงหรือซ่อนรหัสผ่าน') %>"
-                >
-                  <span id="passwordToggleText"><%= safeT('login.show_password', 'แสดง') %></span>
-                </button>
               </div>
+
+              <div class="login-field">
+                <div class="login-field-top">
+                  <label for="password"><%= safeT('login.password', 'รหัสผ่าน') %></label>
+                  <a class="login-forgot" href="/forgot-password"><%= safeT('forgot.title', 'ลืมรหัสผ่าน') %></a>
+                </div>
+                <div class="login-password-wrap">
+                  <input
+                    type="password"
+                    id="password"
+                    name="password"
+                    class="login-input login-input-password"
+                    placeholder="<%= safeT('login.password_placeholder', 'กรอกรหัสผ่าน') %>"
+                    autocomplete="current-password"
+                    required
+                  >
+                  <button
+                    type="button"
+                    class="login-password-toggle"
+                    onclick="togglePass()"
+                    aria-label="<%= safeT('register.toggle_password', 'แสดงหรือซ่อนรหัสผ่าน') %>"
+                  >
+                    <span id="passwordToggleText"><%= safeT('login.show_password', 'แสดง') %></span>
+                  </button>
+                </div>
+              </div>
+
+              <button type="submit" class="login-submit">
+                <%= safeT('nav.login', 'เข้าสู่ระบบ') %>
+              </button>
+            </form>
+
+            <div class="login-divider"><span><%= safeT('login.social', 'หรือเข้าสู่ระบบด้วย') %></span></div>
+
+            <div class="login-social-grid">
+              <a href="/auth/google" class="login-social-btn">
+                <img src="/public/images/google.png" alt="">
+                <span>Google</span>
+              </a>
+              <a href="/auth/line" class="login-social-btn login-social-line">
+                <img src="/public/images/line.png" alt="">
+                <span>LINE</span>
+              </a>
             </div>
 
-            <div class="login-links">
-              <a href="/forgot-password"><%= safeT('forgot.title', 'ลืมรหัสผ่าน') %></a>
-            </div>
-
-            <button type="submit" class="login-submit">
-              <%= safeT('nav.login', 'เข้าสู่ระบบ') %>
-            </button>
-          </form>
-
-          <div class="login-divider">
-            <span><%= safeT('login.social', 'หรือเข้าสู่ระบบด้วย') %></span>
+            <p class="login-footer">
+              <%= safeT('login.no_account', 'ยังไม่มีบัญชี?') %>
+              <a href="/register"><%= safeT('nav.register', 'สมัครใช้งาน') %></a>
+            </p>
           </div>
-
-          <div class="login-social-grid">
-            <a href="/auth/google" class="login-social-btn login-social-google">
-              <img src="/public/images/google.png" alt="Google">
-              <span>Google</span>
-            </a>
-
-            <a href="/auth/line" class="login-social-btn login-social-line">
-              <img src="/public/images/line.png" alt="LINE">
-              <span>LINE</span>
-            </a>
-          </div>
-
-          <div class="login-footer">
-            <span><%= safeT('login.no_account', 'ยังไม่มีบัญชี?') %></span>
-            <a href="/register"><%= safeT('nav.register', 'สมัครใช้งาน') %></a>
-          </div>
-        </div>
-      </section>
+        </section>
+      </div>
     </div>
   </div>
 
@@ -166,7 +186,6 @@ const cssVer = '3';
       const input = document.getElementById('password');
       const text = document.getElementById('passwordToggleText');
       if (!input || !text) return;
-
       if (input.type === 'password') {
         input.type = 'text';
         text.textContent = PW_HIDE;
