@@ -16,7 +16,8 @@ const { normalizeLockedServer, MT5_LOCKED_SERVER } = require('../lib/mt5Server')
 const { expireStuckMaintenanceCommands } = require('../lib/agentDeploy');
 const {
   reserveAdminPortForLogin,
-  buildMt5LoginPayload
+  buildMt5LoginPayload,
+  adminPortToSystemPortNo
 } = require('../lib/adminVpsPortPicker');
 const { reserveVpsPortForConnect } = require('../lib/mt5ReservePortForConnect');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
@@ -55,6 +56,47 @@ const MAX_PING = Number(process.env.MT5_MAX_PING || 350);
 
 function clean(v) {
   return String(v || '').trim();
+}
+
+/** เลข port บน VPS สำหรับ agent — slot 2 → 102, ไม่ใช้ assigned_port_no ค้าง (เช่น 1) */
+function resolveConnectAllocPortNo(reservedPort, portSlot) {
+  const fromRow = num(reservedPort?.port_number || reservedPort?.port_no);
+  if (fromRow >= 100) return fromRow;
+  const slot = num(portSlot);
+  if (slot > 0) return adminPortToSystemPortNo(slot);
+  if (fromRow > 0 && fromRow <= 20) return adminPortToSystemPortNo(fromRow);
+  return fromRow || adminPortToSystemPortNo(num(parsePortNumber(reservedPort)));
+}
+
+/** ซ่อม account ที่ port_slot ไม่ตรง folder/port_no บน VPS */
+async function repairMisboundAccountPorts(userId) {
+  const uid = num(userId);
+  if (!uid) return 0;
+  const r = await query(
+    `
+    UPDATE vps_system.mt5_accounts a
+    SET port_id = p.id,
+        vps_id = p.vps_id,
+        assigned_port_no = p.port_no,
+        windows_port_no = p.port_no,
+        updated_at = NOW()
+    FROM vps_system.vps_ports p
+    WHERE a.user_id = $1
+      AND a.port_slot IS NOT NULL
+      AND a.port_slot > 0
+      AND p.port_no = (100 + a.port_slot)
+      AND COALESCE(TRIM(p.folder_path), '') <> ''
+      AND p.folder_path ~* ('-PORT-' || LPAD(a.port_slot::text, 2, '0') || '([^0-9]|$)')
+      AND (
+        a.port_id IS DISTINCT FROM p.id
+        OR COALESCE(a.assigned_port_no, 0) <> p.port_no
+        OR COALESCE(a.vps_id, 0) <> p.vps_id
+      )
+    RETURNING a.id, a.port_slot, p.port_no
+  `,
+    [uid]
+  ).catch(() => ({ rows: [] }));
+  return r.rows?.length || 0;
 }
 
 function num(v, def = 0) {
@@ -578,7 +620,7 @@ async function findRetryPortForLogin(userId, mt5Login, serverName) {
       a.id AS account_id,
       a.port_id,
       a.vps_id,
-      a.assigned_port_no AS port_no,
+      p.port_no AS port_no,
       a.port_slot,
       p.folder_path
     FROM vps_system.mt5_accounts a
@@ -718,6 +760,7 @@ async function handleMt5ConnectProduction(req, res) {
     await ensureRuntimeColumns();
 
     const userId = req.user.id;
+    await repairMisboundAccountPorts(userId).catch(() => {});
     const mt5Login = clean(req.body.mt5_login || req.body.mt5Login);
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
     const serverName = normalizeLockedServer(clean(req.body.server_name || req.body.serverName));
@@ -828,15 +871,11 @@ async function handleMt5ConnectProduction(req, res) {
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (retryPort) {
-      reservedPort = {
-        port_id: retryPort.port_id,
-        vps_id: retryPort.vps_id,
-        port_no: retryPort.port_no,
-        folder_path: retryPort.folder_path,
-        port_slot: portSlot
-      };
+      const reserve = await reserveVpsPortForConnect(userId, null, portSlot);
+      if (!reserve.ok) throw new Error(reserve.message);
+      reservedPort = reserve.port;
       await cancelPendingLoginCommands({
-        portId: retryPort.port_id,
+        portId: reservedPort.port_id,
         accountId: retryPort.account_id,
         mt5Login
       });
@@ -852,9 +891,7 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(`PORT ${portSlot} กำลังเชื่อมต่ออยู่ กรุณารอสักครู่`);
     }
 
-    const allocPortNo = num(
-      reservedPort.port_number || parsePortNumber(reservedPort) || portSlot
-    );
+    const allocPortNo = resolveConnectAllocPortNo(reservedPort, portSlot);
 
     // ไม่พึ่ง ON CONFLICT เพราะฐานข้อมูลเดิมบางชุดอาจยังไม่มี unique constraint ครบ
     // ใช้วิธี UPDATE ก่อน ถ้าไม่มีค่อย INSERT เพื่อไม่ให้ deploy แล้วล้ม
@@ -1092,6 +1129,7 @@ async function handleMt5ConnectStatusProduction(req, res) {
   try {
     await ensureRuntimeColumns();
     const userId = req.user.id;
+    await repairMisboundAccountPorts(userId).catch(() => {});
     const accountId = num(req.query.accountId || req.query.account_id);
     const data = await getConnectStatusForUser(userId, accountId).catch(() => null);
     if (!data) {
