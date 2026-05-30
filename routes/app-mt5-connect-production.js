@@ -18,6 +18,7 @@ const {
   reserveAdminPortForLogin,
   buildMt5LoginPayload
 } = require('../lib/adminVpsPortPicker');
+const { reserveVpsPortForConnect } = require('../lib/mt5ReservePortForConnect');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const {
@@ -388,7 +389,6 @@ async function reserveBestPort(userId) {
         AND LOWER(COALESCE(p.status,'')) NOT IN ('disabled','off','deleted')
         AND COALESCE(n.agent_enabled, TRUE)=TRUE
         AND LOWER(COALESCE(n.status,'')) IN ('online','active','available','connected')
-        AND COALESCE(n.last_seen_at, n.updated_at, NOW() - INTERVAL '10 minutes') > NOW() - INTERVAL '60 seconds'
         AND COALESCE(n.cpu_percent,0) <= COALESCE(n.max_cpu_percent, $1)
         AND COALESCE(n.ram_percent,0) <= COALESCE(n.max_ram_percent, $2)
         AND COALESCE(n.ping_ms,0) <= COALESCE(n.max_ping_ms, $3)
@@ -397,7 +397,7 @@ async function reserveBestPort(userId) {
           FROM vps_system.mt5_accounts a
           WHERE a.vps_id=p.vps_id
             AND a.assigned_port_no=p.port_no
-            AND LOWER(COALESCE(a.status,'')) IN ('connecting','checking','connected','ready')
+            AND LOWER(COALESCE(a.status,'')) IN ('connecting','checking','connected','ready','starting')
         )
       ORDER BY
         COALESCE(n.cpu_percent,0) ASC,
@@ -760,7 +760,7 @@ async function handleMt5ConnectProduction(req, res) {
     if (fastErr) throw new Error(fastErr);
 
     if (requestedSlot > 0) {
-      const reserve = await reserveBestPort(userId);
+      const reserve = await reserveVpsPortForConnect(userId, null, requestedSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (retryPort) {

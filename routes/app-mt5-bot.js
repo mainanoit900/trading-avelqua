@@ -551,8 +551,10 @@ async function safeQuery(sql, params = [], fallback = []) {
 const {
   reserveAdminPortForLogin,
   buildMt5LoginPayload,
-  formatPickMessage: formatAdminPickMessage
+  formatPickMessage: formatAdminPickMessage,
+  adminPortToSystemPortNo
 } = require('../lib/adminVpsPortPicker');
+const { reserveVpsPortForConnect, vpsPortFolderRegexForSlot } = require('../lib/mt5ReservePortForConnect');
 const { fetchVpsActiveLoginLoadMap } = require('../lib/vpsLoginLoad');
 const { setAdminAllocationStatus, parsePortNumber, resolveSystemVpsId, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
 const { buildStopMt5ReleasePayload } = require('../lib/mt5PortCleanup');
@@ -687,122 +689,6 @@ async function releaseReservedPort(reservedPort) {
       reservedPort.allocation_id
     ).catch(() => {});
   }
-}
-
-function vpsPortFolderRegexForSlot(slot) {
-  const s = Math.max(1, num(slot));
-  return `-PORT-${String(s).padStart(2, '0')}([^0-9]|$)`;
-}
-
-async function reserveVpsPortForConnect(userId, existingPortId, portSlot = 0) {
-  const pid = num(existingPortId);
-  if (pid > 0) {
-    const row = await query(
-      `
-      SELECT
-        p.id AS port_id,
-        p.vps_id,
-        p.port_no,
-        p.folder_path,
-        n.node_name
-      FROM vps_system.vps_ports p
-      INNER JOIN vps_system.vps_nodes n ON n.id = p.vps_id
-      WHERE p.id = $1
-      LIMIT 1
-    `,
-      [pid]
-    ).catch(() => ({ rows: [] }));
-    const port = row.rows?.[0];
-    if (port && String(port.folder_path || '').trim()) {
-      await query(
-        `
-        UPDATE vps_system.vps_ports
-        SET status='locked',
-            locked_by_user_id=$2,
-            locked_until=NOW() + INTERVAL '3 minutes',
-            updated_at=NOW()
-        WHERE id=$1
-      `,
-        [port.port_id, userId]
-      ).catch(() => {});
-      return {
-        ok: true,
-        port: {
-          port_id: port.port_id,
-          vps_id: port.vps_id,
-          port_number: port.port_no,
-          port_no: port.port_no,
-          folder_path: port.folder_path,
-          node_name: port.node_name
-        },
-        reused: true
-      };
-    }
-  }
-
-  const slot = num(portSlot);
-  if (slot > 0) {
-    const preferred = await query(
-      `
-      SELECT
-        p.id AS port_id,
-        p.vps_id,
-        p.port_no,
-        p.folder_path,
-        n.node_name
-      FROM vps_system.vps_ports p
-      INNER JOIN vps_system.vps_nodes n ON n.id = p.vps_id
-      WHERE LOWER(COALESCE(p.status, '')) IN ('available', 'free', 'idle')
-        AND LOWER(COALESCE(p.status, '')) NOT IN ('disabled', 'off', 'deleted')
-        AND COALESCE(n.agent_enabled, TRUE) = TRUE
-        AND LOWER(TRIM(COALESCE(n.status, ''))) IN ('online', 'available', 'active', 'connected')
-        AND COALESCE(TRIM(p.folder_path), '') <> ''
-        AND (
-          p.port_no = $1
-          OR p.port_no = (100 + $1)
-          OR p.folder_path ~* $2
-        )
-      ORDER BY
-        CASE WHEN p.port_no = (100 + $1) THEN 0 WHEN p.port_no = $1 THEN 1 ELSE 2 END,
-        COALESCE(n.cpu_percent, 0) ASC,
-        COALESCE(n.ping_ms, 0) ASC,
-        p.port_no ASC
-      LIMIT 1
-      FOR UPDATE OF p SKIP LOCKED
-    `,
-      [slot, vpsPortFolderRegexForSlot(slot)]
-    ).catch(() => ({ rows: [] }));
-
-    const pick = preferred.rows?.[0];
-    if (pick) {
-      await query(
-        `
-        UPDATE vps_system.vps_ports
-        SET status='locked',
-            locked_by_user_id=$2,
-            locked_until=NOW() + INTERVAL '3 minutes',
-            updated_at=NOW()
-        WHERE id=$1
-      `,
-        [pick.port_id, userId]
-      ).catch(() => {});
-      return {
-        ok: true,
-        port: {
-          port_id: pick.port_id,
-          vps_id: pick.vps_id,
-          port_number: pick.port_no,
-          port_no: pick.port_no,
-          folder_path: pick.folder_path,
-          node_name: pick.node_name
-        },
-        reused: false,
-        matchedSlot: true
-      };
-    }
-  }
-
-  return reserveMt5Port(userId);
 }
 
 function resolveConnectPortSlot(summary, requestedSlot, usedSlotSet, busySlotSet = null) {
@@ -2708,10 +2594,17 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
 
     const oldPort = old.rows[0];
     const stopNodeId = num(oldPort.vps_id);
-    const stopPortNo =
-      num(oldPort.assigned_port_no) ||
-      num(oldPort.windows_port_no) ||
-      num(oldPort.port_slot);
+    const slotNo = num(oldPort.port_slot);
+    const systemPortNos = [
+      ...new Set(
+        [
+          num(oldPort.assigned_port_no),
+          num(oldPort.windows_port_no),
+          adminPortToSystemPortNo(slotNo),
+          slotNo
+        ].filter((n) => n > 0)
+      )
+    ];
     const folderPath = oldPort.folder_path || null;
 
     await abortConnectForRemovedAccount(id, {
@@ -2721,26 +2614,28 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
     }).catch((e) => console.error('[DELETE] abort connect error:', e.message || e));
 
     // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
-    if (stopNodeId && stopPortNo) {
-      await query(`
+    if (stopNodeId && systemPortNos.length) {
+      for (const stopPortNo of systemPortNos) {
+        await query(`
         INSERT INTO vps_system.vps_agent_commands
         (vps_id, node_id, port_id, command_type, payload, status, created_at)
         VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
       `, [
-        stopNodeId,
-        oldPort.port_id || null,
-        JSON.stringify(
-          buildStopMt5ReleasePayload({
-            portNo: stopPortNo,
-            portSlot: oldPort.port_slot,
-            assignedPortNo: oldPort.assigned_port_no,
-            windowsPortNo: oldPort.windows_port_no,
-            folderPath,
-            accountId: id,
-            reason: 'user_delete_port'
-          })
-        )
-      ]).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
+          stopNodeId,
+          oldPort.port_id || null,
+          JSON.stringify(
+            buildStopMt5ReleasePayload({
+              portNo: stopPortNo,
+              portSlot: oldPort.port_slot,
+              assignedPortNo: oldPort.assigned_port_no,
+              windowsPortNo: oldPort.windows_port_no,
+              folderPath,
+              accountId: id,
+              reason: 'user_delete_port'
+            })
+          )
+        ]).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
+      }
       if (oldPort.port_id) {
         await query(`
           UPDATE vps_system.vps_ports
@@ -2749,17 +2644,27 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
         `, [oldPort.port_id]).catch((err) =>
           console.error('[DELETE] release vps_ports by id error:', err.message || err)
         );
-      } else {
+      }
+      if (stopNodeId && systemPortNos.length) {
         await query(`
           UPDATE vps_system.vps_ports
           SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
-          WHERE vps_id=$1 AND port_no=$2
-        `, [stopNodeId, stopPortNo]).catch((err) =>
+          WHERE vps_id=$1 AND port_no = ANY($2::int[])
+        `, [stopNodeId, systemPortNos]).catch((err) =>
           console.error('[DELETE] release vps_ports error:', err.message || err)
         );
       }
+      await query(`
+        UPDATE vps_system.vps_ports
+        SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
+        WHERE locked_by_user_id=$1
+          AND ($2::bigint <= 0 OR vps_id=$2)
+      `, [userId, stopNodeId]).catch((err) =>
+        console.error('[DELETE] release user port locks error:', err.message || err)
+      );
+      const primaryPortNo = systemPortNos[0];
       const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({}));
-      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath).catch(() => {});
+      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, primaryPortNo, folderPath).catch(() => {});
     }
 
     // STEP 3: ค่อยล้างค่าใน DB (port_slot ต้อง NULL — ไม่งั้น repair จะฟื้นบัญชีกลับ)
