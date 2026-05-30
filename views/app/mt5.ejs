@@ -1002,8 +1002,8 @@
         ? '<button type="button" class="mt5-btn mt5-run-secondary mt5-stop-btn" data-stop-id="' + mt5Esc(activeInstance.id) + '">Stop BOT</button>'
         : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
       '</div>' +
-      '<small class="mt5-run-action-note">' + (hasActiveInstance ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
-      (hasActiveInstance && activeInstance && String(activeInstance.status || '') === 'connecting'
+      '<small class="mt5-run-action-note">' + (hasActiveInstance ? (String(activeInstance.status || '') === 'running' ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'กำลังเปิดบอทบน VPS — โดยทั่วไป 30–90 วิ') : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
+      (hasActiveInstance && activeInstance && String(activeInstance.status || '') !== 'running'
         ? ('<div class="mt5-run-connecting-meta" id="mt5RunConnectingMeta" data-since="' + mt5Esc(activeInstance.connecting_since || activeInstance.started_at || '') + '" data-hint="' + mt5Esc(activeInstance.connecting_hint || mt5ConnectingHint(activeInstance)) + '">' +
           '<b>กำลังเปิดบอท</b> — ใช้เวลา <b>' + mt5ConnectingElapsedSec(activeInstance.connecting_since || activeInstance.started_at) + '</b> วินาที · ' + mt5Esc(activeInstance.connecting_hint || mt5ConnectingHint(activeInstance)) +
           ' · โดยทั่วไป 30–90 วิ</div>')

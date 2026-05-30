@@ -2603,7 +2603,21 @@ def account_snapshot(
 
         api_snap: Dict[str, Any] = {}
         login_equity_purpose = "login_equity" in purpose
-        if login_equity_purpose and terminal_up:
+        keep_mt5_for_bot = should_keep_mt5_open_after_login(payload) or str(
+            payload_get(payload, "purposeType", "purpose_type") or ""
+        ).strip().lower() == "bot_run"
+        if login_equity_purpose and terminal_up and keep_mt5_for_bot:
+            api_snap = account_snapshot_mt5_api(port_dir, payload)
+            if api_snap.get("loginMismatch"):
+                snap["loginMismatch"] = True
+                snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
+                snap["source"] = str(api_snap.get("source") or "mt5_api_reject")
+                return snap
+            if _snap_positive(api_snap):
+                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
+                return snap
+            log(f"MT5 SNAPSHOT BOT RUN READ port={port} (skip isolated API — MT5 already open)")
+        elif login_equity_purpose and terminal_up:
             login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
             password = str(payload_get(payload or {}, "mt5Password", "password") or "")
             server = resolve_mt5_server(payload)
@@ -2628,7 +2642,7 @@ def account_snapshot(
                         time.sleep(settle)
                 except Exception as ui_err:
                     log(f"LOGIN EQUITY UI AUTOFILL port={port} err={ui_err}")
-        if login_equity_purpose:
+        if login_equity_purpose and not (terminal_up and keep_mt5_for_bot):
             iso_attempts = max(1, int(os.getenv("AVELQUA_LOGIN_EQUITY_ISOLATED_ATTEMPTS", "3")))
             for iso_i in range(iso_attempts):
                 if cmd_id and not command_still_active(cmd_id):
@@ -6447,24 +6461,33 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 snap["error"] = str(sync_err)[:500]
             command_result(cmd_id, True, {"action": ctype, "snapshot": snap, **snap})
             if login_equity and _snap_positive(snap):
-                try:
-                    port_dir = resolve_mt5_port_dir(port, payload)
-                    login_hint = str(payload_get(payload, "mt5Login", "login") or "").strip()
-                    kill_payload = dict(payload or {})
-                    kill_payload["purpose"] = "post_connect_exit"
-                    kill_payload["forceKill"] = True
-                    kill_payload["closeMt5"] = True
-                    if login_hint:
-                        kill_payload["mt5Login"] = login_hint
-                        kill_payload["login"] = login_hint
-                    res = stop_mt5_port_only(port, kill_payload)
+                keep_open = should_keep_mt5_open_after_login(payload) or str(
+                    payload_get(payload, "purposeType", "purpose_type") or ""
+                ).strip().lower() == "bot_run"
+                if keep_open:
                     log(
-                        f"LOGIN EQUITY CLOSE MT5 port={port} "
-                        f"balance={snap.get('balance')} equity={snap.get('equity')} "
-                        f"stopped={res.get('stopped')}"
+                        f"LOGIN EQUITY SKIP CLOSE port={port} "
+                        f"balance={snap.get('balance')} equity={snap.get('equity')}"
                     )
-                except Exception as close_err:
-                    log(f"LOGIN EQUITY CLOSE MT5 ERROR port={port}: {close_err}")
+                else:
+                    try:
+                        port_dir = resolve_mt5_port_dir(port, payload)
+                        login_hint = str(payload_get(payload, "mt5Login", "login") or "").strip()
+                        kill_payload = dict(payload or {})
+                        kill_payload["purpose"] = "post_connect_exit"
+                        kill_payload["forceKill"] = True
+                        kill_payload["closeMt5"] = True
+                        if login_hint:
+                            kill_payload["mt5Login"] = login_hint
+                            kill_payload["login"] = login_hint
+                        res = stop_mt5_port_only(port, kill_payload)
+                        log(
+                            f"LOGIN EQUITY CLOSE MT5 port={port} "
+                            f"balance={snap.get('balance')} equity={snap.get('equity')} "
+                            f"stopped={res.get('stopped')}"
+                        )
+                    except Exception as close_err:
+                        log(f"LOGIN EQUITY CLOSE MT5 ERROR port={port}: {close_err}")
 
         elif ctype in ("mt5_preview", "capture_mt5_window", "capture_mt5_preview"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
