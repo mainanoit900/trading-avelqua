@@ -359,7 +359,7 @@ const fmt = v => v ? new Date(v).toLocaleString('th-TH') : 'ยังไม่�
             clearInterval(disconnectTimer);
             disconnectTimer = null;
           }
-          postCommand(nodeId, 'disconnect_agent', { waitResult:false });
+          postCommand(nodeId, 'disconnect_agent', { waitResult:true });
         }
       );
     }
@@ -372,12 +372,51 @@ const fmt = v => v ? new Date(v).toLocaleString('th-TH') : 'ยังไม่�
       if(sec <= 0){
         clearInterval(disconnectTimer);
         disconnectTimer = null;
-        postCommand(nodeId, 'disconnect_agent', { waitResult:false });
+        postCommand(nodeId, 'disconnect_agent', { waitResult:true });
         return;
       }
 
       draw();
     }, 1000);
+  }
+
+  function formatCommandResult(command, result, error, commandId, status){
+    if(error) return String(error);
+    if(!result || typeof result !== 'object') return 'Command ID: ' + commandId + '\nStatus: ' + (status || 'pending');
+
+    if(command === 'get_log' && Array.isArray(result.lines)){
+      const lines = result.lines.slice(-80);
+      if(!lines.length) return 'Log ว่าง — ไฟล์: ' + (result.log_file || '-');
+      return 'Log file: ' + (result.log_file || '-') + '\n\n' + lines.join('\n');
+    }
+
+    if(command === 'status'){
+      return [
+        'Service: ' + (result.service_name || result.service || '-'),
+        'Agent status: ' + (result.status || '-'),
+        'Agent type: ' + (result.agent_type || '-'),
+        'Version: ' + (result.agent_version || '-'),
+        'Command ID: ' + commandId
+      ].join('\n');
+    }
+
+    if(command === 'restart_agent'){
+      return [
+        'Restart: ' + (result.restart || result.action || 'scheduled'),
+        'Service: ' + (result.service_name || '-'),
+        'Command ID: ' + commandId
+      ].join('\n');
+    }
+
+    if(command === 'disconnect_agent' || command === 'connect_agent'){
+      return [
+        'Action: ' + (result.action || command),
+        'Status: ' + (result.status || status || '-'),
+        'Command ID: ' + commandId
+      ].join('\n');
+    }
+
+    return JSON.stringify(result, null, 2);
   }
 
   async function pollCommand(commandId, command){
@@ -395,7 +434,7 @@ const fmt = v => v ? new Date(v).toLocaleString('th-TH') : 'ยังไม่�
         const c = data.command || {};
 
         const detail = c.result && Object.keys(c.result || {}).length
-          ? JSON.stringify(c.result, null, 2)
+          ? formatCommandResult(command, c.result, c.error, commandId, c.status)
           : (c.error || 'Command ID: ' + commandId + '\nStatus: ' + (c.status || 'pending'));
 
         resultBox.style.display = 'block';
@@ -530,7 +569,7 @@ const fmt = v => v ? new Date(v).toLocaleString('th-TH') : 'ยังไม่�
   }
 
   async function showNodeStatusDirect(nodeId){
-    openPopup('loading', 'สถานะ VPS', 'กำลังตรวจสอบสถานะ VPS...', '', 'loading');
+    openPopup('loading', 'สถานะ VPS', 'กำลังโหลดข้อมูล heartbeat...', '', 'loading');
 
     const res = await fetch(`/admin/vps/nodes/${nodeId}/status-details`, {
       headers: { 'Accept': 'application/json' }
@@ -548,6 +587,8 @@ const fmt = v => v ? new Date(v).toLocaleString('th-TH') : 'ยังไม่�
     const detail =
 `สถานะ: ${data.state || '-'}
 รายละเอียด: ${data.detail || '-'}
+Port ใช้งาน: ${x.active_ports || x.used_ports || 0} / ${x.max_ports || 0}
+Lot ใช้งาน: ${x.active_lot || x.used_lot || 0} / ${x.max_lot || 0}
 CPU: ${x.cpu_percent || 0}%
 RAM: ${x.ram_percent || 0}%
 Download: ${x.net_down_mbps || 0} Mbps
@@ -559,35 +600,30 @@ Error: ${x.last_error || '-'}`;
     openPopup('ok', 'สถานะ VPS', data.state || 'สถานะ', detail, 'normal');
   }
 
-  async function showNodeLogsDirect(nodeId){
-    openPopup('loading', 'ดู Log VPS', 'กำลังโหลด Log ล่าสุด...', '', 'loading');
-
-    const res = await fetch(`/admin/vps/nodes/${nodeId}/logs`, {
-      headers: { 'Accept': 'application/json' }
-    });
-
-    const data = await res.json().catch(() => ({ ok:false, error:'อ่านข้อมูลไม่ได้' }));
-
-    if(!res.ok || !data.ok){
-      openPopup('error', 'ดู Log VPS', data.error || 'โหลด Log ไม่สำเร็จ', '', 'normal');
-      return;
+  async function showNodeLogsHybrid(nodeId){
+    openPopup('loading', 'ดู Log VPS', 'กำลังขอ Log จาก Agent...', '', 'loading');
+    try {
+      const data = await sendCommand(nodeId, 'get_log');
+      await refreshNodes();
+      const commandId = data.command && data.command.id ? data.command.id : '';
+      if(commandId){
+        openPopup('loading', 'ดู Log VPS', data.message || 'รอ Agent ส่ง Log...', 'Command ID: ' + commandId, 'loading');
+        pollCommand(commandId, 'get_log');
+        return;
+      }
+      openPopup('error', 'ดู Log VPS', 'ส่งคำสั่ง Log ไม่สำเร็จ', '', 'normal');
+    } catch(err){
+      const res = await fetch(`/admin/vps/nodes/${nodeId}/logs`, { headers: { 'Accept': 'application/json' } });
+      const data = await res.json().catch(() => ({ ok:false }));
+      if(res.ok && data.ok && (data.logs || []).length){
+        const lines = data.logs.slice(0, 50).map((x, i) => {
+          return `${i+1}. ${x.created_at}\nStatus: ${x.status || '-'} | CPU: ${x.cpu_percent || 0}% | RAM: ${x.ram_percent || 0}%\nError: ${x.last_error || '-'}`;
+        }).join('\n\n');
+        openPopup('ok', 'ดู Log VPS (DB)', `แสดง ${Math.min(data.logs.length, 50)} แถว heartbeat`, lines, 'normal');
+        return;
+      }
+      openPopup('error', 'ดู Log VPS', err.message || 'โหลด Log ไม่สำเร็จ', '', 'normal');
     }
-
-    const logs = data.logs || [];
-
-    if(!logs.length){
-      openPopup('error', 'ดู Log VPS', 'ยังไม่มี Log', 'รอ Agent ส่ง heartbeat เข้ามาก่อน', 'normal');
-      return;
-    }
-
-    const lines = logs.slice(0, 50).map((x, i) => {
-      return `${i+1}. ${x.created_at}
-Status: ${x.status || '-'} | CPU: ${x.cpu_percent || 0}% | RAM: ${x.ram_percent || 0}%
-Down: ${x.net_down_mbps || 0} Mbps | Up: ${x.net_up_mbps || 0} Mbps | Ping: ${x.ping_ms || 0} ms
-Error: ${x.last_error || '-'}`;
-    }).join('\n\n');
-
-    openPopup('ok', 'ดู Log VPS', `แสดง ${Math.min(logs.length, 50)} แถวล่าสุด / เก็บย้อนหลัง 10 วัน`, lines, 'normal');
   }
 
   document.addEventListener('click', function(e){
@@ -605,7 +641,7 @@ Error: ${x.last_error || '-'}`;
     }
 
     if(command === 'get_log'){
-      showNodeLogsDirect(nodeId);
+      showNodeLogsHybrid(nodeId);
       return;
     }
 
@@ -615,7 +651,7 @@ Error: ${x.last_error || '-'}`;
     }
 
     if(command === 'connect_agent'){
-      postCommand(nodeId, command, { waitResult:false });
+      postCommand(nodeId, command, { waitResult:true });
       return;
     }
 

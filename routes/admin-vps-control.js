@@ -6,7 +6,8 @@ const {
   resolveSystemVpsId,
   queueSystemAgentCommand,
   fetchLiveHealthMap,
-  countLiveRunningPorts
+  countLiveRunningPorts,
+  countLiveUsedLot
 } = require('../lib/adminVpsBridge');
 
 const router = express.Router();
@@ -143,13 +144,14 @@ async function getNodes() {
       `, [node.id]).catch(() => ({ rows: [] }));
 
       const liveUsedPorts = await countLiveRunningPorts(node.id);
+      const liveUsedLot = await countLiveUsedLot(node.id).catch(() => 0);
       const totalPortsFromAlloc = Number(alloc.rows[0]?.total_ports || 0);
       const maxPorts = totalPortsFromAlloc || Number(node.max_ports || 0);
       node.max_ports = maxPorts;
       node.used_ports = liveUsedPorts;
       node.active_ports = liveUsedPorts;
-      node.used_lot = Number(node.used_lot || node.active_lot || 0);
-      node.active_lot = node.used_lot;
+      node.used_lot = liveUsedLot;
+      node.active_lot = liveUsedLot;
       node.max_lot = Number(node.max_lot || alloc.rows[0]?.alloc_max_lot || 0);
 
       const sys = await resolveSystemVpsId(node.id);
@@ -412,7 +414,17 @@ router.get('/vps/nodes/:id/status-details', async (req, res) => {
     const n = r.rows[0];
     if (!n) return res.status(404).json({ ok:false, error:'ไม่พบ VPS' });
 
-    const lastSeen = n.last_seen_at ? new Date(n.last_seen_at) : null;
+    const sys = await resolveSystemVpsId(id);
+    const sysNode = await query(`
+      SELECT cpu_percent, ram_percent, net_down_mbps, net_up_mbps, ping_ms, last_seen_at, status, agent_enabled, last_error
+      FROM vps_system.vps_nodes WHERE id=$1 LIMIT 1
+    `, [sys.systemVpsId]).catch(() => ({ rows: [] }));
+
+    const livePorts = await countLiveRunningPorts(id).catch(() => 0);
+    const liveLot = await countLiveUsedLot(id).catch(() => 0);
+
+    const merged = { ...n, ...(sysNode.rows[0] || {}) };
+    const lastSeen = merged.last_seen_at ? new Date(merged.last_seen_at) : null;
     const ageSec = lastSeen ? Math.floor((Date.now() - lastSeen.getTime()) / 1000) : null;
 
     let state = 'ไม่มีการเชื่อมต่อ';
@@ -429,12 +441,24 @@ router.get('/vps/nodes/:id/status-details', async (req, res) => {
       detail = `ขาดการเชื่อมต่อ ${ageSec} วินาที`;
     }
 
-    if (n.last_error) {
+    if (merged.last_error) {
       state = 'มี Error';
-      detail = n.last_error;
+      detail = merged.last_error;
     }
 
-    res.json({ ok:true, node:n, state, detail, ageSec });
+    res.json({
+      ok:true,
+      node: {
+        ...merged,
+        active_ports: livePorts,
+        used_ports: livePorts,
+        active_lot: liveLot,
+        used_lot: liveLot
+      },
+      state,
+      detail,
+      ageSec
+    });
   } catch (e) {
     res.status(500).json({ ok:false, error:e.message });
   }

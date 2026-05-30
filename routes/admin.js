@@ -18,7 +18,12 @@ const {
   ensureVpsAllocationsAdminColumns,
   setAdminAllocationStatus,
   VPS_ALLOC_PORT_NO_SQL,
-  parsePortNumber
+  parsePortNumber,
+  lookupLiveHealth,
+  lookupDbUsage,
+  resolveAdminPortMt5State,
+  isAgentMt5Running,
+  reconcilePortIdleWhenAgentFree
 } = require('../lib/adminVpsBridge');
 
 function formatBytes(size) {
@@ -1846,12 +1851,6 @@ router.post('/vps/:id/update', async (req, res) => {
 
 
 
-router.post('/vps/:id/delete', async (req, res) => {
-  await query(`DELETE FROM vps_nodes WHERE id = $1`, [req.params.id]);
-  req.session.success = 'ลบ VPS node แล้ว';
-  return res.redirect('/admin/vps');
-});
-
 router.get('/ai-history', async (req, res) => {
   try {
     const q = String(req.query.q || '').trim();
@@ -2907,16 +2906,27 @@ router.post('/vps/nodes/:id/command', async (req, res) => {
 });
 
 
-router.post('/vps/:id/delete', async (req, res) => {
-  const id = req.params.id;
+router.post('/vps/:id/delete', requireAdmin, async (req, res) => {
+  const id = Number(req.params.id);
+  if (!id) return res.redirect('/admin/vps');
+
+  await query(
+    `
+    UPDATE vps_allocations
+    SET status='deleted', is_active=FALSE, updated_at=NOW()
+    WHERE node_id=$1
+  `,
+    [id]
+  ).catch(() => {});
 
   await query(`DELETE FROM vps_nodes WHERE id = $1`, [id]);
 
+  req.session.success = 'ลบ VPS เรียบร้อยแล้ว';
   return res.redirect('/admin/vps');
 });
 
 
-router.get('/vps/:id/ports/api/list', async (req, res) => {
+router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
   try {
     await ensureVpsAllocationsAdminColumns();
     const nodeId = Number(req.params.id);
@@ -2940,26 +2950,25 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
 
     const liveMap = await fetchLiveHealthMap(nodeId);
     const dbUsageMap = await fetchDbMt5UsageMap(nodeId);
-    const { isAgentMt5Running, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
 
     const rows = (ports.rows || []).map((p) => {
       const portNo = parsePortNumber(p);
-      const live = liveMap[portNo] || {};
-      const dbUse = dbUsageMap[portNo] || {};
-      const agentState = isAgentMt5Running(live);
-      const agentRunning = agentState === true;
-      const dbRunning = dbUse.running === true;
+      const live = lookupLiveHealth(liveMap, portNo);
+      const dbUse = lookupDbUsage(dbUsageMap, portNo);
       const adminDisabled = isPortAdminDisabled(p);
-      const dbSt = String(p.status || '').trim().toLowerCase();
-      const dbBusy = ['locked', 'used', 'running', 'busy', 'full'].includes(dbSt);
       const portName = p.port_name || p.display_name || (`PORT-${String(portNo).padStart(2, '0')}`);
       const basePath =
         p.folder_path || p.base_path || live.folder_path || dbUse.folder_path || `C:\\MT5_PORTS\\${portName}`;
-      if (agentState === false && (dbRunning || dbBusy)) {
+
+      if (isAgentMt5Running(live) === false && (dbUse.running || ['locked', 'used', 'running', 'busy', 'full'].includes(String(p.status || '').toLowerCase()))) {
         reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
       }
-      const inUse = !adminDisabled && (agentRunning || (agentState !== false && (dbRunning || dbBusy)));
-      const mt5Login = live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null;
+
+      const state = resolveAdminPortMt5State({ live, dbUse, adminDisabled });
+      const inUse = state.inUse;
+      const orphanRunning = state.orphanRunning;
+      const mt5Login = state.mt5Login || live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null;
+
       return {
         ...p,
         vps_id: p.vps_id || p.node_id || nodeId,
@@ -2972,11 +2981,12 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
         is_active: !adminDisabled,
         admin_disabled: adminDisabled,
         is_used: inUse,
-        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
-        status: adminDisabled ? 'disabled' : inUse ? 'used' : 'free',
+        orphan_running: orphanRunning,
+        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
+        status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
         live_pid: live?.pid || live?.process_id || null,
-        live_running: inUse && !adminDisabled,
-        usage_source: agentState === false ? 'free' : agentRunning ? 'agent' : dbRunning ? dbUse.source || 'db' : dbBusy ? 'allocation' : 'free',
+        live_running: (inUse || orphanRunning) && !adminDisabled,
+        usage_source: state.usageSource,
         mt5_login: mt5Login
       };
     });
@@ -2997,8 +3007,10 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
         ...row,
         admin_disabled: off,
         is_active: !off,
-        status: off ? 'disabled' : row.live_running ? 'used' : 'free',
-        live_status: off ? 'disabled' : row.live_running ? 'used' : 'free',
+        is_used: off ? false : row.is_used,
+        orphan_running: off ? false : row.orphan_running,
+        status: off ? 'disabled' : row.is_used ? 'used' : row.orphan_running ? 'orphan' : 'free',
+        live_status: off ? 'disabled' : row.is_used ? 'used' : row.orphan_running ? 'orphan' : 'free',
         live_running: off ? false : row.live_running
       };
       const prev = dedupe.get(key);
@@ -3019,14 +3031,19 @@ router.get('/vps/:id/ports/api/list', async (req, res) => {
     const cleanRows = Array.from(dedupe.values()).sort((a,b) => Number(a.port_number||0) - Number(b.port_number||0));
 
     const totalPorts = cleanRows.length;
-    const activePorts = cleanRows.filter((p) => p.live_running === true && !p.admin_disabled).length;
+    const activePorts = cleanRows.filter((p) => p.is_used === true && !p.admin_disabled).length;
+    const orphanPorts = cleanRows.filter((p) => p.orphan_running === true && !p.admin_disabled).length;
+    const freePorts = cleanRows.filter(
+      (p) => !p.admin_disabled && !p.is_used && !p.orphan_running
+    ).length;
 
     res.json({
       ok: true,
       stats: {
         total_ports: totalPorts,
         active_ports: activePorts,
-        free_ports: Math.max(0, totalPorts - activePorts)
+        orphan_ports: orphanPorts,
+        free_ports: freePorts
       },
       ports: cleanRows
     });
