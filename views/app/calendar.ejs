@@ -1,3 +1,312 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const pageCss = 'app-calendar.css';
+const pageTitle = safeT('app.menu.calendar', 'ปฏิทินกำไร MT5');
+const refreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) || 90;
+%>
+
 <%- include('../partials/app-shell') %>
-<div class="grid-2"><section class="card"><div class="card-head"><h3>ตัวช่วยคำนวณกำไร</h3></div><form method="GET" class="form-grid two"><label>กำไรต่อวัน<input type="number" name="dailyProfit" value="<%= calc.daily %>" /></label><label>จำนวนวัน<input type="number" name="days" value="<%= calc.days %>" /></label><div class="form-actions full"><button class="btn primary">คำนวณ</button></div></form></section><section class="card"><div class="card-head"><h3>ผลลัพธ์</h3></div><div class="stat-card large"><span>ประมาณการ</span><strong>฿<%= Number(calc.estimated || 0).toLocaleString('th-TH') %></strong><div class="muted">คำนวณจาก <%= calc.daily %> x <%= calc.days %> วัน</div></div></section></div>
+
+<div class="cal-page" id="calPage">
+  <section class="cal-hero">
+    <div class="cal-hero-top">
+      <div>
+        <p class="cal-eyebrow">MT5 Performance</p>
+        <h2>ปฏิทินกำไร / ขาดทุน</h2>
+        <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= refreshSec %> วินาที วันนี้แสดงแบบ Live ส่วนวันก่อนหน้าสรุปเมื่อเที่ยงคืน</p>
+      </div>
+      <div class="cal-live-badge" id="calLiveBadge" hidden>
+        <span class="cal-live-dot" aria-hidden="true"></span>
+        <span>Live · <%= refreshSec %>s</span>
+      </div>
+    </div>
+
+    <div class="cal-toolbar">
+      <label>
+        MT5 Login
+        <select id="calAccountSelect" aria-label="เลือก MT5 Login">
+          <option value="">กำลังโหลด...</option>
+        </select>
+      </label>
+      <div class="cal-month-nav" aria-label="เปลี่ยนเดือน">
+        <button type="button" id="calPrevMonth" title="เดือนก่อน">‹</button>
+        <strong id="calMonthLabel">-</strong>
+        <button type="button" id="calNextMonth" title="เดือนถัดไป">›</button>
+      </div>
+    </div>
+  </section>
+
+  <section class="cal-stats" aria-label="สรุปเดือน">
+    <article class="cal-stat">
+      <span>กำไร/ขาดทุนรวมเดือน</span>
+      <strong id="calMonthTotal" class="neu">-</strong>
+    </article>
+    <article class="cal-stat">
+      <span>วันที่ได้กำไร</span>
+      <strong id="calProfitDays" class="neu">0</strong>
+    </article>
+    <article class="cal-stat">
+      <span>วันที่ขาดทุน</span>
+      <strong id="calLossDays" class="neu">0</strong>
+    </article>
+  </section>
+
+  <section class="cal-panel" aria-label="ปฏิทินรายเดือน">
+    <div class="cal-panel-head">
+      <div>
+        <h3>ปฏิทินรายเดือน</h3>
+        <p id="calSelectedHint">เลือกวันเพื่อดูประวัติด้านล่าง</p>
+      </div>
+    </div>
+    <div class="cal-grid-wrap">
+      <div class="cal-weekdays" aria-hidden="true">
+        <span>อา</span><span>จ</span><span>อ</span><span>พ</span><span>พฤ</span><span>ศ</span><span>ส</span>
+      </div>
+      <div class="cal-grid" id="calGrid"></div>
+    </div>
+  </section>
+
+  <section class="cal-panel" aria-label="ประวัติผลการเทรด">
+    <div class="cal-panel-head">
+      <div>
+        <h3>ประวัติผลการเทรด</h3>
+        <p id="calHistoryHint">อัปเดตทุก <%= refreshSec %> วินาที · 10 แถวต่อหน้า</p>
+      </div>
+    </div>
+    <div class="cal-table-wrap">
+      <table class="cal-table">
+        <thead>
+          <tr>
+            <th>เวลา</th>
+            <th>Equity</th>
+            <th>กำไร/ขาดทุนวัน</th>
+            <th>กำไร</th>
+            <th>ขาดทุน</th>
+            <th>สถานะ</th>
+          </tr>
+        </thead>
+        <tbody id="calHistoryBody">
+          <tr><td colspan="6" class="cal-empty">กำลังโหลด...</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="cal-pager">
+      <span id="calPagerInfo">-</span>
+      <div class="cal-pager-btns">
+        <button type="button" id="calHistPrev">ก่อนหน้า</button>
+        <button type="button" id="calHistNext">ถัดไป</button>
+      </div>
+    </div>
+  </section>
+</div>
+
+<script>
+(function () {
+  var REFRESH_MS = <%= refreshSec %> * 1000;
+  var state = {
+    accountId: 0,
+    month: '',
+    selectedDay: '',
+    historyPage: 1,
+    loading: false,
+    timer: null
+  };
+
+  var el = {
+    page: document.getElementById('calPage'),
+    account: document.getElementById('calAccountSelect'),
+    monthLabel: document.getElementById('calMonthLabel'),
+    grid: document.getElementById('calGrid'),
+    monthTotal: document.getElementById('calMonthTotal'),
+    profitDays: document.getElementById('calProfitDays'),
+    lossDays: document.getElementById('calLossDays'),
+    selectedHint: document.getElementById('calSelectedHint'),
+    historyHint: document.getElementById('calHistoryHint'),
+    historyBody: document.getElementById('calHistoryBody'),
+    pagerInfo: document.getElementById('calPagerInfo'),
+    histPrev: document.getElementById('calHistPrev'),
+    histNext: document.getElementById('calHistNext'),
+    liveBadge: document.getElementById('calLiveBadge'),
+    prevMonth: document.getElementById('calPrevMonth'),
+    nextMonth: document.getElementById('calNextMonth')
+  };
+
+  function fmtMoney(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n)) return '-';
+    var sign = n > 0 ? '+' : '';
+    return sign + n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  }
+
+  function pnlClass(v) {
+    var n = Number(v);
+    if (!Number.isFinite(n) || n === 0) return 'neu';
+    return n > 0 ? 'pos' : 'neg';
+  }
+
+  function shiftMonth(monthKey, delta) {
+    var parts = String(monthKey || '').split('-').map(Number);
+    if (parts.length < 2) return monthKey;
+    var d = new Date(Date.UTC(parts[0], parts[1] - 1 + delta, 1));
+    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
+  }
+
+  function buildQuery() {
+    var q = new URLSearchParams();
+    if (state.accountId) q.set('accountId', String(state.accountId));
+    if (state.month) q.set('month', state.month);
+    if (state.selectedDay) q.set('day', state.selectedDay);
+    q.set('historyPage', String(state.historyPage));
+    return q.toString();
+  }
+
+  function renderAccounts(accounts, selectedId) {
+    if (!accounts || !accounts.length) {
+      el.account.innerHTML = '<option value="">ยังไม่มี MT5 Login</option>';
+      return;
+    }
+    el.account.innerHTML = accounts.map(function (a) {
+      var label = 'Login ' + a.mt5_login;
+      if (a.port_slot) label += ' · PORT ' + a.port_slot;
+      var sel = Number(a.id) === Number(selectedId) ? ' selected' : '';
+      return '<option value="' + a.id + '"' + sel + '>' + label + '</option>';
+    }).join('');
+    el.account.value = String(selectedId || accounts[0].id);
+  }
+
+  function renderGrid(data) {
+    var cells = (data.calendar && data.calendar.cells) || [];
+    if (!cells.length) {
+      el.grid.innerHTML = '<div class="cal-empty">ยังไม่มีข้อมูล</div>';
+      return;
+    }
+    el.grid.innerHTML = cells.map(function (c) {
+      if (c.empty) return '<div class="cal-cell empty"></div>';
+      var cls = ['cal-cell'];
+      if (!c.isFuture && (c.hasData || c.isToday)) cls.push('clickable');
+      if (c.isToday) cls.push('today');
+      if (c.live) cls.push('live');
+      if (c.dayKey === data.selectedDay) cls.push('selected');
+      if (c.isFuture) cls.push('future');
+      var pnlText = c.pnl == null ? '—' : fmtMoney(c.pnl);
+      var tag = c.live ? '<span class="cal-cell-tag">Live</span>' : (c.finalized ? '<span class="cal-cell-tag" style="color:#94a3b8">สรุปแล้ว</span>' : '');
+      return '<button type="button" class="' + cls.join(' ') + '" data-day="' + c.dayKey + '" ' + (c.isFuture ? 'disabled' : '') + '>' +
+        '<span class="cal-day-num">' + c.day + '</span>' +
+        '<span class="cal-pnl ' + pnlClass(c.pnl) + '">' + pnlText + '</span>' +
+        tag +
+      '</button>';
+    }).join('');
+
+    el.grid.querySelectorAll('.cal-cell.clickable').forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        state.selectedDay = btn.getAttribute('data-day') || '';
+        state.historyPage = 1;
+        loadCalendar(false);
+      });
+    });
+  }
+
+  function renderHistory(data) {
+    var hist = data.history || {};
+    var rows = hist.rows || [];
+    if (!rows.length) {
+      el.historyBody.innerHTML = '<tr><td colspan="6" class="cal-empty">ยังไม่มีประวัติในวันนี้</td></tr>';
+    } else {
+      el.historyBody.innerHTML = rows.map(function (r) {
+        var live = r.live ? '<span class="pos">Live</span>' : 'บันทึก';
+        return '<tr class="' + (r.live ? 'live-row' : '') + '">' +
+          '<td>' + (r.datetime || r.time || '-') + '</td>' +
+          '<td class="num">' + fmtMoney(r.equity) + '</td>' +
+          '<td class="num ' + pnlClass(r.pnl) + '">' + fmtMoney(r.pnl) + '</td>' +
+          '<td class="num pos">' + (r.profit ? fmtMoney(r.profit) : '-') + '</td>' +
+          '<td class="num neg">' + (r.loss ? fmtMoney(r.loss) : '-') + '</td>' +
+          '<td>' + live + '</td>' +
+        '</tr>';
+      }).join('');
+    }
+
+    var page = hist.page || 1;
+    var pageCount = hist.pageCount || 1;
+    var total = hist.total || 0;
+    el.pagerInfo.textContent = 'หน้า ' + page + ' / ' + pageCount + ' · ทั้งหมด ' + total + ' รายการ';
+    el.histPrev.disabled = page <= 1;
+    el.histNext.disabled = page >= pageCount;
+  }
+
+  function renderSummary(data) {
+    var total = Number((data.calendar && data.calendar.monthTotal) || 0);
+    el.monthTotal.textContent = fmtMoney(total);
+    el.monthTotal.className = pnlClass(total);
+    el.profitDays.textContent = String((data.calendar && data.calendar.profitDays) || 0);
+    el.lossDays.textContent = String((data.calendar && data.calendar.lossDays) || 0);
+    el.monthLabel.textContent = data.monthLabel || data.month || '-';
+    el.selectedHint.textContent = 'วันที่เลือก: ' + (data.selectedDayLabel || data.selectedDay || '-')
+      + (data.selectedDayPnl != null ? ' · ' + fmtMoney(data.selectedDayPnl) : '');
+    el.historyHint.textContent = 'ประวัติวันที่ ' + (data.selectedDayLabel || data.selectedDay || '-')
+      + ' · อัปเดตทุก ' + (data.refreshSec || <%= refreshSec %>) + ' วินาที';
+    el.liveBadge.hidden = !(data.selectedDay === data.todayKey);
+  }
+
+  async function loadCalendar(showLoading) {
+    if (state.loading) return;
+    state.loading = true;
+    if (showLoading !== false) el.page.classList.add('cal-loading');
+    try {
+      var res = await fetch('/app/calendar/data?' + buildQuery(), {
+        credentials: 'same-origin',
+        headers: { Accept: 'application/json' }
+      });
+      var data = await res.json();
+      if (!data.ok) throw new Error(data.message || 'load_failed');
+
+      state.accountId = data.accountId || 0;
+      state.month = data.month || state.month;
+      state.selectedDay = data.selectedDay || state.selectedDay;
+      state.historyPage = (data.history && data.history.page) || state.historyPage;
+
+      renderAccounts(data.accounts || [], data.accountId);
+      renderSummary(data);
+      renderGrid(data);
+      renderHistory(data);
+    } catch (e) {
+      el.grid.innerHTML = '<div class="cal-empty">โหลดไม่สำเร็จ: ' + (e.message || e) + '</div>';
+    } finally {
+      state.loading = false;
+      el.page.classList.remove('cal-loading');
+    }
+  }
+
+  el.account.addEventListener('change', function () {
+    state.accountId = Number(el.account.value || 0);
+    state.historyPage = 1;
+    loadCalendar(true);
+  });
+
+  el.prevMonth.addEventListener('click', function () {
+    state.month = shiftMonth(state.month, -1);
+    loadCalendar(true);
+  });
+
+  el.nextMonth.addEventListener('click', function () {
+    state.month = shiftMonth(state.month, 1);
+    loadCalendar(true);
+  });
+
+  el.histPrev.addEventListener('click', function () {
+    if (state.historyPage > 1) {
+      state.historyPage -= 1;
+      loadCalendar(false);
+    }
+  });
+
+  el.histNext.addEventListener('click', function () {
+    state.historyPage += 1;
+    loadCalendar(false);
+  });
+
+  loadCalendar(true);
+  state.timer = setInterval(function () { loadCalendar(false); }, REFRESH_MS);
+})();
+</script>
+
 <%- include('../partials/app-shell-end') %>

@@ -31,6 +31,8 @@ const {
   formatSubscriptionDateTime
 } = require('../lib/subscriptionPackage');
 const { isIdentityVerified, requireIdentityVerified } = require('../middleware/requireIdentity');
+const { fetchCalendarPerformance } = require('../lib/mt5CalendarPerformance');
+const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
 router.use(requireLogin);
@@ -3176,17 +3178,37 @@ router.get('/referrals', async (req, res) => {
 
 router.get('/calendar', async (req, res) => {
   const base = await getBaseData(req);
-  const daily = Number(req.query.dailyProfit || 100);
-  const days = Number(req.query.days || 30);
-  const estimated = daily * days;
-
   return res.render('app/calendar', {
-    pageTitle: 'Calendar & Performance',
+    pageTitle: 'ปฏิทินกำไร MT5',
+    pageCss: 'app-calendar.css',
     currentPath: '/app/calendar',
+    refreshSec: MT5_CALENDAR_REFRESH_SEC,
     ...flash(req),
-    ...base,
-    calc: { daily, days, estimated }
+    ...base
   });
+});
+
+router.get('/calendar/data', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const accountId = Number(req.query.accountId || 0);
+    const month = String(req.query.month || '').trim();
+    const day = String(req.query.day || '').trim();
+    const historyPage = Math.max(1, Number(req.query.historyPage || 1));
+    const data = await fetchCalendarPerformance(userId, {
+      accountId,
+      month,
+      day,
+      historyPage
+    });
+    if (!data.ok) {
+      return res.status(data.message === 'account_not_found' ? 404 : 400).json(data);
+    }
+    return res.json(data);
+  } catch (e) {
+    console.error('[calendar/data]', e);
+    return res.status(500).json({ ok: false, message: e.message || 'server_error' });
+  }
 });
 
 router.get('/status', async (req, res) => {
