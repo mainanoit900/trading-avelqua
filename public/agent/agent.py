@@ -4632,6 +4632,17 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     titles = window_title_for_login(port, payload)
     preview_final = capture_mt5_window_base64(port, payload)
 
+    # Journal timed out but MT5 title bar shows the expected login — keep MT5 open
+    # and fall through to the window-verified / equity-fetch path below.
+    if (
+        not ok
+        and msg == JOURNAL_TIMEOUT_MSG
+        and titles
+        and login in str(titles)
+    ):
+        ok = True
+        msg = "window verified (journal timeout)"
+
     if not ok:
         if msg == JOURNAL_TIMEOUT_MSG:
             pending_msg = "กำลังรอ verifier ยืนยันเลขบัญชีจาก Journal / MT5 API..."
