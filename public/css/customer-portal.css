@@ -1293,11 +1293,8 @@ a.btn:hover{
   }
   body.scoin-modal-open{overflow:hidden;}
 /* =========================================================
-   APP SIDEBAR RESPONSIVE FIX - 2026-04-26
-   แก้เฉพาะหน้า /app ไม่กระทบ admin/data/route
-   - เมนูซ้ายไม่ยาวเกินหน้าจอ
-   - พื้นหลังเมนูจบเป็นกล่องพอดี ไม่ลากเต็มความสูงผิดสัดส่วน
-   - รองรับ Desktop / Tablet / Mobile
+   APP SIDEBAR RESPONSIVE FIX - 2026-04-26 / 2026-05-30
+   Sidebar สูงเต็มหน้าจอ (viewport) — footer อยู่ล่าง, เมนู scroll ภายใน
 ========================================================= */
 .portal-shell.premium{
   width:min(100%, 1480px);
@@ -1310,13 +1307,16 @@ a.btn:hover{
 }
 
 .portal-shell.premium > .sidebar.premium{
+  --shell-pad:clamp(12px, 1.6vw, 24px);
   position:sticky;
-  top:clamp(12px, 1.6vw, 24px);
+  top:var(--shell-pad);
   align-self:start;
-  height:auto;
-  max-height:calc(100dvh - (clamp(12px, 1.6vw, 24px) * 2));
-  overflow-y:auto;
-  overflow-x:hidden;
+  display:flex;
+  flex-direction:column;
+  height:calc(100dvh - (var(--shell-pad) * 2));
+  min-height:calc(100dvh - (var(--shell-pad) * 2));
+  max-height:calc(100dvh - (var(--shell-pad) * 2));
+  overflow:hidden;
   min-width:0;
   border:1px solid var(--line);
   border-radius:28px;
@@ -1347,6 +1347,22 @@ a.btn:hover{
 
 .portal-shell.premium .nav-links{
   grid-template-columns:1fr !important;
+  flex:1 1 auto;
+  min-height:0;
+  overflow-y:auto;
+  overflow-x:hidden;
+  padding-right:2px;
+  scrollbar-width:thin;
+  scrollbar-color:rgba(96,165,250,.42) rgba(255,255,255,.04);
+}
+
+.portal-shell.premium .nav-links::-webkit-scrollbar{width:6px;}
+.portal-shell.premium .nav-links::-webkit-scrollbar-track{background:rgba(255,255,255,.04);border-radius:999px;}
+.portal-shell.premium .nav-links::-webkit-scrollbar-thumb{background:rgba(96,165,250,.42);border-radius:999px;}
+
+.portal-shell.premium .sidebar-footer{
+  flex-shrink:0;
+  margin-top:auto;
 }
 
 .portal-shell.premium .nav-links a span:last-child,
@@ -1383,6 +1399,8 @@ a.btn:hover{
     right:14px;
     top:14px;
     z-index:120;
+    height:calc(100dvh - 28px);
+    min-height:calc(100dvh - 28px);
     max-height:calc(100dvh - 28px);
     transform:translateY(-120%);
     opacity:0;
