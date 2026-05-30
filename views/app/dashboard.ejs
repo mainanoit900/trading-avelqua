@@ -1,141 +1,260 @@
 <%
 const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const pageCss = 'app-dashboard.css';
+const pageTitle = safeT('dashboard.title', 'ภาพรวมบัญชี');
 const isIdentityVerified = !!(user && (user.identity_verified || user.identityVerified));
 const identityEmail = (identity && identity.verify_email) || (user && user.email) || '-';
-const dateLocale = (lang || 'th') === 'th' ? 'th-TH' : 'en-US';
+const dateLocaleMap = { th: 'th-TH', en: 'en-US', lo: 'lo-LA', vi: 'vi-VN', my: 'my-MM' };
+const dateLocale = dateLocaleMap[lang || 'th'] || 'en-US';
+const numLocale = dateLocale;
+const displayName = (user && (user.full_name || user.name || user.email)) || safeT('dashboard.profile', 'Profile');
+const coinSymbol = (scoinSettings && scoinSettings.coin_symbol) || 'SCOIN';
+const safeError = typeof error !== 'undefined' ? error : '';
+const safeSuccess = typeof success !== 'undefined' ? success : '';
 %>
 
 <%- include('../partials/app-shell') %>
 
-<div class="stats-grid cols-4">
-  <div class="stat-card">
-    <span><%= safeT('dashboard.credits_balance', 'เครดิตคงเหลือ') %></span>
-    <strong><%= subscription ? subscription.ports_max || 0 : 0 %></strong>
-  </div>
-
-  <div class="stat-card">
-    <span><%= safeT('dashboard.latest_package', 'แพ็กเกจล่าสุด') %></span>
-    <strong><%= subscription ? subscription.package_name_snapshot || '-' : '-' %></strong>
-  </div>
-
-  <div class="stat-card">
-    <span><%= safeT('dashboard.paid_count', 'จ่ายแล้ว') %></span>
-    <strong><%= paymentSummary.total || 0 %> <%= safeT('dashboard.items', 'รายการ') %></strong>
-  </div>
-
-  <div class="stat-card">
-    <span><%= safeT('dashboard.total_spent', 'ยอดรวม') %></span>
-    <strong>฿<%= Number(paymentSummary.total_spent || 0).toLocaleString(dateLocale) %></strong>
-  </div>
-</div>
-
-<section class="card" style="margin-top:20px;">
-  <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-    <div>
-      <h3>Scoin Wallet</h3>
-      <p class="muted" style="margin:6px 0 0;">ยอดเหรียญ มูลค่า และลิงก์แนะนำเพื่อนของคุณ</p>
+<div class="dash-page">
+  <% if (safeError || safeSuccess) { %>
+    <div class="dash-flash">
+      <% if (safeError) { %><div class="alert error"><%= safeError %></div><% } %>
+      <% if (safeSuccess) { %><div class="alert success"><%= safeSuccess %></div><% } %>
     </div>
-  </div>
+  <% } %>
 
-  <div class="kv-grid" style="margin-top:16px;">
-    <div>
-      <span>Scoin Balance</span>
-      <strong><%= Number(scoinBalance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> <%= (scoinSettings && scoinSettings.coin_symbol) || 'SCOIN' %></strong>
-    </div>
-    <div>
-      <span>มูลค่าโดยประมาณ</span>
-      <strong>฿<%= Number(scoinValueThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></strong>
-    </div>
-    <div>
-      <span>ราคา 1 Scoin</span>
-      <strong>฿<%= Number((scoinSettings && scoinSettings.current_price_thb) || 0.10).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
-    </div>
-    <div>
-      <span>Referral Code</span>
-      <strong><%= referralCode || '-' %></strong>
-    </div>
-  </div>
-
-  <div style="margin-top:16px;">
-    <span class="muted" style="display:block;margin-bottom:8px;">ลิงก์แนะนำเพื่อน</span>
-    <div style="display:flex;gap:10px;flex-wrap:wrap;">
-      <input
-        type="text"
-        id="referralUrl"
-        value="<%= referralUrl || '' %>"
-        readonly
-        style="flex:1;min-width:260px;height:44px;border-radius:12px;border:1px solid rgba(130,154,197,.16);background:#0b1628;color:#fff;padding:0 14px;"
-      >
-      <button
-        type="button"
-        class="btn btn-primary"
-        onclick="navigator.clipboard.writeText(document.getElementById('referralUrl').value).then(() => alert('คัดลอกลิงก์แล้ว'))"
-      >
-        คัดลอกลิงก์
-      </button>
-    </div>
-  </div>
-</section>
-
-<div class="grid-2">
-  <section class="card">
-    <div class="card-head">
-      <h3><%= safeT('dashboard.latest_rights', 'สิทธิ์ใช้งานล่าสุด') %></h3>
-    </div>
-
-    <div class="kv-grid">
-      <div><span><%= safeT('dashboard.package', 'Package') %></span><strong><%= subscription ? subscription.package_name_snapshot || '-' : '-' %></strong></div>
-      <div><span><%= safeT('dashboard.source', 'Source') %></span><strong><%= subscription ? subscription.source_channel || '-' : '-' %></strong></div>
-      <div><span>Lot</span><strong><%= subscription ? subscription.lot_min : 0 %> - <%= subscription ? subscription.lot_max : 0 %></strong></div>
-      <div><span>Port</span><strong><%= subscription ? subscription.ports_min : 0 %> - <%= subscription ? subscription.ports_max : 0 %></strong></div>
-      <div><span><%= safeT('dashboard.start_date', 'Start') %></span><strong><%= subscription && subscription.start_at ? new Date(subscription.start_at).toLocaleString(dateLocale) : '-' %></strong></div>
-      <div><span><%= safeT('dashboard.expire_date', 'Expire') %></span><strong><%= subscription && subscription.end_at ? new Date(subscription.end_at).toLocaleString(dateLocale) : '-' %></strong></div>
-    </div>
-  </section>
-
-  <section class="card">
-    <div class="card-head">
-      <h3><%= safeT('dashboard.latest_broker_accounts', 'บัญชีโบรกเกอร์ล่าสุด') %></h3>
-    </div>
-
-    <div class="list-stack">
-      <% if (!(brokerAccounts || []).length) { %>
-        <div class="empty-box"><%= safeT('dashboard.no_broker_accounts', 'ยังไม่มีบัญชีโบรกเกอร์') %></div>
-      <% } %>
-
-      <% (brokerAccounts || []).slice(0, 5).forEach(function(a){ %>
-        <div class="list-item">
-          <strong><%= a.broker_name %></strong> - <%= a.account_login %> / <%= a.server_name %>
+  <section class="dash-hero">
+    <div class="dash-hero-inner">
+      <div class="dash-hero-top">
+        <div>
+          <p class="dash-eyebrow"><%= safeT('dashboard.badge', 'แดชบอร์ดผู้ใช้งาน') %></p>
+          <h2><%= safeT('dashboard.welcome', 'ยินดีต้อนรับกลับ') %>, <%= displayName %></h2>
+          <p class="dash-hero-desc"><%= safeT('dashboard.desc', 'ตรวจสอบแพ็กเกจ สิทธิ์การใช้งาน และข้อมูลสำคัญของบัญชีได้ในหน้าเดียว') %></p>
         </div>
-      <% }) %>
+        <div class="dash-hero-badge"><%= safeT('app.header.kicker', 'พื้นที่ลูกค้า') %></div>
+      </div>
+
+      <div class="dash-quick">
+        <a href="/app/packages">
+          <span class="dash-quick-icon" aria-hidden="true">🛒</span>
+          <span><%= safeT('dashboard.action_packages', 'ซื้อแพ็กเกจ') %></span>
+        </a>
+        <a href="/app/mt5" <%= !isIdentityVerified ? 'data-requires-identity="1"' : '' %>>
+          <span class="dash-quick-icon" aria-hidden="true">💻</span>
+          <span><%= safeT('dashboard.action_mt5', 'เชื่อมต่อ MT5') %></span>
+        </a>
+        <a href="/app/scoin-wallet" <%= !isIdentityVerified ? 'data-requires-identity="1"' : '' %>>
+          <span class="dash-quick-icon" aria-hidden="true">💳</span>
+          <span><%= safeT('dashboard.action_scoin', 'กระเป๋า Scoin') %></span>
+        </a>
+      </div>
     </div>
   </section>
-</div>
 
-<% if (!isIdentityVerified) { %>
-  <section class="card identity-dashboard-card" style="margin-top:20px;">
-    <div class="card-head" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
-      <div>
-        <h3><%= safeT('identity.title', 'ยืนยันตัวตน') %></h3>
-        <p class="muted" style="margin:6px 0 0;"><%= safeT('identity.subtitle', 'กรอกข้อมูลและยืนยันด้วยรหัสที่ส่งไปทางอีเมล') %></p>
+  <section class="dash-stats" aria-label="<%= safeT('dashboard.title', 'ภาพรวมบัญชี') %>">
+    <article class="dash-stat">
+      <div class="dash-stat-head">
+        <span class="dash-stat-icon" aria-hidden="true">⚡</span>
       </div>
-      <a href="/app/identity" class="btn btn-primary">
-        <%= safeT('identity.menu', 'ยืนยันตัวตน') %>
+      <span><%= safeT('dashboard.credits_balance', 'เครดิตคงเหลือ') %></span>
+      <strong><%= subscription ? subscription.ports_max || 0 : 0 %></strong>
+      <div class="dash-stat-note"><%= safeT('dashboard.port', 'Port') %></div>
+    </article>
+
+    <article class="dash-stat">
+      <div class="dash-stat-head">
+        <span class="dash-stat-icon" aria-hidden="true">📦</span>
+      </div>
+      <span><%= safeT('dashboard.latest_package', 'แพ็กเกจล่าสุด') %></span>
+      <strong><%= subscription ? subscription.package_name_snapshot || safeT('dashboard.no_package', 'ยังไม่มีแพ็กเกจ') : safeT('dashboard.no_package', 'ยังไม่มีแพ็กเกจ') %></strong>
+    </article>
+
+    <article class="dash-stat">
+      <div class="dash-stat-head">
+        <span class="dash-stat-icon" aria-hidden="true">✅</span>
+      </div>
+      <span><%= safeT('dashboard.paid_count', 'ชำระแล้ว') %></span>
+      <strong><%= paymentSummary.total || 0 %></strong>
+      <div class="dash-stat-note"><%= safeT('dashboard.items', 'รายการ') %></div>
+    </article>
+
+    <article class="dash-stat">
+      <div class="dash-stat-head">
+        <span class="dash-stat-icon" aria-hidden="true">💰</span>
+      </div>
+      <span><%= safeT('dashboard.total_spent', 'ยอดใช้จ่ายรวม') %></span>
+      <strong>฿<%= Number(paymentSummary.total_spent || 0).toLocaleString(numLocale) %></strong>
+    </article>
+  </section>
+
+  <section class="dash-panel dash-scoin">
+    <div class="dash-panel-head">
+      <div>
+        <h3><%= safeT('dashboard.scoin_wallet', 'Scoin Wallet') %></h3>
+        <p><%= safeT('dashboard.scoin_desc', 'ยอดเหรียญ มูลค่า และลิงก์แนะนำเพื่อน') %></p>
+      </div>
+      <a href="/app/scoin-wallet" class="dash-btn dash-btn-ghost" <%= !isIdentityVerified ? 'data-requires-identity="1"' : '' %>>
+        <%= safeT('dashboard.view_all', 'ดูทั้งหมด') %>
       </a>
     </div>
 
-    <div class="kv-grid" style="margin-top:16px;">
-      <div>
-        <span><%= safeT('identity.current_status', 'สถานะยืนยันตัวตน') %></span>
-        <strong><%= safeT('identity.status_waiting', 'รอยืนยัน') %></strong>
+    <div class="dash-panel-body">
+      <div class="dash-kv">
+        <div class="dash-kv-item">
+          <span><%= safeT('dashboard.scoin_balance', 'ยอด Scoin') %></span>
+          <strong><%= Number(scoinBalance || 0).toLocaleString(numLocale, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> <%= coinSymbol %></strong>
+        </div>
+        <div class="dash-kv-item">
+          <span><%= safeT('dashboard.scoin_value', 'มูลค่าโดยประมาณ') %></span>
+          <strong>฿<%= Number(scoinValueThb || 0).toLocaleString(numLocale, { minimumFractionDigits: 2, maximumFractionDigits: 2 }) %></strong>
+        </div>
+        <div class="dash-kv-item">
+          <span><%= safeT('dashboard.scoin_price', 'ราคา 1 Scoin') %></span>
+          <strong>฿<%= Number((scoinSettings && scoinSettings.current_price_thb) || 0.10).toLocaleString(numLocale, { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></strong>
+        </div>
+        <div class="dash-kv-item">
+          <span><%= safeT('dashboard.referral_code', 'รหัสแนะนำ') %></span>
+          <strong><%= referralCode || '-' %></strong>
+        </div>
       </div>
-      <div>
-        <span><%= safeT('identity.verify_email', 'อีเมลรับรหัส OTP') %></span>
-        <strong><%= identityEmail %></strong>
+
+      <div class="dash-referral">
+        <label for="referralUrl"><%= safeT('dashboard.referral_link', 'ลิงก์แนะนำเพื่อน') %></label>
+        <div class="dash-referral-row">
+          <input type="text" id="referralUrl" value="<%= referralUrl || '' %>" readonly>
+          <button type="button" class="dash-btn dash-btn-primary" id="copyReferralBtn">
+            <%= safeT('dashboard.copy_link', 'คัดลอกลิงก์') %>
+          </button>
+        </div>
       </div>
     </div>
   </section>
-<% } %>
+
+  <div class="dash-grid">
+    <section class="dash-panel">
+      <div class="dash-panel-head">
+        <h3><%= safeT('dashboard.latest_rights', 'สิทธิ์ใช้งานล่าสุด') %></h3>
+      </div>
+      <div class="dash-panel-body">
+        <div class="dash-meta-grid">
+          <div class="dash-kv-item">
+            <span><%= safeT('dashboard.package', 'แพ็กเกจปัจจุบัน') %></span>
+            <strong><%= subscription ? subscription.package_name_snapshot || '-' : '-' %></strong>
+          </div>
+          <div class="dash-kv-item">
+            <span><%= safeT('dashboard.source', 'ช่องทาง') %></span>
+            <strong><%= subscription ? subscription.source_channel || '-' : '-' %></strong>
+          </div>
+          <div class="dash-kv-item">
+            <span><%= safeT('dashboard.lot', 'Lot') %></span>
+            <strong><%= subscription ? subscription.lot_min : 0 %> – <%= subscription ? subscription.lot_max : 0 %></strong>
+          </div>
+          <div class="dash-kv-item">
+            <span><%= safeT('dashboard.port', 'Port') %></span>
+            <strong><%= subscription ? subscription.ports_min : 0 %> – <%= subscription ? subscription.ports_max : 0 %></strong>
+          </div>
+          <div class="dash-kv-item">
+            <span><%= safeT('dashboard.start_date', 'วันเริ่มใช้งาน') %></span>
+            <strong><%= subscription && subscription.start_at ? new Date(subscription.start_at).toLocaleString(dateLocale) : '-' %></strong>
+          </div>
+          <div class="dash-kv-item">
+            <span><%= safeT('dashboard.expire_date', 'วันหมดอายุ') %></span>
+            <strong><%= subscription && subscription.end_at ? new Date(subscription.end_at).toLocaleString(dateLocale) : '-' %></strong>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <section class="dash-panel">
+      <div class="dash-panel-head">
+        <div>
+          <h3><%= safeT('dashboard.latest_broker_accounts', 'บัญชีโบรกเกอร์') %></h3>
+        </div>
+        <a href="/app/broker-accounts" class="dash-btn dash-btn-ghost" <%= !isIdentityVerified ? 'data-requires-identity="1"' : '' %>>
+          <%= safeT('dashboard.view_all', 'ดูทั้งหมด') %>
+        </a>
+      </div>
+      <div class="dash-panel-body">
+        <div class="dash-list">
+          <% if (!(brokerAccounts || []).length) { %>
+            <div class="dash-empty"><%= safeT('dashboard.no_broker_accounts', 'ยังไม่มีบัญชีโบรกเกอร์') %></div>
+          <% } else { %>
+            <% (brokerAccounts || []).slice(0, 5).forEach(function(a){ %>
+              <div class="dash-list-item">
+                <span class="dash-list-dot" aria-hidden="true"></span>
+                <div>
+                  <strong><%= a.broker_name %></strong>
+                  <span><%= a.account_login %> / <%= a.server_name %></span>
+                </div>
+              </div>
+            <% }) %>
+          <% } %>
+        </div>
+      </div>
+    </section>
+  </div>
+
+  <% if (!isIdentityVerified) { %>
+    <section class="dash-panel dash-identity-banner identity-dashboard-card">
+      <div class="dash-panel-head">
+        <div>
+          <h3><%= safeT('identity.title', 'ยืนยันตัวตน') %></h3>
+          <p><%= safeT('identity.subtitle', 'กรอกข้อมูลและยืนยันด้วยรหัสที่ส่งไปทางอีเมล') %></p>
+        </div>
+        <div class="dash-identity-actions">
+          <a href="/app/identity" class="dash-btn dash-btn-primary">
+            <%= safeT('identity.menu', 'ยืนยันตัวตน') %>
+          </a>
+        </div>
+      </div>
+      <div class="dash-panel-body">
+        <div class="dash-meta-grid">
+          <div class="dash-kv-item">
+            <span><%= safeT('identity.current_status', 'สถานะ') %></span>
+            <strong><%= safeT('identity.status_waiting', 'รอยืนยัน') %></strong>
+          </div>
+          <div class="dash-kv-item">
+            <span><%= safeT('identity.verify_email', 'อีเมลรับรหัส OTP') %></span>
+            <strong><%= identityEmail %></strong>
+          </div>
+        </div>
+      </div>
+    </section>
+  <% } %>
+</div>
+
+<script>
+  (function () {
+    const btn = document.getElementById('copyReferralBtn');
+    const input = document.getElementById('referralUrl');
+    if (!btn || !input) return;
+
+    const copiedText = <%- JSON.stringify(safeT('dashboard.copied', 'คัดลอกแล้ว')) %>;
+
+    btn.addEventListener('click', function () {
+      const value = input.value || '';
+      if (!value) return;
+
+      const done = function () {
+        const prev = btn.textContent;
+        btn.textContent = copiedText;
+        setTimeout(function () { btn.textContent = prev; }, 1600);
+      };
+
+      if (navigator.clipboard && navigator.clipboard.writeText) {
+        navigator.clipboard.writeText(value).then(done).catch(function () {
+          input.select();
+          document.execCommand('copy');
+          done();
+        });
+      } else {
+        input.select();
+        document.execCommand('copy');
+        done();
+      }
+    });
+  })();
+</script>
 
 <% if (showIdentityGate) { %>
   <div class="identity-modal-backdrop" id="identityGateModal">

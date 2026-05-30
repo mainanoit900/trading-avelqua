@@ -11,6 +11,9 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title><%= shellPageTitle %></title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/public/css/app-packages.css" />
   <link rel="stylesheet" href="/public/css/customer-portal.css" />
   <link rel="stylesheet" href="/public/css/app-mt5.css" />
@@ -50,9 +53,9 @@
   </script>
 
   <div class="portal-shell premium">
-    <aside class="sidebar premium">
+    <aside class="sidebar premium" id="portalSidebar">
       <div class="brand-box">
-        <div class="brand-mark">TA</div>
+        <img src="/public/images/logo.png" alt="TRADING AVELQUA" class="brand-logo" width="48" height="48">
         <div>
           <div class="brand-kicker">TRADING AVELQUA</div>
           <div class="brand-title" data-i18n="app.portal.title"><%= safeT('app.portal.title', 'Customer Portal') %></div>
@@ -125,7 +128,7 @@
   data-requires-identity="1"
 >
   <span>🏦</span>
-  <span>ตั้งค่าบัญชี</span>
+  <span data-i18n="app.menu.bank_accounts"><%= safeT('app.menu.bank_accounts', 'ตั้งค่าบัญชีธนาคาร') %></span>
 </a>
 
         <a
@@ -148,14 +151,16 @@
     )
   );
 
-  const identityMenuText = identityOk ? 'ยืนยันสำเร็จ' : 'รอยืนยันตัวตน';
+  const identityMenuText = identityOk
+    ? safeT('identity.verified_short', 'ยืนยันสำเร็จ')
+    : safeT('identity.pending_menu', 'รอยืนยันตัวตน');
 %>
         <a
   class="<%= shellCurrentPath.startsWith('/app/identity') ? 'active' : '' %>"
   href="/app/identity"
 >
   <span class="menu-icon-shield">🛂</span>
-  <span><%= identityMenuText %></span>
+  <span data-i18n="<%= identityOk ? 'identity.verified_short' : 'identity.pending_menu' %>"><%= identityMenuText %></span>
 </a>
 
       </nav>
@@ -189,9 +194,14 @@
 
     <main class="content-shell">
       <header class="topbar premium">
-        <div>
-          <div class="eyebrow" data-i18n="app.header.kicker"><%= safeT('app.header.kicker', 'CLIENT AREA') %></div>
-          <h1><%= pageTitle || 'Customer Portal' %></h1>
+        <div class="topbar-leading">
+          <button type="button" class="portal-menu-btn" id="portalMenuBtn" aria-expanded="false" aria-controls="portalSidebar" aria-label="<%= safeT('app.menu.toggle', 'เมนู') %>">
+            <span></span><span></span><span></span>
+          </button>
+          <div>
+            <div class="eyebrow" data-i18n="app.header.kicker"><%= safeT('app.header.kicker', 'CLIENT AREA') %></div>
+            <h1 data-i18n="<%= shellCurrentPath === '/app' ? 'dashboard.title' : '' %>"><%= pageTitle || safeT('app.portal.title', 'Customer Portal') %></h1>
+          </div>
         </div>
 
         <div class="topbar-actions">
@@ -221,23 +231,3 @@
       </header>
   
       <script src="/public/js/i18n-live.js"></script>
-      <script>
-        (function () {
-          const identityVerified = !!(window.__AVELQUA_IDENTITY__ && window.__AVELQUA_IDENTITY__.verified);
-
-          if (identityVerified) return;
-
-          document.querySelectorAll('[data-requires-identity="1"]').forEach(function (link) {
-            link.addEventListener('click', function (e) {
-              e.preventDefault();
-
-              if (typeof window.openIdentityGateModal === 'function') {
-                window.openIdentityGateModal();
-                return;
-              }
-
-              window.location.href = '/app?showIdentityGate=1';
-            });
-          });
-        })();
-      </script>
