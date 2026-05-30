@@ -98,7 +98,7 @@ fi
 RELEASE_DIR="$APP_DIR/.release-9750207"
 if [ -d "$RELEASE_DIR" ] && [ -f "$RELEASE_DIR/server.js" ]; then
   echo "==> sync .release bundle (lib, routes, views, config)"
-  for sub in lib routes views config public locales services; do
+  for sub in lib routes views config public locales services middleware; do
     if [ -d "$APP_DIR/$sub" ]; then
       mkdir -p "$RELEASE_DIR/$sub"
       rsync -a "$APP_DIR/$sub/" "$RELEASE_DIR/$sub/"
