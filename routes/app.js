@@ -25,7 +25,8 @@ const {
 } = require('../services/scoinService');
 const {
   buildFreeCouponPackageName,
-  formatSubscriptionDisplayLabel
+  formatSubscriptionDisplayLabel,
+  formatPackagePaymentDisplayLabel
 } = require('../lib/subscriptionPackage');
 
 const router = express.Router();
@@ -705,10 +706,14 @@ router.get('/packages', async (req, res) => {
     `SELECT
        p.*,
        pk.group_name,
+       pk.days AS package_days,
+       c.free_days AS coupon_free_days,
+       c.free_package_group AS coupon_free_package_group,
        COALESCE(st.scoin_paid_amount, NULLIF(p.raw_payload->'scoin_payment'->>'scoin_amount', '')::numeric) AS scoin_paid_amount,
        COALESCE(st.scoin_paid_price, NULLIF(p.raw_payload->'scoin_payment'->>'scoin_price_thb', '')::numeric) AS scoin_paid_price
      FROM payments p
      LEFT JOIN packages pk ON pk.id = p.package_id
+     LEFT JOIN coupons c ON c.id = p.coupon_id
      LEFT JOIN LATERAL (
        SELECT
          ABS(stx.amount)::numeric AS scoin_paid_amount,
@@ -742,7 +747,10 @@ router.get('/packages', async (req, res) => {
     ...base,
     packages,
     groupedPackages,
-    recentPackagePayments: recentPaymentsRes.rows,
+    recentPackagePayments: recentPaymentsRes.rows.map((p) => ({
+      ...p,
+      display_package_label: formatPackagePaymentDisplayLabel(p)
+    })),
     paymentPage: page,
     paymentTotalPages: totalPages,
     packagesFreeCouponPreview: req.session.packagesFreeCouponPreview || null

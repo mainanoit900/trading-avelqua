@@ -50,8 +50,15 @@ function scoinAmountText(p) {
   if (!amount) return '-';
   return amount.toLocaleString(dateLocale, { minimumFractionDigits: 4, maximumFractionDigits: 4 }) + ' Scoin';
 }
+function isFreeCouponPackagePayment(p) {
+  const m = String(p.payment_method || '').toLowerCase();
+  if (m === 'free_coupon') return true;
+  const raw = rawPayloadObj(p);
+  return !!(raw.coupon && (raw.coupon.type === 'free' || Number(raw.coupon.free_days || 0) > 0));
+}
 function paymentMethodText(p) {
   if (isScoinPackagePayment(p)) return isTH ? 'Scoin' : 'Scoin';
+  if (isFreeCouponPackagePayment(p)) return isTH ? 'คูปองฟรี' : 'Free Coupon';
   const m = String(p.payment_method || '').toLowerCase();
   if (m === 'credit_card') return isTH ? 'บัตรเครดิต' : 'Credit Card';
   if (m === 'promptpay_qr') return isTH ? 'PromptPay QR' : 'PromptPay QR';
@@ -255,7 +262,7 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
           <% recentPackagePayments.forEach(function(p){ %>
             <tr>
               <td><span class="history-id">#<%= p.display_id || ('PM' + String(p.id).padStart(6, '0')) %></span></td>
-              <td><%= p.package_name_snapshot || '-' %></td>
+              <td><%= p.display_package_label || p.package_name_snapshot || '-' %></td>
               <td>
                 <div>฿<%= money(p.final_amount || p.amount || 0) %></div>
                 <% if (isScoinPackagePayment(p)) { %>
@@ -263,7 +270,11 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
                 <% } %>
               </td>
               <td>
-                <% if (isScoinPackagePayment(p)) { %>
+                <% if (isFreeCouponPackagePayment(p)) { %>
+                  <span class="history-method-badge coupon">
+                    <i class="fa-solid fa-ticket"></i> <%= paymentMethodText(p) %>
+                  </span>
+                <% } else if (isScoinPackagePayment(p)) { %>
                   <span class="history-method-badge scoin">
                     <i class="fa-solid fa-coins"></i> ชำระด้วย Scoin
                   </span>

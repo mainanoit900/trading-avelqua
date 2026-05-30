@@ -54,6 +54,12 @@
   background:rgba(148,163,184,.12);
   border:1px solid rgba(148,163,184,.20);
 }
+.history-method-badge.coupon{
+  color:#fde68a;
+  background:linear-gradient(135deg,rgba(245,158,11,.28),rgba(234,88,12,.18));
+  border:1px solid rgba(251,191,36,.35);
+  box-shadow:0 8px 24px rgba(245,158,11,.10);
+}
 .history-scoin-amount{
   display:block;
   margin-top:4px;
