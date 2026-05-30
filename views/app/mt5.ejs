@@ -686,6 +686,39 @@
     }) || null;
   }
 
+  function mt5FormatVpsPortLabel(row) {
+    if (!row) return '';
+    if (row.vps_port_label) return String(row.vps_port_label).trim();
+    if (row.vps_port_name) return String(row.vps_port_name).trim();
+    const node = String(row.node_code || 'VPS-WIN-01').trim() || 'VPS-WIN-01';
+    const slot = Number(row.display_port || row.port_used || 0);
+    if (slot >= 1 && slot <= 50) return node + '-PORT-' + String(slot).padStart(2, '0');
+    const assigned = Number(row.assigned_port_no || 0);
+    const folderNo = assigned >= 100 ? assigned % 100 : (assigned || slot);
+    if (!folderNo) return '';
+    return node + '-PORT-' + String(folderNo).padStart(2, '0');
+  }
+
+  function mt5ActiveRunPortText(activeInstance) {
+    const inst = activeInstance || mt5SelectedRunInstance();
+    const label = mt5FormatVpsPortLabel(inst);
+    if (!label) return '';
+    return 'BOT ทำงานอยู่ ' + label;
+  }
+
+  function mt5ActiveRunPortNote(activeInstance) {
+    const inst = activeInstance || mt5SelectedRunInstance();
+    const portText = mt5ActiveRunPortText(inst);
+    if (!inst) return '';
+    const status = String(inst.status || '').toLowerCase();
+    if (status === 'running') {
+      return portText ? (portText + ' · สั่ง Stop ได้ทันที') : 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที';
+    }
+    return portText
+      ? ('กำลังเปิดบอทที่ ' + mt5FormatVpsPortLabel(inst) + ' — โดยทั่วไป 30–90 วิ')
+      : 'กำลังเปิดบอทบน VPS — โดยทั่วไป 30–90 วิ';
+  }
+
   function mt5ComputeRunPreset(botCode, capital, manualLot, tradeLevel, runTimeMode, syncField) {
     const cfg = window.__mt5RunConfig || {};
     const lotMin = mt5Num(cfg.packageLotMin, 0.01);
@@ -904,7 +937,7 @@
     const note = form.querySelector('.mt5-run-action-note');
     let blockReason = '';
     if (meta.packageExpired) blockReason = 'แพ็คเกจหมดอายุ';
-    else if (hasActive) blockReason = 'BOT กำลังทำงานอยู่ที่ PORT นี้';
+    else if (hasActive) blockReason = mt5ActiveRunPortText() || 'BOT กำลังทำงานอยู่ที่ PORT นี้';
     else if (blocked) blockReason = preview.warning || 'เงินทุนไม่ถึงขั้นต่ำของบอท';
     if (blocked && !meta.packageExpired && !hasActive) {
       btn.title = blockReason;
@@ -918,7 +951,7 @@
       note.style.color = '#fbbf24';
     } else if (note) {
       note.style.color = '';
-      note.textContent = hasActive ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก';
+      note.textContent = hasActive ? mt5ActiveRunPortNote() : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก';
     }
   }
 
@@ -1002,7 +1035,7 @@
         ? '<button type="button" class="mt5-btn mt5-run-secondary mt5-stop-btn" data-stop-id="' + mt5Esc(activeInstance.id) + '">Stop BOT</button>'
         : '<button type="button" class="mt5-btn mt5-run-secondary mt5-run-secondary-disabled" disabled>Stop BOT</button>') +
       '</div>' +
-      '<small class="mt5-run-action-note">' + (hasActiveInstance ? (String(activeInstance.status || '') === 'running' ? 'BOT กำลังทำงานอยู่ สามารถสั่ง Stop ได้ทันที' : 'กำลังเปิดบอทบน VPS — โดยทั่วไป 30–90 วิ') : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
+      '<small class="mt5-run-action-note">' + (hasActiveInstance ? mt5Esc(mt5ActiveRunPortNote(activeInstance)) : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก') + '</small>' +
       (hasActiveInstance && activeInstance && String(activeInstance.status || '') !== 'running'
         ? ('<div class="mt5-run-connecting-meta" id="mt5RunConnectingMeta" data-since="' + mt5Esc(activeInstance.connecting_since || activeInstance.started_at || '') + '" data-hint="' + mt5Esc(activeInstance.connecting_hint || mt5ConnectingHint(activeInstance)) + '">' +
           '<b>กำลังเปิดบอท</b> — ใช้เวลา <b>' + mt5ConnectingElapsedSec(activeInstance.connecting_since || activeInstance.started_at) + '</b> วินาที · ' + mt5Esc(activeInstance.connecting_hint || mt5ConnectingHint(activeInstance)) +
@@ -1382,6 +1415,8 @@
         } else {
           mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
           if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
+          const runForm = document.getElementById('mt5RunForm');
+          if (runForm) mt5UpdateRunSubmitState(runForm);
         }
         const hasConnectingRun = (cfg.activeInstances || []).some(function (row) {
           return String(row.status || '') === 'connecting';
