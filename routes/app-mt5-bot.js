@@ -3202,7 +3202,6 @@ router.post('/mt5/run', async (req, res) => {
     ]);
 
     let cmdId = 0;
-    let loginCmdId = 0;
     let attemptId = null;
 
     if (usePhase2BotRun) {
@@ -3224,32 +3223,23 @@ router.post('/mt5/run', async (req, res) => {
         ...payload,
         instanceId: inst.rows[0].id,
         attemptId,
-        queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
-      };
-      const loginPayload = {
-        ...runPayload,
-        botCode: 'LOGIN_ONLY',
-        action: 'login_mt5',
-        commandType: 'login_mt5',
-        queueDelaySec: Math.max(0, Number(loginQueueDelaySec) || 0),
-        journalTimeoutSec
+        journalTimeoutSec,
+        queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || Number(loginQueueDelaySec) || 0)
       };
 
       const queued = await queueBotRunCommands({
         attemptId,
         vpsId: node.id,
         portId: portCtx.id || account.port_id || null,
-        loginPayload,
         runPayload,
         client
       });
-      loginCmdId = queued.loginCommandId;
       cmdId = queued.runCommandId;
 
-      if (attemptId && loginCmdId) {
+      if (attemptId && cmdId) {
         await client.query(
           `UPDATE vps_system.mt5_connect_attempts SET command_id=$2, updated_at=NOW() WHERE attempt_id=$1`,
-          [attemptId, loginCmdId]
+          [attemptId, cmdId]
         );
       }
 
@@ -3257,7 +3247,7 @@ router.post('/mt5/run', async (req, res) => {
         `
         UPDATE vps_system.mt5_accounts
         SET status='connecting',
-            last_login_message='Phase 2: กำลังเปิด MT5 เพื่อรัน BOT...',
+            last_login_message='Phase 2: กำลังเปิด MT5 และรัน BOT...',
             current_attempt_id=$2,
             updated_at=NOW()
         WHERE id=$1
@@ -3279,7 +3269,6 @@ router.post('/mt5/run', async (req, res) => {
         ...payload,
         instanceId: inst.rows[0].id,
         commandId: cmdId,
-        loginCommandId: loginCmdId || undefined,
         attemptId: attemptId || undefined,
         purposeType: usePhase2BotRun ? 'bot_run' : 'legacy_run'
       })
