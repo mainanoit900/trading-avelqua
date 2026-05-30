@@ -1692,23 +1692,26 @@ router.get('/mt5/recovery-check', async (req, res) => {
   }
 });
 
-function buildPortCardState(acc) {
+function buildPortCardState(acc, activeAccountIds) {
   const accStatus = acc ? String(acc.status || '').toLowerCase() : '';
   const hasEquity =
     acc &&
     ((acc.last_equity != null && acc.last_equity !== '' && Number.isFinite(Number(acc.last_equity))) ||
       (acc.last_balance != null && acc.last_balance !== '' && Number.isFinite(Number(acc.last_balance))));
   const canUse = !!(acc && accStatus === 'connected' && hasEquity);
+  const accountId = acc ? Number(acc.id) : 0;
+  const botRunning = accountId > 0 && activeAccountIds && activeAccountIds.has(accountId);
   let statusLabel = 'ว่าง';
-  if (canUse) statusLabel = 'พร้อมรัน';
-  else if (accStatus === 'connecting' || accStatus === 'starting') statusLabel = 'กำลังเปิด MT5...';
+  if (canUse) statusLabel = botRunning ? 'กำลังรัน BOT' : 'พร้อมรัน';
+  else if (accStatus === 'connecting' || accStatus === 'starting') statusLabel = botRunning ? 'กำลังเปิดบอท...' : 'กำลังเปิด MT5...';
   else if (accStatus === 'checking') statusLabel = 'กำลังตรวจ Login';
   else if (accStatus === 'failed') statusLabel = 'Login ไม่ผ่าน';
   else if (accStatus === 'ready') statusLabel = 'ต้องเชื่อมต่อใหม่';
   else if (acc) statusLabel = 'ยกเลิกแล้ว';
 
   let cssClass = '';
-  if (canUse) cssClass = 'connected';
+  if (botRunning) cssClass = 'bot-running';
+  else if (canUse) cssClass = 'connected';
   else if (accStatus === 'connecting' || accStatus === 'starting' || accStatus === 'checking') {
     cssClass = 'checking';
   } else if (acc) cssClass = 'cancelled';
@@ -1744,10 +1747,17 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       [userId]
     );
 
+    const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
+    const activeAccountIds = new Set(
+      (activeRunInstances || [])
+        .map((row) => Number(row.mt5_account_id || 0))
+        .filter((id) => id > 0)
+    );
+
     const ports = [];
     for (let slot = 1; slot <= summary.totalPorts; slot++) {
       const acc = pickAccountForPortSlot(accounts, slot);
-      const meta = buildPortCardState(acc);
+      const meta = buildPortCardState(acc, activeAccountIds);
       const equity = acc?.last_equity ?? acc?.last_balance;
       const equityPart =
         equity != null && equity !== '' ? ` / Equity: ${equity}` : '';
@@ -1776,8 +1786,6 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         last_balance: a.last_balance,
         last_equity: a.last_equity
       }));
-
-    const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
 
     const bots = (await safeQuery(
       `SELECT id, bot_code, display_name, bot_name FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`,

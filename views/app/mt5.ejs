@@ -17,6 +17,8 @@
 @keyframes mt5ErrPop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
 .port-card-pick{cursor:pointer}
 .port-card-pick:hover{border-color:rgba(125,211,252,.45)}
+.port-item.bot-running{border-color:rgba(251,146,60,.55);background:rgba(251,146,60,.10)}
+.port-item.bot-running.port-card-pick:hover{border-color:rgba(253,186,116,.78);box-shadow:0 0 0 2px rgba(251,146,60,.28)}
 .port-item.selected-run{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.25)}
 .port-item.selected-connect{border-color:#facc15;box-shadow:0 0 0 2px rgba(250,204,21,.20)}
 .status{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:800;text-transform:lowercase}
@@ -105,6 +107,7 @@
         <span>แพ็กเกจให้ <%= includedPorts || 1 %> PORT (สูงสุด <%= packagePortRange || ('1 - ' + packageMaxPorts) %>) · ใช้ได้ <%= totalPorts %> PORT / Lot <%= packageLotMin %>-<%= packageLotMax %> · <b style="color:#7dd3fc">คลิก PORT พร้อมรัน = เลือกเปิดบอท</b></span>
       </div>
       <div class="port-list" id="mt5PortList">
+        <% const activeBotAccountIds = new Set((activeRunInstances || []).map(function (r) { return Number(r.mt5_account_id || 0); }).filter(function (id) { return id > 0; })); %>
         <% if (totalPorts <= 0) { %>
           <div class="port-item cancelled"><div class="port-main"><div><b>PORT 0</b><small>แพ็คเกจหมดอายุ</small></div><span>ใช้งานไม่ได้</span></div></div>
         <% } %>
@@ -113,14 +116,16 @@
           <% const accStatus = acc ? String(acc.status || '').toLowerCase() : ''; %>
           <% const canUsePort = acc && accStatus === 'connected'; %>
           <% const hasEquityPort = acc && ((acc.last_equity != null && acc.last_equity !== '') || (acc.last_balance != null && acc.last_balance !== '')); %>
+          <% const botRunningOnPort = acc && activeBotAccountIds.has(Number(acc.id)); %>
+          <% const portCssClass = botRunningOnPort ? 'bot-running' : (canUsePort ? 'connected' : (accStatus === 'connecting' || accStatus === 'starting' ? 'checking' : (acc ? 'cancelled' : ''))); %>
           <% const cardPick = !acc || canUsePort || accStatus === 'connecting' || accStatus === 'checking' || accStatus === 'starting' || (accStatus === 'failed' && hasEquityPort); %>
-          <div class="port-item <%= canUsePort ? 'connected' : (accStatus === 'connecting' || accStatus === 'starting' ? 'checking' : (acc ? 'cancelled' : '')) %><%= cardPick ? ' port-card-pick' : '' %>" data-port-slot="<%= i %>"<%= acc ? (' data-account-id="' + acc.id + '"') : '' %><%= cardPick ? ' role="button" tabindex="0"' : '' %>>
+          <div class="port-item <%= portCssClass %><%= cardPick ? ' port-card-pick' : '' %>" data-port-slot="<%= i %>"<%= acc ? (' data-account-id="' + acc.id + '"') : '' %><%= cardPick ? ' role="button" tabindex="0"' : '' %>>
             <div class="port-main">
               <div>
                 <b>PORT <%= i %></b>
                 <small><%= acc ? ('Login: ' + acc.mt5_login + ((acc.last_equity || acc.last_balance) ? ' / Equity: ' + (acc.last_equity || acc.last_balance) : '')) : 'ยังไม่เชื่อมต่อ' %></small>
               </div>
-              <span><%= canUsePort ? 'พร้อมรัน' : (accStatus === 'connecting' || accStatus === 'starting' ? 'กำลังเปิด MT5...' : (accStatus === 'checking' ? 'กำลังตรวจ Login' : (accStatus === 'failed' ? 'Login ไม่ผ่าน' : (accStatus === 'ready' ? 'ต้องเชื่อมต่อใหม่' : (acc ? 'ยกเลิกแล้ว' : 'ว่าง'))))) %></span>
+              <span><%= botRunningOnPort ? (accStatus === 'connecting' || accStatus === 'starting' ? 'กำลังเปิดบอท...' : 'กำลังรัน BOT') : (canUsePort ? 'พร้อมรัน' : (accStatus === 'connecting' || accStatus === 'starting' ? 'กำลังเปิด MT5...' : (accStatus === 'checking' ? 'กำลังตรวจ Login' : (accStatus === 'failed' ? 'Login ไม่ผ่าน' : (accStatus === 'ready' ? 'ต้องเชื่อมต่อใหม่' : (acc ? 'ยกเลิกแล้ว' : 'ว่าง')))))) %></span>
             </div>
             <% if (acc) { %>
               <div class="port-actions" onclick="event.stopPropagation()">
