@@ -1,57 +1,35 @@
+<%
+  const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+  var pageTitle = safeT('mt5.page_title', (typeof pageTitle !== 'undefined' && pageTitle) ? pageTitle : 'เชื่อมต่อ MT5');
+  if (typeof pageCss === 'undefined' || !pageCss) {
+    var pageCss = 'app-mt5-bot.css';
+  }
+%>
 <%- include('../partials/app-shell') %>
 
-<div class="mt5-page">
-  <% /* if (error) { %><div class="mt5-alert danger"><%- error %></div><% } */ %>
+<div class="mt5-page mt5-page-premium">
   <% if (success && !error) { %>
   <div class="mt5-alert success" id="mt5SuccessAlert"><%- success %></div>
-<% } %>
+  <% } %>
 
-<style>
-.mt5-error-modal{position:fixed;inset:0;z-index:999999;display:flex;align-items:center;justify-content:center}
-.mt5-error-backdrop{position:absolute;inset:0;background:rgba(2,6,23,.72);backdrop-filter:blur(10px)}
-.mt5-error-card{position:relative;width:min(460px,92vw);border-radius:28px;padding:32px;background:linear-gradient(145deg,#111827,#020617);border:1px solid rgba(248,113,113,.45);box-shadow:0 30px 100px rgba(0,0,0,.65),0 0 48px rgba(248,113,113,.18);color:#fff;text-align:center;animation:mt5ErrPop .22s ease-out}
-.mt5-error-icon{width:68px;height:68px;margin:0 auto 16px;border-radius:22px;display:flex;align-items:center;justify-content:center;background:rgba(248,113,113,.14);font-size:36px}
-.mt5-error-card h3{margin:0 0 10px;font-size:24px;font-weight:900}
-.mt5-error-card p{margin:0 0 24px;color:#fecaca;font-size:16px;line-height:1.6}
-.mt5-error-card button{border:0;border-radius:16px;padding:13px 34px;font-weight:900;color:#fff;cursor:pointer;background:linear-gradient(135deg,#ef4444,#f97316);box-shadow:0 12px 28px rgba(239,68,68,.35)}
-@keyframes mt5ErrPop{from{transform:scale(.92);opacity:0}to{transform:scale(1);opacity:1}}
-.port-card-pick{cursor:pointer}
-.port-card-pick:hover{border-color:rgba(125,211,252,.45)}
-.port-item.bot-running{border-color:rgba(251,146,60,.55);background:rgba(251,146,60,.10)}
-.port-item.bot-running.port-card-pick:hover{border-color:rgba(253,186,116,.78);box-shadow:0 0 0 2px rgba(251,146,60,.28)}
-.port-item.selected-run{border-color:#38bdf8;box-shadow:0 0 0 2px rgba(56,189,248,.25)}
-.port-item.selected-connect{border-color:#facc15;box-shadow:0 0 0 2px rgba(250,204,21,.20)}
-.status{display:inline-flex;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:800;text-transform:lowercase}
-.status.running{background:rgba(34,197,94,.18);color:#86efac;border:1px solid rgba(34,197,94,.35)}
-.status.connecting{background:rgba(56,189,248,.16);color:#7dd3fc;border:1px solid rgba(56,189,248,.32)}
-.mt5-connecting-timer{display:block;margin-top:4px;font-size:11px;color:#7dd3fc;line-height:1.35;font-weight:700;font-variant-numeric:tabular-nums}
-.mt5-run-connecting-meta{margin-top:6px;padding:8px 10px;border-radius:12px;background:rgba(56,189,248,.08);border:1px solid rgba(56,189,248,.22);color:#bae6fd;font-size:12px;line-height:1.45}
-.mt5-run-connecting-meta b{color:#e0f2fe}
-.mt5-run-prepare-box{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:10px;min-height:140px;padding:28px 20px;border-radius:20px;background:linear-gradient(145deg,rgba(15,23,42,.92),rgba(2,6,23,.88));border:1px solid rgba(56,189,248,.22);text-align:center}
-.mt5-run-prepare-ring{width:44px;height:44px;border-radius:50%;border:3px solid rgba(56,189,248,.2);border-top-color:#38bdf8;animation:mt5PrepareSpin .85s linear infinite}
-.mt5-run-prepare-title{margin:0;font-size:16px;font-weight:900;color:#e2e8f0}
-.mt5-run-prepare-timer{margin:0;font-size:14px;color:#7dd3fc}
-.mt5-run-prepare-timer b{font-size:20px;color:#fff;font-variant-numeric:tabular-nums}
-.mt5-run-prepare-hint{margin:0;font-size:12px;color:#94a3b8}
-@keyframes mt5PrepareSpin{to{transform:rotate(360deg)}}
-.status.stopped{background:rgba(148,163,184,.14);color:#cbd5e1;border:1px solid rgba(148,163,184,.28)}
-.status.fail{background:rgba(239,68,68,.16);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
-</style>
-
-
-  <section class="mt5-hero">
-    <div>
-      <div class="mt5-kicker">MH Markets / MT5 Connector</div>
-      <h1>เชื่อมต่อ MT5 และรัน BOT ทองคำ</h1>
+  <section class="mt5-top-shell">
+    <div class="mt5-hero-premium">
+      <div class="mt5-kicker"><%= safeT('mt5.kicker', 'MH Markets / MT5 Connector') %></div>
+      <h1><%= safeT('mt5.hero_title', 'เชื่อมต่อ MT5 และรัน BOT ทองคำ') %></h1>
+      <p class="mt5-hero-desc"><%= safeT('mt5.hero_desc', 'เลือก PORT ตามแพ็กเกจ เชื่อมต่อบัญชี MT5 และรันบอทเทรดทอง XAUUSD ได้ในที่เดียว') %></p>
+      <div class="mt5-hero-tags">
+        <span class="mt5-hero-tag">🥇 XAUUSD</span>
+        <span class="mt5-hero-tag">⚡ <%= safeT('mt5.tag_auto', 'Auto Login') %></span>
+        <span class="mt5-hero-tag">📡 Live Dashboard</span>
+      </div>
     </div>
-  </section>
 
-  <section class="mt5-package-panel mt5-package-panel-right">
+    <section class="mt5-package-panel mt5-package-panel-right">
     <div class="mt5-package-detail-card mt5-package-mini-card <%= packageExpired ? 'expired' : '' %>">
       <div class="mt5-card-head mt5-mini-head">
         <div>
-          <h2>รายละเอียดแพ็กเกจที่ซื้อ</h2>
-          <span><%= packageExpired ? 'หมดอายุแล้ว ระบบปิดการใช้งาน MT5' : 'ข้อมูลจริงจากระบบสมาชิก' %></span>
+          <h2><%= safeT('mt5.package_title', 'รายละเอียดแพ็กเกจที่ซื้อ') %></h2>
+          <span><%= packageExpired ? safeT('mt5.package_expired_note', 'หมดอายุแล้ว ระบบปิดการใช้งาน MT5') : safeT('mt5.package_active_note', 'ข้อมูลจริงจากระบบสมาชิก') %></span>
         </div>
         <div>
   <small>วันหมดอายุ</small>
@@ -92,18 +70,25 @@
         <div><small>พอร์ตว่าง</small><b id="mt5ConnectedCount"><%= packageExpired ? '0' : (typeof availablePortCount !== 'undefined' ? availablePortCount : connectedCount) %> ช่องว่าง</b></div>
       </div>
     </div>
+    </section>
   </section>
+
+  <div class="mt5-steps" aria-hidden="false">
+    <div class="mt5-step-pill"><span>1</span><%= safeT('mt5.step_port', 'เลือก PORT') %></div>
+    <div class="mt5-step-pill"><span>2</span><%= safeT('mt5.step_login', 'Login MT5') %></div>
+    <div class="mt5-step-pill"><span>3</span><%= safeT('mt5.step_run', 'Run BOT') %></div>
+  </div>
 
   <% if (packageExpired) { %>
     <div class="mt5-expired-banner">
-      <b>แพ็คเกจหมดอายุ</b> กรุณาเติมแพ็กเกจค่ะ
+      <b><%= safeT('mt5.expired_title', 'แพ็คเกจหมดอายุ') %></b> <%= safeT('mt5.expired_desc', 'กรุณาเติมแพ็กเกจค่ะ') %>
     </div>
   <% } %>
 
   <section class="mt5-grid mt5-grid-2">
     <div class="mt5-card">
       <div class="mt5-card-head">
-        <h2>1) เลือก PORT ตามแพ็กเกจ</h2>
+        <h2><%= safeT('mt5.section_port', '1) เลือก PORT ตามแพ็กเกจ') %></h2>
         <span>แพ็กเกจให้ <%= includedPorts || 1 %> PORT (สูงสุด <%= packagePortRange || ('1 - ' + packageMaxPorts) %>) · ใช้ได้ <%= totalPorts %> PORT / Lot <%= packageLotMin %>-<%= packageLotMax %> · <b style="color:#7dd3fc">คลิก PORT พร้อมรัน = เลือกเปิดบอท</b></span>
       </div>
       <div class="port-list" id="mt5PortList">
@@ -165,7 +150,7 @@
 
     <div class="mt5-card">
       <div class="mt5-card-head">
-        <h2>2) Login MT5</h2>
+        <h2><%= safeT('mt5.section_login', '2) Login MT5') %></h2>
         <span>Server: <%= fixedServer %> — เปิด MT5 + Login อัตโนมัติ</span>
       </div>
 
@@ -214,7 +199,7 @@
 
   <section class="mt5-card">
     <div class="mt5-card-head">
-      <h2>3) เลือก BOT แล้วกด Run</h2>
+      <h2><%= safeT('mt5.section_run', '3) เลือก BOT แล้วกด Run') %></h2>
       <span>เลือก PORT ที่ข้อ 1 · เทรดทองคำ XAUUSD เท่านั้น</span>
     </div>
 
@@ -234,7 +219,7 @@
 
   <section class="mt5-card">
     <div class="mt5-card-head">
-      <h2>📡 Live MT5 Dashboard</h2>
+      <h2><%= safeT('mt5.section_live', '📡 Live MT5 Dashboard') %></h2>
       <span id="mt5LiveDashboardMeta">Status อัปเดตทุก 5 วินาทีขณะเชื่อมต่อ · Balance · Equity · Profit และกราฟ Equity ทุก 90 วินาที</span>
     </div>
 
@@ -245,7 +230,7 @@
 
   <section class="mt5-card" id="mt5HistorySection">
     <div class="mt5-card-head">
-      <h2>BOT ที่กำลังทำงาน / ประวัติล่าสุด</h2>
+      <h2><%= safeT('mt5.section_history', 'BOT ที่กำลังทำงาน / ประวัติล่าสุด') %></h2>
       <span id="mt5HistoryMeta">ทุกครั้งที่ Run = แถวใหม่ · หยุด/Error บันทึกในรายการ</span>
     </div>
     <div id="mt5HistoryDashboard" class="mt5-table-wrap">

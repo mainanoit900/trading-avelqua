@@ -4,7 +4,7 @@
   const shellCurrentPath = (typeof currentPath !== 'undefined' && currentPath) ? currentPath : '';
   const shellPageCss = (typeof pageCss !== 'undefined' && pageCss) ? pageCss : '';
   const shellPageCssHref = shellPageCss ? (shellPageCss.startsWith('/') ? shellPageCss : '/public/css/' + shellPageCss) : '';
-  const shellCssVer = '202605301';
+  const shellCssVer = '202605302';
 %>
 <!DOCTYPE html>
 <html lang="<%= shellLang %>">
@@ -20,6 +20,7 @@
   <link rel="stylesheet" href="/public/css/app-dashboard.css?v=<%= shellCssVer %>" />
   <link rel="stylesheet" href="/public/css/app-mt5.css?v=<%= shellCssVer %>" />
   <link rel="stylesheet" href="/public/css/app-mt5-bot.css?v=<%= shellCssVer %>" />
+  <link rel="stylesheet" href="/public/css/app-mt5-premium.css?v=<%= shellCssVer %>" />
   <% if (shellPageCssHref) { %>
     <link rel="stylesheet" href="<%= shellPageCssHref %>?v=<%= shellCssVer %>" />
   <% } %>
