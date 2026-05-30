@@ -68,6 +68,57 @@
   white-space:nowrap;
 }
 
+/* Package history table columns — prevent date/actions overlap */
+.package-history-table{
+  -webkit-overflow-scrolling:touch;
+}
+.package-history-table table{
+  min-width:980px;
+  table-layout:fixed;
+}
+.package-history-table th,
+.package-history-table td{
+  vertical-align:middle;
+}
+.package-history-table .col-id{width:108px;white-space:nowrap}
+.package-history-table .col-package{width:18%;min-width:120px;word-break:break-word}
+.package-history-table .col-amount{width:120px;white-space:nowrap}
+.package-history-table .col-method{width:150px}
+.package-history-table .col-status{width:96px;white-space:nowrap}
+.package-history-table .col-date{
+  width:132px;
+  min-width:132px;
+  white-space:nowrap;
+}
+.package-history-table .col-actions{
+  width:168px;
+  min-width:168px;
+  white-space:nowrap;
+}
+.history-date-line{
+  display:block;
+  font-weight:800;
+  line-height:1.35;
+  white-space:nowrap;
+}
+.history-time-line{
+  display:block;
+  margin-top:2px;
+  color:#9fb4df;
+  font-size:12px;
+  font-weight:700;
+  line-height:1.3;
+  white-space:nowrap;
+}
+.package-history-table .col-actions .package-history-actions{
+  flex-wrap:nowrap;
+  justify-content:flex-start;
+}
+@media(max-width:900px){
+  .package-history-table table{min-width:920px}
+  .package-history-table .col-actions{width:150px;min-width:150px}
+}
+
 /* Luxury package buy / free coupon confirmation modals */
 .buy-confirm-card,.free-coupon-card{
   overflow:hidden;

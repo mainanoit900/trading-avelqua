@@ -65,6 +65,15 @@ function paymentMethodText(p) {
   if (m === 'bank_transfer') return isTH ? 'โอนเงิน' : 'Bank Transfer';
   return isTH ? 'เงินสด/โอน' : 'Cash/Transfer';
 }
+function formatHistoryDateTime(value) {
+  if (!value) return null;
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return null;
+  return {
+    date: d.toLocaleDateString(dateLocale, { day: 'numeric', month: 'short', year: 'numeric' }),
+    time: d.toLocaleTimeString(dateLocale, { hour: '2-digit', minute: '2-digit', second: '2-digit', hour12: false })
+  };
+}
 
 const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && groupedPackages[key]) || []).length), 0);
 %>
@@ -249,27 +258,28 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
       <table>
         <thead>
           <tr>
-            <th><%= safeT('common.id', 'ID') %></th>
-            <th><%= safeT('dashboard.package', 'Package') %></th>
-            <th><%= safeT('common.amount', 'ยอดเงิน') %></th>
-            <th>วิธีชำระ</th>
-            <th><%= safeT('common.status', 'สถานะ') %></th>
-            <th><%= safeT('common.created_at', 'วันที่') %></th>
-	     <th>จัดการ</th>
+            <th class="col-id"><%= safeT('common.id', 'ID') %></th>
+            <th class="col-package"><%= safeT('dashboard.package', 'Package') %></th>
+            <th class="col-amount"><%= safeT('common.amount', 'ยอดเงิน') %></th>
+            <th class="col-method">วิธีชำระ</th>
+            <th class="col-status"><%= safeT('common.status', 'สถานะ') %></th>
+            <th class="col-date"><%= safeT('common.created_at', 'วันที่') %></th>
+            <th class="col-actions">จัดการ</th>
           </tr>
         </thead>
         <tbody>
           <% recentPackagePayments.forEach(function(p){ %>
+            <% const historyWhen = formatHistoryDateTime(p.created_at); %>
             <tr>
-              <td><span class="history-id">#<%= p.display_id || ('PM' + String(p.id).padStart(6, '0')) %></span></td>
-              <td><%= p.display_package_label || p.package_name_snapshot || '-' %></td>
-              <td>
+              <td class="col-id"><span class="history-id">#<%= p.display_id || ('PM' + String(p.id).padStart(6, '0')) %></span></td>
+              <td class="col-package"><%= p.display_package_label || p.package_name_snapshot || '-' %></td>
+              <td class="col-amount">
                 <div>฿<%= money(p.final_amount || p.amount || 0) %></div>
                 <% if (isScoinPackagePayment(p)) { %>
                   <small class="history-scoin-amount"><%= scoinAmountText(p) %></small>
                 <% } %>
               </td>
-              <td>
+              <td class="col-method">
                 <% if (isFreeCouponPackagePayment(p)) { %>
                   <span class="history-method-badge coupon">
                     <i class="fa-solid fa-ticket"></i> <%= paymentMethodText(p) %>
@@ -282,25 +292,31 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
                   <span class="history-method-badge cash"><%= paymentMethodText(p) %></span>
                 <% } %>
               </td>
-              <td><span class="package-status <%= String(p.payment_status || 'pending').toLowerCase() %>"><%= statusText(p.payment_status) %></span></td>
-              <td><%= p.created_at ? new Date(p.created_at).toLocaleString(dateLocale) : '-' %></td>
-<td>
-  <% if (String(p.payment_status || '').toLowerCase() === 'pending') { %>
-    <div class="package-history-actions">
-      <a class="history-pay-btn" href="/app/package-payment/<%= p.id %>">
-        ชำระเงินต่อ
-      </a>
-
-      <form method="POST" action="/app/package-payment/<%= p.id %>/cancel" onsubmit="return confirm('ยืนยันยกเลิกรายการนี้?');">
-        <button type="submit" class="history-cancel-btn">
-          ยกเลิก
-        </button>
-      </form>
-    </div>
-  <% } else { %>
-    <span class="history-muted">-</span>
-  <% } %>
-</td>
+              <td class="col-status"><span class="package-status <%= String(p.payment_status || 'pending').toLowerCase() %>"><%= statusText(p.payment_status) %></span></td>
+              <td class="col-date">
+                <% if (historyWhen) { %>
+                  <span class="history-date-line"><%= historyWhen.date %></span>
+                  <span class="history-time-line"><%= historyWhen.time %></span>
+                <% } else { %>
+                  -
+                <% } %>
+              </td>
+              <td class="col-actions">
+                <% if (String(p.payment_status || '').toLowerCase() === 'pending') { %>
+                  <div class="package-history-actions">
+                    <a class="history-pay-btn" href="/app/package-payment/<%= p.id %>">
+                      ชำระเงินต่อ
+                    </a>
+                    <form method="POST" action="/app/package-payment/<%= p.id %>/cancel" onsubmit="return confirm('ยืนยันยกเลิกรายการนี้?');">
+                      <button type="submit" class="history-cancel-btn">
+                        ยกเลิก
+                      </button>
+                    </form>
+                  </div>
+                <% } else { %>
+                  <span class="history-muted">-</span>
+                <% } %>
+              </td>
             </tr>
           <% }) %>
         </tbody>
