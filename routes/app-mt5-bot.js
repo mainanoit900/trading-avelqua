@@ -30,6 +30,8 @@ const {
   computePresetForBot,
   presetSummary,
   buildRunSummary,
+  buildRunConfigSnapshot,
+  capitalFromLot,
   isProductionBot,
   validateRunCapital,
   botUiMeta,
@@ -2858,6 +2860,7 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
     if (!bot) return res.json({ ok: false, message: 'ไม่พบ BOT' });
     const summary = await getPortSummary(req.user.id);
     const lotMeta = packageLotLimits(summary);
+    const syncField = String(req.query.sync_field || 'capital').toLowerCase() === 'lot' ? 'lot' : 'capital';
     const calc = computePresetForBot(
       bot,
       capital,
@@ -2865,7 +2868,8 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
       manualLot,
       lotMeta.lotMin,
       lotMeta.lotMax,
-      lotMeta.defaultLot
+      lotMeta.defaultLot,
+      syncField
     );
     return res.json({
       ok: true,
@@ -2982,7 +2986,11 @@ router.post('/mt5/run', async (req, res) => {
     if (!bot) throw new Error('ไม่พบ BOT ที่เลือก');
     if (!isProductionBot(bot)) throw new Error('BOT นี้ไม่ได้เปิดให้ใช้งานบนหน้าเว็บนี้');
 
-    const capital = capitalManual > 0 ? capitalManual : num(account.last_equity || account.last_balance || account.capital_override, 0);
+    const capital = capitalManual > 0
+      ? capitalManual
+      : (manualLot > 0 && syncField === 'lot'
+        ? capitalFromLot(manualLot)
+        : num(account.last_equity || account.last_balance || account.capital_override, 0));
     const capitalCheck = validateRunCapital(capital, bot);
     if (!capitalCheck.ok) throw new Error(capitalCheck.message);
 
@@ -3004,6 +3012,7 @@ router.post('/mt5/run', async (req, res) => {
     const trade = calc.trade;
     const capitalUsed = num(calc.capitalUsed || calc.capital || capitalCheck.capital);
     const runSummary = buildRunSummary(calc, tradeLevel, runTimeMode);
+    const runConfigSnapshot = buildRunConfigSnapshot(calc, tradeLevel, runTimeMode);
     const lotPlus = clampLot(lotPlusInput > 0 ? lotPlusInput : calc.lotPlus, lotMeta.lotMin, lotMeta.lotMax);
     const tStart = tStartInput == null ? num(trade.t_start) : tStartInput;
     const tStop = tStopInput == null ? num(trade.t_stop) : tStopInput;
@@ -3130,6 +3139,7 @@ router.post('/mt5/run', async (req, res) => {
       eaTimeProfile,
       eaSetPreview,
       runSummary,
+      runConfigSnapshot,
       botKind: calc.botKind,
       ...eaSetFields,
       allowOpen24Hours: runTimeMode === '24h',

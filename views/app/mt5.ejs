@@ -1109,8 +1109,14 @@
       const syncHidden = form.querySelector('#mt5RunSyncField');
       const botCode = botSelect ? botSelect.value : '';
       const syncField = syncHidden && syncHidden.value === 'lot' ? 'lot' : 'capital';
-      const submitCapital = mt5Num(capitalInput ? capitalInput.value : 0, 0);
+      const submitCapitalRaw = mt5Num(capitalInput ? capitalInput.value : 0, 0);
       const submitLot = mt5Num(lotInput ? lotInput.value : 0, 0);
+      let submitCapital = submitCapitalRaw;
+      if (submitCapital <= 0 && submitLot > 0 && syncField === 'lot') {
+        submitCapital = mt5CapitalFromLot(submitLot);
+      } else if (submitCapital <= 0 && selected) {
+        submitCapital = mt5RunAccountCapital(selected);
+      }
       const preview = mt5ComputeRunPreset(
         botCode,
         submitCapital,
@@ -1143,6 +1149,13 @@
           cancelText: 'ยกเลิก'
         });
         if (!ok) return;
+        if (capitalInput && preview.capital > 0) {
+          capitalInput.value = mt5Fixed(preview.capital);
+        }
+        if (lotInput && preview.botKind !== 'quantum' && preview.lot > 0) {
+          lotInput.value = mt5Fixed(preview.lot);
+        }
+        if (syncHidden) syncHidden.value = syncField;
         if (selected && typeof mt5ApplyRunAccountToForm === 'function') {
           mt5ApplyRunAccountToForm(selected);
         } else if (selected) {
