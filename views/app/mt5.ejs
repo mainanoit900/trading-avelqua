@@ -251,7 +251,7 @@
 
 <script>
 (function () {
-  let mt5Checking = true;
+  let mt5Checking = false;
   const serverPendingAccountId = '<%= typeof pendingConnectAccountId !== "undefined" && pendingConnectAccountId ? pendingConnectAccountId : "" %>';
   let mt5PollAccountId = sessionStorage.getItem('mt5PollAccountId') || serverPendingAccountId || '';
   const urlParams = new URLSearchParams(window.location.search);
@@ -1453,6 +1453,28 @@
     b.style.pointerEvents = '';
   };
 
+  window.mt5ResetConnectUi = function () {
+    mt5Checking = false;
+    if (window.mt5Checker) {
+      clearInterval(window.mt5Checker);
+      window.mt5Checker = null;
+    }
+    mt5PollAccountId = '';
+    sessionStorage.removeItem('mt5PollAccountId');
+    if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+    const previewBox = document.getElementById('mt5LoginPreview');
+    const previewImg = document.getElementById('mt5PreviewImg');
+    const previewTitle = document.getElementById('mt5PreviewTitle');
+    const meta = document.getElementById('mt5ConnectMeta');
+    if (previewBox) previewBox.style.display = 'none';
+    if (previewImg) {
+      previewImg.removeAttribute('src');
+      previewImg.style.display = 'none';
+    }
+    if (previewTitle) previewTitle.textContent = '';
+    if (meta) meta.innerHTML = '';
+  };
+
   async function checkMt5Connected() {
     if (!mt5Checking) return;
     try {
@@ -1492,11 +1514,21 @@
         if (window.mt5Checker) clearInterval(window.mt5Checker);
         window.mt5Checker = null;
         sessionStorage.removeItem('mt5PollAccountId');
-        if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+        if (typeof window.mt5ResetConnectUi === 'function') window.mt5ResetConnectUi();
+        else if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
         await refreshMt5PortCards();
         return;
       }
+      const pollSlot = Number(data.account.port_slot || data.account.portSlot || 0);
       const stWait = String(data.account.status || '').toLowerCase();
+      if (
+        !pollSlot
+        && ['checking', 'connecting', 'starting'].includes(stWait)
+      ) {
+        if (typeof window.mt5ResetConnectUi === 'function') window.mt5ResetConnectUi();
+        await refreshMt5PortCards();
+        return;
+      }
       if (stWait === 'deleted' || stWait === 'expired' || stWait === 'cancelled') {
         mt5Checking = false;
         if (window.mt5Checker) clearInterval(window.mt5Checker);
@@ -1769,11 +1801,7 @@ async function mt5ConfirmDeletePortForm(form) {
       if (slot && String(sessionStorage.getItem('mt5RunPortSlot') || '') === String(slot)) {
         sessionStorage.removeItem('mt5RunPortSlot');
       }
-      if (window.mt5Checker) {
-        clearInterval(window.mt5Checker);
-        window.mt5Checker = null;
-      }
-      mt5Checking = false;
+      if (typeof window.mt5ResetConnectUi === 'function') window.mt5ResetConnectUi();
     } catch (_) {}
     return true;
   }
@@ -1807,6 +1835,7 @@ function mt5BindPortSlotPicks() {
               headers: { Accept: 'text/html' },
               redirect: 'follow'
             });
+            if (typeof window.mt5ResetConnectUi === 'function') window.mt5ResetConnectUi();
             window.location.href = res.url || '/app/mt5';
           } catch (_) {
             el.dataset.deleteSubmitting = '0';

@@ -1865,7 +1865,9 @@ router.get('/mt5', async (req, res) => {
   `, [userId]);
 
   const pendingConnectAccount = (accounts || []).find((row) =>
-    ['checking', 'connecting', 'starting'].includes(String(row.status || '').toLowerCase())
+    row.port_slot != null
+    && Number(row.port_slot) > 0
+    && ['checking', 'connecting', 'starting'].includes(String(row.status || '').toLowerCase())
   );
 
   const connectedRunAccounts = (accounts || [])
@@ -2620,6 +2622,25 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       portId: oldPort.port_id || null,
       message: 'ยกเลิกเพราะผู้ใช้ลบ PORT'
     }).catch((e) => console.error('[DELETE] abort connect error:', e.message || e));
+
+    await query(
+      `
+      UPDATE vps_system.mt5_accounts
+      SET status='ready',
+          last_error=NULL,
+          last_login_message=NULL,
+          current_attempt_id=NULL,
+          connect_started_at=NULL,
+          mt5_window_title=NULL,
+          mt5_preview_path=NULL,
+          updated_at=NOW()
+      WHERE user_id=$1
+        AND port_slot IS NULL
+        AND LOWER(COALESCE(status, '')) IN ('checking', 'connecting', 'starting')
+        AND id <> $2
+    `,
+      [userId, id]
+    ).catch(() => {});
 
     // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
     if (stopNodeId && systemPortNos.length) {
