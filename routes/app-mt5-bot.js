@@ -1817,9 +1817,15 @@ function buildPortCardState(acc) {
 
   const slotBusy =
     !!acc &&
-    ['connecting', 'checking', 'connected', 'ready', 'starting'].includes(accStatus);
+    ['connecting', 'checking', 'ready', 'starting'].includes(accStatus);
 
-  return { accStatus, canUse, statusLabel, cssClass, slotBusy, canPick: !slotBusy };
+  const canPickForRun =
+    canUse ||
+    accStatus === 'connecting' ||
+    accStatus === 'checking' ||
+    (accStatus === 'failed' && hasEquity);
+
+  return { accStatus, canUse, statusLabel, cssClass, slotBusy, canPick: !acc || canPickForRun };
 }
 
 router.get('/mt5/ports-state', requireLogin, async (req, res) => {
@@ -1854,7 +1860,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         status: acc?.status || null,
         canUse: meta.canUse,
         cssClass: meta.cssClass,
-        canPick: meta.canPick,
+        canPick: meta.canPick || !acc,
         statusLabel: meta.statusLabel,
         sublabel: acc
           ? `Login: ${acc.mt5_login}${equityPart}`

@@ -112,8 +112,8 @@
           <% const acc = typeof pickAccountForPortSlot === 'function' ? pickAccountForPortSlot(portSlotAccounts || accounts, i) : (accounts || []).find(a => Number(a.port_slot) === i); %>
           <% const accStatus = acc ? String(acc.status || '').toLowerCase() : ''; %>
           <% const canUsePort = acc && accStatus === 'connected'; %>
-          <% const slotBusy = acc && ['connecting','checking','connected','ready','starting'].includes(accStatus); %>
-          <% const cardPick = canUsePort || !slotBusy; %>
+          <% const hasEquityPort = acc && ((acc.last_equity != null && acc.last_equity !== '') || (acc.last_balance != null && acc.last_balance !== '')); %>
+          <% const cardPick = !acc || canUsePort || accStatus === 'connecting' || accStatus === 'checking' || accStatus === 'starting' || (accStatus === 'failed' && hasEquityPort); %>
           <div class="port-item <%= canUsePort ? 'connected' : (accStatus === 'connecting' || accStatus === 'starting' ? 'checking' : (acc ? 'cancelled' : '')) %><%= cardPick ? ' port-card-pick' : '' %>" data-port-slot="<%= i %>"<%= acc ? (' data-account-id="' + acc.id + '"') : '' %><%= cardPick ? ' role="button" tabindex="0"' : '' %>>
             <div class="port-main">
               <div>
@@ -887,7 +887,7 @@
         '<button class="mt5-btn mini delete" type="submit" onclick="event.stopPropagation()">ลบ</button></form>'
       : '';
     const actions = p.accountId ? '<div class="port-actions" onclick="event.stopPropagation()">' + del + '</div>' : '';
-    const pickable = !!(p.accountId ? (p.canUse || String(p.status || '').toLowerCase() === 'connected') : p.canPick);
+    const pickable = !!(p.canPick || (p.accountId && (p.canUse || ['connected', 'connecting', 'checking', 'starting'].includes(String(p.status || '').toLowerCase()))));
     const pickCls = pickable ? ' port-card-pick' : '';
     const pickTitle = p.canUse ? ' title="คลิกเลือก PORT นี้เพื่อ Run BOT"' : (pickable ? ' title="คลิกเลือก PORT นี้เพื่อ Login MT5"' : '');
     const pickAttr = pickable
