@@ -17,7 +17,8 @@
     document.documentElement.lang = lang;
 
     document.querySelectorAll('[data-i18n]').forEach((el) => {
-      const key = el.getAttribute('data-i18n');
+      const key = (el.getAttribute('data-i18n') || '').trim();
+      if (!key) return;
       const fallback = el.getAttribute('data-i18n-fallback') || el.textContent.trim();
       el.textContent = translate(lang, key, fallback);
     });

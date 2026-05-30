@@ -645,6 +645,7 @@ router.get('/', async (req, res) => {
 
   return res.render('app/dashboard', {
     pageTitle: 'Customer Portal',
+    pageCss: 'app-dashboard.css',
     currentPath: '/app',
     showIdentityGate: !isIdentityVerified(base.user) || String(req.query.showIdentityGate || '') === '1',
     ...flash(req),
