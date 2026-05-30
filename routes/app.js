@@ -32,6 +32,7 @@ const {
 } = require('../lib/subscriptionPackage');
 const { isIdentityVerified, requireIdentityVerified } = require('../middleware/requireIdentity');
 const { fetchCalendarPerformance } = require('../lib/mt5CalendarPerformance');
+const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
@@ -3182,10 +3183,40 @@ router.get('/calendar', async (req, res) => {
     pageTitle: 'ปฏิทินกำไร MT5',
     pageCss: 'app-calendar.css',
     currentPath: '/app/calendar',
+    activeTab: 'calendar',
     refreshSec: MT5_CALENDAR_REFRESH_SEC,
     ...flash(req),
     ...base
   });
+});
+
+router.get('/calendar/ai', async (req, res) => {
+  const base = await getBaseData(req);
+  return res.render('app/calendar', {
+    pageTitle: 'AI วิเคราะห์ตลาด 30 วัน',
+    pageCss: 'app-calendar.css',
+    currentPath: '/app/calendar/ai',
+    activeTab: 'ai',
+    refreshSec: MT5_CALENDAR_REFRESH_SEC,
+    ...flash(req),
+    ...base
+  });
+});
+
+router.get('/calendar/forecast', async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const accountId = Number(req.query.accountId || 0);
+    const refresh = String(req.query.refresh || '') === '1';
+    const data = await fetchForecastForAccount(userId, accountId, { refresh });
+    if (!data.ok) {
+      return res.status(data.message === 'account_not_found' ? 404 : 400).json(data);
+    }
+    return res.json(data);
+  } catch (e) {
+    console.error('[calendar/forecast]', e);
+    return res.status(500).json({ ok: false, message: e.message || 'server_error' });
+  }
 });
 
 router.get('/calendar/data', async (req, res) => {

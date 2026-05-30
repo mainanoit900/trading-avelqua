@@ -1,19 +1,29 @@
 <%
 const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
 const pageCss = 'app-calendar.css';
-const pageTitle = safeT('app.menu.calendar', 'ปฏิทินกำไร MT5');
 const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) || 90;
+const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'calendar');
 %>
 
 <%- include('../partials/app-shell') %>
 
 <div class="cal-page" id="calPage">
+  <nav class="cal-tabs" aria-label="เมนูปฏิทิน">
+    <a href="/app/calendar" class="cal-tab <%= calActiveTab === 'calendar' ? 'active' : '' %>">📅 ปฏิทิน PnL</a>
+    <a href="/app/calendar/ai" class="cal-tab <%= calActiveTab === 'ai' ? 'active' : '' %>">🤖 AI วิเคราะห์ 30 วัน</a>
+  </nav>
+
   <section class="cal-hero">
     <div class="cal-hero-top">
       <div>
         <p class="cal-eyebrow">MT5 Performance</p>
-        <h2>ปฏิทินกำไร / ขาดทุน</h2>
-        <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= calendarRefreshSec %> วินาที (วันจันทร์–ศุกร์) · เสาร์–อาทิตย์ตลาดทองปิด ไม่อัปเดต</p>
+        <% if (calActiveTab === 'ai') { %>
+          <h2>AI วิเคราะห์ตลาด · 30 วันข้างหน้า</h2>
+          <p>วิเคราะห์จากประวัติ PnL ของแต่ละ Login + มุมมองตลาดทอง (Python AI) — คาดการณ์กำไร/ขาดทุนเฉพาะวันจันทร์–ศุกร์</p>
+        <% } else { %>
+          <h2>ปฏิทินกำไร / ขาดทุน</h2>
+          <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= calendarRefreshSec %> วินาที (วันจันทร์–ศุกร์) · เสาร์–อาทิตย์ตลาดทองปิด ไม่อัปเดต</p>
+        <% } %>
       </div>
       <div class="cal-live-badge" id="calLiveBadge" hidden>
         <span class="cal-live-dot" aria-hidden="true"></span>
@@ -31,14 +41,19 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
           <option value="">กำลังโหลด...</option>
         </select>
       </label>
+      <% if (calActiveTab === 'calendar') { %>
       <div class="cal-month-nav" aria-label="เปลี่ยนเดือน">
         <button type="button" id="calPrevMonth" title="เดือนก่อน">‹</button>
         <strong id="calMonthLabel">-</strong>
         <button type="button" id="calNextMonth" title="เดือนถัดไป">›</button>
       </div>
+      <% } else { %>
+      <button type="button" class="cal-ai-refresh" id="calAiRefresh">🔄 วิเคราะห์ใหม่</button>
+      <% } %>
     </div>
   </section>
 
+  <% if (calActiveTab === 'calendar') { %>
   <section class="cal-stats" aria-label="สรุปเดือน">
     <article class="cal-stat">
       <span>กำไร/ขาดทุนรวมเดือน</span>
@@ -101,10 +116,68 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
       </div>
     </div>
   </section>
+  <% } else { %>
+  <section class="cal-ai-stats" id="calAiStats" aria-label="สรุป AI">
+    <article class="cal-stat">
+      <span>แนวโน้ม</span>
+      <strong id="calAiOutlook" class="neu">-</strong>
+    </article>
+    <article class="cal-stat">
+      <span>ความมั่นใจ AI</span>
+      <strong id="calAiConfidence" class="neu">-</strong>
+    </article>
+    <article class="cal-stat">
+      <span>คาดการณ์ 30 วัน (ฐาน)</span>
+      <strong id="calAiBase" class="neu">-</strong>
+    </article>
+  </section>
+
+  <section class="cal-panel cal-ai-panel" aria-label="สรุป AI">
+    <div class="cal-panel-head">
+      <div>
+        <h3>สรุปการวิเคราะห์</h3>
+        <p id="calAiMeta">กำลังโหลด...</p>
+      </div>
+    </div>
+    <div class="cal-ai-summary" id="calAiSummary">กำลังวิเคราะห์...</div>
+    <div class="cal-ai-scenarios" id="calAiScenarios"></div>
+    <div class="cal-ai-lists">
+      <div><h4>ความเสี่ยง</h4><ul id="calAiRisks"></ul></div>
+      <div><h4>คำแนะนำ</h4><ul id="calAiTips"></ul></div>
+    </div>
+    <p class="cal-ai-disclaimer" id="calAiDisclaimer"></p>
+  </section>
+
+  <section class="cal-panel" aria-label="คาดการณ์รายวัน 30 วัน">
+    <div class="cal-panel-head">
+      <div>
+        <h3>คาดการณ์รายวัน (เฉพาะวันตลาดเปิด)</h3>
+        <p>30 วันทำการข้างหน้า · ข้ามเสาร์–อาทิตย์</p>
+      </div>
+    </div>
+    <div class="cal-table-wrap">
+      <table class="cal-table">
+        <thead>
+          <tr>
+            <th>วันที่</th>
+            <th>คาด PnL/วัน</th>
+            <th>ดีสุด</th>
+            <th>แย่สุด</th>
+            <th>สะสม 30 วัน</th>
+          </tr>
+        </thead>
+        <tbody id="calAiForecastBody">
+          <tr><td colspan="5" class="cal-empty">กำลังโหลด...</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </section>
+  <% } %>
 </div>
 
 <script>
 (function () {
+  var ACTIVE_TAB = '<%= calActiveTab %>';
   var REFRESH_MS = <%= calendarRefreshSec %> * 1000;
   var state = {
     accountId: 0,
@@ -117,23 +190,42 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
 
   var el = {
     page: document.getElementById('calPage'),
-    account: document.getElementById('calAccountSelect'),
-    monthLabel: document.getElementById('calMonthLabel'),
-    grid: document.getElementById('calGrid'),
-    monthTotal: document.getElementById('calMonthTotal'),
-    profitDays: document.getElementById('calProfitDays'),
-    lossDays: document.getElementById('calLossDays'),
-    selectedHint: document.getElementById('calSelectedHint'),
-    historyHint: document.getElementById('calHistoryHint'),
-    historyBody: document.getElementById('calHistoryBody'),
-    pagerInfo: document.getElementById('calPagerInfo'),
-    histPrev: document.getElementById('calHistPrev'),
-    histNext: document.getElementById('calHistNext'),
-    liveBadge: document.getElementById('calLiveBadge'),
-    closedBadge: document.getElementById('calClosedBadge'),
-    prevMonth: document.getElementById('calPrevMonth'),
-    nextMonth: document.getElementById('calNextMonth')
+    account: document.getElementById('calAccountSelect')
   };
+
+  if (ACTIVE_TAB === 'calendar') {
+    Object.assign(el, {
+      monthLabel: document.getElementById('calMonthLabel'),
+      grid: document.getElementById('calGrid'),
+      monthTotal: document.getElementById('calMonthTotal'),
+      profitDays: document.getElementById('calProfitDays'),
+      lossDays: document.getElementById('calLossDays'),
+      selectedHint: document.getElementById('calSelectedHint'),
+      historyHint: document.getElementById('calHistoryHint'),
+      historyBody: document.getElementById('calHistoryBody'),
+      pagerInfo: document.getElementById('calPagerInfo'),
+      histPrev: document.getElementById('calHistPrev'),
+      histNext: document.getElementById('calHistNext'),
+      liveBadge: document.getElementById('calLiveBadge'),
+      closedBadge: document.getElementById('calClosedBadge'),
+      prevMonth: document.getElementById('calPrevMonth'),
+      nextMonth: document.getElementById('calNextMonth')
+    });
+  } else {
+    Object.assign(el, {
+      aiRefresh: document.getElementById('calAiRefresh'),
+      aiOutlook: document.getElementById('calAiOutlook'),
+      aiConfidence: document.getElementById('calAiConfidence'),
+      aiBase: document.getElementById('calAiBase'),
+      aiMeta: document.getElementById('calAiMeta'),
+      aiSummary: document.getElementById('calAiSummary'),
+      aiScenarios: document.getElementById('calAiScenarios'),
+      aiRisks: document.getElementById('calAiRisks'),
+      aiTips: document.getElementById('calAiTips'),
+      aiDisclaimer: document.getElementById('calAiDisclaimer'),
+      aiForecastBody: document.getElementById('calAiForecastBody')
+    });
+  }
 
   function fmtMoney(v) {
     var n = Number(v);
@@ -148,20 +240,11 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
     return n > 0 ? 'pos' : 'neg';
   }
 
-  function shiftMonth(monthKey, delta) {
-    var parts = String(monthKey || '').split('-').map(Number);
-    if (parts.length < 2) return monthKey;
-    var d = new Date(Date.UTC(parts[0], parts[1] - 1 + delta, 1));
-    return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
-  }
-
-  function buildQuery() {
-    var q = new URLSearchParams();
-    if (state.accountId) q.set('accountId', String(state.accountId));
-    if (state.month) q.set('month', state.month);
-    if (state.selectedDay) q.set('day', state.selectedDay);
-    q.set('historyPage', String(state.historyPage));
-    return q.toString();
+  function outlookLabel(v) {
+    var s = String(v || '').toLowerCase();
+    if (s === 'bullish') return 'ขาขึ้น';
+    if (s === 'bearish') return 'ขาลง';
+    return 'ทรงตัว';
   }
 
   function renderAccounts(accounts, selectedId) {
@@ -178,163 +261,207 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
     el.account.value = String(selectedId || accounts[0].id);
   }
 
-  function renderGrid(data) {
-    var cells = (data.calendar && data.calendar.cells) || [];
-    if (!cells.length) {
-      el.grid.innerHTML = '<div class="cal-empty">ยังไม่มีข้อมูล</div>';
-      return;
+  if (ACTIVE_TAB === 'calendar') {
+    function shiftMonth(monthKey, delta) {
+      var parts = String(monthKey || '').split('-').map(Number);
+      if (parts.length < 2) return monthKey;
+      var d = new Date(Date.UTC(parts[0], parts[1] - 1 + delta, 1));
+      return d.getUTCFullYear() + '-' + String(d.getUTCMonth() + 1).padStart(2, '0');
     }
-    el.grid.innerHTML = cells.map(function (c) {
-      if (c.empty) return '<div class="cal-cell empty"></div>';
-      var cls = ['cal-cell'];
-      if (!c.isFuture && (c.hasData || c.isToday)) cls.push('clickable');
-      if (c.isToday) cls.push('today');
-      if (c.live) cls.push('live');
-      if (c.dayKey === data.selectedDay) cls.push('selected');
-      if (c.isFuture) cls.push('future');
-      if (c.isWeekend || c.marketClosed) cls.push('weekend');
-      var pnlText = (c.marketClosed || c.isWeekend) ? 'ปิด' : (c.pnl == null ? '—' : fmtMoney(c.pnl));
-      var tag = '';
-      if (c.marketClosed || c.isWeekend) {
-        tag = '<span class="cal-cell-tag cal-market-closed">ตลาดปิด</span>';
-      } else if (c.live) {
-        tag = '<span class="cal-cell-tag">Live</span>';
-      } else if (c.finalized) {
-        tag = '<span class="cal-cell-tag" style="color:#94a3b8">สรุปแล้ว</span>';
+
+    function buildQuery() {
+      var q = new URLSearchParams();
+      if (state.accountId) q.set('accountId', String(state.accountId));
+      if (state.month) q.set('month', state.month);
+      if (state.selectedDay) q.set('day', state.selectedDay);
+      q.set('historyPage', String(state.historyPage));
+      return q.toString();
+    }
+
+    function renderGrid(data) {
+      var cells = (data.calendar && data.calendar.cells) || [];
+      if (!cells.length) {
+        el.grid.innerHTML = '<div class="cal-empty">ยังไม่มีข้อมูล</div>';
+        return;
       }
-      var disabled = c.isFuture ? 'disabled' : '';
-      return '<button type="button" class="' + cls.join(' ') + '" data-day="' + c.dayKey + '" ' + disabled + '>' +
-        '<span class="cal-day-num">' + c.day + '</span>' +
-        '<span class="cal-pnl ' + pnlClass(c.pnl) + '">' + pnlText + '</span>' +
-        tag +
-      '</button>';
-    }).join('');
-
-    el.grid.querySelectorAll('.cal-cell.clickable').forEach(function (btn) {
-      btn.addEventListener('click', function () {
-        state.selectedDay = btn.getAttribute('data-day') || '';
-        state.historyPage = 1;
-        loadCalendar(false);
-      });
-    });
-  }
-
-  function renderHistory(data) {
-    var hist = data.history || {};
-    var rows = hist.rows || [];
-    if (!rows.length) {
-      var emptyMsg = (hist.marketClosed || data.selectedMarketClosed)
-        ? 'ตลาดทองปิด · ไม่มีการอัปเดตวันเสาร์–อาทิตย์'
-        : 'ยังไม่มีประวัติในวันนี้';
-      el.historyBody.innerHTML = '<tr><td colspan="6" class="cal-empty">' + emptyMsg + '</td></tr>';
-    } else {
-      el.historyBody.innerHTML = rows.map(function (r) {
-        var live = r.live ? '<span class="pos">Live</span>' : 'บันทึก';
-        return '<tr class="' + (r.live ? 'live-row' : '') + '">' +
-          '<td>' + (r.datetime || r.time || '-') + '</td>' +
-          '<td class="num">' + fmtMoney(r.equity) + '</td>' +
-          '<td class="num ' + pnlClass(r.pnl) + '">' + fmtMoney(r.pnl) + '</td>' +
-          '<td class="num pos">' + (r.profit ? fmtMoney(r.profit) : '-') + '</td>' +
-          '<td class="num neg">' + (r.loss ? fmtMoney(r.loss) : '-') + '</td>' +
-          '<td>' + live + '</td>' +
-        '</tr>';
+      el.grid.innerHTML = cells.map(function (c) {
+        if (c.empty) return '<div class="cal-cell empty"></div>';
+        var cls = ['cal-cell'];
+        if (!c.isFuture && (c.hasData || c.isToday)) cls.push('clickable');
+        if (c.isToday) cls.push('today');
+        if (c.live) cls.push('live');
+        if (c.dayKey === data.selectedDay) cls.push('selected');
+        if (c.isFuture) cls.push('future');
+        if (c.isWeekend || c.marketClosed) cls.push('weekend');
+        var pnlText = (c.marketClosed || c.isWeekend) ? 'ปิด' : (c.pnl == null ? '—' : fmtMoney(c.pnl));
+        var tag = '';
+        if (c.marketClosed || c.isWeekend) tag = '<span class="cal-cell-tag cal-market-closed">ตลาดปิด</span>';
+        else if (c.live) tag = '<span class="cal-cell-tag">Live</span>';
+        else if (c.finalized) tag = '<span class="cal-cell-tag" style="color:#94a3b8">สรุปแล้ว</span>';
+        return '<button type="button" class="' + cls.join(' ') + '" data-day="' + c.dayKey + '" ' + (c.isFuture ? 'disabled' : '') + '>' +
+          '<span class="cal-day-num">' + c.day + '</span>' +
+          '<span class="cal-pnl ' + pnlClass(c.pnl) + '">' + pnlText + '</span>' + tag + '</button>';
       }).join('');
-    }
-
-    var page = hist.page || 1;
-    var pageCount = hist.pageCount || 1;
-    var total = hist.total || 0;
-    el.pagerInfo.textContent = 'หน้า ' + page + ' / ' + pageCount + ' · ทั้งหมด ' + total + ' รายการ';
-    el.histPrev.disabled = page <= 1;
-    el.histNext.disabled = page >= pageCount;
-  }
-
-  function renderSummary(data) {
-    var total = Number((data.calendar && data.calendar.monthTotal) || 0);
-    el.monthTotal.textContent = fmtMoney(total);
-    el.monthTotal.className = pnlClass(total);
-    el.profitDays.textContent = String((data.calendar && data.calendar.profitDays) || 0);
-    el.lossDays.textContent = String((data.calendar && data.calendar.lossDays) || 0);
-    el.monthLabel.textContent = data.monthLabel || data.month || '-';
-    el.selectedHint.textContent = 'วันที่เลือก: ' + (data.selectedDayLabel || data.selectedDay || '-')
-      + (data.selectedDayPnl != null ? ' · ' + fmtMoney(data.selectedDayPnl) : '');
-    el.historyHint.textContent = (data.selectedMarketClosed || (hist.marketClosed && data.selectedDay === data.todayKey))
-      ? 'วันเสาร์–อาทิตย์ ตลาดทองปิด · ไม่อัปเดต'
-      : ('ประวัติวันที่ ' + (data.selectedDayLabel || data.selectedDay || '-')
-        + ' · อัปเดตทุก ' + (data.refreshSec || <%= calendarRefreshSec %>) + ' วินาที (จ–ศ)');
-    el.liveBadge.hidden = !(data.selectedDay === data.todayKey && data.refreshEnabled);
-    el.closedBadge.hidden = !(!data.refreshEnabled && data.selectedDay === data.todayKey);
-  }
-
-  function scheduleRefresh(enabled) {
-    if (state.timer) {
-      clearInterval(state.timer);
-      state.timer = null;
-    }
-    if (enabled) {
-      state.timer = setInterval(function () { loadCalendar(false); }, REFRESH_MS);
-    }
-  }
-
-  async function loadCalendar(showLoading) {
-    if (state.loading) return;
-    state.loading = true;
-    if (showLoading !== false) el.page.classList.add('cal-loading');
-    try {
-      var res = await fetch('/app/calendar/data?' + buildQuery(), {
-        credentials: 'same-origin',
-        headers: { Accept: 'application/json' }
+      el.grid.querySelectorAll('.cal-cell.clickable').forEach(function (btn) {
+        btn.addEventListener('click', function () {
+          state.selectedDay = btn.getAttribute('data-day') || '';
+          state.historyPage = 1;
+          loadCalendar(false);
+        });
       });
-      var data = await res.json();
-      if (!data.ok) throw new Error(data.message || 'load_failed');
-
-      state.accountId = data.accountId || 0;
-      state.month = data.month || state.month;
-      state.selectedDay = data.selectedDay || state.selectedDay;
-      state.historyPage = (data.history && data.history.page) || state.historyPage;
-
-      renderAccounts(data.accounts || [], data.accountId);
-      renderSummary(data);
-      renderGrid(data);
-      renderHistory(data);
-      scheduleRefresh(!!data.refreshEnabled);
-    } catch (e) {
-      el.grid.innerHTML = '<div class="cal-empty">โหลดไม่สำเร็จ: ' + (e.message || e) + '</div>';
-    } finally {
-      state.loading = false;
-      el.page.classList.remove('cal-loading');
     }
+
+    function renderHistory(data) {
+      var hist = data.history || {};
+      var rows = hist.rows || [];
+      if (!rows.length) {
+        var emptyMsg = (hist.marketClosed || data.selectedMarketClosed)
+          ? 'ตลาดทองปิด · ไม่มีการอัปเดตวันเสาร์–อาทิตย์'
+          : 'ยังไม่มีประวัติในวันนี้';
+        el.historyBody.innerHTML = '<tr><td colspan="6" class="cal-empty">' + emptyMsg + '</td></tr>';
+      } else {
+        el.historyBody.innerHTML = rows.map(function (r) {
+          return '<tr class="' + (r.live ? 'live-row' : '') + '">' +
+            '<td>' + (r.datetime || r.time || '-') + '</td>' +
+            '<td class="num">' + fmtMoney(r.equity) + '</td>' +
+            '<td class="num ' + pnlClass(r.pnl) + '">' + fmtMoney(r.pnl) + '</td>' +
+            '<td class="num pos">' + (r.profit ? fmtMoney(r.profit) : '-') + '</td>' +
+            '<td class="num neg">' + (r.loss ? fmtMoney(r.loss) : '-') + '</td>' +
+            '<td>' + (r.live ? '<span class="pos">Live</span>' : 'บันทึก') + '</td></tr>';
+        }).join('');
+      }
+      el.pagerInfo.textContent = 'หน้า ' + (hist.page || 1) + ' / ' + (hist.pageCount || 1) + ' · ทั้งหมด ' + (hist.total || 0) + ' รายการ';
+      el.histPrev.disabled = (hist.page || 1) <= 1;
+      el.histNext.disabled = (hist.page || 1) >= (hist.pageCount || 1);
+    }
+
+    function renderSummary(data) {
+      var hist = data.history || {};
+      var total = Number((data.calendar && data.calendar.monthTotal) || 0);
+      el.monthTotal.textContent = fmtMoney(total);
+      el.monthTotal.className = pnlClass(total);
+      el.profitDays.textContent = String((data.calendar && data.calendar.profitDays) || 0);
+      el.lossDays.textContent = String((data.calendar && data.calendar.lossDays) || 0);
+      el.monthLabel.textContent = data.monthLabel || data.month || '-';
+      el.selectedHint.textContent = 'วันที่เลือก: ' + (data.selectedDayLabel || data.selectedDay || '-')
+        + (data.selectedDayPnl != null ? ' · ' + fmtMoney(data.selectedDayPnl) : '');
+      el.historyHint.textContent = (data.selectedMarketClosed || (hist.marketClosed && data.selectedDay === data.todayKey))
+        ? 'วันเสาร์–อาทิตย์ ตลาดทองปิด · ไม่อัปเดต'
+        : ('ประวัติวันที่ ' + (data.selectedDayLabel || data.selectedDay || '-')
+          + ' · อัปเดตทุก ' + (data.refreshSec || <%= calendarRefreshSec %>) + ' วินาที (จ–ศ)');
+      el.liveBadge.hidden = !(data.selectedDay === data.todayKey && data.refreshEnabled);
+      el.closedBadge.hidden = !(!data.refreshEnabled && data.selectedDay === data.todayKey);
+    }
+
+    function scheduleRefresh(enabled) {
+      if (state.timer) clearInterval(state.timer);
+      state.timer = null;
+      if (enabled) state.timer = setInterval(function () { loadCalendar(false); }, REFRESH_MS);
+    }
+
+    async function loadCalendar(showLoading) {
+      if (state.loading) return;
+      state.loading = true;
+      if (showLoading !== false) el.page.classList.add('cal-loading');
+      try {
+        var res = await fetch('/app/calendar/data?' + buildQuery(), { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        var data = await res.json();
+        if (!data.ok) throw new Error(data.message || 'load_failed');
+        state.accountId = data.accountId || 0;
+        state.month = data.month || state.month;
+        state.selectedDay = data.selectedDay || state.selectedDay;
+        state.historyPage = (data.history && data.history.page) || state.historyPage;
+        renderAccounts(data.accounts || [], data.accountId);
+        renderSummary(data);
+        renderGrid(data);
+        renderHistory(data);
+        scheduleRefresh(!!data.refreshEnabled);
+      } catch (e) {
+        el.grid.innerHTML = '<div class="cal-empty">โหลดไม่สำเร็จ: ' + (e.message || e) + '</div>';
+      } finally {
+        state.loading = false;
+        el.page.classList.remove('cal-loading');
+      }
+    }
+
+    el.account.addEventListener('change', function () {
+      state.accountId = Number(el.account.value || 0);
+      state.historyPage = 1;
+      loadCalendar(true);
+    });
+    el.prevMonth.addEventListener('click', function () { state.month = shiftMonth(state.month, -1); loadCalendar(true); });
+    el.nextMonth.addEventListener('click', function () { state.month = shiftMonth(state.month, 1); loadCalendar(true); });
+    el.histPrev.addEventListener('click', function () { if (state.historyPage > 1) { state.historyPage -= 1; loadCalendar(false); } });
+    el.histNext.addEventListener('click', function () { state.historyPage += 1; loadCalendar(false); });
+    loadCalendar(true);
+  } else {
+    function renderForecast(data) {
+      var f = data.forecast || {};
+      var analysis = f.analysis || {};
+      var stats = f.stats || {};
+      var proj = f.projected_pnl_30d || {};
+      el.aiOutlook.textContent = outlookLabel(analysis.outlook);
+      el.aiOutlook.className = pnlClass(analysis.outlook === 'bullish' ? 1 : analysis.outlook === 'bearish' ? -1 : 0);
+      el.aiConfidence.textContent = String(analysis.confidence != null ? analysis.confidence : '-') + '%';
+      el.aiBase.textContent = fmtMoney(proj.base);
+      el.aiBase.className = pnlClass(proj.base);
+      var meta = 'Login ' + (data.mt5Login || '-') + ' · วิเคราะห์เมื่อ ' + (data.generatedAt ? new Date(data.generatedAt).toLocaleString('th-TH') : '-');
+      if (data.cached) meta += ' · จากแคช';
+      if (data.refreshBlocked) meta += ' · รอ ' + (data.refreshCooldownSec || 0) + ' วิ ก่อนวิเคราะห์ใหม่';
+      el.aiMeta.textContent = meta;
+      el.aiSummary.innerHTML = '<p><strong>สรุป:</strong> ' + (analysis.summary_th || '-') + '</p><p><strong>มุมมองตลาด:</strong> ' + (analysis.market_view_th || '-') + '</p>';
+      el.aiScenarios.innerHTML =
+        '<div class="cal-ai-scenario pos"><span>ดีสุด</span><strong>' + fmtMoney(proj.optimistic) + '</strong></div>' +
+        '<div class="cal-ai-scenario neu"><span>ฐาน</span><strong>' + fmtMoney(proj.base) + '</strong></div>' +
+        '<div class="cal-ai-scenario neg"><span>แย่สุด</span><strong>' + fmtMoney(proj.pessimistic) + '</strong></div>';
+      el.aiRisks.innerHTML = (analysis.risks || []).map(function (x) { return '<li>' + x + '</li>'; }).join('') || '<li>-</li>';
+      el.aiTips.innerHTML = (analysis.recommendations || []).map(function (x) { return '<li>' + x + '</li>'; }).join('') || '<li>-</li>';
+      el.aiDisclaimer.textContent = analysis.disclaimer || 'เป็นการคาดการณ์ ไม่ใช่คำแนะนำการลงทุน';
+      var days = f.daily_forecast || [];
+      if (!days.length) {
+        el.aiForecastBody.innerHTML = '<tr><td colspan="5" class="cal-empty">ยังไม่มีข้อมูลคาดการณ์ (ต้องมีประวัติ PnL อย่างน้อยบางวัน)</td></tr>';
+      } else {
+        el.aiForecastBody.innerHTML = days.map(function (d) {
+          return '<tr><td>' + d.day_key + '</td><td class="num ' + pnlClass(d.expected_pnl) + '">' + fmtMoney(d.expected_pnl) + '</td>' +
+            '<td class="num pos">' + fmtMoney(d.optimistic_pnl) + '</td><td class="num neg">' + fmtMoney(d.pessimistic_pnl) + '</td>' +
+            '<td class="num ' + pnlClass(d.cumulative_pnl) + '">' + fmtMoney(d.cumulative_pnl) + '</td></tr>';
+        }).join('');
+      }
+    }
+
+    async function loadForecast(refresh) {
+      if (state.loading) return;
+      state.loading = true;
+      el.page.classList.add('cal-loading');
+      try {
+        var q = new URLSearchParams();
+        if (state.accountId) q.set('accountId', String(state.accountId));
+        if (refresh) q.set('refresh', '1');
+        var res = await fetch('/app/calendar/forecast?' + q.toString(), { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        var data = await res.json();
+        if (!data.ok) throw new Error(data.message || 'forecast_failed');
+        state.accountId = data.accountId || state.accountId;
+        renderAccounts(data.accounts || [], data.accountId);
+        if (data.message === 'no_account') {
+          el.aiSummary.textContent = 'ยังไม่มี MT5 Login — เชื่อมต่อที่หน้า MT5 ก่อน';
+          return;
+        }
+        renderForecast(data);
+      } catch (e) {
+        el.aiSummary.textContent = 'โหลดไม่สำเร็จ: ' + (e.message || e);
+      } finally {
+        state.loading = false;
+        el.page.classList.remove('cal-loading');
+      }
+    }
+
+    el.account.addEventListener('change', function () {
+      state.accountId = Number(el.account.value || 0);
+      loadForecast(false);
+    });
+    el.aiRefresh.addEventListener('click', function () { loadForecast(true); });
+    loadForecast(false);
   }
-
-  el.account.addEventListener('change', function () {
-    state.accountId = Number(el.account.value || 0);
-    state.historyPage = 1;
-    loadCalendar(true);
-  });
-
-  el.prevMonth.addEventListener('click', function () {
-    state.month = shiftMonth(state.month, -1);
-    loadCalendar(true);
-  });
-
-  el.nextMonth.addEventListener('click', function () {
-    state.month = shiftMonth(state.month, 1);
-    loadCalendar(true);
-  });
-
-  el.histPrev.addEventListener('click', function () {
-    if (state.historyPage > 1) {
-      state.historyPage -= 1;
-      loadCalendar(false);
-    }
-  });
-
-  el.histNext.addEventListener('click', function () {
-    state.historyPage += 1;
-    loadCalendar(false);
-  });
-
-  loadCalendar(true);
 })();
 </script>
 

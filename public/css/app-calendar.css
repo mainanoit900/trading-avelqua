@@ -4,6 +4,112 @@
   min-width: 0;
 }
 
+.cal-tabs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.cal-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 16px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.16);
+  background: rgba(255, 255, 255, 0.03);
+  color: #cbd5e1;
+  font-weight: 800;
+  text-decoration: none;
+  font-size: 14px;
+}
+
+.cal-tab.active {
+  border-color: rgba(56, 189, 248, 0.45);
+  background: rgba(56, 189, 248, 0.12);
+  color: #e0f2fe;
+}
+
+.cal-ai-refresh {
+  height: 44px;
+  padding: 0 18px;
+  border-radius: 14px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: linear-gradient(135deg, rgba(37, 99, 235, 0.35), rgba(6, 182, 212, 0.25));
+  color: #e0f2fe;
+  font-weight: 800;
+  cursor: pointer;
+}
+
+.cal-ai-stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.cal-ai-summary {
+  padding: 18px 20px;
+  line-height: 1.7;
+  color: #cbd5e1;
+}
+
+.cal-ai-summary p {
+  margin: 0 0 12px;
+}
+
+.cal-ai-scenarios {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 10px;
+  padding: 0 20px 16px;
+}
+
+.cal-ai-scenario {
+  padding: 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(148, 163, 184, 0.12);
+  background: rgba(255, 255, 255, 0.03);
+  display: grid;
+  gap: 6px;
+}
+
+.cal-ai-scenario span {
+  font-size: 12px;
+  color: #94a3b8;
+}
+
+.cal-ai-scenario strong {
+  font-size: 20px;
+}
+
+.cal-ai-lists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  padding: 0 20px 16px;
+}
+
+.cal-ai-lists h4 {
+  margin: 0 0 8px;
+  font-size: 14px;
+  color: #94a3b8;
+}
+
+.cal-ai-lists ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #cbd5e1;
+  line-height: 1.6;
+}
+
+.cal-ai-disclaimer {
+  margin: 0;
+  padding: 14px 20px 18px;
+  font-size: 12px;
+  color: #64748b;
+  border-top: 1px solid rgba(148, 163, 184, 0.1);
+}
+
 .cal-hero {
   position: relative;
   overflow: hidden;
@@ -376,7 +482,13 @@ button.cal-cell {
 }
 
 @media (max-width: 860px) {
-  .cal-stats {
+  .cal-stats,
+  .cal-ai-stats {
+    grid-template-columns: 1fr;
+  }
+
+  .cal-ai-scenarios,
+  .cal-ai-lists {
     grid-template-columns: 1fr;
   }
 

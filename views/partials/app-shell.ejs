@@ -4,7 +4,7 @@
   const shellCurrentPath = (typeof currentPath !== 'undefined' && currentPath) ? currentPath : '';
   const shellPageCss = (typeof pageCss !== 'undefined' && pageCss) ? pageCss : '';
   const shellPageCssHref = shellPageCss ? (shellPageCss.startsWith('/') ? shellPageCss : '/public/css/' + shellPageCss) : '';
-  const shellCssVer = '202605307';
+  const shellCssVer = '202605308';
 %>
 <!DOCTYPE html>
 <html lang="<%= shellLang %>">
@@ -100,13 +100,22 @@
           <span data-i18n="app.menu.broker"><%= safeT('app.menu.broker', 'Broker Accounts') %></span>
         </a>
 
-<a
-          class="<%= shellCurrentPath.startsWith('/app/calendar') ? 'active' : '' %>"
+        <a
+          class="<%= shellCurrentPath === '/app/calendar' ? 'active' : '' %>"
           href="/app/calendar"
           data-requires-identity="1"
         >
-          <span>📰</span>
-          <span data-i18n="app.menu.calendar"><%= safeT('app.menu.calendar', 'Calendar / Performance') %></span>
+          <span>📅</span>
+          <span data-i18n="app.menu.calendar"><%= safeT('app.menu.calendar', 'ปฏิทิน PnL') %></span>
+        </a>
+
+        <a
+          class="<%= shellCurrentPath.startsWith('/app/calendar/ai') ? 'active' : '' %>"
+          href="/app/calendar/ai"
+          data-requires-identity="1"
+        >
+          <span>🤖</span>
+          <span>AI วิเคราะห์ 30 วัน</span>
         </a>
 
 <a
