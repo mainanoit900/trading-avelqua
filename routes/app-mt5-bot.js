@@ -2762,14 +2762,18 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath).catch(() => {});
     }
 
-    // STEP 3: ค่อยล้างค่าใน DB
+    // STEP 3: ค่อยล้างค่าใน DB (port_slot ต้อง NULL — ไม่งั้น repair จะฟื้นบัญชีกลับ)
     await query(`
       UPDATE vps_system.mt5_accounts
       SET status='deleted',
+          port_slot=NULL,
+          account_name=NULL,
           assigned_port_no=NULL,
           windows_port_no=NULL,
           vps_id=NULL,
           port_id=NULL,
+          current_attempt_id=NULL,
+          last_login_message='ลบ PORT โดยผู้ใช้',
           updated_at=NOW()
       WHERE id=$1
         AND user_id=$2

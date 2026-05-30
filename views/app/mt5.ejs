@@ -1739,6 +1739,45 @@ function mt5InitPortListClickDelegation() {
   });
 }
 
+async function mt5ConfirmDeletePortForm(form) {
+    const slotEl = form.closest('.port-item');
+    const slot = slotEl ? Number(slotEl.getAttribute('data-port-slot') || 0) : 0;
+    const label = slot > 0 ? ('PORT ' + slot) : 'PORT นี้';
+    const ok = typeof mt5UiConfirm === 'function'
+      ? await mt5UiConfirm({
+          variant: 'danger',
+          title: 'ลบ ' + label,
+          message: 'ยืนยันลบ ' + label + ' และปิด MT5 บน VPS ใช่ไหม?',
+          okText: 'ลบ PORT',
+          cancelText: 'ยกเลิก'
+        })
+      : window.confirm('ยืนยันลบ ' + label + ' ใช่ไหม?');
+    if (!ok) return false;
+    try {
+      const m = String(form.getAttribute('action') || '').match(/\/account\/(\d+)\/delete/);
+      const deletedId = m ? String(m[1]) : '';
+      if (deletedId) {
+        if (sessionStorage.getItem('mt5PollAccountId') === deletedId) {
+          sessionStorage.removeItem('mt5PollAccountId');
+        }
+        if (String(sessionStorage.getItem('mt5RunAccountId') || '') === deletedId) {
+          sessionStorage.removeItem('mt5RunAccountId');
+          sessionStorage.removeItem('mt5RunPortSlot');
+          if (window.mt5RunState) window.mt5RunState.selectedAccountId = 0;
+        }
+      }
+      if (slot && String(sessionStorage.getItem('mt5RunPortSlot') || '') === String(slot)) {
+        sessionStorage.removeItem('mt5RunPortSlot');
+      }
+      if (window.mt5Checker) {
+        clearInterval(window.mt5Checker);
+        window.mt5Checker = null;
+      }
+      mt5Checking = false;
+    } catch (_) {}
+    return true;
+  }
+
 function mt5BindPortSlotPicks() {
   document.querySelectorAll('.port-delete-form, .port-actions').forEach(function (el) {
     if (el.dataset.delBound === '1') return;
@@ -1746,19 +1785,25 @@ function mt5BindPortSlotPicks() {
     el.addEventListener('click', function (e) { e.stopPropagation(); });
     el.addEventListener('mousedown', function (e) { e.stopPropagation(); });
     if (el.classList.contains('port-delete-form')) {
-      el.addEventListener('submit', function () {
-        try {
-          const m = String(el.getAttribute('action') || '').match(/\/account\/(\d+)\/delete/);
-          const deletedId = m ? String(m[1]) : '';
-          if (deletedId && sessionStorage.getItem('mt5PollAccountId') === deletedId) {
-            sessionStorage.removeItem('mt5PollAccountId');
+      el.addEventListener('submit', function (e) {
+        if (el.dataset.deleteSubmitting === '1') return;
+        e.preventDefault();
+        e.stopPropagation();
+        (async function () {
+          const ok = await mt5ConfirmDeletePortForm(el);
+          if (!ok) return;
+          el.dataset.deleteSubmitting = '1';
+          const btn = el.querySelector('button[type="submit"]');
+          if (btn) {
+            btn.disabled = true;
+            btn.textContent = 'กำลังลบ...';
           }
-          if (window.mt5Checker) {
-            clearInterval(window.mt5Checker);
-            window.mt5Checker = null;
+          if (typeof HTMLFormElement !== 'undefined' && HTMLFormElement.prototype.submit) {
+            HTMLFormElement.prototype.submit.call(el);
+          } else {
+            el.submit();
           }
-          mt5Checking = false;
-        } catch (e) {}
+        })();
       });
     }
   });
