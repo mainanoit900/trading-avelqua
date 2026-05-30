@@ -66,7 +66,7 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
         <span class="dash-stat-icon" aria-hidden="true">📦</span>
       </div>
       <span><%= safeT('dashboard.latest_package', 'แพ็กเกจล่าสุด') %></span>
-      <strong><%= subscription ? subscription.package_name_snapshot || safeT('dashboard.no_package', 'ยังไม่มีแพ็กเกจ') : safeT('dashboard.no_package', 'ยังไม่มีแพ็กเกจ') %></strong>
+      <strong><%= typeof currentPackageLabel !== 'undefined' ? currentPackageLabel : (subscription ? subscription.package_name_snapshot || safeT('dashboard.no_package', 'ยังไม่มีแพ็กเกจ') : safeT('dashboard.no_package', 'ยังไม่มีแพ็กเกจ')) %></strong>
     </article>
 
     <article class="dash-stat">
@@ -139,7 +139,7 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
         <div class="dash-meta-grid">
           <div class="dash-kv-item">
             <span><%= safeT('dashboard.package', 'แพ็กเกจปัจจุบัน') %></span>
-            <strong><%= subscription ? subscription.package_name_snapshot || '-' : '-' %></strong>
+            <strong><%= typeof currentPackageLabel !== 'undefined' ? currentPackageLabel : (subscription ? subscription.package_name_snapshot || '-' : '-') %></strong>
           </div>
           <div class="dash-kv-item">
             <span><%= safeT('dashboard.source', 'ช่องทาง') %></span>

@@ -23,6 +23,10 @@ const {
   finalizeSellLock,
   releaseSellLock
 } = require('../services/scoinService');
+const {
+  buildFreeCouponPackageName,
+  formatSubscriptionDisplayLabel
+} = require('../lib/subscriptionPackage');
 
 const router = express.Router();
 router.use(requireLogin);
@@ -150,7 +154,7 @@ async function applyFreeCouponPreviewFromCode(req, base, payment, couponCode) {
     couponId: coupon.id,
     couponCode: coupon.coupon_code,
     packageId: freePkg.id,
-    packageName: freePkg.name_th || freePkg.name_en || `${freeGroup} FREE`,
+    packageName: buildFreeCouponPackageName(freeGroup, freeDays),
     packageGroup: freeGroup,
     freeDays,
     detail: coupon.description || coupon.print_note || coupon.coupon_name || 'คูปองแพ็กเกจฟรี',
@@ -226,7 +230,7 @@ async function finalizeFreeCouponFromPackagesPage(req, base, couponCode) {
   const freePkg = freePkgRes.rows[0];
   if (!freePkg) return { error: 'ไม่พบแพ็กเกจสำหรับคูปองฟรีนี้' };
 
-  const packageName = freePkg.name_th || freePkg.name_en || `${freeGroup} FREE`;
+  const packageName = buildFreeCouponPackageName(freeGroup, freeDays);
   const paymentRes = await query(
     `INSERT INTO payments (user_id, package_id, payer_name, payer_email, package_name_snapshot, amount, discount_amount, final_amount, currency_code, payment_method, payment_status, coupon_id, coupon_code_snapshot, raw_payload, created_at, updated_at)
        VALUES ($1,$2,$3,$4,$5,0,0,0,'THB','free_coupon','pending',$6,$7,$8::jsonb,NOW(),NOW()) RETURNING id`,
@@ -526,9 +530,23 @@ function maskAccountNumber(accountNumber) {
 
 async function getCurrentSubscription(userId) {
   const result = await query(
-    `SELECT s.*, p.name_th, p.name_en, p.group_name
+    `SELECT s.*,
+            p.name_th,
+            p.name_en,
+            p.group_name,
+            p.days,
+            pay.payment_method,
+            c.free_days AS coupon_free_days,
+            c.free_package_group AS coupon_free_package_group
      FROM user_subscriptions s
      LEFT JOIN packages p ON p.id = s.package_id
+     LEFT JOIN payments pay ON pay.id = CASE
+       WHEN s.source_channel ~ '^free_coupon:[0-9]+$'
+         THEN NULLIF(regexp_replace(s.source_channel, '^free_coupon:', ''), '')::int
+       ELSE NULL
+     END
+     LEFT JOIN coupon_usages cu ON cu.payment_id = pay.id AND cu.user_id = s.user_id
+     LEFT JOIN coupons c ON c.id = cu.coupon_id
      WHERE s.user_id = $1
      ORDER BY COALESCE(s.end_at, s.created_at) DESC NULLS LAST, s.id DESC
      LIMIT 1`,
@@ -587,6 +605,7 @@ async function getBaseData(req) {
   }
 
   const subscription = await getCurrentSubscription(user.id);
+  const currentPackageLabel = formatSubscriptionDisplayLabel(subscription);
   const brokerAccountsRes = await query(
     `SELECT * FROM user_broker_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
     [user.id]
@@ -620,6 +639,7 @@ async function getBaseData(req) {
   return {
     user,
     subscription,
+    currentPackageLabel,
     brokerAccounts: brokerAccountsRes.rows,
     botSessions: sessionsRes.rows,
     canChangePassword: ['web', 'local'].includes(String(user.provider || 'local')),
@@ -871,7 +891,7 @@ router.post('/packages/free-coupon/confirm', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
-    const packageName = pkg.name_th || pkg.name_en || `${freeGroup} FREE ${freeDays} วัน`;
+    const packageName = buildFreeCouponPackageName(freeGroup, freeDays);
     const startAt = new Date();
     const endAt = new Date(startAt.getTime() + freeDays * 24 * 60 * 60 * 1000);
 
@@ -1621,7 +1641,7 @@ router.post('/package-payment/:id/confirm-free-coupon', async (req, res) => {
 
     const startAt = new Date();
     const endAt = new Date(startAt.getTime() + freeDays * 24 * 60 * 60 * 1000);
-    const packageName = freePkg.name_th || freePkg.name_en || `${freeGroup} FREE ${freeDays} วัน`;
+    const packageName = buildFreeCouponPackageName(freeGroup, freeDays);
     const paymentRef = `FREE-${payment.id}-${Date.now()}`;
 
     await client.query(

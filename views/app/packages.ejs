@@ -89,7 +89,7 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
 
   <div class="package-current-card">
     <span><%= safeT('app.packages.current_package', 'แพ็กเกจปัจจุบัน') %></span>
-    <strong><%= subscription ? (subscription.package_name_snapshot || '-') : '-' %></strong>
+    <strong><%= typeof currentPackageLabel !== 'undefined' ? currentPackageLabel : (subscription ? (subscription.package_name_snapshot || '-') : '-') %></strong>
     <small>
       <%= subscription && subscription.end_at
         ? `${safeT('app.packages.expire', 'หมดอายุ')} ${new Date(subscription.end_at).toLocaleDateString(dateLocale)}`
