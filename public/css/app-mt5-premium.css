@@ -1,13 +1,21 @@
-/* MT5 page premium shell — layout/UI only (v202605302) */
+/* MT5 page premium shell — layout/UI only (v202605305) */
+
+.portal-shell.premium > .content-shell:has(.mt5-page-premium) {
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: clip;
+}
 
 .portal-shell.premium .content-shell .mt5-page-premium {
   max-width: none;
   width: 100%;
+  min-width: 0;
   margin: 0;
   padding: 0;
   display: grid;
   gap: clamp(16px, 2vw, 22px);
   color: #e8eefc;
+  overflow-x: clip;
 }
 
 .mt5-page-premium .mt5-package-wide-card,
@@ -251,10 +259,23 @@
   border-radius: 16px;
   border: 1px solid rgba(148, 163, 184, 0.1);
   background: rgba(255, 255, 255, 0.02);
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
+
+.mt5-page-premium #mt5LiveDashboard,
+.mt5-page-premium #mt5HistoryDashboard,
+.mt5-page-premium #mt5HistoryTableWrap {
+  max-width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
 }
 
 .mt5-page-premium .mt5-table {
-  min-width: min(100%, 720px);
+  min-width: 640px;
+  width: 100%;
 }
 
 .mt5-page-premium .mt5-empty {
@@ -314,13 +335,15 @@
 .mt5-page-premium .status.stopped{background:rgba(148,163,184,.14);color:#cbd5e1;border:1px solid rgba(148,163,184,.28)}
 .mt5-page-premium .status.fail{background:rgba(239,68,68,.16);color:#fca5a5;border:1px solid rgba(239,68,68,.35)}
 
-@media (max-width: 1100px) {
+@media (max-width: 860px) {
   .mt5-top-shell {
     grid-template-columns: 1fr;
   }
-}
 
-@media (max-width: 860px) {
+  .mt5-page-premium .mt5-grid-2 {
+    grid-template-columns: 1fr !important;
+  }
+
   .mt5-steps {
     grid-template-columns: 1fr;
   }
@@ -332,10 +355,56 @@
 
   .mt5-page-premium .mt5-card-head {
     flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mt5-page-premium .mt5-card-head span {
+    word-break: break-word;
+    overflow-wrap: anywhere;
   }
 
   .mt5-page-premium .port-list {
     grid-template-columns: 1fr;
+  }
+
+  .mt5-page-premium .port-main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+
+  .mt5-page-premium .port-main > div {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .mt5-page-premium .port-main small {
+    word-break: break-all;
+  }
+
+  .mt5-page-premium .mt5-buy-row {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mt5-page-premium .mt5-mini-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mt5-page-premium .mt5-btn {
+    white-space: normal;
+    text-align: center;
+  }
+
+  .mt5-page-premium .mt5-bot-command-bar {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .mt5-page-premium .mt5-bot-command-bar .mt5-btn.run {
+    width: 100%;
+    min-width: 0;
   }
 }
 
@@ -347,5 +416,24 @@
   .mt5-page-premium .mt5-detail-grid,
   .mt5-page-premium .mt5-detail-grid-mini {
     grid-template-columns: 1fr !important;
+  }
+
+  .mt5-page-premium .mt5-card {
+    padding: 14px;
+    border-radius: 18px;
+  }
+
+  .mt5-page-premium .mt5-table {
+    min-width: 520px;
+    font-size: 12px;
+  }
+
+  .mt5-hero-premium h1 {
+    font-size: 22px;
+  }
+
+  .mt5-page-premium .mt5-hero-tag {
+    font-size: 11px;
+    padding: 7px 10px;
   }
 }

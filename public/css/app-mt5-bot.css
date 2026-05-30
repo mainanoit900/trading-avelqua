@@ -340,6 +340,33 @@
   .mt5-preset-preview {
     grid-template-columns: 1fr 1fr;
   }
+
+  .mt5-grid-2 {
+    grid-template-columns: 1fr !important;
+  }
+
+  .mt5-page {
+    max-width: 100%;
+    padding: 12px !important;
+  }
+
+  .mt5-card-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+
+  .mt5-card-head span {
+    word-break: break-word;
+    overflow-wrap: anywhere;
+  }
+
+  .mt5-table-wrap,
+  #mt5LiveDashboard,
+  #mt5HistoryDashboard {
+    max-width: 100%;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+  }
 }
 
 .mt5-login-quiet-banner {
@@ -468,7 +495,7 @@
 }
 
 /* History table — action dropdown (glass luxury) */
-#mt5HistoryTableWrap { overflow: visible; }
+#mt5HistoryTableWrap { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
 #mt5HistoryTableWrap .mt5-table tbody tr { position: relative; }
 .mt5-row-actions {
   position: relative;
@@ -643,7 +670,7 @@
   background: linear-gradient(90deg, rgba(250, 204, 21, 0.18), rgba(245, 158, 11, 0.1));
   color: #fffbeb;
 }
-#mt5LiveDashboardSection .mt5-table-wrap { overflow: visible; }
+#mt5LiveDashboardSection .mt5-table-wrap { overflow-x: auto; max-width: 100%; -webkit-overflow-scrolling: touch; }
 #mt5LiveDashboard .mt5-table tbody tr { position: relative; }
 .mt5-action-dd-form + .mt5-action-dd-form { margin-top: 2px; }
 .mt5-action-dd-form:last-child {
