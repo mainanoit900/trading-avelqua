@@ -5,6 +5,10 @@ const brandName = safeSite.brandName || 'TRADING AVELQUA';
 const langNow = (typeof lang !== 'undefined' && lang) ? lang : 'th';
 const safeError = typeof error !== 'undefined' ? error : '';
 const safeSuccess = typeof success !== 'undefined' ? success : '';
+const localeList = (typeof supportedLocales !== 'undefined' && supportedLocales) ? supportedLocales : ['th', 'en', 'lo', 'vi', 'my'];
+const labelsMap = (typeof localeLabels !== 'undefined' && localeLabels) ? localeLabels : { th: 'ไทย', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
+const langShort = { th: 'TH', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
+const cssVer = '3';
 %>
 
 <!DOCTYPE html>
@@ -17,17 +21,27 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
   <link rel="shortcut icon" href="/public/favicon.ico?v=2">
   <link rel="apple-touch-icon" href="/public/favicon.ico?v=2">
   <title><%= safeT('login.title', 'เข้าสู่ระบบ') %> | <%= brandName %></title>
-  <link rel="stylesheet" href="/public/css/login.css">
+  <link rel="stylesheet" href="/public/css/login.css?v=<%= cssVer %>">
 </head>
 <body>
   <div class="login-page">
+    <div class="login-lang-switch" aria-label="Language">
+      <% localeList.forEach(function(code) { %>
+        <a
+          href="/set-language/<%= code %>?redirect=/login"
+          class="login-lang-btn <%= langNow === code ? 'active' : '' %>"
+          title="<%= labelsMap[code] || code %>"
+        ><%= langShort[code] || String(code).toUpperCase() %></a>
+      <% }) %>
+    </div>
+
     <div class="login-layout">
       <section class="login-side">
         <div class="login-brand">
           <img src="/public/images/logo.png" alt="<%= brandName %>" class="login-brand-logo">
           <div class="login-brand-text">
             <strong><%= brandName %></strong>
-            <span>Customer Portal</span>
+            <span><%= safeT('login.customer_portal', 'Customer Portal') %></span>
           </div>
         </div>
 
