@@ -2,7 +2,7 @@
 const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
 const pageCss = 'app-calendar.css';
 const pageTitle = safeT('app.menu.calendar', 'ปฏิทินกำไร MT5');
-const refreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) || 90;
+const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) || 90;
 %>
 
 <%- include('../partials/app-shell') %>
@@ -13,11 +13,11 @@ const refreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) |
       <div>
         <p class="cal-eyebrow">MT5 Performance</p>
         <h2>ปฏิทินกำไร / ขาดทุน</h2>
-        <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= refreshSec %> วินาที วันนี้แสดงแบบ Live ส่วนวันก่อนหน้าสรุปเมื่อเที่ยงคืน</p>
+        <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= calendarRefreshSec %> วินาที วันนี้แสดงแบบ Live ส่วนวันก่อนหน้าสรุปเมื่อเที่ยงคืน</p>
       </div>
       <div class="cal-live-badge" id="calLiveBadge" hidden>
         <span class="cal-live-dot" aria-hidden="true"></span>
-        <span>Live · <%= refreshSec %>s</span>
+        <span>Live · <%= calendarRefreshSec %>s</span>
       </div>
     </div>
 
@@ -70,7 +70,7 @@ const refreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) |
     <div class="cal-panel-head">
       <div>
         <h3>ประวัติผลการเทรด</h3>
-        <p id="calHistoryHint">อัปเดตทุก <%= refreshSec %> วินาที · 10 แถวต่อหน้า</p>
+        <p id="calHistoryHint">อัปเดตทุก <%= calendarRefreshSec %> วินาที · 10 แถวต่อหน้า</p>
       </div>
     </div>
     <div class="cal-table-wrap">
@@ -102,7 +102,7 @@ const refreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) |
 
 <script>
 (function () {
-  var REFRESH_MS = <%= refreshSec %> * 1000;
+  var REFRESH_MS = <%= calendarRefreshSec %> * 1000;
   var state = {
     accountId: 0,
     month: '',
@@ -243,7 +243,7 @@ const refreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec : 90) |
     el.selectedHint.textContent = 'วันที่เลือก: ' + (data.selectedDayLabel || data.selectedDay || '-')
       + (data.selectedDayPnl != null ? ' · ' + fmtMoney(data.selectedDayPnl) : '');
     el.historyHint.textContent = 'ประวัติวันที่ ' + (data.selectedDayLabel || data.selectedDay || '-')
-      + ' · อัปเดตทุก ' + (data.refreshSec || <%= refreshSec %>) + ' วินาที';
+      + ' · อัปเดตทุก ' + (data.refreshSec || <%= calendarRefreshSec %>) + ' วินาที';
     el.liveBadge.hidden = !(data.selectedDay === data.todayKey);
   }
 
