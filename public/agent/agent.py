@@ -2612,7 +2612,10 @@ def account_snapshot(
                     procs = mt5_port_processes(port, payload)
                     pid = None
                     if procs:
-                        pid = procs[0].get("pid") or procs[0].get("process_id")
+                        p0 = procs[0]
+                        pid = getattr(p0, "pid", None)
+                        if pid is None and isinstance(p0, dict):
+                            pid = p0.get("pid") or p0.get("process_id")
                     automate_mt5_login_server_form(
                         login_hint,
                         password,
@@ -6432,6 +6435,25 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 log(f"ACCOUNT SNAPSHOT ERROR: {sync_err}")
                 snap["error"] = str(sync_err)[:500]
             command_result(cmd_id, True, {"action": ctype, "snapshot": snap, **snap})
+            if login_equity and _snap_positive(snap):
+                try:
+                    port_dir = resolve_mt5_port_dir(port, payload)
+                    login_hint = str(payload_get(payload, "mt5Login", "login") or "").strip()
+                    kill_payload = dict(payload or {})
+                    kill_payload["purpose"] = "post_connect_exit"
+                    kill_payload["forceKill"] = True
+                    kill_payload["closeMt5"] = True
+                    if login_hint:
+                        kill_payload["mt5Login"] = login_hint
+                        kill_payload["login"] = login_hint
+                    res = stop_mt5_port_only(port, kill_payload)
+                    log(
+                        f"LOGIN EQUITY CLOSE MT5 port={port} "
+                        f"balance={snap.get('balance')} equity={snap.get('equity')} "
+                        f"stopped={res.get('stopped')}"
+                    )
+                except Exception as close_err:
+                    log(f"LOGIN EQUITY CLOSE MT5 ERROR port={port}: {close_err}")
 
         elif ctype in ("mt5_preview", "capture_mt5_window", "capture_mt5_preview"):
             port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")

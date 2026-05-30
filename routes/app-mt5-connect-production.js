@@ -455,7 +455,7 @@ async function cancelPendingPostConnectExitOnPort(vpsId, portId) {
     WHERE (vps_id = $1 OR node_id = $1)
       AND port_id = $2
       AND command_type IN ('login_exit_mt5', 'stop_mt5')
-      AND LOWER(COALESCE(status, '')) = 'pending'
+      AND LOWER(COALESCE(status, '')) IN ('pending', 'queued', 'picked', 'processing', 'running')
       AND COALESCE(payload->>'purpose', '') = 'post_connect_exit'
   `,
     [nid, pid]
@@ -695,6 +695,38 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(mt5LoginInUseMessage(duplicate));
     }
 
+    const requestedSlot = num(req.body.port_slot || req.body.portSlot);
+    let portSlotForFast = requestedSlot;
+    if (!portSlotForFast) {
+      const retryPortEarly = await findRetryPortForLogin(userId, mt5Login, serverName);
+      portSlotForFast = Number(retryPortEarly?.port_slot || 0) || (await getNextUserSlot(userId, totalPorts));
+    }
+    if (portSlotForFast) {
+      const fastEarly = await tryCachedEquityFastConnect({
+        userId,
+        mt5Login,
+        mt5Password,
+        serverName,
+        portSlot: portSlotForFast
+      });
+      if (fastEarly.ok) {
+        return res.json({
+          ok: true,
+          status: 'connected',
+          connected: true,
+          fastPath: true,
+          metricsReady: true,
+          accountId: fastEarly.accountId,
+          portSlot: fastEarly.portSlot || portSlotForFast,
+          balance: fastEarly.balance,
+          equity: fastEarly.equity,
+          message: fastEarly.message
+        });
+      }
+      const fastEarlyErr = fastConnectErrorMessage(fastEarly.reason, mt5Login);
+      if (fastEarlyErr) throw new Error(fastEarlyErr);
+    }
+
     const inFlight = await findInFlightLoginCommand({ userId, mt5Login, serverName });
     if (inFlight?.id) {
       return res.json({
@@ -734,30 +766,6 @@ async function handleMt5ConnectProduction(req, res) {
         throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
       }
     }
-
-    const fast = await tryCachedEquityFastConnect({
-      userId,
-      mt5Login,
-      mt5Password,
-      serverName,
-      portSlot
-    });
-    if (fast.ok) {
-      return res.json({
-        ok: true,
-        status: 'connected',
-        connected: true,
-        fastPath: true,
-        metricsReady: true,
-        accountId: fast.accountId,
-        portSlot: fast.portSlot || portSlot,
-        balance: fast.balance,
-        equity: fast.equity,
-        message: fast.message
-      });
-    }
-    const fastErr = fastConnectErrorMessage(fast.reason, mt5Login);
-    if (fastErr) throw new Error(fastErr);
 
     if (requestedSlot > 0) {
       const reserve = await reserveVpsPortForConnect(userId, null, requestedSlot);
