@@ -5117,6 +5117,13 @@ def _ea_file_candidates(bot_code: str) -> List[str]:
         "PA-SNIPER-VER2.0": ["PA-SNIPER-VER2.0.ex5", "PA_SNIPER_VER2.0.ex5"],
         "PA-SNIPER": ["PA-SNIPER-VER2.0.ex5"],
         "5PA-SNIPER": ["5PA-SNIPER.ex5", "5PA_SNIPER.ex5"],
+        "QUANTUM-QUEEN-MT5-3.65": [
+            "Quantum-Queen-MT5-3.65.ex5",
+            "QUANTUM-QUEEN-MT5-3.65.ex5",
+            "Quantum-Queen-MT5-3.65.mq5",
+        ],
+        "QUANTUM-QUEEN": ["Quantum-Queen-MT5-3.65.ex5", "QUANTUM-QUEEN-MT5-3.65.ex5"],
+        "QUEEN-SNIPER-AI-V1.0": ["QUEEN-SNIPER-AI-V1.0.ex5", "Queen-Sniper-AI-V1.0.ex5"],
     }
     key = code.upper().replace(" ", "")
     for alt in aliases.get(key, []):
@@ -5729,6 +5736,10 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     login = str(payload_get(payload, "mt5Login", "login") or "").strip()
     password = str(payload_get(payload, "mt5Password", "password") or "")
     server = str(payload_get(payload, "serverName", "server") or LOCKED_MT5_SERVER).strip() or LOCKED_MT5_SERVER
+    if not login:
+        raise RuntimeError("payload.mt5Login is required")
+    if not password:
+        raise RuntimeError("payload.mt5Password is required")
     symbol = str(payload_get(payload, "symbol", default="XAUUSD") or "XAUUSD").strip() or "XAUUSD"
     period = str(payload_get(payload, "period", "chartPeriod", default=MT5_RUNBOT_PERIOD) or MT5_RUNBOT_PERIOD).strip().upper()
     startup_expert = _mt5_startup_expert_name(port_dir, launch_ea)
@@ -5780,6 +5791,46 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
+    journal_since = time.time()
+    log(f"RUN BOT LAUNCH port={port} login={login} expert={startup_expert or '-'} period={period}")
+    token = acquire_login_ui_lock(port, timeout_sec=45)
+    try:
+        time.sleep(0.5)
+        automate_mt5_login_server_form(
+            login,
+            password,
+            server,
+            port_dir=port_dir,
+            process_id=proc_pid,
+        )
+    finally:
+        release_login_ui_lock(port, token)
+
+    journal_timeout = int(
+        payload_get(payload, "journalTimeoutSec", "journal_timeout_sec")
+        or os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "45")
+    )
+    login_ok, login_msg, journal_chunk = wait_mt5_login_hybrid(
+        port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
+    )
+    titles = window_title_for_login(port, payload)
+    if not login_ok and login_msg == JOURNAL_TIMEOUT_MSG and titles and login in str(titles):
+        login_ok = True
+        login_msg = "window verified (journal timeout)"
+    if not login_ok:
+        preview_fail = capture_mt5_window_base64(port, payload)
+        send_connect_result(
+            payload,
+            "failed_auth",
+            login_msg or "MT5 login failed during bot run",
+            port,
+            process_id=proc_pid,
+            journal_evidence=journal_chunk,
+            window_title=titles,
+            preview_b64=preview_fail,
+        )
+        raise RuntimeError(login_msg or "MT5 login failed during bot run")
+
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     ui_target: Dict[str, Any] = {}
     for _wait in range(15):
