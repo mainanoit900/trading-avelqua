@@ -8,7 +8,7 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
 const localeList = (typeof supportedLocales !== 'undefined' && supportedLocales) ? supportedLocales : ['th', 'en', 'lo', 'vi', 'my'];
 const labelsMap = (typeof localeLabels !== 'undefined' && localeLabels) ? localeLabels : { th: 'ไทย', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
 const langShort = { th: 'TH', en: 'EN', lo: 'LO', vi: 'VI', my: 'MY' };
-const cssVer = '4';
+const cssVer = '5';
 %>
 
 <!DOCTYPE html>
@@ -37,15 +37,24 @@ const cssVer = '4';
           <img src="/public/images/logo.png" alt="<%= brandName %>" width="36" height="36">
           <span><%= brandName %></span>
         </a>
-        <nav class="login-lang-switch" aria-label="Language">
-          <% localeList.forEach(function(code) { %>
-            <a
-              href="/set-language/<%= code %>?redirect=/login"
-              class="login-lang-btn <%= langNow === code ? 'active' : '' %>"
-              title="<%= labelsMap[code] || code %>"
-            ><%= langShort[code] || String(code).toUpperCase() %></a>
-          <% }) %>
-        </nav>
+        <div class="login-lang-dropdown" id="loginLangDropdown">
+          <button type="button" class="login-lang-trigger" aria-expanded="false" aria-haspopup="listbox" aria-label="Language">
+            <span class="login-lang-trigger-label"><%= labelsMap[langNow] || langNow.toUpperCase() %></span>
+            <span class="login-lang-caret" aria-hidden="true">▾</span>
+          </button>
+          <div class="login-lang-menu" role="listbox">
+            <% localeList.forEach(function(code) { %>
+              <a
+                href="/set-language/<%= code %>?redirect=/login"
+                class="login-lang-option <%= langNow === code ? 'active' : '' %>"
+                role="option"
+              >
+                <span><%= labelsMap[code] || code.toUpperCase() %></span>
+                <small><%= langShort[code] || String(code).toUpperCase() %></small>
+              </a>
+            <% }) %>
+          </div>
+        </div>
       </header>
 
       <div class="login-layout">
@@ -159,12 +168,16 @@ const cssVer = '4';
 
             <div class="login-social-grid">
               <a href="/auth/google" class="login-social-btn">
-                <img src="/public/images/google.png" alt="">
-                <span>Google</span>
+                <span class="login-social-icon">
+                  <img src="/public/images/google.png" alt="Google" width="32" height="32">
+                </span>
+                <span class="login-social-label">Google</span>
               </a>
               <a href="/auth/line" class="login-social-btn login-social-line">
-                <img src="/public/images/line.png" alt="">
-                <span>LINE</span>
+                <span class="login-social-icon">
+                  <img src="/public/images/line.png" alt="LINE" width="32" height="32">
+                </span>
+                <span class="login-social-label">LINE</span>
               </a>
             </div>
 
@@ -194,6 +207,42 @@ const cssVer = '4';
         text.textContent = PW_SHOW;
       }
     }
+
+    (function initLoginLangDropdown() {
+      const root = document.getElementById('loginLangDropdown');
+      if (!root) return;
+      const trigger = root.querySelector('.login-lang-trigger');
+      const menu = root.querySelector('.login-lang-menu');
+      if (!trigger || !menu) return;
+
+      function closeMenu() {
+        root.classList.remove('open');
+        trigger.setAttribute('aria-expanded', 'false');
+      }
+
+      function openMenu() {
+        root.classList.add('open');
+        trigger.setAttribute('aria-expanded', 'true');
+      }
+
+      trigger.addEventListener('click', function (event) {
+        event.stopPropagation();
+        if (root.classList.contains('open')) closeMenu();
+        else openMenu();
+      });
+
+      document.addEventListener('click', function () {
+        closeMenu();
+      });
+
+      menu.addEventListener('click', function (event) {
+        event.stopPropagation();
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closeMenu();
+      });
+    })();
   </script>
 </body>
 </html>

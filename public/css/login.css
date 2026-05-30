@@ -100,38 +100,102 @@ body{
   padding:4px;
 }
 
-.login-lang-switch{
-  display:inline-flex;
-  gap:2px;
-  padding:3px;
-  border-radius:999px;
-  background:rgba(15,23,42,.75);
-  border:1px solid var(--line-soft);
-  backdrop-filter:blur(12px);
+.login-lang-dropdown{
+  position:relative;
 }
 
-.login-lang-btn{
-  min-width:32px;
-  height:26px;
-  padding:0 7px;
+.login-lang-trigger{
   display:inline-flex;
   align-items:center;
-  justify-content:center;
+  gap:8px;
+  min-height:36px;
+  padding:0 12px 0 14px;
   border-radius:999px;
-  color:var(--muted);
-  font-size:10px;
-  font-weight:800;
-  letter-spacing:.05em;
-  text-decoration:none;
-  transition:all .15s ease;
+  border:1px solid var(--line-soft);
+  background:rgba(15,23,42,.82);
+  color:var(--text);
+  font:inherit;
+  font-size:13px;
+  font-weight:700;
+  cursor:pointer;
+  backdrop-filter:blur(12px);
+  transition:border-color .15s ease, background .15s ease;
 }
 
-.login-lang-btn:hover{color:#fff;background:rgba(255,255,255,.06)}
+.login-lang-trigger:hover,
+.login-lang-dropdown.open .login-lang-trigger{
+  border-color:rgba(129,140,248,.35);
+  background:rgba(30,41,59,.92);
+}
 
-.login-lang-btn.active{
-  color:#fff;
-  background:linear-gradient(135deg,var(--accent) 0%,var(--accent-2) 100%);
-  box-shadow:0 4px 14px var(--accent-glow);
+.login-lang-trigger-label{
+  max-width:120px;
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+
+.login-lang-caret{
+  color:var(--muted);
+  font-size:11px;
+  line-height:1;
+  transition:transform .15s ease;
+}
+
+.login-lang-dropdown.open .login-lang-caret{
+  transform:rotate(180deg);
+}
+
+.login-lang-menu{
+  position:absolute;
+  top:calc(100% + 8px);
+  right:0;
+  min-width:168px;
+  padding:6px;
+  border-radius:14px;
+  border:1px solid var(--line-soft);
+  background:rgba(12,20,36,.98);
+  box-shadow:0 18px 40px rgba(0,0,0,.38);
+  opacity:0;
+  visibility:hidden;
+  transform:translateY(-6px);
+  transition:opacity .15s ease, transform .15s ease, visibility .15s ease;
+  z-index:30;
+}
+
+.login-lang-dropdown.open .login-lang-menu{
+  opacity:1;
+  visibility:visible;
+  transform:translateY(0);
+}
+
+.login-lang-option{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:10px 12px;
+  border-radius:10px;
+  text-decoration:none;
+  color:var(--text);
+  font-size:13px;
+  font-weight:600;
+}
+
+.login-lang-option small{
+  color:var(--muted-2);
+  font-size:11px;
+  font-weight:800;
+  letter-spacing:.04em;
+}
+
+.login-lang-option:hover{
+  background:rgba(255,255,255,.06);
+}
+
+.login-lang-option.active{
+  background:linear-gradient(135deg, rgba(99,102,241,.22), rgba(59,130,246,.14));
+  border:1px solid rgba(129,140,248,.22);
 }
 
 .login-layout{
@@ -453,33 +517,53 @@ body{
 .login-social-grid{
   display:grid;
   grid-template-columns:1fr 1fr;
-  gap:10px;
+  gap:12px;
 }
 
 .login-social-btn{
-  min-height:48px;
+  min-height:58px;
   display:flex;
   align-items:center;
-  justify-content:center;
-  gap:8px;
+  justify-content:flex-start;
+  gap:12px;
+  padding:10px 14px;
   border-radius:var(--radius-md);
   text-decoration:none;
-  font-size:13px;
-  font-weight:700;
   color:var(--text);
   background:rgba(255,255,255,.03);
   border:1px solid var(--line);
-  transition:background .15s ease, border-color .15s ease;
+  transition:background .15s ease, border-color .15s ease, transform .15s ease;
 }
 
 .login-social-btn:hover{
   background:rgba(255,255,255,.06);
   border-color:rgba(148,163,184,.28);
+  transform:translateY(-1px);
 }
 
-.login-social-btn img{width:18px;height:18px;object-fit:contain}
+.login-social-icon{
+  flex:0 0 44px;
+  width:44px;
+  height:44px;
+  display:grid;
+  place-items:center;
+  border-radius:12px;
+  background:rgba(255,255,255,.06);
+  border:1px solid var(--line-soft);
+}
 
-.login-social-line img{filter:none}
+.login-social-icon img{
+  width:32px;
+  height:32px;
+  object-fit:contain;
+  display:block;
+}
+
+.login-social-label{
+  font-size:14px;
+  font-weight:700;
+  line-height:1.2;
+}
 
 .login-social-line{
   border-color:rgba(6,199,85,.28);
