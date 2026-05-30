@@ -264,7 +264,6 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
             <th class="col-method">วิธีชำระ</th>
             <th class="col-status"><%= safeT('common.status', 'สถานะ') %></th>
             <th class="col-date"><%= safeT('common.created_at', 'วันที่') %></th>
-            <th class="col-actions">จัดการ</th>
           </tr>
         </thead>
         <tbody>
@@ -275,9 +274,6 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
               <td class="col-package"><%= p.display_package_label || p.package_name_snapshot || '-' %></td>
               <td class="col-amount">
                 <div>฿<%= money(p.final_amount || p.amount || 0) %></div>
-                <% if (isScoinPackagePayment(p)) { %>
-                  <small class="history-scoin-amount"><%= scoinAmountText(p) %></small>
-                <% } %>
               </td>
               <td class="col-method">
                 <% if (isFreeCouponPackagePayment(p)) { %>
@@ -286,8 +282,10 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
                   </span>
                 <% } else if (isScoinPackagePayment(p)) { %>
                   <span class="history-method-badge scoin">
-                    <i class="fa-solid fa-coins"></i> ชำระด้วย Scoin
+                    <i class="fa-solid fa-coins"></i> <%= isTH ? 'ชำระด้วย Scoin' : 'Paid with Scoin' %>
                   </span>
+                  <small class="history-method-scoin-amount"><%= scoinAmountText(p) %></small>
+                  <small class="history-method-scoin-note"><%= isTH ? 'เปิดใช้งานทันที · ไม่คืน Scoin' : 'Instant activation · Scoin non-refundable' %></small>
                 <% } else { %>
                   <span class="history-method-badge cash"><%= paymentMethodText(p) %></span>
                 <% } %>
@@ -299,22 +297,6 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
                   <span class="history-time-line"><%= historyWhen.time %></span>
                 <% } else { %>
                   -
-                <% } %>
-              </td>
-              <td class="col-actions">
-                <% if (String(p.payment_status || '').toLowerCase() === 'pending') { %>
-                  <div class="package-history-actions">
-                    <a class="history-pay-btn" href="/app/package-payment/<%= p.id %>">
-                      ชำระเงินต่อ
-                    </a>
-                    <form method="POST" action="/app/package-payment/<%= p.id %>/cancel" onsubmit="return confirm('ยืนยันยกเลิกรายการนี้?');">
-                      <button type="submit" class="history-cancel-btn">
-                        ยกเลิก
-                      </button>
-                    </form>
-                  </div>
-                <% } else { %>
-                  <span class="history-muted">-</span>
                 <% } %>
               </td>
             </tr>

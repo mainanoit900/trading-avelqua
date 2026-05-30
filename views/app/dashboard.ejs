@@ -143,7 +143,7 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
           </div>
           <div class="dash-kv-item">
             <span><%= safeT('dashboard.source', 'ช่องทาง') %></span>
-            <strong><%= subscription ? subscription.source_channel || '-' : '-' %></strong>
+            <strong><%= typeof subscriptionSourceLabel !== 'undefined' ? subscriptionSourceLabel : (subscription ? subscription.source_channel || '-' : '-') %></strong>
           </div>
           <div class="dash-kv-item">
             <span><%= safeT('dashboard.lot', 'Lot') %></span>
@@ -155,11 +155,25 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
           </div>
           <div class="dash-kv-item">
             <span><%= safeT('dashboard.start_date', 'วันเริ่มใช้งาน') %></span>
-            <strong><%= subscription && subscription.start_at ? new Date(subscription.start_at).toLocaleString(dateLocale) : '-' %></strong>
+            <strong class="dash-datetime">
+              <% if (subscription && typeof subscriptionStartAt !== 'undefined' && subscriptionStartAt.date && subscriptionStartAt.date !== '-') { %>
+                <span class="dash-date-line"><%= subscriptionStartAt.date %></span>
+                <% if (subscriptionStartAt.time) { %><span class="dash-time-line"><%= subscriptionStartAt.time %></span><% } %>
+              <% } else { %>
+                -
+              <% } %>
+            </strong>
           </div>
           <div class="dash-kv-item">
             <span><%= safeT('dashboard.expire_date', 'วันหมดอายุ') %></span>
-            <strong><%= subscription && subscription.end_at ? new Date(subscription.end_at).toLocaleString(dateLocale) : '-' %></strong>
+            <strong class="dash-datetime">
+              <% if (subscription && typeof subscriptionEndAt !== 'undefined' && subscriptionEndAt.date && subscriptionEndAt.date !== '-') { %>
+                <span class="dash-date-line"><%= subscriptionEndAt.date %></span>
+                <% if (subscriptionEndAt.time) { %><span class="dash-time-line"><%= subscriptionEndAt.time %></span><% } %>
+              <% } else { %>
+                -
+              <% } %>
+            </strong>
           </div>
         </div>
       </div>

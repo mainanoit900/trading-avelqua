@@ -26,7 +26,9 @@ const {
 const {
   buildFreeCouponPackageName,
   formatSubscriptionDisplayLabel,
-  formatPackagePaymentDisplayLabel
+  formatPackagePaymentDisplayLabel,
+  formatSubscriptionSourceLabel,
+  formatSubscriptionDateTime
 } = require('../lib/subscriptionPackage');
 
 const router = express.Router();
@@ -542,8 +544,8 @@ async function getCurrentSubscription(userId) {
      FROM user_subscriptions s
      LEFT JOIN packages p ON p.id = s.package_id
      LEFT JOIN payments pay ON pay.id = CASE
-       WHEN s.source_channel ~ '^free_coupon:[0-9]+$'
-         THEN NULLIF(regexp_replace(s.source_channel, '^free_coupon:', ''), '')::int
+       WHEN s.source_channel ~ '^(free_coupon|payment):[0-9]+$'
+         THEN NULLIF(regexp_replace(s.source_channel, '^(free_coupon|payment):', ''), '')::int
        ELSE NULL
      END
      LEFT JOIN coupon_usages cu ON cu.payment_id = pay.id AND cu.user_id = s.user_id
@@ -606,7 +608,11 @@ async function getBaseData(req) {
   }
 
   const subscription = await getCurrentSubscription(user.id);
+  const appLang = req.lang || req.session?.lang || 'th';
   const currentPackageLabel = formatSubscriptionDisplayLabel(subscription);
+  const subscriptionSourceLabel = formatSubscriptionSourceLabel(subscription, appLang);
+  const subscriptionStartAt = formatSubscriptionDateTime(subscription?.start_at, appLang);
+  const subscriptionEndAt = formatSubscriptionDateTime(subscription?.end_at, appLang);
   const brokerAccountsRes = await query(
     `SELECT * FROM user_broker_accounts WHERE user_id = $1 ORDER BY created_at DESC`,
     [user.id]
@@ -641,6 +647,9 @@ async function getBaseData(req) {
     user,
     subscription,
     currentPackageLabel,
+    subscriptionSourceLabel,
+    subscriptionStartAt,
+    subscriptionEndAt,
     brokerAccounts: brokerAccountsRes.rows,
     botSessions: sessionsRes.rows,
     canChangePassword: ['web', 'local'].includes(String(user.provider || 'local')),
