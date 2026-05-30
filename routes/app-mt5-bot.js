@@ -557,7 +557,11 @@ const {
 const { reserveVpsPortForConnect, vpsPortFolderRegexForSlot } = require('../lib/mt5ReservePortForConnect');
 const { fetchVpsActiveLoginLoadMap } = require('../lib/vpsLoginLoad');
 const { setAdminAllocationStatus, parsePortNumber, resolveSystemVpsId, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
-const { buildStopMt5ReleasePayload } = require('../lib/mt5PortCleanup');
+const {
+  buildStopMt5ReleasePayload,
+  systemPortNosForPackageSlot,
+  primarySystemPortForPackageSlot
+} = require('../lib/mt5PortCleanup');
 
 async function reserveMt5Port(userId) {
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -2357,8 +2361,11 @@ async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_d
   const accRow = accStop.rows?.[0];
   if (accRow) {
     const stopNodeId = num(accRow.vps_id);
-    const stopPortNo =
-      num(accRow.assigned_port_no) || num(accRow.windows_port_no) || num(accRow.port_slot);
+    const stopPortNo = primarySystemPortForPackageSlot(
+      accRow.port_slot,
+      accRow.assigned_port_no,
+      accRow.windows_port_no
+    );
     const folderPath = accRow.folder_path || null;
     if (stopNodeId && stopPortNo) {
       await query(
@@ -2496,10 +2503,12 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
 
     const oldPort = old.rows[0];
     const stopNodeId = num(oldPort.vps_id);
-    const stopPortNo =
-      num(oldPort.assigned_port_no) ||
-      num(oldPort.windows_port_no) ||
-      num(oldPort.port_slot);
+    const systemPortNos = systemPortNosForPackageSlot(
+      oldPort.port_slot,
+      oldPort.assigned_port_no,
+      oldPort.windows_port_no
+    );
+    const stopPortNo = systemPortNos[0] || 0;
     const folderPath = oldPort.folder_path || null;
 
     await abortConnectForRemovedAccount(id, {
@@ -2537,7 +2546,11 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
         `, [oldPort.port_id]).catch(() => {});
       }
       const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({}));
-      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath).catch(() => {});
+      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath, {
+        accountId: id,
+        userId,
+        portSlot: oldPort.port_slot
+      }).catch(() => {});
     }
 
     // STEP 3: ค่อยล้างค่าใน DB
@@ -2595,16 +2608,11 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
     const oldPort = old.rows[0];
     const stopNodeId = num(oldPort.vps_id);
     const slotNo = num(oldPort.port_slot);
-    const systemPortNos = [
-      ...new Set(
-        [
-          num(oldPort.assigned_port_no),
-          num(oldPort.windows_port_no),
-          adminPortToSystemPortNo(slotNo),
-          slotNo
-        ].filter((n) => n > 0)
-      )
-    ];
+    const systemPortNos = systemPortNosForPackageSlot(
+      slotNo,
+      oldPort.assigned_port_no,
+      oldPort.windows_port_no
+    );
     const folderPath = oldPort.folder_path || null;
 
     await abortConnectForRemovedAccount(id, {
@@ -2662,9 +2670,6 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       `, [userId, stopNodeId]).catch((err) =>
         console.error('[DELETE] release user port locks error:', err.message || err)
       );
-      const primaryPortNo = systemPortNos[0];
-      const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({}));
-      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, primaryPortNo, folderPath).catch(() => {});
     }
 
     // STEP 3: ค่อยล้างค่าใน DB (port_slot ต้อง NULL — ไม่งั้น repair จะฟื้นบัญชีกลับ)
