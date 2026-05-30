@@ -1798,10 +1798,29 @@ function mt5BindPortSlotPicks() {
             btn.disabled = true;
             btn.textContent = 'กำลังลบ...';
           }
-          if (typeof HTMLFormElement !== 'undefined' && HTMLFormElement.prototype.submit) {
-            HTMLFormElement.prototype.submit.call(el);
-          } else {
-            el.submit();
+          const action = String(el.getAttribute('action') || '').trim();
+          if (!action) return;
+          try {
+            const res = await fetch(action, {
+              method: 'POST',
+              credentials: 'same-origin',
+              headers: { Accept: 'text/html' },
+              redirect: 'follow'
+            });
+            window.location.href = res.url || '/app/mt5';
+          } catch (_) {
+            el.dataset.deleteSubmitting = '0';
+            if (btn) {
+              btn.disabled = false;
+              btn.textContent = 'ลบ';
+            }
+            if (typeof window.mt5UiAlert === 'function') {
+              await window.mt5UiAlert({
+                variant: 'danger',
+                title: 'ลบ PORT ไม่สำเร็จ',
+                message: 'ส่งคำสั่งลบไม่สำเร็จ กรุณาลองใหม่อีกครั้ง'
+              });
+            }
           }
         })();
       });
