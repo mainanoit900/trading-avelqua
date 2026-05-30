@@ -424,12 +424,21 @@
   };
   window.mt5RunState = mt5RunState;
   (function () {
-    const preferSlot = Number(sessionStorage.getItem('mt5RunPortSlot') || 0);
-    if (preferSlot) return;
+    const connected = mt5RunState.connectedAccounts || [];
+    const idSet = new Set(connected.map(function (a) { return Number(a.id); }));
     const selId = Number(mt5RunState.selectedAccountId || 0);
-    const acc = selId
-      ? mt5RunState.connectedAccounts.find(function (a) { return Number(a.id) === selId; })
-      : (mt5RunState.connectedAccounts[0] || null);
+    const preferSlot = Number(sessionStorage.getItem('mt5RunPortSlot') || 0);
+    if (selId && !idSet.has(selId)) {
+      mt5RunState.selectedAccountId = 0;
+      sessionStorage.removeItem('mt5RunAccountId');
+    }
+    if (preferSlot && !connected.some(function (a) { return Number(a.port_slot) === preferSlot; })) {
+      sessionStorage.removeItem('mt5RunPortSlot');
+    }
+    const validId = Number(mt5RunState.selectedAccountId || 0);
+    const acc = validId
+      ? connected.find(function (a) { return Number(a.id) === validId; })
+      : (connected[0] || null);
     if (acc && acc.port_slot) sessionStorage.setItem('mt5RunPortSlot', String(acc.port_slot));
   })();
 
@@ -582,7 +591,7 @@
     let acc = connected.find(function (a) { return Number(a.port_slot) === n; });
     if (acc) return acc;
     const ports = (window.__mt5RunConfig || {}).ports || [];
-    const card = ports.find(function (p) { return Number(p.slot) === n && p.accountId; });
+    const card = ports.find(function (p) { return Number(p.slot) === n && p.accountId && p.canUse; });
     if (!card) return null;
     return {
       id: Number(card.accountId),
@@ -629,6 +638,8 @@
     if (explicitId) {
       const byId = connected.find(function (a) { return Number(a.id) === explicitId; });
       if (byId) return byId;
+      sessionStorage.removeItem('mt5RunAccountId');
+      mt5RunState.selectedAccountId = 0;
     }
     if (connected.length && !preferSlot && !explicitId) {
       const active = Array.isArray(mt5RunState.activeInstances) ? mt5RunState.activeInstances : [];
@@ -925,6 +936,7 @@
       '</div></div>';
     return (
       '<form method="POST" action="/app/mt5/run" class="mt5-run-form" id="mt5RunForm">' +
+      '<input type="hidden" name="run_fetch" value="1">' +
       '<input type="hidden" name="mt5_account_id" id="mt5RunAccountId" value="' + mt5Esc(selected.id) + '">' +
       '<input type="hidden" name="sync_field" id="mt5RunSyncField" value="capital">' +
       portSummaryHtml +
@@ -1117,10 +1129,19 @@
             method: 'POST',
             body: fd,
             credentials: 'same-origin',
-            redirect: 'follow',
+            headers: { 'X-MT5-Run-Fetch': '1', Accept: 'application/json' },
             signal: controller ? controller.signal : undefined
           });
           if (timer) window.clearTimeout(timer);
+          const ct = String(res.headers.get('content-type') || '');
+          if (ct.indexOf('application/json') >= 0) {
+            const data = await res.json();
+            if (data.ok) {
+              window.location.href = data.redirect || '/app/mt5';
+              return;
+            }
+            throw new Error(data.message || 'ส่งคำสั่งไม่สำเร็จ');
+          }
           if (res.redirected && res.url) {
             window.location.href = res.url;
             return;
@@ -1614,8 +1635,8 @@ function mt5SelectRunAccount(accountId, portSlot) {
     sessionStorage.setItem('mt5RunAccountId', String(acc.id));
     if (acc.port_slot) sessionStorage.setItem('mt5RunPortSlot', String(acc.port_slot));
   } else if (id) {
-    runState.selectedAccountId = id;
-    sessionStorage.setItem('mt5RunAccountId', String(id));
+    runState.selectedAccountId = 0;
+    sessionStorage.removeItem('mt5RunAccountId');
   }
   const panel = document.getElementById('mt5RunPanel');
   const cfg = window.__mt5RunConfig || {};

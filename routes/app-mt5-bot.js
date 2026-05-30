@@ -45,7 +45,7 @@ const {
   finalizeBotInstanceRecord,
   stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
-const { createConnectAttempt, repairUserMt5AccountStatuses } = require('../lib/mt5ConnectAttempt');
+const { createConnectAttempt, repairUserMt5AccountStatuses, ensureMt5ConnectAttemptTables } = require('../lib/mt5ConnectAttempt');
 const { abortConnectForRemovedAccount } = require('../lib/vpsAgentCommandQueue');
 const { queueBotRunCommands, assertNoRecentBotRunAttempt } = require('../lib/mt5BotRunPhase2');
 const {
@@ -2940,6 +2940,9 @@ router.post('/mt5/run', async (req, res) => {
   let loginGateWaitedMs = 0;
   let runGateWaitedMs = 0;
   let reservedPortForRun = null;
+  const wantJson = String(req.body?.run_fetch || req.get('X-MT5-Run-Fetch') || '').trim() === '1';
+  let runOkMessage = '';
+  let runErrorMessage = '';
   try {
     await ensureBotCatalog();
     const userId = req.user.id;
@@ -3118,9 +3121,18 @@ router.post('/mt5/run', async (req, res) => {
       journalTimeoutSec = computeJournalTimeoutSec({
         activeLoginCount: await countActiveLoginsOnVps(nodePreview.id).catch(() => 0)
       });
-      const loginGate = await acquireVpsLoginSlot(nodePreview.id, assignedPortNo);
-      vpsLoginGateKey = loginGate.lockKey;
-      loginGateWaitedMs = loginGate.waitedMs || 0;
+      const prevLoginGateMax = process.env.MT5_LOGIN_GATE_MAX_WAIT_MS;
+      if (!prevLoginGateMax || num(prevLoginGateMax) > 30000) {
+        process.env.MT5_LOGIN_GATE_MAX_WAIT_MS = '30000';
+      }
+      try {
+        const loginGate = await acquireVpsLoginSlot(nodePreview.id, assignedPortNo);
+        vpsLoginGateKey = loginGate.lockKey;
+        loginGateWaitedMs = loginGate.waitedMs || 0;
+      } finally {
+        if (prevLoginGateMax === undefined) delete process.env.MT5_LOGIN_GATE_MAX_WAIT_MS;
+        else process.env.MT5_LOGIN_GATE_MAX_WAIT_MS = prevLoginGateMax;
+      }
     }
 
     const payload = {
@@ -3187,6 +3199,7 @@ router.post('/mt5/run', async (req, res) => {
     };
 
     client = await getClient();
+    if (usePhase2BotRun) await ensureMt5ConnectAttemptTables();
     await client.query('BEGIN');
 
     const accountRows = await client.query(
@@ -3232,7 +3245,8 @@ router.post('/mt5/run', async (req, res) => {
         folderPath,
         mt5Login: account.mt5_login,
         serverName: FIXED_SERVER,
-        purposeType: 'bot_run'
+        purposeType: 'bot_run',
+        client
       });
 
       const runPayload = {
@@ -3316,22 +3330,27 @@ router.post('/mt5/run', async (req, res) => {
         : loginGateWaitedMs > 500
           ? ` (คิว Login VPS ~${Math.ceil(loginGateWaitedMs / 1000)} วินาที)`
           : '';
-    flash(
-      req,
-      'success',
+    runOkMessage =
       usePhase2BotRun
         ? `Phase 2: ส่งคำสั่ง Login + Run ${bot.display_name || bot.bot_name} ไปยัง PORT ${assignedPortNo} แล้ว${queueNote} — MT5 จะเปิดค้างไว้รัน BOT`
-        : `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว${queueNote} — รอ VPS ส่ง Balance/Equity จริง`
-    );
+        : `ส่งคำสั่ง Run ${bot.display_name || bot.bot_name} ไปยัง ${node.node_name || node.node_code || 'Windows VPS'} PORT ${assignedPortNo} แล้ว${queueNote} — รอ VPS ส่ง Balance/Equity จริง`;
+    flash(req, 'success', runOkMessage);
   } catch (e) {
     if (client) await client.query('ROLLBACK').catch(() => {});
     if (reservedPortForRun) await releaseReservedPort(reservedPortForRun).catch(() => {});
-    flash(req, 'error', e.message);
+    runErrorMessage = e.message;
+    flash(req, 'error', runErrorMessage);
   } finally {
     if (vpsLoginGateKey) await releaseVpsLoginSlot(vpsLoginGateKey).catch(() => {});
     if (vpsRunLockKey) await releaseVpsRunBotSlot(vpsRunLockKey).catch(() => {});
     if (accountLockKey) await redis.del(accountLockKey).catch(() => {});
     if (client) client.release();
+  }
+  if (wantJson) {
+    if (runOkMessage) {
+      return res.json({ ok: true, redirect: '/app/mt5', message: runOkMessage });
+    }
+    return res.json({ ok: false, message: runErrorMessage || 'ส่งคำสั่ง Run ไม่สำเร็จ' });
   }
   return res.redirect('/app/mt5');
 });
