@@ -74,6 +74,7 @@
         <a
           class="<%= shellCurrentPath.startsWith('/app/packages') ? 'active' : '' %>"
           href="/app/packages"
+          data-requires-identity="1"
         >
           <span>🛒</span>
           <span data-i18n="app.menu.packages"><%= safeT('app.menu.packages', 'ซื้อแพ็กเกจ') %></span>

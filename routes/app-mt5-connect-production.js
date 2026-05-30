@@ -11,6 +11,7 @@
 const express = require('express');
 const Redis = require('ioredis');
 const { requireLogin } = require('../middleware/requireAuth');
+const { requireIdentityVerified } = require('../middleware/requireIdentity');
 const { query, getClient } = require('../config/database');
 const { normalizeLockedServer, MT5_LOCKED_SERVER } = require('../lib/mt5Server');
 const { expireStuckMaintenanceCommands } = require('../lib/agentDeploy');
@@ -1159,10 +1160,12 @@ async function handleMt5StartBot(req, res) {
 }
 
 // ใช้ได้ทั้ง endpoint ใหม่และ endpoint เดิมของหน้าเว็บ
-router.post('/mt5/connect-production', requireLogin, handleMt5ConnectProduction);
-router.post('/mt5/connect', requireLogin, handleMt5ConnectProduction);
-router.post('/mt5/start-bot', requireLogin, handleMt5StartBot);
-router.get('/mt5/connect-status-production', requireLogin, handleMt5ConnectStatusProduction);
-router.get('/mt5/connect-status', requireLogin, handleMt5ConnectStatusProduction);
+router.use(requireLogin);
+router.use(requireIdentityVerified);
+router.post('/mt5/connect-production', handleMt5ConnectProduction);
+router.post('/mt5/connect', handleMt5ConnectProduction);
+router.post('/mt5/start-bot', handleMt5StartBot);
+router.get('/mt5/connect-status-production', handleMt5ConnectStatusProduction);
+router.get('/mt5/connect-status', handleMt5ConnectStatusProduction);
 
 module.exports = router;

@@ -30,9 +30,11 @@ const {
   formatSubscriptionSourceLabel,
   formatSubscriptionDateTime
 } = require('../lib/subscriptionPackage');
+const { isIdentityVerified, requireIdentityVerified } = require('../middleware/requireIdentity');
 
 const router = express.Router();
 router.use(requireLogin);
+router.use(requireIdentityVerified);
 
 function flash(req) {
   const out = { success: req.session.success || '', error: req.session.error || '' };
@@ -469,10 +471,6 @@ function appBaseUrl() {
   return process.env.APP_BASE_URL || process.env.BASE_URL || 'https://trading.avelqua.com';
 }
 
-function isIdentityVerified(user) {
-  return !!(user && (user.identity_verified === true || user.identity_verified === 't' || user.identity_verified === 1));
-}
-
 async function sendIdentityOtpEmail({ email, fullName, code }) {
   const pageUrl = `${appBaseUrl()}/app/identity`;
 
@@ -667,6 +665,11 @@ async function getBaseData(req) {
 
 router.get('/', async (req, res) => {
   const base = await getBaseData(req);
+
+  if (isIdentityVerified(base.user) && String(req.query.showIdentityGate || '') === '1') {
+    return res.redirect('/app');
+  }
+
   const paymentsRes = await query(
     `SELECT COUNT(*)::int AS total, COALESCE(SUM(final_amount),0)::numeric AS total_spent
      FROM payments WHERE user_id = $1 AND payment_status = 'paid'`,
@@ -677,7 +680,7 @@ router.get('/', async (req, res) => {
     pageTitle: 'Customer Portal',
     pageCss: 'app-dashboard.css',
     currentPath: '/app',
-    showIdentityGate: !isIdentityVerified(base.user) || String(req.query.showIdentityGate || '') === '1',
+    showIdentityGate: !isIdentityVerified(base.user),
     ...flash(req),
     ...base,
     paymentSummary: paymentsRes.rows[0]
@@ -1994,28 +1997,6 @@ router.post('/identity/verify', async (req, res) => {
     req.session.error = 'ยืนยันตัวตนไม่สำเร็จ';
     return res.redirect('/app/identity');
   }
-});
-
-router.use(async (req, res, next) => {
-  const path = req.path || '/';
-  const allowedPaths = [
-    '/',
-    '/identity',
-    '/identity/request-code',
-    '/identity/verify'
-  ];
-
-  if (allowedPaths.includes(path)) {
-    return next();
-  }
-
-  const base = await getBaseData(req);
-  if (isIdentityVerified(base.user)) {
-    return next();
-  }
-
-  req.session.error = 'กรุณายืนยันตัวตนก่อนใช้งานเมนูอื่น';
-  return res.redirect('/app?showIdentityGate=1');
 });
 
 router.get('/bots', async (req, res) => {

@@ -19,6 +19,7 @@ function getConnectSlotLockKey(userId, portSlot) {
 }
 
 const { requireLogin } = require('../middleware/requireAuth');
+const { requireIdentityVerified } = require('../middleware/requireIdentity');
 const { query, getClient, repairVpsAgentCommandSequences } = require('../config/database');
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
 const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
@@ -432,6 +433,7 @@ router.post('/mt5/live-status', requireAgentToken, handleMt5LiveStatusCallback);
 router.post('/mt5/account-metrics', requireAgentToken, handleMt5AccountMetricsCallback);
 
 router.use(requireLogin);
+router.use(requireIdentityVerified);
 
 // ===== VPS CACHE =====
 let VPS_CACHE = {
