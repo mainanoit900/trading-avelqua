@@ -745,7 +745,6 @@ async function handleMt5ConnectProduction(req, res) {
 
     await cancelPendingLoginCommands({ mt5Login });
 
-    const requestedSlot = num(req.body.port_slot || req.body.portSlot);
     const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
     let portSlot;
 
