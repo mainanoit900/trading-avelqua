@@ -566,11 +566,12 @@ body{
   border:none;
 }
 
-.login-social-icon-line svg{
+.login-social-icon-line img{
   width:48px;
   height:48px;
-  display:block;
+  object-fit:cover;
   border-radius:12px;
+  display:block;
 }
 
 .login-social-label{
