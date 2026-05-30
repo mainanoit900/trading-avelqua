@@ -237,6 +237,7 @@ app.use('/app', require('./routes/app-mt5-bot'));
 app.use('/', require('./routes/web'));
 app.use('/admin', require('./routes/admin'));
 app.use('/app', require('./routes/app'));
+app.use('/app/api', require('./routes/scoin-api'));
 app.use('/', require('./routes/cart'));
 app.use('/', require('./routes/payment'));
 app.use('/api', require('./routes/api'));
@@ -519,6 +520,48 @@ await query(`
       meta_json JSONB NOT NULL DEFAULT '{}'::jsonb,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     );
+  `);
+
+  await query(`
+    ALTER TABLE scoin_transactions
+    ADD COLUMN IF NOT EXISTS tx_ref TEXT
+  `);
+
+  await query(`
+    ALTER TABLE scoin_transactions
+    ADD COLUMN IF NOT EXISTS idempotency_key TEXT
+  `);
+
+  await query(`
+    ALTER TABLE scoin_transactions
+    ADD COLUMN IF NOT EXISTS source TEXT NOT NULL DEFAULT 'web'
+  `);
+
+  await query(`
+    ALTER TABLE scoin_transactions
+    ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'confirmed'
+  `);
+
+  await query(`
+    ALTER TABLE scoin_transactions
+    ADD COLUMN IF NOT EXISTS transfer_group_id TEXT
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_scoin_transactions_tx_ref
+    ON scoin_transactions(tx_ref)
+    WHERE tx_ref IS NOT NULL
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_scoin_transactions_idempotency_key
+    ON scoin_transactions(idempotency_key)
+    WHERE idempotency_key IS NOT NULL
+  `);
+
+  await query(`
+    ALTER TABLE users
+    ADD COLUMN IF NOT EXISTS scoin_locked_balance NUMERIC(18,4) NOT NULL DEFAULT 0
   `);
 
   await query(`

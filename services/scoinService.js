@@ -1,4 +1,12 @@
 const { query, getClient } = require('../config/database');
+const {
+  generateTransferGroupId,
+  postTransaction,
+  lockScoinForOrder,
+  finalizeSellLock,
+  releaseSellLock,
+  withLedgerTransaction
+} = require('../lib/scoinLedger');
 
 function generateReferralCode() {
   return Math.random().toString(36).slice(2, 10).toUpperCase();
@@ -71,59 +79,68 @@ async function awardScoin({
   refPaymentId = null,
   refPackageId = null,
   levelNo = 0,
-  meta = {}
-}) {
-  const client = await getClient();
-  try {
-    await client.query('BEGIN');
+  meta = {},
+  idempotencyKey = null,
+  source = 'web'
+}, existingClient = null) {
+  const run = async (client) => postTransaction(client, {
+    userId,
+    direction: 'in',
+    amount,
+    txType,
+    refUserId,
+    refPaymentId,
+    refPackageId,
+    levelNo,
+    meta,
+    idempotencyKey: idempotencyKey || (
+      refPaymentId
+        ? `credit-${txType}-${userId}-${refPaymentId}-${levelNo || 0}`
+        : null
+    ),
+    source
+  });
 
-    const userRes = await client.query(
-      `SELECT id, scoin_balance FROM users WHERE id = $1 FOR UPDATE`,
-      [userId]
-    );
-
-    if (!userRes.rows.length) {
-      throw new Error('User not found');
-    }
-
-    const before = Number(userRes.rows[0].scoin_balance || 0);
-    const reward = Number(amount || 0);
-    const after = before + reward;
-
-    await client.query(
-      `UPDATE users SET scoin_balance = $2 WHERE id = $1`,
-      [userId, after]
-    );
-
-    await client.query(
-      `INSERT INTO scoin_transactions (
-        user_id, tx_type, direction, amount, fee_amount,
-        balance_before, balance_after, ref_user_id, ref_payment_id, ref_package_id,
-        level_no, meta_json
-      )
-      VALUES ($1,$2,'in',$3,0,$4,$5,$6,$7,$8,$9,$10::jsonb)`,
-      [
-        userId,
-        txType,
-        reward,
-        before,
-        after,
-        refUserId,
-        refPaymentId,
-        refPackageId,
-        levelNo,
-        JSON.stringify(meta || {})
-      ]
-    );
-
-    await client.query('COMMIT');
-    return { before, after };
-  } catch (error) {
-    await client.query('ROLLBACK');
-    throw error;
-  } finally {
-    client.release();
+  if (existingClient) {
+    const result = await run(existingClient);
+    return { before: result.before, after: result.after, tx: result.tx };
   }
+
+  const result = await withLedgerTransaction(run);
+  return { before: result.before, after: result.after, tx: result.tx };
+}
+
+async function debitScoin({
+  userId,
+  amount,
+  txType,
+  refUserId = null,
+  refPaymentId = null,
+  refPackageId = null,
+  meta = {},
+  idempotencyKey = null,
+  source = 'web'
+}, existingClient = null) {
+  const run = async (client) => postTransaction(client, {
+    userId,
+    direction: 'out',
+    amount,
+    txType,
+    refUserId,
+    refPaymentId,
+    refPackageId,
+    meta,
+    idempotencyKey,
+    source
+  });
+
+  if (existingClient) {
+    const result = await run(existingClient);
+    return { before: result.before, after: result.after, tx: result.tx };
+  }
+
+  const result = await withLedgerTransaction(run);
+  return { before: result.before, after: result.after, tx: result.tx };
 }
 
 async function grantPackageReward(paymentRow) {
@@ -301,16 +318,18 @@ async function transferScoin({ fromUserId, toUserId, amount }) {
     throw new Error('Receive amount must be greater than zero');
   }
 
+  const transferGroupId = generateTransferGroupId();
+
   const client = await getClient();
   try {
     await client.query('BEGIN');
 
     const senderRes = await client.query(
-      `SELECT id, scoin_balance FROM users WHERE id = $1 FOR UPDATE`,
+      `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
       [fromUserId]
     );
     const receiverRes = await client.query(
-      `SELECT id, scoin_balance FROM users WHERE id = $1 FOR UPDATE`,
+      `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
       [toUserId]
     );
 
@@ -318,18 +337,26 @@ async function transferScoin({ fromUserId, toUserId, amount }) {
       throw new Error('User not found');
     }
 
-    const senderBefore = Number(senderRes.rows[0].scoin_balance || 0);
-    const receiverBefore = Number(receiverRes.rows[0].scoin_balance || 0);
+    const senderOut = await postTransaction(client, {
+      userId: fromUserId,
+      direction: 'out',
+      amount: transferAmount,
+      txType: 'transfer_out',
+      feeAmount: feeAmount,
+      refUserId: toUserId,
+      transferGroupId,
+      meta: { receive_amount: receiveAmount, transfer_group_id: transferGroupId }
+    });
 
-    if (senderBefore < transferAmount) {
-      throw new Error('Scoin balance is not enough');
-    }
-
-    const senderAfter = senderBefore - transferAmount;
-    const receiverAfter = receiverBefore + receiveAmount;
-
-    await client.query(`UPDATE users SET scoin_balance = $2 WHERE id = $1`, [fromUserId, senderAfter]);
-    await client.query(`UPDATE users SET scoin_balance = $2 WHERE id = $1`, [toUserId, receiverAfter]);
+    await postTransaction(client, {
+      userId: toUserId,
+      direction: 'in',
+      amount: receiveAmount,
+      txType: 'transfer_in',
+      refUserId: fromUserId,
+      transferGroupId,
+      meta: { sent_amount: transferAmount, transfer_group_id: transferGroupId }
+    });
 
     await client.query(
       `INSERT INTO scoin_transfer_requests (
@@ -338,22 +365,13 @@ async function transferScoin({ fromUserId, toUserId, amount }) {
       [fromUserId, toUserId, transferAmount, feePercent, feeAmount, receiveAmount]
     );
 
-    await client.query(
-      `INSERT INTO scoin_transactions (
-        user_id, tx_type, direction, amount, fee_amount, balance_before, balance_after, ref_user_id, meta_json
-      ) VALUES ($1,'transfer_out','out',$2,$3,$4,$5,$6,$7::jsonb)`,
-      [fromUserId, transferAmount, feeAmount, senderBefore, senderAfter, toUserId, JSON.stringify({ receive_amount: receiveAmount })]
-    );
-
-    await client.query(
-      `INSERT INTO scoin_transactions (
-        user_id, tx_type, direction, amount, fee_amount, balance_before, balance_after, ref_user_id, meta_json
-      ) VALUES ($1,'transfer_in','in',$2,0,$3,$4,$5,$6::jsonb)`,
-      [toUserId, receiveAmount, receiverBefore, receiverAfter, fromUserId, JSON.stringify({ sent_amount: transferAmount })]
-    );
-
     await client.query('COMMIT');
-    return { feeAmount, receiveAmount };
+    return {
+      feeAmount,
+      receiveAmount,
+      transferGroupId,
+      txRef: senderOut.tx?.tx_ref || null
+    };
   } catch (error) {
     await client.query('ROLLBACK');
     throw error;
@@ -767,49 +785,31 @@ async function approveBuyOrderAndCredit(orderId, adminUserId = null) {
     if (String(order.status) !== 'pending') throw new Error('คำสั่งนี้ไม่ได้อยู่ในสถานะ pending');
 
     const userRes = await client.query(
-      `SELECT id, scoin_balance
-       FROM users
-       WHERE id = $1
-       FOR UPDATE`,
+      `SELECT id FROM users WHERE id = $1 FOR UPDATE`,
       [order.user_id]
     );
 
     const user = userRes.rows[0];
     if (!user) throw new Error('ไม่พบผู้ใช้งาน');
 
-    const before = Number(user.scoin_balance || 0);
     const scoinAmount = Number(order.scoin_amount || 0);
-    const after = before + scoinAmount;
 
-    await client.query(
-      `UPDATE users
-       SET scoin_balance = $2
-       WHERE id = $1`,
-      [user.id, after]
-    );
-
-    await client.query(
-      `INSERT INTO scoin_transactions (
-        user_id, tx_type, direction, amount, fee_amount,
-        balance_before, balance_after, meta_json, created_at
-      )
-      VALUES ($1, 'market_buy', 'in', $2, 0, $3, $4, $5::jsonb, NOW())`,
-      [
-        user.id,
-        scoinAmount,
-        before,
-        after,
-        JSON.stringify({
-          market_order_id: order.id,
-          order_type: order.order_type,
-          payment_method: order.payment_method,
-          payment_ref: order.payment_ref,
-          gross_amount_thb: order.gross_amount_thb,
-          fee_amount_thb: order.fee_amount_thb,
-          net_amount_thb: order.net_amount_thb
-        })
-      ]
-    );
+    await postTransaction(client, {
+      userId: user.id,
+      direction: 'in',
+      amount: scoinAmount,
+      txType: 'market_buy',
+      idempotencyKey: `market-buy-${order.id}`,
+      meta: {
+        market_order_id: order.id,
+        order_type: order.order_type,
+        payment_method: order.payment_method,
+        payment_ref: order.payment_ref,
+        gross_amount_thb: order.gross_amount_thb,
+        fee_amount_thb: order.fee_amount_thb,
+        net_amount_thb: order.net_amount_thb
+      }
+    });
 
     await client.query(
       `UPDATE scoin_market_orders
@@ -868,5 +868,10 @@ module.exports = {
   recreateWalletByUserId,
   markMarketOrderPaid,
   approveBuyOrderAndCredit,
-  isPackagePaidByScoin
+  isPackagePaidByScoin,
+  awardScoin,
+  debitScoin,
+  lockScoinForOrder,
+  finalizeSellLock,
+  releaseSellLock
 };

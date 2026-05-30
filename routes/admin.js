@@ -55,8 +55,11 @@ function cronTimeFromLine(line) {
 }
 
 const {
-  distributeScoinEconomy
+  distributeScoinEconomy,
+  finalizeSellLock,
+  releaseSellLock
 } = require('../services/scoinService');
+const { postTransaction } = require('../lib/scoinLedger');
 
 const { syncNewsNow } = require('../services/newsSyncService');
 
@@ -2369,69 +2372,34 @@ router.post('/scoin-market/:id/approve', async (req, res) => {
     const user = userRes.rows[0];
     if (!user) throw new Error('ไม่พบผู้ใช้งาน');
 
-    const before = Number(user.scoin_balance || 0);
     const scoinAmount = Number(order.scoin_amount || 0);
 
     if (String(order.order_type) === 'buy') {
-      const after = before + scoinAmount;
-
-      await client.query(
-        `UPDATE users SET scoin_balance = $2 WHERE id = $1`,
-        [user.id, after]
-      );
-
-      await client.query(
-        `INSERT INTO scoin_transactions (
-          user_id, tx_type, direction, amount, fee_amount,
-          balance_before, balance_after, meta_json, created_at
-        )
-        VALUES ($1, 'market_buy', 'in', $2, 0, $3, $4, $5::jsonb, NOW())`,
-        [
-          user.id,
-          scoinAmount,
-          before,
-          after,
-          JSON.stringify({
-            market_order_id: order.id,
-            order_type: order.order_type,
-            gross_amount_thb: order.gross_amount_thb,
-            fee_amount_thb: order.fee_amount_thb,
-            net_amount_thb: order.net_amount_thb
-          })
-        ]
-      );
+      await postTransaction(client, {
+        userId: user.id,
+        direction: 'in',
+        amount: scoinAmount,
+        txType: 'market_buy',
+        idempotencyKey: `market-buy-admin-${order.id}`,
+        meta: {
+          market_order_id: order.id,
+          order_type: order.order_type,
+          gross_amount_thb: order.gross_amount_thb,
+          fee_amount_thb: order.fee_amount_thb,
+          net_amount_thb: order.net_amount_thb
+        }
+      });
     } else if (String(order.order_type) === 'sell') {
-      if (before < scoinAmount) {
-        throw new Error('ยอด Scoin ของผู้ใช้ไม่พอสำหรับขายคืนโฮส');
-      }
-
-      const after = before - scoinAmount;
-
-      await client.query(
-        `UPDATE users SET scoin_balance = $2 WHERE id = $1`,
-        [user.id, after]
-      );
-
-      await client.query(
-        `INSERT INTO scoin_transactions (
-          user_id, tx_type, direction, amount, fee_amount,
-          balance_before, balance_after, meta_json, created_at
-        )
-        VALUES ($1, 'market_sell', 'out', $2, 0, $3, $4, $5::jsonb, NOW())`,
-        [
-          user.id,
-          scoinAmount,
-          before,
-          after,
-          JSON.stringify({
-            market_order_id: order.id,
-            order_type: order.order_type,
-            gross_amount_thb: order.gross_amount_thb,
-            fee_amount_thb: order.fee_amount_thb,
-            net_amount_thb: order.net_amount_thb
-          })
-        ]
-      );
+      await finalizeSellLock(client, {
+        userId: user.id,
+        amount: scoinAmount,
+        orderId: order.id,
+        meta: {
+          gross_amount_thb: order.gross_amount_thb,
+          fee_amount_thb: order.fee_amount_thb,
+          net_amount_thb: order.net_amount_thb
+        }
+      });
 
       await client.query(
         `INSERT INTO system_wallets (wallet_type, wallet_code, balance)
@@ -2523,28 +2491,55 @@ router.post('/scoin-market/:id/confirm-transfer', async (req, res) => {
 });
 
 router.post('/scoin-market/:id/reject', async (req, res) => {
+  const client = await getClient();
+
   try {
-    const result = await query(
-      `UPDATE scoin_market_orders
-       SET status = 'rejected',
-           updated_at = NOW()
+    await client.query('BEGIN');
+
+    const orderRes = await client.query(
+      `SELECT *
+       FROM scoin_market_orders
        WHERE id = $1
-         AND status = 'pending'
-       RETURNING id`,
+       FOR UPDATE`,
       [req.params.id]
     );
 
-    if (!result.rows.length) {
-      req.session.error = 'ไม่พบคำสั่ง pending ที่ต้องการปฏิเสธ';
-      return res.redirect('/admin/scoin-market');
+    const order = orderRes.rows[0];
+    if (!order) throw new Error('ไม่พบคำสั่งตลาด');
+    if (String(order.status) !== 'pending') {
+      throw new Error('คำสั่งนี้ไม่ได้อยู่ในสถานะ pending');
     }
+
+    if (String(order.order_type) === 'sell') {
+      await releaseSellLock(client, {
+        userId: order.user_id,
+        amount: Number(order.scoin_amount || 0),
+        orderId: order.id,
+        reason: 'rejected'
+      }).catch((error) => {
+        if (!String(error.message || '').includes('Locked Scoin is not enough')) throw error;
+      });
+    }
+
+    await client.query(
+      `UPDATE scoin_market_orders
+       SET status = 'rejected',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [order.id]
+    );
+
+    await client.query('COMMIT');
 
     req.session.success = 'ปฏิเสธคำสั่งตลาด Scoin แล้ว';
     return res.redirect('/admin/scoin-market');
   } catch (error) {
+    await client.query('ROLLBACK');
     console.error('reject scoin market error:', error);
-    req.session.error = 'ปฏิเสธคำสั่งไม่สำเร็จ';
+    req.session.error = error.message || 'ปฏิเสธคำสั่งไม่สำเร็จ';
     return res.redirect('/admin/scoin-market');
+  } finally {
+    client.release();
   }
 });
 

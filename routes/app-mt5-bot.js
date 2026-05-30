@@ -61,6 +61,7 @@ const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBot
 const { computeRunBotQueueDelaySec, computeLoginQueueDelaySec, computeJournalTimeoutSec, countActiveLoginsOnVps } = require('../lib/mt5MultiPortLogin');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 const { repairUserMt5PortBindings } = require('../lib/mt5CachedEquityLogin');
+const { debitScoin } = require('../services/scoinService');
 
 const router = express.Router();
 
@@ -2813,14 +2814,18 @@ router.post('/mt5/ports/add', async (req, res) => {
       );
     }
 
-    const u = await client.query(`SELECT scoin_balance FROM users WHERE id=$1 FOR UPDATE`, [userId]);
-    const balance = num(u.rows[0]?.scoin_balance);
-
-    if (balance < price) {
-      throw new Error(`Scoin ไม่พอ ต้องใช้ ${price} Scoin`);
-    }
-
-    await client.query(`UPDATE users SET scoin_balance=$2 WHERE id=$1`, [userId, balance - price]);
+    await debitScoin({
+      userId,
+      amount: price,
+      txType: 'mt5_extra_port_purchase',
+      meta: {
+        port_type: portType,
+        subscription_id: pkg.subscription_id,
+        package_id: pkg.package_id,
+        package_group: group,
+        price_scoin: price
+      }
+    }, client);
 
     const expiresAt = portType === 'temporary' && pkg.end_at ? new Date(pkg.end_at) : null;
 

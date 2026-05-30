@@ -17,7 +17,11 @@ const {
   transferScoinByWalletCode,
   markMarketOrderPaid,
   approveBuyOrderAndCredit,
-  distributeScoinEconomy
+  distributeScoinEconomy,
+  debitScoin,
+  lockScoinForOrder,
+  finalizeSellLock,
+  releaseSellLock
 } = require('../services/scoinService');
 
 const router = express.Router();
@@ -405,10 +409,21 @@ async function payPackageWithScoin({ userId, paymentId }) {
     if (!user) throw new Error('ไม่พบผู้ใช้งาน');
     const beforeBalance = Number(user.scoin_balance || 0);
     if (beforeBalance < scoinRequired) throw new Error(`Scoin ไม่พอ ต้องใช้ ${scoinRequired.toLocaleString('th-TH')} Scoin`);
-    const afterBalance = Number((beforeBalance - scoinRequired).toFixed(4));
 
-    await client.query(`UPDATE users SET scoin_balance=$2 WHERE id=$1`, [userId, afterBalance]);
-    await client.query(`INSERT INTO scoin_transactions (user_id, tx_type, direction, amount, fee_amount, balance_before, balance_after, ref_payment_id, ref_package_id, meta_json, created_at) VALUES ($1,'package_purchase_scoin','out',$2,0,$3,$4,$5,$6,$7::jsonb,NOW())`, [userId, scoinRequired, beforeBalance, afterBalance, payment.id, payment.package_id, JSON.stringify({ source:'app_package_payment', final_amount_thb: finalAmountThb, scoin_price_thb: scoinPriceThb, note:'ชำระแพ็กเกจด้วย Scoin อนุมัติทันที' })]);
+    await debitScoin({
+      userId,
+      amount: scoinRequired,
+      txType: 'package_purchase_scoin',
+      refPaymentId: payment.id,
+      refPackageId: payment.package_id,
+      idempotencyKey: `package-scoin-${payment.id}`,
+      meta: {
+        source: 'app_package_payment',
+        final_amount_thb: finalAmountThb,
+        scoin_price_thb: scoinPriceThb,
+        note: 'ชำระแพ็กเกจด้วย Scoin อนุมัติทันที'
+      }
+    }, client);
 
     const paidRes = await client.query(`UPDATE payments SET payment_status='paid', payment_method='scoin', paid_at=NOW(), auto_confirmed_at=NOW(), auto_confirm_note='Scoin instant package payment', payment_ref=$2, raw_payload=COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb, updated_at=NOW() WHERE id=$1 RETURNING *`, [payment.id, `SCOIN-PKG-${payment.id}-${Date.now()}`, JSON.stringify({ scoin_payment:{ scoin_amount:scoinRequired, scoin_price_thb:scoinPriceThb, final_amount_thb:finalAmountThb, instant_approved:true } })]);
     paidPayment = paidRes.rows[0];
@@ -598,7 +613,9 @@ async function getBaseData(req) {
   const wallet = await ensureUserWallet(user.id);
   const scoinSettings = await getScoinSettings();
   const scoinBalance = Number(user.scoin_balance || 0);
-  const scoinValueThb = scoinBalance * Number(scoinSettings.current_price_thb || 0.10);
+  const scoinLockedBalance = Number(user.scoin_locked_balance || 0);
+  const scoinAvailableBalance = Math.max(0, +(scoinBalance - scoinLockedBalance).toFixed(4));
+  const scoinValueThb = scoinAvailableBalance * Number(scoinSettings.current_price_thb || 0.10);
 
   return {
     user,
@@ -611,6 +628,8 @@ async function getBaseData(req) {
     wallet,
     scoinSettings,
     scoinBalance,
+    scoinLockedBalance,
+    scoinAvailableBalance,
     scoinValueThb,
     referralUrl: `${appBaseUrl()}/register?ref=${encodeURIComponent(referralCode || '')}`
   };
@@ -2116,8 +2135,8 @@ router.post('/scoin-market/order', async (req, res) => {
       return res.redirect('/app/scoin-wallet');
     }
 
-    if (orderType === 'sell' && Number(base.scoinBalance || 0) < scoinAmount) {
-      req.session.error = 'ยอด Scoin ไม่พอสำหรับขายคืนโฮส';
+    if (orderType === 'sell' && Number(base.scoinAvailableBalance ?? base.scoinBalance ?? 0) < scoinAmount) {
+      req.session.error = 'ยอด Scoin ที่ใช้ได้ไม่พอสำหรับขายคืนโฮส';
       return res.redirect('/app/scoin-wallet');
     }
 
@@ -2188,6 +2207,25 @@ const netAmountThb = totalPayThb;
     );
 
     const order = insertRes.rows[0];
+
+    if (orderType === 'sell') {
+      const client = await getClient();
+      try {
+        await client.query('BEGIN');
+        await lockScoinForOrder(client, {
+          userId: base.user.id,
+          amount: scoinAmount,
+          orderId: order.id
+        });
+        await client.query('COMMIT');
+      } catch (lockError) {
+        await client.query('ROLLBACK');
+        await query(`DELETE FROM scoin_market_orders WHERE id = $1`, [order.id]).catch(() => {});
+        throw lockError;
+      } finally {
+        client.release();
+      }
+    }
 
 if (orderType === 'sell') {
   await notifyAdminSellOrder({
