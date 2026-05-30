@@ -5726,6 +5726,17 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     patch_mt5_experts_config(port_dir, True)
 
     if login and password:
+        try:
+            if mt5_running_for_port_dir(port_dir):
+                stop_mt5_port_only(port, payload)
+                time.sleep(0.35)
+            clear_mt5_port_session(port_dir)
+            clear_mt5_login_cache(port_dir)
+            remove_mt5_login_ini(port_dir)
+            time.sleep(float(os.getenv("AVELQUA_PRELOGIN_CLEAN_SEC", "0.6")))
+        except Exception as e:
+            log(f"RUN BOT PRE-LAUNCH CLEAN ERROR port={port}: {e}")
+
         write_mt5_login_ini(
             port_dir,
             login,

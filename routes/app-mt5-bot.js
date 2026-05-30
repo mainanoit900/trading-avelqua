@@ -31,7 +31,7 @@ const {
   presetSummary,
   buildRunSummary,
   buildRunConfigSnapshot,
-  capitalFromLot,
+  resolveRunCapitalAndLot,
   isProductionBot,
   validateRunCapital,
   botUiMeta,
@@ -2861,15 +2861,23 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
     const summary = await getPortSummary(req.user.id);
     const lotMeta = packageLotLimits(summary);
     const syncField = String(req.query.sync_field || 'capital').toLowerCase() === 'lot' ? 'lot' : 'capital';
+    const resolved = resolveRunCapitalAndLot({
+      capitalManual: capital,
+      manualLot,
+      syncField,
+      equityFallback: 0,
+      lotMin: lotMeta.lotMin,
+      lotMax: lotMeta.lotMax
+    });
     const calc = computePresetForBot(
       bot,
-      capital,
+      resolved.capital,
       tradeLevel,
-      manualLot,
+      resolved.manualLot,
       lotMeta.lotMin,
       lotMeta.lotMax,
       lotMeta.defaultLot,
-      syncField
+      resolved.syncField
     );
     return res.json({
       ok: true,
@@ -2986,11 +2994,17 @@ router.post('/mt5/run', async (req, res) => {
     if (!bot) throw new Error('ไม่พบ BOT ที่เลือก');
     if (!isProductionBot(bot)) throw new Error('BOT นี้ไม่ได้เปิดให้ใช้งานบนหน้าเว็บนี้');
 
-    const capital = capitalManual > 0
-      ? capitalManual
-      : (manualLot > 0 && syncField === 'lot'
-        ? capitalFromLot(manualLot)
-        : num(account.last_equity || account.last_balance || account.capital_override, 0));
+    const capitalResolved = resolveRunCapitalAndLot({
+      capitalManual,
+      manualLot,
+      syncField,
+      equityFallback: num(account.last_equity || account.last_balance || account.capital_override, 0),
+      lotMin: lotMeta.lotMin,
+      lotMax: lotMeta.lotMax
+    });
+    const capital = num(capitalResolved.capital, 0);
+    const effectiveManualLot = num(capitalResolved.manualLot, 0);
+    const effectiveSyncField = capitalResolved.syncField || syncField;
     const capitalCheck = validateRunCapital(capital, bot);
     if (!capitalCheck.ok) throw new Error(capitalCheck.message);
 
@@ -2998,11 +3012,11 @@ router.post('/mt5/run', async (req, res) => {
       bot,
       capitalCheck.capital,
       tradeLevel,
-      manualLot,
+      effectiveManualLot,
       lotMeta.lotMin,
       lotMeta.lotMax,
       lotMeta.defaultLot,
-      syncField
+      effectiveSyncField
     );
     if (botKind(bot) === 'queen' && num(calc.lot) <= 0) {
       throw new Error('เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ 10,000 USD)');
