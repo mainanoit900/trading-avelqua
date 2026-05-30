@@ -107,6 +107,18 @@
   font-weight: 800;
 }
 
+.cal-closed-badge {
+  display: inline-flex;
+  align-items: center;
+  padding: 8px 12px;
+  border-radius: 999px;
+  background: rgba(148, 163, 184, 0.12);
+  border: 1px solid rgba(148, 163, 184, 0.24);
+  color: #cbd5e1;
+  font-size: 12px;
+  font-weight: 800;
+}
+
 .cal-live-dot {
   width: 8px;
   height: 8px;
@@ -249,6 +261,16 @@ button.cal-cell {
 
 .cal-cell.live {
   border-color: rgba(34, 197, 94, 0.35);
+}
+
+.cal-cell.weekend {
+  background: rgba(148, 163, 184, 0.06);
+  border-color: rgba(148, 163, 184, 0.16);
+  opacity: 0.88;
+}
+
+.cal-market-closed {
+  color: #94a3b8 !important;
 }
 
 .cal-day-num {

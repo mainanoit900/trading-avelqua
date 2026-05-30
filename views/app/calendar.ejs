@@ -13,11 +13,14 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
       <div>
         <p class="cal-eyebrow">MT5 Performance</p>
         <h2>ปฏิทินกำไร / ขาดทุน</h2>
-        <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= calendarRefreshSec %> วินาที วันนี้แสดงแบบ Live ส่วนวันก่อนหน้าสรุปเมื่อเที่ยงคืน</p>
+        <p>สรุปผลตามวัน (เวลาไทย) ของแต่ละ Login — อัปเดตทุก <%= calendarRefreshSec %> วินาที (วันจันทร์–ศุกร์) · เสาร์–อาทิตย์ตลาดทองปิด ไม่อัปเดต</p>
       </div>
       <div class="cal-live-badge" id="calLiveBadge" hidden>
         <span class="cal-live-dot" aria-hidden="true"></span>
         <span>Live · <%= calendarRefreshSec %>s</span>
+      </div>
+      <div class="cal-closed-badge" id="calClosedBadge" hidden>
+        <span>ตลาดปิด · เสาร์–อาทิตย์</span>
       </div>
     </div>
 
@@ -127,6 +130,7 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
     histPrev: document.getElementById('calHistPrev'),
     histNext: document.getElementById('calHistNext'),
     liveBadge: document.getElementById('calLiveBadge'),
+    closedBadge: document.getElementById('calClosedBadge'),
     prevMonth: document.getElementById('calPrevMonth'),
     nextMonth: document.getElementById('calNextMonth')
   };
@@ -188,9 +192,18 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
       if (c.live) cls.push('live');
       if (c.dayKey === data.selectedDay) cls.push('selected');
       if (c.isFuture) cls.push('future');
-      var pnlText = c.pnl == null ? '—' : fmtMoney(c.pnl);
-      var tag = c.live ? '<span class="cal-cell-tag">Live</span>' : (c.finalized ? '<span class="cal-cell-tag" style="color:#94a3b8">สรุปแล้ว</span>' : '');
-      return '<button type="button" class="' + cls.join(' ') + '" data-day="' + c.dayKey + '" ' + (c.isFuture ? 'disabled' : '') + '>' +
+      if (c.isWeekend || c.marketClosed) cls.push('weekend');
+      var pnlText = (c.marketClosed || c.isWeekend) ? 'ปิด' : (c.pnl == null ? '—' : fmtMoney(c.pnl));
+      var tag = '';
+      if (c.marketClosed || c.isWeekend) {
+        tag = '<span class="cal-cell-tag cal-market-closed">ตลาดปิด</span>';
+      } else if (c.live) {
+        tag = '<span class="cal-cell-tag">Live</span>';
+      } else if (c.finalized) {
+        tag = '<span class="cal-cell-tag" style="color:#94a3b8">สรุปแล้ว</span>';
+      }
+      var disabled = c.isFuture ? 'disabled' : '';
+      return '<button type="button" class="' + cls.join(' ') + '" data-day="' + c.dayKey + '" ' + disabled + '>' +
         '<span class="cal-day-num">' + c.day + '</span>' +
         '<span class="cal-pnl ' + pnlClass(c.pnl) + '">' + pnlText + '</span>' +
         tag +
@@ -210,7 +223,10 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
     var hist = data.history || {};
     var rows = hist.rows || [];
     if (!rows.length) {
-      el.historyBody.innerHTML = '<tr><td colspan="6" class="cal-empty">ยังไม่มีประวัติในวันนี้</td></tr>';
+      var emptyMsg = (hist.marketClosed || data.selectedMarketClosed)
+        ? 'ตลาดทองปิด · ไม่มีการอัปเดตวันเสาร์–อาทิตย์'
+        : 'ยังไม่มีประวัติในวันนี้';
+      el.historyBody.innerHTML = '<tr><td colspan="6" class="cal-empty">' + emptyMsg + '</td></tr>';
     } else {
       el.historyBody.innerHTML = rows.map(function (r) {
         var live = r.live ? '<span class="pos">Live</span>' : 'บันทึก';
@@ -242,9 +258,22 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
     el.monthLabel.textContent = data.monthLabel || data.month || '-';
     el.selectedHint.textContent = 'วันที่เลือก: ' + (data.selectedDayLabel || data.selectedDay || '-')
       + (data.selectedDayPnl != null ? ' · ' + fmtMoney(data.selectedDayPnl) : '');
-    el.historyHint.textContent = 'ประวัติวันที่ ' + (data.selectedDayLabel || data.selectedDay || '-')
-      + ' · อัปเดตทุก ' + (data.refreshSec || <%= calendarRefreshSec %>) + ' วินาที';
-    el.liveBadge.hidden = !(data.selectedDay === data.todayKey);
+    el.historyHint.textContent = (data.selectedMarketClosed || (hist.marketClosed && data.selectedDay === data.todayKey))
+      ? 'วันเสาร์–อาทิตย์ ตลาดทองปิด · ไม่อัปเดต'
+      : ('ประวัติวันที่ ' + (data.selectedDayLabel || data.selectedDay || '-')
+        + ' · อัปเดตทุก ' + (data.refreshSec || <%= calendarRefreshSec %>) + ' วินาที (จ–ศ)');
+    el.liveBadge.hidden = !(data.selectedDay === data.todayKey && data.refreshEnabled);
+    el.closedBadge.hidden = !(!data.refreshEnabled && data.selectedDay === data.todayKey);
+  }
+
+  function scheduleRefresh(enabled) {
+    if (state.timer) {
+      clearInterval(state.timer);
+      state.timer = null;
+    }
+    if (enabled) {
+      state.timer = setInterval(function () { loadCalendar(false); }, REFRESH_MS);
+    }
   }
 
   async function loadCalendar(showLoading) {
@@ -268,6 +297,7 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
       renderSummary(data);
       renderGrid(data);
       renderHistory(data);
+      scheduleRefresh(!!data.refreshEnabled);
     } catch (e) {
       el.grid.innerHTML = '<div class="cal-empty">โหลดไม่สำเร็จ: ' + (e.message || e) + '</div>';
     } finally {
@@ -305,7 +335,6 @@ const calendarRefreshSec = Number(typeof refreshSec !== 'undefined' ? refreshSec
   });
 
   loadCalendar(true);
-  state.timer = setInterval(function () { loadCalendar(false); }, REFRESH_MS);
 })();
 </script>
 
