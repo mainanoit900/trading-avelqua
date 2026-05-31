@@ -1,5 +1,5 @@
-# Avelqua Agent Watchdog — ถ้า agent.log ไม่ขยับเกิน N นาที → kill agent.py แล้ว start Task ใหม่
-# รันจาก Scheduled Task ทุก 5 นาที (ติดโดย install-agent-desktop-with-watchdog.ps1)
+# Avelqua Agent Watchdog - restart agent if agent.log is stale
+# Runs from Scheduled Task every 5 min (install-agent-desktop-with-watchdog.ps1)
 
 param(
   [string]$AgentDir = "C:\avelqua-python-agent",
@@ -16,7 +16,7 @@ try {
 } catch {}
 
 if (-not (Test-Path $log)) {
-  Write-Output "watchdog: no log yet — start task"
+  Write-Output "watchdog: no log yet - start task"
   schtasks /Run /TN $TaskName 2>$null
   exit 0
 }
@@ -27,7 +27,7 @@ if ($age -le $MaxLogAgeMin) {
   exit 0
 }
 
-Write-Output "watchdog: STALE log age=$([math]::Round($age,1))m — restarting agent"
+Write-Output "watchdog: STALE log age=$([math]::Round($age,1))m - restarting agent"
 
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
   Where-Object { $_.CommandLine -like "*$AgentDir*agent.py*" } |

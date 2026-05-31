@@ -1,4 +1,4 @@
-# Desktop Agent Task (MT5 + BOT) — no NSSM Session 0
+# Desktop Agent Task (MT5 + BOT) - no NSSM Session 0
 # powershell -ExecutionPolicy Bypass -File C:\avelqua-python-agent\install_interactive_agent_task.ps1 -Token "YOUR_TOKEN"
 
 param(
@@ -36,7 +36,7 @@ New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
 
 $agentPy = Join-Path $AgentDir "agent.py"
 if (-not (Test-Path -LiteralPath $agentPy)) {
-  Write-Host "ERROR: missing $agentPy — download agent.py first" -ForegroundColor Red
+  Write-Host "ERROR: missing $agentPy - download agent.py first" -ForegroundColor Red
   exit 1
 }
 
@@ -55,7 +55,7 @@ try { sc.exe config $NssmServiceName start= disabled 2>$null | Out-Null } catch 
 $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
 if (-not $python) {
-  Write-Host "ERROR: python not found — install Python 3 and add to PATH" -ForegroundColor Red
+  Write-Host "ERROR: python not found - install Python 3 and add to PATH" -ForegroundColor Red
   exit 1
 }
 
@@ -86,6 +86,6 @@ Start-ScheduledTask -TaskName $TaskName
 Write-Host ""
 Write-Host "OK: Agent Desktop Task installed" -ForegroundColor Green
 Write-Host "  Task: $TaskName"
-Write-Host "  User: $env:USERNAME (keep RDP logged in — disconnect OK, no Sign out)"
+Write-Host "  User: $env:USERNAME (keep RDP logged in - disconnect OK, no Sign out)"
 $agentLog = Join-Path $logsDir "agent.log"
 Write-Host "  Log:  $agentLog"
