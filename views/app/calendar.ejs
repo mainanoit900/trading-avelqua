@@ -10,7 +10,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
 <div class="cal-page" id="calPage">
   <nav class="cal-tabs" aria-label="เมนูปฏิทิน">
     <a href="/app/calendar" class="cal-tab <%= calActiveTab === 'calendar' ? 'active' : '' %>">📅 ปฏิทิน PnL</a>
-    <a href="/app/calendar/ai" class="cal-tab <%= calActiveTab === 'ai' ? 'active' : '' %>">🤖 AI วิเคราะห์ 30 วัน</a>
+    <a href="/app/calendar/ai" class="cal-tab <%= calActiveTab === 'ai' ? 'active' : '' %>">🤖 AI วิเคราะห์ 15/30 วัน</a>
   </nav>
 
   <section class="cal-hero">
@@ -18,8 +18,8 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       <div>
         <p class="cal-eyebrow">MT5 Performance</p>
         <% if (calActiveTab === 'ai') { %>
-          <h2>AI วิเคราะห์ตลาด · 30 วันข้างหน้า</h2>
-          <p>วิเคราะห์จากประวัติ PnL ของแต่ละ Login + มุมมองตลาดทอง (Python AI) — คาดการณ์กำไร/ขาดทุนเฉพาะวันจันทร์–ศุกร์</p>
+          <h2>AI วิเคราะห์ตลาด · 15 วัน / 30 วันข้างหน้า</h2>
+          <p>วิเคราะห์จากประวัติ PnL ของแต่ละ Login + มุมมองตลาดทอง (Python AI) — เลือกช่วง 15 หรือ 30 วันทำการ (จ–ศ)</p>
         <% } else { %>
           <h2>ปฏิทินกำไร / ขาดทุน</h2>
           <p>กำไร/ขาดทุน = Equity ปัจจุบัน − Equity ตอนเชื่อมต่อ Login · อัปเดตทุก <%= calendarRefreshSec %> วิ (จ–ศ) · เสาร์–อาทิตย์ตลาดปิด</p>
@@ -48,6 +48,10 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
         <button type="button" id="calNextMonth" title="เดือนถัดไป">›</button>
       </div>
       <% } else { %>
+      <div class="cal-horizon-nav" aria-label="เลือกช่วงคาดการณ์">
+        <button type="button" class="cal-horizon-btn" id="calHorizon15" data-horizon="15">15 วัน</button>
+        <button type="button" class="cal-horizon-btn active" id="calHorizon30" data-horizon="30">30 วัน</button>
+      </div>
       <button type="button" class="cal-ai-refresh" id="calAiRefresh">🔄 วิเคราะห์ใหม่</button>
       <% } %>
     </div>
@@ -135,7 +139,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       <strong id="calAiConfidence" class="neu">-</strong>
     </article>
     <article class="cal-stat">
-      <span>คาดการณ์ 30 วัน (ฐาน)</span>
+      <span id="calAiBaseLabel">คาดการณ์ 30 วัน (ฐาน)</span>
       <strong id="calAiBase" class="neu">-</strong>
     </article>
   </section>
@@ -159,8 +163,8 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
   <section class="cal-panel" aria-label="คาดการณ์รายวัน 30 วัน">
     <div class="cal-panel-head">
       <div>
-        <h3>คาดการณ์รายวัน (เฉพาะวันตลาดเปิด)</h3>
-        <p>30 วันทำการข้างหน้า · ข้ามเสาร์–อาทิตย์ · 10 แถวต่อหน้า</p>
+        <h3 id="calAiForecastTitle">คาดการณ์รายวัน (เฉพาะวันตลาดเปิด)</h3>
+        <p id="calAiForecastHint">30 วันทำการข้างหน้า · ข้ามเสาร์–อาทิตย์ · 10 แถวต่อหน้า</p>
       </div>
     </div>
     <div class="cal-table-wrap">
@@ -171,7 +175,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
             <th>คาด PnL/วัน</th>
             <th>ดีสุด</th>
             <th>แย่สุด</th>
-            <th>สะสม 30 วัน</th>
+            <th id="calAiCumulativeCol">สะสม 30 วัน</th>
           </tr>
         </thead>
         <tbody id="calAiForecastBody">
@@ -201,6 +205,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
     selectedDay: '',
     historyPage: 1,
     forecastPage: 1,
+    forecastHorizon: 30,
     forecastDays: [],
     loading: false,
     timer: null
@@ -246,7 +251,13 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       aiForecastBody: document.getElementById('calAiForecastBody'),
       aiForecastPagerInfo: document.getElementById('calAiForecastPagerInfo'),
       aiForecastPrev: document.getElementById('calAiForecastPrev'),
-      aiForecastNext: document.getElementById('calAiForecastNext')
+      aiForecastNext: document.getElementById('calAiForecastNext'),
+      aiBaseLabel: document.getElementById('calAiBaseLabel'),
+      aiForecastTitle: document.getElementById('calAiForecastTitle'),
+      aiForecastHint: document.getElementById('calAiForecastHint'),
+      aiCumulativeCol: document.getElementById('calAiCumulativeCol'),
+      horizon15: document.getElementById('calHorizon15'),
+      horizon30: document.getElementById('calHorizon30')
     });
   }
 
@@ -425,6 +436,15 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
     el.histNext.addEventListener('click', function () { state.historyPage += 1; loadCalendar(false); });
     loadCalendar(true);
   } else {
+    function setForecastHorizon(days) {
+      state.forecastHorizon = days === 15 ? 15 : 30;
+      if (el.horizon15) el.horizon15.classList.toggle('active', state.forecastHorizon === 15);
+      if (el.horizon30) el.horizon30.classList.toggle('active', state.forecastHorizon === 30);
+      if (el.aiBaseLabel) el.aiBaseLabel.textContent = 'คาดการณ์ ' + state.forecastHorizon + ' วัน (ฐาน)';
+      if (el.aiForecastHint) el.aiForecastHint.textContent = state.forecastHorizon + ' วันทำการข้างหน้า · ข้ามเสาร์–อาทิตย์ · 10 แถวต่อหน้า';
+      if (el.aiCumulativeCol) el.aiCumulativeCol.textContent = 'สะสม ' + state.forecastHorizon + ' วัน';
+    }
+
     function renderForecastTable() {
       var days = state.forecastDays || [];
       var total = days.length;
@@ -458,8 +478,10 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
     function renderForecast(data) {
       var f = data.forecast || {};
       var analysis = f.analysis || {};
-      var stats = f.stats || {};
-      var proj = f.projected_pnl_30d || {};
+      var horizon = Number(f.horizon_days || data.horizonDays || state.forecastHorizon || 30);
+      state.forecastHorizon = horizon === 15 ? 15 : 30;
+      setForecastHorizon(state.forecastHorizon);
+      var proj = f.projected_pnl || f.projected_pnl_30d || {};
       el.aiOutlook.textContent = outlookLabel(analysis.outlook);
       el.aiOutlook.className = pnlClass(analysis.outlook === 'bullish' ? 1 : analysis.outlook === 'bearish' ? -1 : 0);
       el.aiConfidence.textContent = String(analysis.confidence != null ? analysis.confidence : '-') + '%';
@@ -488,6 +510,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       try {
         var q = new URLSearchParams();
         if (state.accountId) q.set('accountId', String(state.accountId));
+        q.set('horizonDays', String(state.forecastHorizon));
         if (refresh) q.set('refresh', '1');
         var res = await fetch('/app/calendar/forecast?' + q.toString(), { credentials: 'same-origin', headers: { Accept: 'application/json' } });
         var data = await res.json();
@@ -514,6 +537,24 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       loadForecast(false);
     });
     el.aiRefresh.addEventListener('click', function () { loadForecast(true); });
+    if (el.horizon15) {
+      el.horizon15.addEventListener('click', function () {
+        if (state.forecastHorizon === 15) return;
+        state.forecastHorizon = 15;
+        state.forecastPage = 1;
+        setForecastHorizon(15);
+        loadForecast(false);
+      });
+    }
+    if (el.horizon30) {
+      el.horizon30.addEventListener('click', function () {
+        if (state.forecastHorizon === 30) return;
+        state.forecastHorizon = 30;
+        state.forecastPage = 1;
+        setForecastHorizon(30);
+        loadForecast(false);
+      });
+    }
     if (el.aiForecastPrev) {
       el.aiForecastPrev.addEventListener('click', function () {
         if (state.forecastPage > 1) {
@@ -531,6 +572,8 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
         }
       });
     }
+    var initHorizon = Number(new URLSearchParams(window.location.search).get('horizon') || 30);
+    setForecastHorizon(initHorizon === 15 ? 15 : 30);
     loadForecast(false);
   }
 })();

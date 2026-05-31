@@ -79,6 +79,7 @@ def call_openai(payload: dict, stats: dict) -> dict:
     login = str(payload.get("mt5_login") or "-")
     symbol = str(payload.get("symbol") or "XAUUSD")
     equity = float(payload.get("current_equity") or 0)
+    horizon = int(payload.get("horizon_days") or 30)
 
     if not api_key:
         return {
@@ -107,7 +108,7 @@ Equity ปัจจุบัน: {equity}
   "summary_th": "สรุปภาพรวม 2-3 ประโยค",
   "outlook": "bullish|bearish|neutral",
   "confidence": 0-100,
-  "market_view_th": "มุมมองตลาดทอง 30 วันข้างหน้า",
+  "market_view_th": "มุมมองตลาดทอง {horizon} วันข้างหน้า",
   "risks": ["..."],
   "recommendations": ["..."],
   "disclaimer": "คำเตือนความเสี่ยง"
@@ -217,6 +218,11 @@ def main() -> int:
         daily = project_days(stats, ai, horizon, start)
         base_total = daily[-1]["cumulative_pnl"] if daily else 0.0
         std_total = float(stats.get("std_daily_pnl") or 0) * math.sqrt(max(len(daily), 1))
+        projected = {
+            "optimistic": round(base_total + std_total, 2),
+            "base": round(base_total, 2),
+            "pessimistic": round(base_total - std_total, 2),
+        }
 
         result = {
             "ok": True,
@@ -225,11 +231,8 @@ def main() -> int:
             "generated_at": datetime.now(BANGKOK).isoformat(),
             "stats": stats,
             "analysis": ai,
-            "projected_pnl_30d": {
-                "optimistic": round(base_total + std_total, 2),
-                "base": round(base_total, 2),
-                "pessimistic": round(base_total - std_total, 2),
-            },
+            "projected_pnl": projected,
+            "projected_pnl_30d": projected,
             "daily_forecast": daily,
         }
         sys.stdout.write(json.dumps(result, ensure_ascii=False))

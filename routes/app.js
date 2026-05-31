@@ -3220,7 +3220,7 @@ router.get('/calendar', async (req, res) => {
 router.get('/calendar/ai', async (req, res) => {
   const base = await getBaseData(req);
   return res.render('app/calendar', {
-    pageTitle: 'AI วิเคราะห์ตลาด 30 วัน',
+    pageTitle: 'AI วิเคราะห์ตลาด 15/30 วัน',
     pageCss: 'app-calendar.css',
     currentPath: '/app/calendar/ai',
     activeTab: 'ai',
@@ -3235,7 +3235,8 @@ router.get('/calendar/forecast', async (req, res) => {
     const userId = req.user.id;
     const accountId = Number(req.query.accountId || 0);
     const refresh = String(req.query.refresh || '') === '1';
-    const data = await fetchForecastForAccount(userId, accountId, { refresh });
+    const horizonDays = Number(req.query.horizonDays || req.query.horizon || 30);
+    const data = await fetchForecastForAccount(userId, accountId, { refresh, horizonDays });
     if (!data.ok) {
       return res.status(data.message === 'account_not_found' ? 404 : 400).json(data);
     }
