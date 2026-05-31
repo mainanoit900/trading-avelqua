@@ -549,6 +549,35 @@ def system_port_no(folder_port: Any) -> int:
     return 100 + p
 
 
+def port_dir_path_prefix(path: Any) -> str:
+    """Normalized folder path + trailing \\ — กัน PORT-01 ชน PORT-10 (substring ไม่พอ)."""
+    try:
+        p = os.path.normcase(os.path.abspath(str(path or ""))).replace("/", "\\").rstrip("\\")
+    except Exception:
+        p = os.path.normcase(str(path or "")).replace("/", "\\").rstrip("\\")
+    return f"{p}\\" if p else ""
+
+
+def exe_belongs_to_port_dir(exe_or_cmd: str, port_dir: Path) -> bool:
+    if not exe_or_cmd or not port_dir:
+        return False
+    root = port_dir_path_prefix(port_dir)
+    if not root:
+        return False
+    text = os.path.normcase(str(exe_or_cmd)).replace("/", "\\")
+    return text.startswith(root)
+
+
+def exe_belongs_to_folder_path(exe_or_cmd: str, folder_path: str) -> bool:
+    if not exe_or_cmd or not folder_path:
+        return False
+    root = port_dir_path_prefix(folder_path)
+    if not root:
+        return False
+    text = os.path.normcase(str(exe_or_cmd)).replace("/", "\\")
+    return text.startswith(root)
+
+
 def _port_nos_from_payload(payload: Optional[Dict[str, Any]], *keys: str) -> set:
     payload = payload or {}
     out: set = set()
@@ -585,24 +614,31 @@ def mt5_launch_allowed(payload: Optional[Dict[str, Any]] = None) -> bool:
 
 
 def stop_stale_user_mt5_ports(port: Any, port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
-    """Kill MT5 on this user's other PORT folders (not in keepOpenPorts / not target)."""
+    """Kill MT5 on this user's other PORT folders (not in keepOpenPorts / protected / not target)."""
     payload = payload or {}
     user_ports = _port_nos_from_payload(payload, "userPortNumbers", "user_port_numbers")
     if not user_ports:
         return {"skipped": True, "reason": "no_user_ports"}
     keep = _port_nos_from_payload(payload, "keepOpenPorts", "keep_open_ports")
+    protected = _port_nos_from_payload(
+        payload,
+        "protectedPorts",
+        "protected_ports",
+        "vpsProtectedPorts",
+        "vps_protected_ports",
+    )
+    keep |= protected
     target = payload_system_port_no(port)
     if target > 0:
         keep.add(target)
     mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
     stopped: List[int] = []
-    port_dir_norm = str(port_dir).lower().replace("/", "\\").rstrip("\\")
+    target_prefix = port_dir_path_prefix(port_dir)
     for folder in sorted(mt5_root.glob("*PORT*")):
         try:
             if not folder.is_dir():
                 continue
-            folder_norm = str(folder).lower().replace("/", "\\").rstrip("\\")
-            if folder_norm == port_dir_norm:
+            if port_dir_path_prefix(folder) == target_prefix:
                 continue
             sys_port = system_port_no(extract_port_no(str(folder)))
             if sys_port <= 0 or sys_port in keep or sys_port not in user_ports:
@@ -636,19 +672,20 @@ def send_port_health():
                 if name != "terminal64.exe":
                     continue
 
-                exe_norm = exe.lower().replace("/", "\\")
+                exe_norm = os.path.normcase(exe).replace("/", "\\")
 
-                for folder in mt5_root.glob("*PORT*"):
-                    folder_norm = str(folder).lower().replace("/", "\\")
-
-                    if folder_norm in exe_norm:
-                        port_no = extract_port_no(str(folder))
-
-                        running_map[port_no] = {
-                            "process_id": p.pid,
-                            "exe_path": exe,
-                            "folder_path": str(folder)
-                        }
+                for folder in sorted(mt5_root.glob("*PORT*"), key=lambda f: len(str(f)), reverse=True):
+                    if not exe_belongs_to_port_dir(exe_norm, folder):
+                        continue
+                    port_no = extract_port_no(str(folder))
+                    if port_no in running_map:
+                        continue
+                    running_map[port_no] = {
+                        "process_id": p.pid,
+                        "exe_path": exe,
+                        "folder_path": str(folder)
+                    }
+                    break
 
             except Exception:
                 pass
@@ -864,16 +901,18 @@ def stop_mt5_by_folder(folder_path):
     if not folder_path:
         raise Exception("missing folder_path")
 
-    folder_path = str(folder_path).lower().replace("/", "\\")
+    folder_path = str(folder_path)
     stopped = []
 
     for p in iter_terminal_processes():
         try:
             name = (p.info.get("name") or "").lower()
-            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
-            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
 
-            if name == "terminal64.exe" and (folder_path in exe or folder_path in cmd):
+            if name == "terminal64.exe" and (
+                exe_belongs_to_folder_path(exe, folder_path) or exe_belongs_to_folder_path(cmd, folder_path)
+            ):
                 p.kill()
                 stopped.append(p.pid)
                 log(f"KILLED MT5 PID={p.pid} FOLDER={folder_path}")
@@ -890,7 +929,7 @@ def stop_mt5_by_folder(folder_path):
 
 def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    root = str(port_dir).rstrip("\\/").lower()
+    root_prefix = port_dir_path_prefix(port_dir)
     taskkill: List[Dict[str, Any]] = []
     # Strong kill by PID (preferred) — closes only this PORT.
     if os.name == "nt":
@@ -912,9 +951,9 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
     stopped: List[int] = []
     for p in list(iter_terminal_processes()):
         try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
+            if exe_belongs_to_port_dir(exe, port_dir) or exe_belongs_to_port_dir(cmd, port_dir):
                 log(f"STOP MT5 PORT={port} PID={p.pid} PATH={exe}")
                 p.kill()
                 stopped.append(p.pid)
@@ -925,10 +964,10 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
     # kill ghost terminal ของ PORT นี้อีกรอบ
     for p in list(iter_terminal_processes()):
         try:
-            exe = (p.info.get("exe") or "").lower().replace("/", "\\")
-            cmd = " ".join(p.info.get("cmdline") or []).lower().replace("/", "\\")
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
 
-            if exe.startswith(root) or root in cmd or str(port_dir).lower().replace("/", "\\") in cmd:
+            if exe_belongs_to_port_dir(exe, port_dir) or exe_belongs_to_port_dir(cmd, port_dir):
                 log(f"KILL GHOST MT5 PORT={port} PID={p.pid}")
                 p.kill()
                 if p.pid not in stopped:
@@ -2624,12 +2663,11 @@ def patch_mt5_experts_config(port_dir: Path, enabled: bool) -> List[str]:
 
 
 def mt5_running_for_port_dir(port_dir: Path) -> bool:
-    root = str(port_dir).rstrip("\\/").lower()
     for p in iter_terminal_processes():
         try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
+            if exe_belongs_to_port_dir(exe, port_dir) or exe_belongs_to_port_dir(cmd, port_dir):
                 return True
         except Exception:
             pass
@@ -5005,13 +5043,12 @@ def list_files(payload: Dict[str, Any]) -> Dict[str, Any]:
 
 def mt5_port_processes(port: Any, payload: Optional[Dict[str, Any]] = None) -> List[Any]:
     port_dir = resolve_mt5_port_dir(port, payload)
-    root = str(port_dir).rstrip("\\/").lower()
     out = []
     for p in list(iter_terminal_processes()):
         try:
-            exe = (p.info.get("exe") or "").lower()
-            cmd = " ".join(p.info.get("cmdline") or []).lower()
-            if exe.startswith(root) or root in cmd:
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
+            if exe_belongs_to_port_dir(exe, port_dir) or exe_belongs_to_port_dir(cmd, port_dir):
                 out.append(p)
         except Exception:
             pass
@@ -5050,13 +5087,12 @@ def scan_all_mt5_ports() -> List[Dict[str, Any]]:
             terminal = folder / "terminal64.exe"
 
             running_procs = []
-            root = str(folder).rstrip("\\/").lower()
 
             for p in list(iter_terminal_processes()):
                 try:
-                    exe = (p.info.get("exe") or "").lower()
-                    cmd = " ".join(p.info.get("cmdline") or []).lower()
-                    if exe.startswith(root) or root in cmd:
+                    exe = p.info.get("exe") or ""
+                    cmd = " ".join(p.info.get("cmdline") or [])
+                    if exe_belongs_to_port_dir(exe, folder) or exe_belongs_to_port_dir(cmd, folder):
                         running_procs.append(p.pid)
                 except Exception:
                     pass

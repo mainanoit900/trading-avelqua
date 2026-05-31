@@ -24,6 +24,7 @@ const { reserveVpsPortForConnect } = require('../lib/mt5ReservePortForConnect');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
+const { assertFolderPortFreeForUser } = require('../lib/mt5PortSlotGuard');
 const {
   createConnectAttempt,
   ensureMt5ConnectAttemptTables,
@@ -894,6 +895,15 @@ async function handleMt5ConnectProduction(req, res) {
     }
 
     const allocPortNo = resolveConnectAllocPortNo(reservedPort, portSlot);
+
+    const folderGuard = await assertFolderPortFreeForUser(
+      reservedPort.vps_id,
+      allocPortNo,
+      userId
+    );
+    if (!folderGuard.ok) {
+      throw new Error(folderGuard.message);
+    }
 
     // ไม่พึ่ง ON CONFLICT เพราะฐานข้อมูลเดิมบางชุดอาจยังไม่มี unique constraint ครบ
     // ใช้วิธี UPDATE ก่อน ถ้าไม่มีค่อย INSERT เพื่อไม่ให้ deploy แล้วล้ม

@@ -67,6 +67,7 @@ const { computeRunBotQueueDelaySec, computeLoginQueueDelaySec, computeJournalTim
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 const { repairUserMt5PortBindings } = require('../lib/mt5CachedEquityLogin');
 const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
+const { assertFolderPortFreeForUser } = require('../lib/mt5PortSlotGuard');
 const { debitScoin } = require('../services/scoinService');
 
 const router = express.Router();
@@ -2169,6 +2170,16 @@ console.log('[MT5 CONNECT START]', {
     const allocPortNo = num(
       reservedPort.port_number || parsePortNumber(reservedPort) || portSlot
     );
+
+    const folderGuard = await assertFolderPortFreeForUser(
+      reservedPort.vps_id,
+      allocPortNo,
+      userId
+    );
+    if (!folderGuard.ok) {
+      await releaseReservedPort(reservedPort);
+      throw new Error(folderGuard.message);
+    }
 
     console.log('[STEP] RESERVED PORT', reservedPort);
 
