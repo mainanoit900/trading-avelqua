@@ -73,10 +73,18 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '8mb';
+const STRIPE_WEBHOOK_PATH = '/app/stripe/webhook';
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT }));
-app.use(express.json({ limit: REQUEST_BODY_LIMIT }));
+app.use(express.json({
+  limit: REQUEST_BODY_LIMIT,
+  verify: (req, _res, buf) => {
+    if (String(req.originalUrl || '').startsWith(STRIPE_WEBHOOK_PATH)) {
+      req.rawBody = Buffer.from(buf);
+    }
+  }
+}));
 
 app.use((err, req, res, next) => {
   if (err && (err.type === 'entity.too.large' || err.status === 413)) {

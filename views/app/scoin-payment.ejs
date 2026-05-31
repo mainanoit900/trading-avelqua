@@ -121,23 +121,23 @@ const totalPay = Number(order.net_amount_thb || order.gross_amount_thb || 0);
   </div>
 <% } %>
 
-    <% if (paymentMethod === 'credit_card') { %>
+    <% if (paymentMethod === 'credit_card' || paymentMethod === 'stripe_card') { %>
   <div class="pay-card">
     <h4>บัตรเครดิต / เดบิต</h4>
-    <p class="scoin-muted">ชำระผ่าน KBank Payment Gateway</p>
+    <p class="scoin-muted">ชำระผ่าน Stripe Checkout</p>
 
-    <% if (typeof kbankPayment !== 'undefined' && kbankPayment && kbankPayment.payment_url) { %>
-      <a href="<%= kbankPayment.payment_url %>" class="btn btn-primary btn-full">
-        ไปหน้าชำระเงิน KBank
+    <% if (typeof stripePayment !== 'undefined' && stripePayment && stripePayment.payment_url) { %>
+      <a href="<%= stripePayment.payment_url %>" class="btn btn-primary btn-full">
+        ไปหน้าชำระเงิน Stripe
       </a>
     <% } else { %>
       <button type="button" class="btn btn-secondary btn-full" disabled>
-        ยังไม่ได้เปิดใช้งาน KBank Card Payment
+        ยังไม่ได้เปิดใช้งาน Stripe Card Payment
       </button>
     <% } %>
 
-    <% if (typeof kbankMockMode !== 'undefined' && kbankMockMode) { %>
-      <p class="scoin-muted">โหมดทดสอบ: รอใส่ KBank Key จริง</p>
+    <% if (typeof stripeReady !== 'undefined' && !stripeReady) { %>
+      <p class="scoin-muted">โหมดทดสอบ: รอใส่ STRIPE_SECRET_KEY และ STRIPE_WEBHOOK_SECRET</p>
     <% } %>
   </div>
 <% } %>

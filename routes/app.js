@@ -5,10 +5,15 @@ const { sendMailSafe } = require('../services/mailService');
 const bcrypt = require('bcryptjs');
 const {
   createKbankPaymentForScoin,
-  createKbankPaymentForPackage,
   verifyKbankWebhook,
   isMockMode
 } = require('../services/kbankService');
+const {
+  isStripeReady,
+  createStripeCheckoutForPackage,
+  createStripeCheckoutForScoin,
+  constructStripeWebhookEvent
+} = require('../services/stripeService');
 const {
   ensureUserReferralCode,
   ensureUserWallet,
@@ -36,6 +41,115 @@ const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
+router.post('/stripe/webhook', async (req, res) => {
+  try {
+    if (!isStripeReady()) {
+      return res.status(503).json({ ok: false, error: 'stripe is not enabled' });
+    }
+
+    const event = constructStripeWebhookEvent(req);
+    const eventType = String(event?.type || '').toLowerCase();
+    const session = event?.data?.object || {};
+
+    if (!['checkout.session.completed', 'checkout.session.async_payment_succeeded'].includes(eventType)) {
+      return res.status(200).json({ ok: true, ignored: true });
+    }
+
+    const paymentStatus = String(session.payment_status || '').toLowerCase();
+    if (paymentStatus !== 'paid') {
+      return res.status(200).json({ ok: true, ignored: 'not paid' });
+    }
+
+    const metadata = session.metadata || {};
+    const localType = String(metadata.local_type || '').trim().toLowerCase();
+
+    if (localType === 'package_buy') {
+      const paymentId = Number(metadata.local_payment_id || session.client_reference_id || 0);
+      if (!paymentId) return res.status(200).json({ ok: true, ignored: 'missing package payment id' });
+
+      const paymentRes = await query(
+        `SELECT * FROM payments WHERE id = $1 AND package_id IS NOT NULL LIMIT 1`,
+        [paymentId]
+      );
+      const payment = paymentRes.rows[0];
+      if (!payment) return res.status(200).json({ ok: true, ignored: 'payment not found' });
+
+      if (String(payment.payment_status || '').toLowerCase() !== 'paid') {
+        await activatePackagePayment(payment.id, {
+          stripe_event_id: event.id,
+          stripe_event_type: eventType,
+          stripe_session_id: session.id,
+          stripe_payment_intent: session.payment_intent || null
+        });
+      }
+
+      const stripeMethod =
+        String(metadata.payment_method || '').toLowerCase() === 'promptpay_qr'
+          ? 'stripe_promptpay'
+          : 'stripe_card';
+
+      await query(
+        `UPDATE payments
+         SET payment_ref = COALESCE($2, payment_ref),
+             payment_method = $3,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [payment.id, session.id || null, stripeMethod]
+      ).catch(() => null);
+
+      return res.status(200).json({ ok: true, handled: 'package_buy' });
+    }
+
+    if (localType === 'scoin_buy') {
+      const orderId = Number(metadata.local_order_id || session.client_reference_id || 0);
+      if (!orderId) return res.status(200).json({ ok: true, ignored: 'missing scoin order id' });
+
+      const orderRes = await query(
+        `SELECT * FROM scoin_market_orders WHERE id = $1 AND order_type = 'buy' LIMIT 1`,
+        [orderId]
+      );
+      const order = orderRes.rows[0];
+      if (!order) return res.status(200).json({ ok: true, ignored: 'order not found' });
+
+      const paidOrder = await markMarketOrderPaid(orderId, {
+        stripe_event_id: event.id,
+        stripe_event_type: eventType,
+        stripe_session_id: session.id,
+        stripe_payment_intent: session.payment_intent || null
+      });
+
+      await query(
+        `UPDATE scoin_market_orders
+         SET payment_ref = COALESCE($2, payment_ref),
+             payment_method = 'stripe_card',
+             updated_at = NOW()
+         WHERE id = $1`,
+        [orderId, session.id || null]
+      ).catch(() => null);
+
+      if (String((paidOrder && paidOrder.status) || order.status || '').toLowerCase() === 'pending') {
+        await approveBuyOrderAndCredit(orderId, null).catch((approveError) => {
+          const message = String(approveError?.message || '').toLowerCase();
+          if (
+            message.includes('ไม่ได้อยู่ในสถานะ pending') ||
+            message.includes('not pending') ||
+            message.includes('duplicate')
+          ) {
+            return null;
+          }
+          throw approveError;
+        });
+      }
+
+      return res.status(200).json({ ok: true, handled: 'scoin_buy' });
+    }
+
+    return res.status(200).json({ ok: true, ignored: 'unsupported local_type' });
+  } catch (error) {
+    console.error('stripe webhook error:', error);
+    return res.status(400).json({ ok: false, error: 'invalid webhook' });
+  }
+});
 router.use(requireLogin);
 router.use(requireIdentityVerified);
 
@@ -44,6 +158,18 @@ function flash(req) {
   req.session.success = '';
   req.session.error = '';
   return out;
+}
+
+function parseJsonObject(input) {
+  if (!input) return {};
+  if (typeof input === 'object') return input;
+  if (typeof input !== 'string') return {};
+  try {
+    const parsed = JSON.parse(input);
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
 }
 
 /** Match admin/DB values: is_free flag and/or coupon_type (case-insensitive). */
@@ -275,6 +401,12 @@ async function finalizeFreeCouponFromPackagesPage(req, base, couponCode) {
 async function activatePackagePayment(paymentId, webhookPayload = {}) {
   const client = await getClient();
   let paymentRow = null;
+  const isStripePayload =
+    !!(webhookPayload && (webhookPayload.stripe_event_id || webhookPayload.stripe_session_id));
+  const webhookPayloadKey = isStripePayload ? 'stripe_webhook' : 'kbank_webhook';
+  const autoConfirmNote = isStripePayload
+    ? 'Stripe webhook auto confirm'
+    : 'KBank webhook auto confirm';
 
   try {
     await client.query('BEGIN');
@@ -290,10 +422,10 @@ async function activatePackagePayment(paymentId, webhookPayload = {}) {
     await client.query(
       `UPDATE payments
        SET payment_status='paid', paid_at=COALESCE(paid_at,NOW()), auto_confirmed_at=NOW(),
-           auto_confirm_note='KBank webhook auto confirm', updated_at=NOW(),
+           auto_confirm_note=$3, updated_at=NOW(),
            raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $2::jsonb
        WHERE id=$1`,
-      [paymentRow.id, JSON.stringify({ kbank_webhook: webhookPayload })]
+      [paymentRow.id, JSON.stringify({ [webhookPayloadKey]: webhookPayload }), autoConfirmNote]
     );
 
     if (paymentRow.package_id) {
@@ -1126,7 +1258,7 @@ router.post('/packages/:id/buy', async (req, res) => {
         user_id, package_id, payer_name, payer_email, package_name_snapshot,
         amount, discount_amount, final_amount, currency_code, payment_method,
         payment_status, raw_payload, created_at, updated_at
-      ) VALUES ($1,$2,$3,$4,$5,$6,0,$6,'THB','kbank','pending',$7::jsonb,NOW(),NOW())
+      ) VALUES ($1,$2,$3,$4,$5,$6,0,$6,'THB','promptpay_qr','pending',$7::jsonb,NOW(),NOW())
       RETURNING id`,
       [
         base.user.id,
@@ -1232,7 +1364,7 @@ router.get('/package-payment/:id', async (req, res) => {
               user_id, package_id, payer_name, payer_email, package_name_snapshot,
               amount, discount_amount, final_amount, currency_code, payment_method,
               payment_status, raw_payload, created_at, updated_at
-            ) VALUES ($1,$2,$3,$4,$5,$6,0,$6,'THB','kbank','pending',$7::jsonb,NOW(),NOW())
+            ) VALUES ($1,$2,$3,$4,$5,$6,0,$6,'THB','promptpay_qr','pending',$7::jsonb,NOW(),NOW())
             RETURNING id`,
             [
               base.user.id,
@@ -1282,10 +1414,13 @@ router.get('/package-payment/:id', async (req, res) => {
       return res.redirect(`/app/package-payment/${payment.id}`);
     }
 
-    let kbankPayment = null;
+    let stripePayment = null;
     const freeCouponPreview = req.session.freeCouponPreview && Number(req.session.freeCouponPreview.paymentId) === Number(payment.id) ? req.session.freeCouponPreview : null;
     const scoinPriceThb = Number((base.scoinSettings && base.scoinSettings.current_price_thb) || 0);
     const packageFinalAmount = Number(payment.final_amount ?? payment.amount ?? 0);
+    const paymentMethodNorm = String(payment.payment_method || '').trim().toLowerCase();
+    const paymentPayload = parseJsonObject(payment.raw_payload);
+    const cachedStripeCheckout = parseJsonObject(paymentPayload.stripe_checkout);
     const packageScoinRequired = scoinPriceThb > 0 ? Number((packageFinalAmount / scoinPriceThb).toFixed(4)) : 0;
     const packageScoinPayment = {
       enabled: !!(base.scoinSettings && base.scoinSettings.is_enabled) && packageScoinRequired > 0,
@@ -1296,11 +1431,44 @@ router.get('/package-payment/:id', async (req, res) => {
     };
 
     if (String(payment.payment_status || '') === 'pending' && !freeCouponPreview) {
-      kbankPayment = await createKbankPaymentForPackage(payment);
-      await query(
-        `UPDATE payments SET payment_ref=$2, updated_at=NOW() WHERE id=$1`,
-        [payment.id, kbankPayment.ref]
-      ).catch(() => null);
+      const normalizedMethod = (
+        paymentMethodNorm === 'kbank' || paymentMethodNorm === 'promptpay_qr'
+      )
+        ? 'stripe_promptpay'
+        : (paymentMethodNorm === 'credit_card' ? 'stripe_card' : paymentMethodNorm);
+
+      if (['stripe_card', 'stripe_promptpay'].includes(normalizedMethod)) {
+        stripePayment = {
+          ref: cachedStripeCheckout.ref || payment.payment_ref || '',
+          payment_url: cachedStripeCheckout.payment_url || '',
+          method: cachedStripeCheckout.method || (normalizedMethod === 'stripe_promptpay' ? 'promptpay_qr' : 'credit_card')
+        };
+
+        if (!stripePayment.payment_url && isStripeReady()) {
+          const checkoutMethod = normalizedMethod === 'stripe_promptpay' ? 'promptpay_qr' : 'credit_card';
+          stripePayment = await createStripeCheckoutForPackage(payment, { paymentMethod: checkoutMethod });
+          await query(
+            `UPDATE payments
+             SET payment_ref = COALESCE($2, payment_ref),
+                 payment_method = $4,
+                 raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $3::jsonb,
+                 updated_at = NOW()
+             WHERE id = $1`,
+            [
+              payment.id,
+              stripePayment.ref || null,
+              JSON.stringify({
+                stripe_checkout: {
+                  ref: stripePayment.ref || null,
+                  payment_url: stripePayment.payment_url || '',
+                  method: stripePayment.method || checkoutMethod
+                }
+              }),
+              normalizedMethod
+            ]
+          ).catch(() => null);
+        }
+      }
     }
 
     return res.render('app/package-payment', {
@@ -1309,10 +1477,15 @@ router.get('/package-payment/:id', async (req, res) => {
       ...flash(req),
       ...base,
       payment,
+      packagePaymentMethod: (
+        paymentMethodNorm === 'kbank' || paymentMethodNorm === 'promptpay_qr'
+          ? 'stripe_promptpay'
+          : (paymentMethodNorm === 'credit_card' ? 'stripe_card' : paymentMethodNorm)
+      ),
       freeCouponPreview,
-      kbankPayment,
-      packageScoinPayment,
-      kbankMockMode: isMockMode()
+      stripePayment,
+      stripeReady: isStripeReady(),
+      packageScoinPayment
     });
   } catch (error) {
     console.error('package payment page error:', error);
@@ -1795,17 +1968,36 @@ router.post('/package-payment/:id/pay', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
-    const kbankPayment = await createKbankPaymentForPackage(payment);
+    if (!isStripeReady()) {
+      req.session.error = 'ระบบ Stripe ยังไม่พร้อมใช้งาน กรุณาตรวจสอบ STRIPE_SECRET_KEY';
+      return res.redirect(`/app/package-payment/${payment.id}`);
+    }
+    const gatewayPayment = await createStripeCheckoutForPackage(payment, { paymentMethod });
+    const storedMethod = paymentMethod === 'credit_card' ? 'stripe_card' : 'stripe_promptpay';
 
     await query(
       `UPDATE payments
-       SET payment_method = $1, payment_ref = $2, updated_at = NOW()
+       SET payment_method = $1,
+           payment_ref = $2,
+           raw_payload = COALESCE(raw_payload, '{}'::jsonb) || $4::jsonb,
+           updated_at = NOW()
        WHERE id = $3`,
-      [paymentMethod, kbankPayment.ref, payment.id]
+      [
+        storedMethod,
+        gatewayPayment.ref,
+        payment.id,
+        JSON.stringify({
+          stripe_checkout: {
+            ref: gatewayPayment.ref || null,
+            payment_url: gatewayPayment.payment_url || '',
+            method: gatewayPayment.method || paymentMethod
+          }
+        })
+      ]
     );
 
-    if (kbankPayment.payment_url) {
-      return res.redirect(kbankPayment.payment_url);
+    if (gatewayPayment.payment_url) {
+      return res.redirect(gatewayPayment.payment_url);
     }
 
     req.session.success = 'สร้างข้อมูลชำระเงินแล้ว กรุณาชำระตามข้อมูลด้านล่าง';
@@ -2324,15 +2516,35 @@ router.get('/scoin-market/payment/:id', async (req, res) => {
       return res.redirect('/app/scoin-wallet');
     }
 
-    const kbankPayment = await createKbankPaymentForScoin(order);
+    const paymentMethodNorm = String(order.payment_method || '').trim().toLowerCase();
+    let kbankPayment = null;
+    let stripePayment = null;
 
-    await query(
-      `UPDATE scoin_market_orders
-       SET payment_ref = $2,
-           updated_at = NOW()
-       WHERE id = $1`,
-      [order.id, kbankPayment.ref]
-    );
+    if (['credit_card', 'stripe_card'].includes(paymentMethodNorm)) {
+      if (!isStripeReady()) {
+        req.session.error = 'ระบบชำระบัตรเครดิต Stripe ยังไม่พร้อมใช้งาน';
+        return res.redirect('/app/scoin-wallet');
+      }
+
+      stripePayment = await createStripeCheckoutForScoin(order);
+      await query(
+        `UPDATE scoin_market_orders
+         SET payment_ref = COALESCE($2, payment_ref),
+             payment_method = 'stripe_card',
+             updated_at = NOW()
+         WHERE id = $1`,
+        [order.id, stripePayment.ref || null]
+      );
+    } else {
+      kbankPayment = await createKbankPaymentForScoin(order);
+      await query(
+        `UPDATE scoin_market_orders
+         SET payment_ref = $2,
+             updated_at = NOW()
+         WHERE id = $1`,
+        [order.id, kbankPayment.ref]
+      );
+    }
 
     return res.render('app/scoin-payment', {
       pageTitle: 'ชำระเงินซื้อ Scoin',
@@ -2342,6 +2554,8 @@ router.get('/scoin-market/payment/:id', async (req, res) => {
       ...base,
       order,
       kbankPayment,
+      stripePayment,
+      stripeReady: isStripeReady(),
       kbankMockMode: isMockMode()
     });
   } catch (error) {

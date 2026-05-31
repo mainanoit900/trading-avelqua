@@ -65,7 +65,7 @@
     <div class="package-pay-head">
       <span class="package-chip">PACKAGE PAYMENT</span>
       <h2>ชำระเงินแพ็กเกจ</h2>
-      <p>เลือกชำระผ่าน KBank หรือจ่ายด้วย Scoin ได้ทันที หากจ่ายด้วย Scoin ระบบจะเปิดใช้งานแพ็กเกจทันที แต่จะไม่ได้รับ Scoin คืน 30% และไม่แจกโบนัสสายงาน/แนะนำตรง</p>
+      <p>เลือกชำระผ่าน PromptPay QR หรือบัตรเครดิตผ่าน Stripe และยังจ่ายด้วย Scoin ได้ทันที หากจ่ายด้วย Scoin ระบบจะเปิดใช้งานแพ็กเกจทันที แต่จะไม่ได้รับ Scoin คืน 30% และไม่แจกโบนัสสายงาน/แนะนำตรง</p>
     </div>
 
     <div class="package-pay-summary">
@@ -115,29 +115,21 @@
       </div>
     <% } else { %>
 
-      <% if (kbankMockMode) { %>
+      <% const paymentMethodNorm = String(packagePaymentMethod || payment.payment_method || '').toLowerCase(); %>
+
+      <% if (!stripeReady) { %>
         <div class="package-scoin-box">
           <div class="package-scoin-main">
-            <span>Mock Mode</span>
-            <strong>ทดสอบระบบ</strong>
+            <span>Stripe</span>
+            <strong>ยังไม่พร้อมใช้งาน</strong>
           </div>
-          <p>ตอนนี้ KBANK_MOCK_MODE=true หากใส่ Key จริงและเปลี่ยนเป็น false ระบบจะยิง API จริง</p>
+          <p>กรุณาตรวจสอบ STRIPE_SECRET_KEY และ STRIPE_WEBHOOK_SECRET ในเซิร์ฟเวอร์</p>
         </div>
       <% } %>
 
-      <% if (kbankPayment && kbankPayment.qr_text) { %>
-        <div class="package-scoin-box">
-          <div class="package-scoin-main">
-            <span>PromptPay QR</span>
-            <strong>พร้อมชำระ</strong>
-          </div>
-          <p style="word-break:break-all;"><%= kbankPayment.qr_text %></p>
-        </div>
-      <% } %>
-
-      <% if (kbankPayment && kbankPayment.payment_url) { %>
-        <a class="pay-kbank-link" href="<%= kbankPayment.payment_url %>">
-          ไปหน้าชำระเงิน KBank
+      <% if (stripePayment && stripePayment.payment_url) { %>
+        <a class="pay-kbank-link" href="<%= stripePayment.payment_url %>">
+          <%= paymentMethodNorm === 'stripe_promptpay' ? 'ไปหน้าสแกน PromptPay (Stripe)' : 'ไปหน้าชำระบัตร (Stripe)' %>
         </a>
       <% } %>
 
@@ -186,19 +178,21 @@
       <div class="package-pay-methods">
         <form method="POST" action="/app/package-payment/<%= payment.id %>/pay">
           <input type="hidden" name="payment_method" value="promptpay_qr">
-          <button type="submit" class="pay-method-btn">
+          <button type="submit" class="pay-method-btn" <%= stripeReady ? '' : 'disabled' %>>
             <i class="fa-solid fa-qrcode"></i>
             <span>PromptPay QR</span>
-            <small>สแกนจ่ายผ่าน KBank</small>
+            <small><%= stripeReady ? 'สแกนจ่ายผ่าน Stripe PromptPay' : 'ยังไม่เปิดใช้งาน Stripe ในระบบ' %></small>
           </button>
         </form>
 
         <form method="POST" action="/app/package-payment/<%= payment.id %>/pay">
           <input type="hidden" name="payment_method" value="credit_card">
-          <button type="submit" class="pay-method-btn">
+          <button type="submit" class="pay-method-btn" <%= stripeReady ? '' : 'disabled' %>>
             <i class="fa-solid fa-credit-card"></i>
             <span>บัตรเครดิต / เดบิต</span>
-            <small>ชำระผ่าน KBank API</small>
+            <small>
+              <%= stripeReady ? 'ชำระผ่าน Stripe Card' : 'ยังไม่เปิดใช้งาน Stripe ในระบบ' %>
+            </small>
           </button>
         </form>
       </div>
