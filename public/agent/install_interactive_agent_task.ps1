@@ -94,9 +94,10 @@ Register-ScheduledTask -TaskName $TaskName -Action $Action -Trigger $Trigger -Pr
 Start-ScheduledTask -TaskName $TaskName
 
 Write-Host ""
-Write-Host "OK: Agent Desktop Task ติดตั้งแล้ว" -ForegroundColor Green
+Write-Host "OK: Agent Desktop Task installed" -ForegroundColor Green
 Write-Host "  Task: $TaskName"
-Write-Host "  User: $env:USERNAME (Session ต้อง login ค้าง — disconnect ได้ ห้าม Sign out)"
-Write-Host "  Log:  $AgentDir\logs\agent.log"
+Write-Host "  User: $env:USERNAME (keep RDP session logged in — disconnect OK, do not Sign out)"
+$agentLog = Join-Path $AgentDir "logs\agent.log"
+Write-Host "  Log:  $agentLog"
 Write-Host ""
-Write-Host "ติด Watchdog (กันค้าง): รัน install-agent-desktop-with-watchdog.ps1" -ForegroundColor Yellow
+Write-Host "Optional: run install-agent-desktop-with-watchdog.ps1 for auto-restart watchdog" -ForegroundColor Yellow

@@ -57,9 +57,10 @@ schtasks /Create /TN $WatchdogTaskName /TR $watchdogCmd /SC MINUTE /MO $Watchdog
 schtasks /Run /TN $WatchdogTaskName 2>$null | Out-Null
 
 Write-Host ""
-Write-Host "OK: Watchdog ติดแล้ว — ทุก ${WatchdogEveryMin} นาที ถ้า log ค้าง > ${MaxLogAgeMin} นาที จะ restart agent" -ForegroundColor Green
+Write-Host ('OK: Watchdog installed — every {0} min, restart agent if log stale > {1} min' -f $WatchdogEveryMin, $MaxLogAgeMin) -ForegroundColor Green
 Write-Host "  Watchdog Task: $WatchdogTaskName"
 Write-Host ""
-Write-Host "ตรวจสอบ:" -ForegroundColor Cyan
-Write-Host "  Get-ScheduledTask -TaskName '$AgentTaskName','$WatchdogTaskName'"
-Write-Host "  Get-Content $AgentDir\logs\agent.log -Tail 30 -Wait"
+Write-Host "Check:" -ForegroundColor Cyan
+Write-Host ('  Get-ScheduledTask -TaskName ''{0}'',''{1}''' -f $AgentTaskName, $WatchdogTaskName)
+$agentLog = Join-Path $AgentDir "logs\agent.log"
+Write-Host ('  Get-Content ''{0}'' -Tail 30 -Wait' -f $agentLog)
