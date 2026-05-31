@@ -572,9 +572,19 @@ def send_port_health():
                 "status": "running" if run else "free",
             })
 
-        post_json("/port-health", {
+        res = post_json("/port-health", {
             "ports": ports
         })
+
+        for item in (res or {}).get("force_stop_ports") or []:
+            port = payload_get(item, "port", "portNumber", "port_no")
+            if not port:
+                continue
+            try:
+                stop_mt5_port_only(port, dict(item))
+                log(f"PACKAGE EXPIRED KILL port={port} login={item.get('mt5_login') or '-'}")
+            except Exception as kill_err:
+                log(f"PACKAGE EXPIRED KILL ERROR port={port}: {kill_err}")
 
         log(f"PORT HEALTH SENT count={len(ports)}")
 
@@ -2866,7 +2876,7 @@ def send_account_metrics(
     try:
         url = os.getenv(
             "AVELQUA_ACCOUNT_METRICS_URL",
-            "https://trading.avelqua.com/app/mt5/account-metrics",
+            "/mt5/account-metrics",
         )
         body = {
             "accountId": account_id,
@@ -6012,7 +6022,7 @@ def send_mt5_live_status(
             "errorText": error_text,
             "at": datetime.now().isoformat(timespec="seconds"),
         }
-        api("POST", "https://trading.avelqua.com/app/mt5/live-status", body)
+        api("POST", "/mt5/live-status", body)
         log(f"LIVE STATUS SENT PORT={port} STATUS={status} EA={ea_status}")
     except Exception as e:
         log(f"LIVE STATUS ERROR PORT={port}: {e}")
@@ -6072,7 +6082,7 @@ def poll_running_mt5_list() -> None:
         return
     _watch_instances_last_at = now
     try:
-        running = api("GET", "https://trading.avelqua.com/app/mt5/agent-running-list")
+        running = api("GET", "/mt5/agent-running-list")
         if running.get("ok") is not True:
             return
         for item in running.get("items", []):

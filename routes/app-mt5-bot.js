@@ -246,6 +246,13 @@ router.get('/mt5/agent-running-list', requireAgentToken, async (req, res) => {
         AND bi.stopped_at IS NULL
         AND COALESCE(bi.run_payload->>'userStopped', '') NOT IN ('true', '1', 'yes')
         AND bi.assigned_port_no IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM user_subscriptions s
+          WHERE s.user_id = bi.user_id
+            AND LOWER(TRIM(COALESCE(s.status, ''))) NOT IN ('cancelled', 'deleted', 'expired')
+            AND (s.end_at IS NULL OR s.end_at > NOW())
+        )
       ORDER BY bi.started_at DESC NULLS LAST, bi.id DESC
       LIMIT 100
     `, [vpsId]);

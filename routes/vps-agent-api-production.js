@@ -501,6 +501,81 @@ async function findNode(req) {
   return r.rows?.[0] || null;
 }
 
+async function userHasActivePackage(userId) {
+  const uid = Number(userId || 0);
+  if (!uid) return false;
+  const r = await query(
+    `
+    SELECT 1
+    FROM user_subscriptions s
+    WHERE s.user_id = $1
+      AND LOWER(TRIM(COALESCE(s.status, ''))) NOT IN ('cancelled', 'deleted', 'expired')
+      AND (s.end_at IS NULL OR s.end_at > NOW())
+    LIMIT 1
+  `,
+    [uid]
+  ).catch(() => ({ rows: [] }));
+  return !!(r.rows && r.rows.length);
+}
+
+async function findExpiredPackageKillPorts(nodeId, ports) {
+  const kills = [];
+  const seen = new Set();
+  for (const p of ports) {
+    const running = !!(p.running ?? p.is_running ?? p.isRunning);
+    if (!running) continue;
+    const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
+    if (!portNo) continue;
+    const login = String(p.mt5_login || p.mt5Login || '').trim();
+    const folderPath = String(p.folder_path || p.folderPath || '').trim();
+    let userId = null;
+    if (login) {
+      const owner = await query(
+        `
+        SELECT user_id
+        FROM vps_system.mt5_accounts
+        WHERE mt5_login = $1
+        ORDER BY updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+      `,
+        [login]
+      ).catch(() => ({ rows: [] }));
+      userId = owner.rows?.[0]?.user_id || null;
+    }
+    if (!userId) {
+      const locked = await query(
+        `
+        SELECT locked_by_user_id
+        FROM vps_system.vps_ports
+        WHERE vps_id = $1 AND port_no = $2
+        LIMIT 1
+      `,
+        [nodeId, portNo]
+      ).catch(() => ({ rows: [] }));
+      userId = locked.rows?.[0]?.locked_by_user_id || null;
+    }
+    if (!userId) continue;
+    if (await userHasActivePackage(userId)) continue;
+    const key = `${portNo}:${folderPath || login || userId}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    kills.push({
+      port: portNo,
+      port_no: portNo,
+      portNumber: portNo,
+      folder_path: folderPath,
+      vpsFolderPath: folderPath,
+      mt5_login: login || null,
+      userId: Number(userId),
+      reason: 'package_expired',
+      forceKill: true,
+      closeMt5: true,
+      killMt5: true
+    });
+  }
+  return kills;
+}
+
 router.post('/heartbeat', async (req, res) => {
   try {
     await ensureAgentTables();
@@ -648,10 +723,146 @@ router.post('/port-health', async (req, res) => {
     const { reconcileBotsFromPortHealth } = require('../lib/mt5BotPortHealthSync');
     await reconcileBotsFromPortHealth(node.id, ports).catch(() => {});
 
-    return res.json({ ok: true, count: ports.length });
+    const forceStopPorts = await findExpiredPackageKillPorts(node.id, ports);
+
+    return res.json({ ok: true, count: ports.length, force_stop_ports: forceStopPorts });
   } catch (e) {
     console.error('[PORT HEALTH ERROR]', e);
     return res.status(500).json({ ok: false, message: e.message });
+  }
+});
+
+router.get('/mt5/agent-running-list', async (req, res) => {
+  try {
+    await ensureAgentTables();
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, items: [], message: 'Unauthorized' });
+
+    const rows = await query(
+      `
+      SELECT bi.id AS "instanceId",
+             bi.assigned_port_no AS port,
+             bi.mt5_account_id AS "accountId",
+             bi.user_id AS "userId",
+             bi.run_payload AS "runPayload"
+      FROM vps_system.bot_instances bi
+      WHERE bi.vps_id = $1
+        AND LOWER(TRIM(COALESCE(bi.status, ''))) IN ('running','pending','restarting','starting','connecting')
+        AND bi.stopped_at IS NULL
+        AND COALESCE(bi.run_payload->>'userStopped', '') NOT IN ('true', '1', 'yes')
+        AND bi.assigned_port_no IS NOT NULL
+        AND EXISTS (
+          SELECT 1
+          FROM user_subscriptions s
+          WHERE s.user_id = bi.user_id
+            AND LOWER(TRIM(COALESCE(s.status, ''))) NOT IN ('cancelled', 'deleted', 'expired')
+            AND (s.end_at IS NULL OR s.end_at > NOW())
+        )
+      ORDER BY bi.started_at DESC NULLS LAST, bi.id DESC
+      LIMIT 100
+    `,
+      [node.id]
+    );
+
+    return res.json({ ok: true, items: rows.rows || [] });
+  } catch (e) {
+    return res.json({ ok: false, items: [], message: e.message });
+  }
+});
+
+router.post('/mt5/live-status', async (req, res) => {
+  try {
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'Unauthorized' });
+    const { applyMt5LiveStatus } = require('../lib/mt5LiveStatus');
+    const result = await applyMt5LiveStatus(req.body || {});
+    return res.json(result);
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+});
+
+router.post('/mt5/account-metrics', async (req, res) => {
+  try {
+    const node = await findNode(req);
+    if (!node) return res.status(401).json({ ok: false, message: 'Unauthorized' });
+
+    const accountId = Number(req.body?.accountId || req.body?.account_id || 0) || null;
+    const userId = Number(req.body?.userId || req.body?.user_id || 0) || null;
+    const portNumber = Number(req.body?.portNumber || req.body?.port || req.body?.port_no || 0) || null;
+    const balance = req.body?.balance ?? null;
+    const equity = req.body?.equity ?? null;
+
+    if (!accountId && !(userId && portNumber)) {
+      return res.json({ ok: false, message: 'accountId or userId+portNumber required' });
+    }
+
+    await query(
+      `
+      WITH target AS (
+        SELECT id
+        FROM vps_system.mt5_accounts
+        WHERE ($1::bigint IS NOT NULL AND id = $1)
+           OR (
+             $2::bigint IS NOT NULL
+             AND $3::int IS NOT NULL
+             AND user_id = $2
+             AND (assigned_port_no = $3 OR port_slot = $3)
+           )
+        ORDER BY CASE WHEN id = $1 THEN 0 ELSE 1 END, updated_at DESC NULLS LAST, id DESC
+        LIMIT 1
+      )
+      UPDATE vps_system.mt5_accounts a
+      SET last_balance = COALESCE($4::numeric, a.last_balance),
+          last_equity = COALESCE($5::numeric, a.last_equity),
+          connect_baseline_equity = CASE
+            WHEN $5::numeric IS NOT NULL AND $5::numeric > 0
+            THEN COALESCE(a.connect_baseline_equity, $5::numeric)
+            ELSE a.connect_baseline_equity
+          END,
+          last_seen_at = NOW(),
+          updated_at = NOW()
+      WHERE a.id IN (SELECT id FROM target)
+    `,
+      [accountId, userId, portNumber, balance, equity]
+    );
+
+    const activeInst = await query(
+      `
+      SELECT id FROM vps_system.bot_instances
+      WHERE LOWER(TRIM(COALESCE(status, ''))) IN ('running', 'pending', 'restarting', 'connecting', 'starting')
+        AND (
+          ($1::bigint IS NOT NULL AND mt5_account_id = $1)
+          OR ($2::bigint IS NOT NULL AND $3::int IS NOT NULL AND user_id = $2 AND assigned_port_no = $3)
+        )
+      ORDER BY started_at DESC NULLS LAST, id DESC
+      LIMIT 1
+      `,
+      [accountId, userId, portNumber]
+    );
+    const instId = activeInst.rows?.[0]?.id;
+    if (instId && (balance != null || equity != null)) {
+      await query(
+        `
+        UPDATE vps_system.bot_instances
+        SET mt5_balance = COALESCE($2::numeric, mt5_balance),
+            mt5_equity = COALESCE($3::numeric, mt5_equity),
+            last_agent_ping = NOW(),
+            last_heartbeat = NOW(),
+            updated_at = NOW()
+        WHERE id = $1
+        `,
+        [instId, balance, equity]
+      ).catch(() => {});
+    }
+    if (instId && equity != null && Number(equity) > 0) {
+      const { seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
+      await seedInstanceLiveMetrics(instId, balance, equity).catch(() => {});
+    }
+
+    return res.json({ ok: true });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
   }
 });
 

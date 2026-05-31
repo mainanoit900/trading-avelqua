@@ -1160,12 +1160,12 @@ async function handleMt5StartBot(req, res) {
 }
 
 // ใช้ได้ทั้ง endpoint ใหม่และ endpoint เดิมของหน้าเว็บ
-router.use(requireLogin);
-router.use(requireIdentityVerified);
-router.post('/mt5/connect-production', handleMt5ConnectProduction);
-router.post('/mt5/connect', handleMt5ConnectProduction);
-router.post('/mt5/start-bot', handleMt5StartBot);
-router.get('/mt5/connect-status-production', handleMt5ConnectStatusProduction);
-router.get('/mt5/connect-status', handleMt5ConnectStatusProduction);
+// ห้าม router.use(requireLogin) ทั้ง router — จะบล็อก agent callback อื่นใน /app/mt5/* ด้วย
+const mt5UserAuth = [requireLogin, requireIdentityVerified];
+router.post('/mt5/connect-production', ...mt5UserAuth, handleMt5ConnectProduction);
+router.post('/mt5/connect', ...mt5UserAuth, handleMt5ConnectProduction);
+router.post('/mt5/start-bot', ...mt5UserAuth, handleMt5StartBot);
+router.get('/mt5/connect-status-production', ...mt5UserAuth, handleMt5ConnectStatusProduction);
+router.get('/mt5/connect-status', ...mt5UserAuth, handleMt5ConnectStatusProduction);
 
 module.exports = router;
