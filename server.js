@@ -18,6 +18,9 @@ const { findById, findByEmail, findByGoogleId, createUser } = require('./reposit
 const app = express();
 app.use('/agent', express.static('/root/trading-avelqua/public/agent'));
 
+// LINE webhook — raw body สำหรับ verify signature (ต้อง mount ก่อน express.json)
+app.use('/line', require('./routes/line-webhook'));
+
 const PORT = Number(process.env.PORT || 3061);
 
 const { syncNewsNow } = require('./services/newsSyncService');
@@ -700,7 +703,13 @@ async function ensureMt5RuntimeSchema() {
 ensureOptionalTables()
   .then(() => repairVpsAgentCommandSequences())
   .then(() => ensureMt5RuntimeSchema())
+  .then(() => require('./lib/lineNotifySchema').ensureLineNotifyTables())
   .then(() => {
+    try {
+      require('./services/lineNotifyScheduler').startLineScheduler();
+    } catch (e) {
+      console.error('[LineScheduler] start error:', e.message);
+    }
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
     });
