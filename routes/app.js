@@ -3066,11 +3066,12 @@ router.get('/referrals', async (req, res) => {
 
   const memberPage = Math.max(1, Number(req.query.memberPage || req.query.page || 1));
   const incomePage = Math.max(1, Number(req.query.incomePage || 1));
-  const limit = 10;
+  const incomeLimit = 10;
+  const memberLimit = 5;
 
   const treeRows = await getReferralTree(base.user.id, 5);
-  const memberOffset = (memberPage - 1) * limit;
-  const pagedRows = treeRows.slice(memberOffset, memberOffset + limit);
+  const memberOffset = (memberPage - 1) * memberLimit;
+  const pagedRows = treeRows.slice(memberOffset, memberOffset + memberLimit);
   const totalMembers = treeRows.length;
 
   const levels = [1, 2, 3, 4, 5].map((level) => ({
@@ -3136,7 +3137,7 @@ router.get('/referrals', async (req, res) => {
   });
 
   const totalIncomeDetails = Number((incomeCountRes.rows && incomeCountRes.rows[0] && incomeCountRes.rows[0].total) || 0);
-  const incomeOffset = (incomePage - 1) * limit;
+  const incomeOffset = (incomePage - 1) * incomeLimit;
 
   const incomeDetailsRes = await query(
     `SELECT
@@ -3165,7 +3166,7 @@ router.get('/referrals', async (req, res) => {
        AND ${referralIncomeWhere}
      ORDER BY st.created_at DESC, st.id DESC
      LIMIT $2 OFFSET $3`,
-    [base.user.id, limit, incomeOffset]
+    [base.user.id, incomeLimit, incomeOffset]
   ).catch((error) => {
     console.error('referral income detail error:', error);
     return { rows: [] };
@@ -3183,21 +3184,21 @@ router.get('/referrals', async (req, res) => {
     referralIncomeDetails: incomeDetailsRes.rows || [],
     incomePagination: {
       page: incomePage,
-      limit,
+      limit: incomeLimit,
       total: totalIncomeDetails,
-      totalPages: Math.max(1, Math.ceil(totalIncomeDetails / limit))
+      totalPages: Math.max(1, Math.ceil(totalIncomeDetails / incomeLimit))
     },
     memberPagination: {
       page: memberPage,
-      limit,
+      limit: memberLimit,
       total: totalMembers,
-      totalPages: Math.max(1, Math.ceil(totalMembers / limit))
+      totalPages: Math.max(1, Math.ceil(totalMembers / memberLimit))
     },
     pagination: {
       page: memberPage,
-      limit,
+      limit: memberLimit,
       total: totalMembers,
-      totalPages: Math.max(1, Math.ceil(totalMembers / limit))
+      totalPages: Math.max(1, Math.ceil(totalMembers / memberLimit))
     }
   });
 });

@@ -332,6 +332,15 @@ body.modal-open {
 .ref-pager-info{color:#8fa5ce;font-size:13px;}
 .ref-pager-btns{display:flex;gap:8px;flex-wrap:wrap;}
 .ref-pager-btn{display:inline-flex;align-items:center;justify-content:center;min-height:38px;padding:0 14px;border-radius:12px;text-decoration:none;font-weight:800;color:#fff;background:linear-gradient(135deg,#3456ff,#6d3dff);}
+.ref-member-list .ref-member-table{min-width:0;width:100%;}
+.ref-member-table-wrap{overflow-x:auto;-webkit-overflow-scrolling:touch;}
+.ref-member-table-compact th,
+.ref-member-table-compact td{padding:8px 10px;font-size:13px;line-height:1.35;vertical-align:middle;}
+.ref-member-table-compact th{font-size:12px;white-space:nowrap;}
+.ref-member-table-compact .ref-member-cell{min-width:180px;max-width:320px;}
+.ref-member-table-compact .ref-scoin-col{white-space:nowrap;color:#67e8f9;font-weight:800;}
+.ref-member-table-compact tbody tr{height:42px;}
+.referral-detail-btn-sm{min-height:34px;padding:0 12px;font-size:12px;box-shadow:none;}
 .ref-scoin-plus{color:#67e8f9;font-weight:900;white-space:nowrap;}
 .tree-card-id{display:inline-flex;align-items:center;min-height:24px;padding:0 9px;margin-bottom:8px;border-radius:999px;background:rgba(34,211,238,.12);color:#a5f3fc;font-size:12px;font-weight:900;}
 
@@ -360,8 +369,10 @@ body.modal-open {
 .tree-card{width:100% !important;min-width:0 !important;max-width:none !important;display:block !important;background:linear-gradient(180deg,#0a1425 0%,#08111d 100%) !important;color:#fff !important;border:1px solid rgba(130,154,197,.18) !important;}
 .ref-table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .ref-table{border-collapse:separate;border-spacing:0;width:100%;}
-.ref-table th,.ref-table td{white-space:nowrap;vertical-align:middle;}
-.ref-table td:nth-child(4),.ref-table td:nth-child(5){white-space:normal;min-width:210px;word-break:break-word;}
+.ref-table th,.ref-table td{vertical-align:middle;}
+.ref-income-table-compact .ref-table td:nth-child(4),
+.ref-income-table-compact .ref-table td:nth-child(5),
+.ref-member-table-compact .ref-member-cell{white-space:normal;word-break:break-word;}
 .ref-modal{position:fixed !important;inset:0 !important;z-index:999999 !important;display:none !important;align-items:center !important;justify-content:center !important;padding:18px !important;}
 .ref-modal.show{display:flex !important;}
 .ref-modal-card{margin:0 !important;width:min(720px,96vw) !important;max-height:90vh !important;overflow:auto !important;}

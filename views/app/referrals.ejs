@@ -252,62 +252,54 @@ function incomeRuleText(item) {
   </div>
 </section>
 
-<section class="card" id="memberList" style="margin-top:20px;">
+<section class="card ref-member-list" id="memberList" style="margin-top:20px;">
   <div class="card-head">
-    <h3><%= safeT('app.referrals.members', 'ตารางสมาชิกใต้สายงาน') %></h3>
+    <div>
+      <h3><%= safeT('app.referrals.members', 'รายชื่อสมาชิกใต้สายงาน') %></h3>
+      <p class="muted">แสดง 5 แถวต่อหน้า · กดดูรายละเอียดแต่ละคน</p>
+    </div>
   </div>
 
-  <div class="ref-table-wrap">
-    <table class="ref-table">
+  <div class="ref-table-wrap ref-member-table-wrap">
+    <table class="ref-table ref-member-table ref-member-table-compact">
       <thead>
         <tr>
-          <th>ID</th>
+          <th>สมาชิก</th>
           <th>ชั้น</th>
-          <th><%= safeT('common.name', 'ชื่อ') %></th>
-          <th><%= safeT('common.email', 'อีเมล') %></th>
           <th>Scoin</th>
-          <th><%= safeT('app.referrals.joined_at', 'วันที่สมัคร') %></th>
-          <th>ดู</th>
+          <th>วันที่สมัคร</th>
+          <th></th>
         </tr>
       </thead>
       <tbody>
         <% if (!treeRows.length) { %>
           <tr>
-            <td colspan="7" class="ref-empty-row"><%= safeT('app.referrals.empty', 'ยังไม่มีสมาชิกใต้สายงาน') %></td>
+            <td colspan="5" class="ref-empty-row"><%= safeT('app.referrals.empty', 'ยังไม่มีสมาชิกใต้สายงาน') %></td>
           </tr>
         <% } %>
 
         <% treeRows.forEach(function(member){ %>
           <tr>
-            <td>#<%= member.display_id || member.id %></td>
-            <td><span class="ref-level-pill">ชั้น <%= member.level_no %></span></td>
-            <td><%= member.full_name || '-' %></td>
-            <td><%= member.email || '-' %></td>
-            <td><%= Number(member.scoin_balance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></td>
-            <td><%= member.created_at ? new Date(member.created_at).toLocaleString('th-TH', {
-  timeZone: 'Asia/Bangkok',
-  year: 'numeric',
-  month: '2-digit',
-  day: '2-digit',
-  hour: '2-digit',
-  minute: '2-digit',
-  second: '2-digit',
-  hour12: false
-}) : '-' %></td>
+            <td class="ref-member-cell">
+              <strong>#<%= member.display_id || member.id %> · <%= member.full_name || '-' %></strong>
+              <small class="ref-subtext"><%= member.email || '-' %></small>
+            </td>
+            <td><span class="ref-level-pill"><%= member.level_no %></span></td>
+            <td class="ref-scoin-col"><%= Number(member.scoin_balance || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></td>
+            <td class="ref-date-cell"><%= fmtShortDate(member.created_at) %></td>
             <td>
               <button
-  type="button"
-  class="referral-detail-btn"
-  onclick="openReferralDetailFromButton(this)"
-  data-id="<%= member.display_id || member.id %>"
-  data-level="<%= member.level_no %>"
-  data-name="<%= member.full_name || '-' %>"
-  data-email="<%= member.email || '-' %>"
-  data-scoin="<%= Number(member.scoin_balance || 0) %>"
-  data-created="<%= member.created_at ? new Date(member.created_at).toLocaleString('th-TH', { timeZone:'Asia/Bangkok', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }) : '-' %>"
->
-  🔍 ดูรายละเอียด
-</button>            </td>
+                type="button"
+                class="referral-detail-btn referral-detail-btn-sm"
+                onclick="openReferralDetailFromButton(this)"
+                data-id="<%= member.display_id || member.id %>"
+                data-level="<%= member.level_no %>"
+                data-name="<%= member.full_name || '-' %>"
+                data-email="<%= member.email || '-' %>"
+                data-scoin="<%= Number(member.scoin_balance || 0) %>"
+                data-created="<%= member.created_at ? new Date(member.created_at).toLocaleString('th-TH', { timeZone:'Asia/Bangkok', year:'numeric', month:'2-digit', day:'2-digit', hour:'2-digit', minute:'2-digit', second:'2-digit', hour12:false }) : '-' %>"
+              >ดู</button>
+            </td>
           </tr>
         <% }) %>
       </tbody>
