@@ -155,13 +155,25 @@ def _redis_cmd_listener_loop() -> None:
             time.sleep(5.0)
 
 
+_FORCE_STOP_LAST: Dict[int, float] = {}
+_FORCE_STOP_COOLDOWN_SEC = float(os.getenv("AVELQUA_FORCE_STOP_COOLDOWN_SEC", "90"))
+
+
 def apply_force_stop_ports(items: Any) -> None:
+    now = time.time()
     for item in items or []:
         port = payload_get(item, "port", "portNumber", "port_no")
         if not port:
             continue
         try:
+            port_i = int(port)
+        except (TypeError, ValueError):
+            continue
+        if now - _FORCE_STOP_LAST.get(port_i, 0.0) < _FORCE_STOP_COOLDOWN_SEC:
+            continue
+        try:
             stop_mt5_port_only(port, dict(item))
+            _FORCE_STOP_LAST[port_i] = now
             log(
                 f"PACKAGE EXPIRED KILL port={port} login={item.get('mt5_login') or '-'} "
                 f"userId={item.get('userId') or item.get('user_id') or '-'}"
