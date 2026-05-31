@@ -405,7 +405,8 @@
     botUi: <%- JSON.stringify(runBotUi || {}) %>,
     capitalPer001Lot: 10000,
     connectedAccounts: <%- JSON.stringify(connectedRunAccounts || []) %>,
-    activeInstances: <%- JSON.stringify(activeRunInstances || []) %>
+    activeInstances: <%- JSON.stringify(activeRunInstances || []) %>,
+    equityBudget: <%- JSON.stringify(typeof equityBudget !== 'undefined' ? equityBudget : { totalEquity: 0, allocatedCapital: 0, remainingCapital: 0, activeBotCount: 0 }) %>
   };
   const mt5RunState = {
     connectedAccounts: Array.isArray(window.__mt5RunConfig.connectedAccounts) ? window.__mt5RunConfig.connectedAccounts.slice() : [],
@@ -463,11 +464,56 @@
     return mt5Num(account.last_equity, mt5Num(account.last_balance, 0));
   }
 
-  function mt5CapitalExceedsEquity(capital, account) {
-    const equity = mt5RunAccountCapital(account);
+  function mt5FmtMoney(v) {
+    const n = mt5Num(v, 0);
+    return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
+  }
+
+  function mt5EquityBudget(excludeAccountId) {
+    const budget = (window.__mt5RunConfig || {}).equityBudget || {};
+    let allocated = mt5Num(budget.allocatedCapital, 0);
+    const totalEquity = mt5Num(budget.totalEquity, 0);
+    const excludeId = Number(excludeAccountId || 0);
+    if (excludeId > 0 && Array.isArray(window.__mt5RunConfig.activeInstances)) {
+      const onAccount = window.__mt5RunConfig.activeInstances.filter(function (row) {
+        return Number(row.mt5_account_id || row.accountId || 0) === excludeId;
+      });
+      const onAccountCap = onAccount.reduce(function (sum, row) {
+        return sum + mt5Num(row.capital_used || row.capitalUsed || 0, 0);
+      }, 0);
+      allocated = Math.max(0, allocated - onAccountCap);
+    }
+    const remaining = Math.max(0, totalEquity - allocated);
+    return {
+      totalEquity: totalEquity,
+      allocatedCapital: allocated,
+      remainingCapital: remaining
+    };
+  }
+
+  function mt5EquityBudgetMessage(capital, account) {
     const cap = mt5Num(capital, 0);
-    if (equity <= 0 || cap <= 0) return false;
-    return cap > equity + 0.0001;
+    const budget = mt5EquityBudget(account ? account.id : 0);
+    const acctEq = mt5RunAccountCapital(account);
+    if (acctEq > 0 && cap > acctEq + 0.0001) {
+      return 'เงินทุนเกิน Equity ของ Login นี้ (' + mt5FmtMoney(acctEq) + ' USD)';
+    }
+    if (budget.totalEquity > 0 && cap > budget.remainingCapital + 0.0001) {
+      return 'เงินทุนรวมเกิน Equity — ลงทุนแล้ว ' + mt5FmtMoney(budget.allocatedCapital) +
+        ' / ' + mt5FmtMoney(budget.totalEquity) + ' USD เหลือลงทุนได้อีก ' +
+        mt5FmtMoney(budget.remainingCapital) + ' USD';
+    }
+    return MT5_EQUITY_CAPITAL_MSG;
+  }
+
+  function mt5CapitalExceedsEquity(capital, account) {
+    const cap = mt5Num(capital, 0);
+    if (cap <= 0) return false;
+    const budget = mt5EquityBudget(account ? account.id : 0);
+    const acctEq = mt5RunAccountCapital(account);
+    if (acctEq > 0 && cap > acctEq + 0.0001) return true;
+    if (budget.totalEquity > 0 && cap > budget.remainingCapital + 0.0001) return true;
+    return false;
   }
 
   const MT5_EQUITY_CAPITAL_MSG = 'เงินทุนไม่พอกับการเทรด';
@@ -936,7 +982,7 @@
     let blockReason = '';
     if (meta.packageExpired) blockReason = 'แพ็คเกจหมดอายุ';
     else if (hasActive) blockReason = mt5ActiveRunPortText() || 'BOT กำลังทำงานอยู่ที่ PORT นี้';
-    else if (exceedsEquity) blockReason = MT5_EQUITY_CAPITAL_MSG;
+    else if (exceedsEquity) blockReason = mt5EquityBudgetMessage(capital, selectedAccount);
     else if (blocked) blockReason = preview.warning || 'เงินทุนไม่ถึงขั้นต่ำของบอท';
     if ((blocked || exceedsEquity) && !meta.packageExpired && !hasActive) {
       btn.title = blockReason;
@@ -998,6 +1044,11 @@
     const initialMinCap = mt5MinCapitalForBot(initialBotCode);
     const initialCapitalLabel = mt5CapitalLabelForBot(initialBotCode);
     const initDefaults = mt5InitialRunDefaults(selected, initialBotCode);
+    const budget = mt5EquityBudget(selected.id);
+    const budgetLine = budget.totalEquity > 0
+      ? ('<small style="display:block;margin-top:6px;color:#94a3b8">Equity รวม ' + mt5FmtMoney(budget.totalEquity) +
+        ' · ใช้แล้ว ' + mt5FmtMoney(budget.allocatedCapital) + ' · เหลือ ' + mt5FmtMoney(budget.remainingCapital) + '</small>')
+      : '';
     const portSummaryHtml =
       '<div style="margin-bottom:14px">' +
       '<label>PORT สำหรับ Run BOT</label>' +
@@ -1006,6 +1057,7 @@
       '<b style="color:#7dd3fc">PORT ' + mt5Esc(selected.port_slot) + '</b> · Login <b style="color:#fff">' + mt5Esc(selected.mt5_login || '-') + '</b>' +
       (actualCapital > 0 ? (' · Equity <b style="color:#fff">' + mt5Esc(actualCapital) + '</b>') : '') +
       '</span>' +
+      budgetLine +
       '<small style="display:block;margin-top:6px;color:#64748b">เปลี่ยน PORT ได้ที่ข้อ 1 — คลิกการ์ด PORT พร้อมรัน</small>' +
       '</div></div>';
     return (
@@ -1217,7 +1269,7 @@
           return;
         }
         if (mt5CapitalExceedsEquity(submitCapital, selected)) {
-          await mt5UiAlert({ variant: 'warning', title: 'แจ้งเตือน', message: MT5_EQUITY_CAPITAL_MSG });
+          await mt5UiAlert({ variant: 'warning', title: 'แจ้งเตือน', message: mt5EquityBudgetMessage(submitCapital, selected) });
           return;
         }
         const ok = await mt5UiConfirm({
@@ -1409,6 +1461,7 @@
         const cfg = window.__mt5RunConfig || {};
         cfg.connectedAccounts = Array.isArray(data.connectedAccounts) ? data.connectedAccounts : [];
         cfg.activeInstances = Array.isArray(data.activeRunInstances) ? data.activeRunInstances : [];
+        cfg.equityBudget = data.equityBudget || cfg.equityBudget || {};
         cfg.ports = Array.isArray(data.ports) ? data.ports : [];
         cfg.bots = Array.isArray(data.bots) && data.bots.length ? data.bots : (cfg.bots || []);
         window.__mt5RunConfig = cfg;

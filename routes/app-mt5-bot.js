@@ -41,6 +41,10 @@ const {
 const { buildEaTimeProfile } = require('../lib/mt5EaTimeProfile');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
 const {
+  getUserEquityCapitalBudget,
+  validateEquityCapitalBudget
+} = require('../lib/mt5EquityCapitalGate');
+const {
   purgeStaleBotInstances,
   fetchHistoryInstances,
   fetchLiveDashboardInstances,
@@ -1769,6 +1773,12 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     );
 
     const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
+    const equityBudget = await getUserEquityCapitalBudget(userId).catch(() => ({
+      totalEquity: 0,
+      allocatedCapital: 0,
+      remainingCapital: 0,
+      activeBotCount: 0
+    }));
     const activeAccountIds = new Set(
       (activeRunInstances || [])
         .map((row) => Number(row.mt5_account_id || 0))
@@ -1832,6 +1842,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       ports,
       connectedAccounts,
       activeRunInstances,
+      equityBudget,
       bots: (bots || []).map((b) => ({
         id: Number(b.id),
         code: String(b.bot_code || b.bot_name || '').trim(),
@@ -1930,6 +1941,12 @@ router.get('/mt5', async (req, res) => {
   const historyPageCount = dashPage.pageCount || 1;
   const historySafePage = Math.min(historyPage, historyPageCount);
   const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
+  const equityBudget = await getUserEquityCapitalBudget(userId).catch(() => ({
+    totalEquity: 0,
+    allocatedCapital: 0,
+    remainingCapital: 0,
+    activeBotCount: 0
+  }));
 
   const flashData = pullFlash(req);
 
@@ -1984,6 +2001,7 @@ router.get('/mt5', async (req, res) => {
     bots,
     connectedRunAccounts,
     activeRunInstances,
+    equityBudget,
     runBotUi,
     runPackageGroup: runLotMeta.packageGroup,
     instances,
@@ -2928,10 +2946,24 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
         minCapital: calc.minCapital,
         packageCapped: calc.packageCapped,
         runTimeMode,
-        timeLabel: runTimeMode === '24h' ? 'Open 24H.' : 'Auto trading'
+        timeLabel: runTimeMode === '24h' ? 'Open 24H.' : 'Auto trading',
+        equityBudget: await getUserEquityCapitalBudget(req.user.id, {
+          excludeAccountId: num(req.query.mt5_account_id || req.query.account_id)
+        }).catch(() => null)
       },
       ui: botUiMeta(bot)
     });
+  } catch (e) {
+    return res.json({ ok: false, message: e.message });
+  }
+});
+
+router.get('/mt5/equity-capital-budget', requireLogin, async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const excludeAccountId = num(req.query.mt5_account_id || req.query.account_id) || null;
+    const budget = await getUserEquityCapitalBudget(userId, { excludeAccountId });
+    return res.json({ ok: true, budget });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
   }
@@ -3059,6 +3091,15 @@ router.post('/mt5/run', async (req, res) => {
     if (lot <= 0 && botKind(bot) === 'quantum') lot = 0.01;
     const trade = calc.trade;
     const capitalUsed = num(calc.capitalUsed || calc.capital || capitalCheck.capital);
+
+    const equityBudget = await getUserEquityCapitalBudget(userId, {
+      excludeAccountId: mt5AccountId
+    });
+    const equityGate = validateEquityCapitalBudget(equityBudget, capitalUsed, {
+      accountEquity: num(account.last_equity || account.last_balance, 0)
+    });
+    if (!equityGate.ok) throw new Error(equityGate.message);
+
     const runSummary = buildRunSummary(calc, tradeLevel, runTimeMode);
     const runConfigSnapshot = buildRunConfigSnapshot(calc, tradeLevel, runTimeMode);
     const lotPlus = clampLot(lotPlusInput > 0 ? lotPlusInput : calc.lotPlus, lotMeta.lotMin, lotMeta.lotMax);
