@@ -703,7 +703,9 @@ async function ensureMt5RuntimeSchema() {
 ensureOptionalTables()
   .then(() => repairVpsAgentCommandSequences())
   .then(() => ensureMt5RuntimeSchema())
-  .then(() => require('./lib/lineNotifySchema').ensureLineNotifyTables())
+  .then(() => require('./lib/lineNotifySchema').ensureLineNotifyTables().catch((e) => {
+    console.error('[lineNotifySchema]', e.message);
+  }))
   .then(() => {
     try {
       require('./services/lineNotifyScheduler').startLineScheduler();
