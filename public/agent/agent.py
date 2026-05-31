@@ -6600,6 +6600,56 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                     folder = str(resolve_mt5_port_dir(port, stop_payload))
                 except Exception:
                     folder = ""
+            reason_blob = str(payload_get(payload, "reason", "purpose") or "").lower()
+            expected_login = str(
+                payload_get(payload, "expectedMt5Login", "mt5Login", "login") or ""
+            ).strip()
+            if "package_expired" in reason_blob:
+                if not expected_login:
+                    command_result(
+                        cmd_id,
+                        True,
+                        {
+                            "action": ctype,
+                            "skipped": True,
+                            "reason": "missing_expected_login",
+                            "port": port,
+                        },
+                    )
+                    return
+                observed_login = ""
+                try:
+                    for title in mt5_window_titles(port, stop_payload):
+                        title_s = str(title or "").strip()
+                        if not title_s:
+                            continue
+                        lead = _leading_login_from_title(title_s)
+                        if lead:
+                            observed_login = lead
+                            break
+                        if expected_login in title_s:
+                            observed_login = expected_login
+                            break
+                except Exception:
+                    observed_login = ""
+                if observed_login and observed_login != expected_login:
+                    log(
+                        f"SKIP PACKAGE EXPIRED STOP port={port} expected={expected_login} "
+                        f"observed={observed_login}"
+                    )
+                    command_result(
+                        cmd_id,
+                        True,
+                        {
+                            "action": ctype,
+                            "skipped": True,
+                            "reason": "login_mismatch",
+                            "port": port,
+                            "expectedMt5Login": expected_login,
+                            "observedLogin": observed_login,
+                        },
+                    )
+                    return
             stop_payload.setdefault("vpsFolderPath", folder)
             action_low = str(payload_get(payload, "action") or "").lower()
             force_kill = ctype in ("force_stop_mt5", "kill_mt5") or str(
@@ -6620,9 +6670,6 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 command_result(cmd_id, True, stop_bot_trading_only(port, stop_payload))
             elif folder:
                 res = stop_mt5_by_folder(folder)
-                reason_blob = str(
-                    payload_get(payload, "reason", "purpose") or ""
-                ).lower()
                 if (
                     str(payload_get(payload, "clearSession") or "").lower() in ("1", "true", "yes")
                     or "title_mismatch" in reason_blob
@@ -6637,9 +6684,6 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 command_result(cmd_id, True, res)
             else:
                 res = stop_mt5_port_only(port, stop_payload)
-                reason_blob = str(
-                    payload_get(payload, "reason", "purpose") or ""
-                ).lower()
                 if (
                     str(payload_get(payload, "clearSession") or "").lower() in ("1", "true", "yes")
                     or "title_mismatch" in reason_blob
