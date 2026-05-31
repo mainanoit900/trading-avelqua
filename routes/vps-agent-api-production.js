@@ -924,6 +924,47 @@ router.get('/queue', async (req, res) => {
             < NOW() - ($2::text || ' seconds')::interval
     `, [node.id, String(loginStuckSec)]).catch(() => {});
 
+    const runBotStuckSec = Math.max(90, Number(process.env.MT5_RUN_BOT_STUCK_REQUEUE_SEC || 120));
+    await query(`
+      UPDATE vps_system.vps_agent_commands
+      SET
+        status = 'pending',
+        locked_at = NULL,
+        started_at = NULL,
+        finished_at = NULL,
+        updated_at = NOW(),
+        result_message = COALESCE(NULLIF(result_message, ''), 'requeued_stuck_run_bot')
+      WHERE status IN ('processing', 'picked', 'running')
+        AND (node_id = $1 OR vps_id = $1)
+        AND finished_at IS NULL
+        AND command_type IN ('run_mt5_bot', 'run_mt5')
+        AND COALESCE(locked_at, started_at, picked_at, updated_at, created_at)
+            < NOW() - ($2::text || ' seconds')::interval
+    `, [node.id, String(runBotStuckSec)]).catch(() => {});
+
+    await query(`
+      UPDATE vps_system.vps_agent_commands c
+      SET status = 'cancelled',
+          finished_at = NOW(),
+          updated_at = NOW(),
+          result_message = 'cancelled_package_renewed'
+      WHERE c.status IN ('pending', 'processing')
+        AND (c.vps_id = $1 OR c.node_id = $1)
+        AND c.command_type IN ('stop_mt5', 'stop_mt5_bot')
+        AND COALESCE(c.payload->>'reason', '') LIKE 'package_expired%'
+        AND EXISTS (
+          SELECT 1
+          FROM user_subscriptions s
+          WHERE s.user_id = COALESCE(
+            NULLIF(TRIM(c.payload->>'userId'), '')::int,
+            NULLIF(TRIM(c.payload->>'user_id'), '')::int,
+            0
+          )
+            AND LOWER(TRIM(COALESCE(s.status, ''))) NOT IN ('cancelled', 'deleted', 'expired')
+            AND (s.end_at IS NULL OR s.end_at > NOW())
+        )
+    `, [node.id]).catch(() => {});
+
     await query(`
       WITH verify_dup AS (
         SELECT id,
