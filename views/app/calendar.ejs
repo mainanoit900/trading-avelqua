@@ -160,7 +160,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
     <div class="cal-panel-head">
       <div>
         <h3>คาดการณ์รายวัน (เฉพาะวันตลาดเปิด)</h3>
-        <p>30 วันทำการข้างหน้า · ข้ามเสาร์–อาทิตย์</p>
+        <p>30 วันทำการข้างหน้า · ข้ามเสาร์–อาทิตย์ · 10 แถวต่อหน้า</p>
       </div>
     </div>
     <div class="cal-table-wrap">
@@ -179,6 +179,13 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
         </tbody>
       </table>
     </div>
+    <div class="cal-pager">
+      <span id="calAiForecastPagerInfo">-</span>
+      <div class="cal-pager-btns">
+        <button type="button" id="calAiForecastPrev">ก่อนหน้า</button>
+        <button type="button" id="calAiForecastNext">ถัดไป</button>
+      </div>
+    </div>
   </section>
   <% } %>
 </div>
@@ -187,11 +194,14 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
 (function () {
   var ACTIVE_TAB = '<%= calActiveTab %>';
   var REFRESH_MS = <%= calendarRefreshSec %> * 1000;
+  var FORECAST_PAGE_SIZE = 10;
   var state = {
     accountId: 0,
     month: '',
     selectedDay: '',
     historyPage: 1,
+    forecastPage: 1,
+    forecastDays: [],
     loading: false,
     timer: null
   };
@@ -233,7 +243,10 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       aiRisks: document.getElementById('calAiRisks'),
       aiTips: document.getElementById('calAiTips'),
       aiDisclaimer: document.getElementById('calAiDisclaimer'),
-      aiForecastBody: document.getElementById('calAiForecastBody')
+      aiForecastBody: document.getElementById('calAiForecastBody'),
+      aiForecastPagerInfo: document.getElementById('calAiForecastPagerInfo'),
+      aiForecastPrev: document.getElementById('calAiForecastPrev'),
+      aiForecastNext: document.getElementById('calAiForecastNext')
     });
   }
 
@@ -412,6 +425,36 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
     el.histNext.addEventListener('click', function () { state.historyPage += 1; loadCalendar(false); });
     loadCalendar(true);
   } else {
+    function renderForecastTable() {
+      var days = state.forecastDays || [];
+      var total = days.length;
+      var pageCount = Math.max(1, Math.ceil(total / FORECAST_PAGE_SIZE));
+      if (state.forecastPage > pageCount) state.forecastPage = pageCount;
+      if (state.forecastPage < 1) state.forecastPage = 1;
+
+      if (!total) {
+        el.aiForecastBody.innerHTML = '<tr><td colspan="5" class="cal-empty">ยังไม่มีข้อมูลคาดการณ์ (ต้องมีประวัติ PnL อย่างน้อยบางวัน)</td></tr>';
+        if (el.aiForecastPagerInfo) el.aiForecastPagerInfo.textContent = '-';
+        if (el.aiForecastPrev) el.aiForecastPrev.disabled = true;
+        if (el.aiForecastNext) el.aiForecastNext.disabled = true;
+        return;
+      }
+
+      var start = (state.forecastPage - 1) * FORECAST_PAGE_SIZE;
+      var pageRows = days.slice(start, start + FORECAST_PAGE_SIZE);
+      el.aiForecastBody.innerHTML = pageRows.map(function (d) {
+        return '<tr><td>' + d.day_key + '</td><td class="num ' + pnlClass(d.expected_pnl) + '">' + fmtMoney(d.expected_pnl) + '</td>' +
+          '<td class="num pos">' + fmtMoney(d.optimistic_pnl) + '</td><td class="num neg">' + fmtMoney(d.pessimistic_pnl) + '</td>' +
+          '<td class="num ' + pnlClass(d.cumulative_pnl) + '">' + fmtMoney(d.cumulative_pnl) + '</td></tr>';
+      }).join('');
+
+      if (el.aiForecastPagerInfo) {
+        el.aiForecastPagerInfo.textContent = 'หน้า ' + state.forecastPage + ' / ' + pageCount + ' · ทั้งหมด ' + total + ' วัน · 10 แถวต่อหน้า';
+      }
+      if (el.aiForecastPrev) el.aiForecastPrev.disabled = state.forecastPage <= 1;
+      if (el.aiForecastNext) el.aiForecastNext.disabled = state.forecastPage >= pageCount;
+    }
+
     function renderForecast(data) {
       var f = data.forecast || {};
       var analysis = f.analysis || {};
@@ -434,16 +477,8 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
       el.aiRisks.innerHTML = (analysis.risks || []).map(function (x) { return '<li>' + x + '</li>'; }).join('') || '<li>-</li>';
       el.aiTips.innerHTML = (analysis.recommendations || []).map(function (x) { return '<li>' + x + '</li>'; }).join('') || '<li>-</li>';
       el.aiDisclaimer.textContent = analysis.disclaimer || 'เป็นการคาดการณ์ ไม่ใช่คำแนะนำการลงทุน';
-      var days = f.daily_forecast || [];
-      if (!days.length) {
-        el.aiForecastBody.innerHTML = '<tr><td colspan="5" class="cal-empty">ยังไม่มีข้อมูลคาดการณ์ (ต้องมีประวัติ PnL อย่างน้อยบางวัน)</td></tr>';
-      } else {
-        el.aiForecastBody.innerHTML = days.map(function (d) {
-          return '<tr><td>' + d.day_key + '</td><td class="num ' + pnlClass(d.expected_pnl) + '">' + fmtMoney(d.expected_pnl) + '</td>' +
-            '<td class="num pos">' + fmtMoney(d.optimistic_pnl) + '</td><td class="num neg">' + fmtMoney(d.pessimistic_pnl) + '</td>' +
-            '<td class="num ' + pnlClass(d.cumulative_pnl) + '">' + fmtMoney(d.cumulative_pnl) + '</td></tr>';
-        }).join('');
-      }
+      state.forecastDays = f.daily_forecast || [];
+      renderForecastTable();
     }
 
     async function loadForecast(refresh) {
@@ -458,6 +493,7 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
         var data = await res.json();
         if (!data.ok) throw new Error(data.message || 'forecast_failed');
         state.accountId = data.accountId || state.accountId;
+        if (refresh) state.forecastPage = 1;
         renderAccounts(data.accounts || [], data.accountId);
         if (data.message === 'no_account') {
           el.aiSummary.textContent = 'ยังไม่มี MT5 Login — เชื่อมต่อที่หน้า MT5 ก่อน';
@@ -474,9 +510,27 @@ const calActiveTab = String(typeof activeTab !== 'undefined' ? activeTab : 'cale
 
     el.account.addEventListener('change', function () {
       state.accountId = Number(el.account.value || 0);
+      state.forecastPage = 1;
       loadForecast(false);
     });
     el.aiRefresh.addEventListener('click', function () { loadForecast(true); });
+    if (el.aiForecastPrev) {
+      el.aiForecastPrev.addEventListener('click', function () {
+        if (state.forecastPage > 1) {
+          state.forecastPage -= 1;
+          renderForecastTable();
+        }
+      });
+    }
+    if (el.aiForecastNext) {
+      el.aiForecastNext.addEventListener('click', function () {
+        var pageCount = Math.max(1, Math.ceil((state.forecastDays || []).length / FORECAST_PAGE_SIZE));
+        if (state.forecastPage < pageCount) {
+          state.forecastPage += 1;
+          renderForecastTable();
+        }
+      });
+    }
     loadForecast(false);
   }
 })();
