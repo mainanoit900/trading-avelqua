@@ -788,6 +788,26 @@ async function handleMt5ConnectProduction(req, res) {
       const retryPortEarly = await findRetryPortForLogin(userId, mt5Login, serverName);
       portSlotForFast = Number(retryPortEarly?.port_slot || 0) || (await getNextUserSlot(userId, totalPorts));
     }
+
+    // กัน login_mt5 ผีค้างคิวจากรอบก่อน (เคส fast-login แล้ว Agent มาเปิด MT5 ซ้อน)
+    await cancelPendingLoginCommands({ mt5Login });
+
+    const inFlight = await findInFlightLoginCommand({ userId, mt5Login, serverName });
+    if (inFlight?.id) {
+      return res.json({
+        ok: true,
+        status: 'queued',
+        accountId: Number(inFlight.account_id || 0) || null,
+        attemptId: String(inFlight.attempt_id || '').trim() || null,
+        commandId: Number(inFlight.id || 0) || null,
+        vpsId: Number(inFlight.vps_id || 0) || null,
+        portId: Number(inFlight.port_id || 0) || null,
+        portNo: Number(inFlight.port_no || 0) || null,
+        portSlot: Number(inFlight.port_slot || 0) || null,
+        message: 'ระบบกำลังเปิด MT5 อยู่ กรุณารอสักครู่...'
+      });
+    }
+
     if (portSlotForFast) {
       const fastEarly = await tryCachedEquityFastConnect({
         userId,
@@ -797,6 +817,11 @@ async function handleMt5ConnectProduction(req, res) {
         portSlot: portSlotForFast
       });
       if (fastEarly.ok) {
+        await cancelPendingLoginCommands({
+          portId: fastEarly.portId || null,
+          accountId: fastEarly.accountId || null,
+          mt5Login
+        });
         return res.json({
           ok: true,
           status: 'connected',
@@ -816,24 +841,6 @@ async function handleMt5ConnectProduction(req, res) {
       const fastEarlyErr = fastConnectErrorMessage(fastEarly.reason, mt5Login);
       if (fastEarlyErr) throw new Error(fastEarlyErr);
     }
-
-    const inFlight = await findInFlightLoginCommand({ userId, mt5Login, serverName });
-    if (inFlight?.id) {
-      return res.json({
-        ok: true,
-        status: 'queued',
-        accountId: Number(inFlight.account_id || 0) || null,
-        attemptId: String(inFlight.attempt_id || '').trim() || null,
-        commandId: Number(inFlight.id || 0) || null,
-        vpsId: Number(inFlight.vps_id || 0) || null,
-        portId: Number(inFlight.port_id || 0) || null,
-        portNo: Number(inFlight.port_no || 0) || null,
-        portSlot: Number(inFlight.port_slot || 0) || null,
-        message: 'ระบบกำลังเปิด MT5 อยู่ กรุณารอสักครู่...'
-      });
-    }
-
-    await cancelPendingLoginCommands({ mt5Login });
 
     const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
     let portSlot;
