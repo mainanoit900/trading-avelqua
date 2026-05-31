@@ -202,7 +202,7 @@ const fmtPnlClass = (v) => {
     <section class="dash-panel" id="dashBrokerPanel">
       <div class="dash-panel-head">
         <div>
-          <h3><%= safeT('dashboard.latest_broker_accounts', 'บัญชีโบรกเกอร์') %></h3>
+          <h3><span class="dash-panel-icon" aria-hidden="true">📊</span><%= safeT('dashboard.latest_broker_accounts', 'บัญชีโบรกเกอร์') %></h3>
           <p class="dash-broker-hint">Login = Port · อัปเดตทุก <%= dashBrokerRefreshSec %> วิ</p>
         </div>
         <a href="/app/broker-accounts" class="dash-btn dash-btn-ghost" <%= !isIdentityVerified ? 'data-requires-identity="1"' : '' %>>

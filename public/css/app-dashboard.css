@@ -224,6 +224,21 @@
   margin:0;
   font-size:20px;
   color:#f8fbff;
+  display:inline-flex;
+  align-items:center;
+  gap:10px;
+}
+
+.dash-panel-icon{
+  width:34px;
+  height:34px;
+  border-radius:10px;
+  display:grid;
+  place-items:center;
+  font-size:17px;
+  background:rgba(56,189,248,.12);
+  border:1px solid rgba(56,189,248,.22);
+  flex-shrink:0;
 }
 
 .dash-panel-head p{
