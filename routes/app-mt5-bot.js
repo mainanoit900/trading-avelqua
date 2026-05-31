@@ -1746,7 +1746,7 @@ function buildPortCardState(acc, activeByAccount) {
     else statusLabel = 'พร้อมรัน';
   } else if (accStatus === 'connecting' || accStatus === 'starting') {
     statusLabel = botConnecting || botRunning ? 'กำลังเปิดบอท...' : 'กำลังเปิด MT5...';
-  else if (accStatus === 'checking') statusLabel = 'กำลังตรวจ Login';
+  } else if (accStatus === 'checking') statusLabel = 'กำลังตรวจ Login';
   else if (accStatus === 'failed') statusLabel = 'Login ไม่ผ่าน';
   else if (accStatus === 'ready') statusLabel = 'ต้องเชื่อมต่อใหม่';
   else if (acc) statusLabel = 'ยกเลิกแล้ว';
