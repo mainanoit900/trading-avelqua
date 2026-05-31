@@ -166,6 +166,9 @@ function fmtDate(value) {
 .wallet-panel.active{display:block}
 .wallet-tx-ref{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:#b8c9ea;word-break:break-all}
 .wallet-copy-mini{min-height:32px;padding:0 10px;border-radius:10px;border:1px solid rgba(130,154,197,.18);background:rgba(255,255,255,.06);color:#dbeafe;font-size:12px;font-weight:700;cursor:pointer}
+.wallet-pagination{display:flex;justify-content:flex-end;align-items:center;gap:10px;flex-wrap:wrap;margin-top:12px;padding-top:12px;border-top:1px solid rgba(130,154,197,.12)}
+.wallet-pagination .wallet-link-btn{min-height:38px;padding:0 14px;font-size:13px}
+.wallet-pagination .wallet-muted{font-size:13px}
 @media (max-width:720px){.wallet-balance-main{font-size:32px}.wallet-address-card{grid-template-columns:1fr}.wallet-qr,.wallet-qr-placeholder{margin:0 auto}}
 </style>
 
@@ -357,17 +360,17 @@ function fmtDate(value) {
         </tbody>
       </table>
     </div>
-<div class="wallet-actions" style="justify-content:flex-end;margin-top:12px;">
-  <% if (ordersPagination && ordersPagination.page > 1) { %>
-    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page - 1 %>&txs_page=<%= txsPagination.page %>">ก่อนหน้า</a>
-  <% } %>
-
-  <span class="wallet-muted">หน้า <%= ordersPagination.page %> / <%= ordersPagination.totalPages %></span>
-
-  <% if (ordersPagination && ordersPagination.page < ordersPagination.totalPages) { %>
-    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page + 1 %>&txs_page=<%= txsPagination.page %>">ถัดไป</a>
-  <% } %>
-</div>
+    <% if (ordersPagination && ordersPagination.totalPages > 1) { %>
+    <div class="wallet-pagination">
+      <% if (ordersPagination.page > 1) { %>
+        <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page - 1 %>&txs_page=<%= txsPagination.page %>">ก่อนหน้า</a>
+      <% } %>
+      <span class="wallet-muted">หน้า <%= ordersPagination.page %> / <%= ordersPagination.totalPages %></span>
+      <% if (ordersPagination.page < ordersPagination.totalPages) { %>
+        <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page + 1 %>&txs_page=<%= txsPagination.page %>">ถัดไป</a>
+      <% } %>
+    </div>
+    <% } %>
   </section>
 
   <section class="card wallet-panel" id="wallet-panel-activity-txs">
@@ -406,18 +409,18 @@ function fmtDate(value) {
         </tbody>
       </table>
     </div>
+    <% if (txsPagination && txsPagination.totalPages > 1) { %>
+    <div class="wallet-pagination">
+      <% if (txsPagination.page > 1) { %>
+        <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page %>&txs_page=<%= txsPagination.page - 1 %>">ก่อนหน้า</a>
+      <% } %>
+      <span class="wallet-muted">หน้า <%= txsPagination.page %> / <%= txsPagination.totalPages %></span>
+      <% if (txsPagination.page < txsPagination.totalPages) { %>
+        <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page %>&txs_page=<%= txsPagination.page + 1 %>">ถัดไป</a>
+      <% } %>
+    </div>
+    <% } %>
   </section>
-</div>
-<div class="wallet-actions" style="justify-content:flex-end;margin-top:12px;">
-  <% if (txsPagination && txsPagination.page > 1) { %>
-    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page %>&txs_page=<%= txsPagination.page - 1 %>">ก่อนหน้า</a>
-  <% } %>
-
-  <span class="wallet-muted">หน้า <%= txsPagination.page %> / <%= txsPagination.totalPages %></span>
-
-  <% if (txsPagination && txsPagination.page < txsPagination.totalPages) { %>
-    <a class="wallet-link-btn" href="/app/scoin-wallet?orders_page=<%= ordersPagination.page %>&txs_page=<%= txsPagination.page + 1 %>">ถัดไป</a>
-  <% } %>
 </div>
 <script>
 function copyText(text){
@@ -433,9 +436,12 @@ function setWalletTab(name){
     activity:['wallet-panel-activity','wallet-panel-activity-txs']
   };
   document.querySelectorAll('.wallet-panel').forEach(el=>el.classList.remove('active'));
-  (panels[name]||panels.activity).forEach(id=>{
+  (panels[name]||panels.overview).forEach(id=>{
     const el=document.getElementById(id);
     if(el)el.classList.add('active');
+  });
+  document.querySelectorAll('[data-wallet-tab]').forEach(btn=>{
+    btn.classList.toggle('active', btn.getAttribute('data-wallet-tab')===name);
   });
 }
 document.querySelectorAll('[data-wallet-tab]').forEach(btn=>{
@@ -445,6 +451,12 @@ const SCOIN_PRICE=<%= Number((scoinSettings && scoinSettings.current_price_thb) 
 function bindScoinThbPair(scoinId,thbId){const s=document.getElementById(scoinId),t=document.getElementById(thbId);if(!s||!t)return;let syncing=false;s.addEventListener('input',()=>{if(syncing)return;syncing=true;const v=Number(s.value||0);t.value=v>0?(v*SCOIN_PRICE).toFixed(2):'';syncing=false;});t.addEventListener('input',()=>{if(syncing)return;syncing=true;const v=Number(t.value||0);s.value=v>0?(v/SCOIN_PRICE).toFixed(4):'';syncing=false;});}
 bindScoinThbPair('buy_scoin_amount','buy_amount_thb');
 bindScoinThbPair('sell_scoin_amount','sell_amount_thb');
+(function(){
+  const params=new URLSearchParams(window.location.search);
+  const ordersPage=Math.max(1,Number(params.get('orders_page')||1));
+  const txsPage=Math.max(1,Number(params.get('txs_page')||1));
+  if(ordersPage>1||txsPage>1)setWalletTab('activity');
+})();
 </script>
 
 <%- include('../partials/app-shell-end') %>
