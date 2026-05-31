@@ -23,6 +23,7 @@ const {
 const { reserveVpsPortForConnect } = require('../lib/mt5ReservePortForConnect');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
+const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
 const {
   createConnectAttempt,
   ensureMt5ConnectAttemptTables,
@@ -1046,23 +1047,29 @@ async function handleMt5ConnectProduction(req, res) {
       activeLoginCount: await countActiveLoginsOnVps(reservedPort.vps_id).catch(() => 0)
     });
 
-    const payload = {
-      ...buildMt5LoginPayload({
-        accountId,
-        attemptId,
-        userId,
-        reservedPort,
-        portSlot,
-        mt5Login,
-        mt5Password,
-        serverName
-      }),
-      queueDelaySec: Math.max(0, Number(queueDelaySec) || 0),
-      journalTimeoutSec,
-      purposeType: 'login_only',
-      // Phase 1: เปิด MT5 ค้างไว้ให้ web ดึง Equity ก่อน — ปิดผ่าน login_exit_mt5 หลัง metrics OK
-      keepMt5Open: true
-    };
+    const payload = attachPortIsolationFields(
+      {
+        ...buildMt5LoginPayload({
+          accountId,
+          attemptId,
+          userId,
+          reservedPort,
+          portSlot,
+          mt5Login,
+          mt5Password,
+          serverName
+        }),
+        queueDelaySec: Math.max(0, Number(queueDelaySec) || 0),
+        journalTimeoutSec,
+        purposeType: 'login_only',
+        // Phase 1: เปิด MT5 ค้างไว้ให้ web ดึง Equity ก่อน — ปิดผ่าน login_exit_mt5 หลัง metrics OK
+        keepMt5Open: true
+      },
+      await loadUserPortIsolationContext(userId, reservedPort.vps_id, allocPortNo).catch(() => ({
+        userPortNumbers: [],
+        keepOpenPorts: [allocPortNo]
+      }))
+    );
 
     const ins = await insertPendingAgentCommand({
       vpsId: reservedPort.vps_id,

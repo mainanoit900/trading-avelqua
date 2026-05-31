@@ -66,6 +66,7 @@ const { acquireVpsRunBotSlot, releaseVpsRunBotSlot } = require('../lib/mt5RunBot
 const { computeRunBotQueueDelaySec, computeLoginQueueDelaySec, computeJournalTimeoutSec, countActiveLoginsOnVps } = require('../lib/mt5MultiPortLogin');
 const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGate');
 const { repairUserMt5PortBindings } = require('../lib/mt5CachedEquityLogin');
+const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
 const { debitScoin } = require('../services/scoinService');
 
 const router = express.Router();
@@ -1688,15 +1689,21 @@ router.get('/mt5/recovery-check', async (req, res) => {
       }
 
       const payloadJson = JSON.stringify(
-        buildMt5LoginPayload({
-          accountId: accId,
-          userId: uid,
-          reservedPort: p,
-          portSlot: acc.port_slot,
-          mt5Login: acc.mt5_login,
-          mt5Password: acc.mt5_password,
-          serverName: acc.server_name || FIXED_SERVER
-        })
+        attachPortIsolationFields(
+          buildMt5LoginPayload({
+            accountId: accId,
+            userId: uid,
+            reservedPort: p,
+            portSlot: acc.port_slot,
+            mt5Login: acc.mt5_login,
+            mt5Password: acc.mt5_password,
+            serverName: acc.server_name || FIXED_SERVER
+          }),
+          await loadUserPortIsolationContext(uid, p.vps_id, allocPortNo).catch(() => ({
+            userPortNumbers: [],
+            keepOpenPorts: [allocPortNo]
+          }))
+        )
       );
 
       await query(
@@ -2272,18 +2279,24 @@ console.log('[MT5 CONNECT START]', {
         ? 'มี PORT อื่นกำลัง Login บน VPS เดียวกัน — ระบบคิวให้อัตโนมัติ (ประมาณ 1–2 นาที)'
         : 'กำลังเปิด MT5 และตรวจสอบ Login (ประมาณ 15–45 วินาที)';
 
-    const loginPayload = {
-      ...buildMt5LoginPayload({
-        accountId,
-        userId,
-        reservedPort,
-        portSlot,
-        mt5Login,
-        mt5Password,
-        serverName: FIXED_SERVER
-      }),
-      staggerSec
-    };
+    const loginPayload = attachPortIsolationFields(
+      {
+        ...buildMt5LoginPayload({
+          accountId,
+          userId,
+          reservedPort,
+          portSlot,
+          mt5Login,
+          mt5Password,
+          serverName: FIXED_SERVER
+        }),
+        staggerSec
+      },
+      await loadUserPortIsolationContext(userId, reservedPort.vps_id, allocPortNo).catch(() => ({
+        userPortNumbers: [],
+        keepOpenPorts: [allocPortNo]
+      }))
+    );
     const payloadJson = JSON.stringify(loginPayload);
 
     async function insertConnectCommand() {
@@ -3192,7 +3205,15 @@ router.post('/mt5/run', async (req, res) => {
       }
     }
 
-    const payload = {
+    const portIsolation = await loadUserPortIsolationContext(userId, nodePreview.id, assignedPortNo).catch(
+      () => ({
+        userPortNumbers: [],
+        keepOpenPorts: [assignedPortNo]
+      })
+    );
+
+    const payload = attachPortIsolationFields(
+      {
       action: 'run_mt5_bot',
       commandType: 'run_mt5_bot',
       userId,
@@ -3254,7 +3275,9 @@ router.post('/mt5/run', async (req, res) => {
       keepMt5Open: true,
       stopTradingOnly: false,
       queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
-    };
+      },
+      portIsolation
+    );
 
     client = await getClient();
     if (usePhase2BotRun) await ensureMt5ConnectAttemptTables();

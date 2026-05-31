@@ -549,6 +549,77 @@ def system_port_no(folder_port: Any) -> int:
     return 100 + p
 
 
+def _port_nos_from_payload(payload: Optional[Dict[str, Any]], *keys: str) -> set:
+    payload = payload or {}
+    out: set = set()
+    for key in keys:
+        val = payload.get(key)
+        if val is None:
+            continue
+        items = val if isinstance(val, (list, tuple, set)) else [val]
+        for item in items:
+            try:
+                n = int(re.sub(r"[^0-9]", "", str(item)) or "0")
+            except Exception:
+                continue
+            if n <= 0:
+                continue
+            out.add(system_port_no(n) if n <= 20 else n)
+    return out
+
+
+def payload_system_port_no(port: Any) -> int:
+    try:
+        n = normalize_port(port)
+    except Exception:
+        return 0
+    return system_port_no(n) if n <= 20 else n
+
+
+def mt5_launch_allowed(payload: Optional[Dict[str, Any]] = None) -> bool:
+    return str(payload_get(payload or {}, "allowMt5Launch", "allow_mt5_launch") or "").strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+
+
+def stop_stale_user_mt5_ports(port: Any, port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    """Kill MT5 on this user's other PORT folders (not in keepOpenPorts / not target)."""
+    payload = payload or {}
+    user_ports = _port_nos_from_payload(payload, "userPortNumbers", "user_port_numbers")
+    if not user_ports:
+        return {"skipped": True, "reason": "no_user_ports"}
+    keep = _port_nos_from_payload(payload, "keepOpenPorts", "keep_open_ports")
+    target = payload_system_port_no(port)
+    if target > 0:
+        keep.add(target)
+    mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
+    stopped: List[int] = []
+    port_dir_norm = str(port_dir).lower().replace("/", "\\").rstrip("\\")
+    for folder in sorted(mt5_root.glob("*PORT*")):
+        try:
+            if not folder.is_dir():
+                continue
+            folder_norm = str(folder).lower().replace("/", "\\").rstrip("\\")
+            if folder_norm == port_dir_norm:
+                continue
+            sys_port = system_port_no(extract_port_no(str(folder)))
+            if sys_port <= 0 or sys_port in keep or sys_port not in user_ports:
+                continue
+            if not mt5_running_for_port_dir(folder):
+                continue
+            res = stop_mt5_by_folder(str(folder))
+            stopped.extend(res.get("stopped") or [])
+            log(
+                f"STOP STALE MT5 port={sys_port} folder={folder.name} "
+                f"target={target} keep={sorted(keep)}"
+            )
+        except Exception as e:
+            log(f"STOP STALE MT5 ERROR folder={folder}: {e}")
+    return {"stopped": stopped, "keepOpen": sorted(keep), "userPorts": sorted(user_ports)}
+
+
 def send_port_health():
     ports = []
 
@@ -1893,6 +1964,10 @@ def account_snapshot_mt5_api_isolated(port_dir: Path, payload: Optional[Dict[str
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {}
+    if not mt5_running_for_port_dir(port_dir) and not mt5_launch_allowed(payload):
+        log(f"MT5 API ISOLATED SKIP terminal not running path={port_dir.name}")
+        return {}
+    was_running = mt5_running_for_port_dir(port_dir)
     login_hint = 0
     try:
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
@@ -2012,6 +2087,14 @@ except Exception as e:
     except Exception as e:
         log(f"MT5 API ISOLATED SNAPSHOT ERROR path={port_dir.name}: {e}")
         return {}
+    finally:
+        if not was_running:
+            try:
+                if mt5_running_for_port_dir(port_dir):
+                    stop_mt5_by_folder(str(port_dir))
+                    log(f"MT5 API ISOLATED CLEANUP killed cold-launched terminal path={port_dir.name}")
+            except Exception as cleanup_err:
+                log(f"MT5 API ISOLATED CLEANUP ERROR path={port_dir.name}: {cleanup_err}")
 
 
 def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2022,6 +2105,9 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
         return {}
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
+        return {}
+    if not mt5_running_for_port_dir(port_dir) and not mt5_launch_allowed(payload):
+        log(f"MT5 API SNAPSHOT SKIP terminal not running path={port_dir.name}")
         return {}
     login_hint = 0
     try:
@@ -4569,6 +4655,11 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     log(f"MT5 TERMINAL={terminal}")
 
     try:
+        stop_stale_user_mt5_ports(port, port_dir, payload)
+    except Exception as e:
+        log(f"STOP STALE MT5 ERROR port={port}: {e}")
+
+    try:
         kill_mt5_by_folder(port_dir)
         remove_mt5_login_ini(port_dir)
         clear_mt5_login_cache(port_dir)
@@ -5793,6 +5884,11 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     write_avelqua_trading_gate(port_dir, True, payload)
     patch_mt5_experts_config(port_dir, True)
+
+    try:
+        stop_stale_user_mt5_ports(port, port_dir, payload)
+    except Exception as e:
+        log(f"RUN BOT STOP STALE MT5 ERROR port={port}: {e}")
 
     if login and password:
         try:
