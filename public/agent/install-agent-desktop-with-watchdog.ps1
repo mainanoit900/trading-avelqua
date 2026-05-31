@@ -1,7 +1,5 @@
-# ติดตั้งครบ: Desktop Agent Task + Watchdog (แนะนำแทน NSSM)
-# PowerShell Administrator + login RDP เป็น user ที่ใช้ MT5
-#
-# powershell -ExecutionPolicy Bypass -File .\install-agent-desktop-with-watchdog.ps1 -Token "YOUR_TOKEN"
+# Desktop Agent Task + Watchdog (recommended instead of NSSM)
+# powershell -ExecutionPolicy Bypass -File C:\avelqua-python-agent\install-agent-desktop-with-watchdog.ps1 -Token "YOUR_TOKEN"
 
 param(
   [Parameter(Mandatory = $false)]
@@ -16,39 +14,28 @@ param(
 )
 
 $ErrorActionPreference = "Stop"
-$here = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { $AgentDir }
 
-$installScript = Join-Path $here "install_interactive_agent_task.ps1"
-if (-not (Test-Path $installScript)) {
-  $installScript = Join-Path $AgentDir "install_interactive_agent_task.ps1"
+if ([string]::IsNullOrWhiteSpace($AgentDir)) {
+  $AgentDir = "C:\avelqua-python-agent"
 }
-if (-not (Test-Path $installScript)) {
-  Write-Host "ERROR: ไม่พบ install_interactive_agent_task.ps1" -ForegroundColor Red
+
+$installScript = Join-Path $AgentDir "install_interactive_agent_task.ps1"
+if (-not (Test-Path -LiteralPath $installScript)) {
+  Write-Host "ERROR: missing $installScript" -ForegroundColor Red
   exit 1
 }
 
-$installArgs = @{
-  Token           = $Token
-  ServerUrl       = $ServerUrl
-  AgentDir        = $AgentDir
-  Mt5Root         = $Mt5Root
-  TaskName        = $AgentTaskName
-}
-& $installScript @installArgs
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installScript `
+  -Token $Token -ServerUrl $ServerUrl -AgentDir $AgentDir -Mt5Root $Mt5Root -TaskName $AgentTaskName
 if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
 
-$watchdogSrc = Join-Path $here "watchdog-agent.ps1"
-if (-not (Test-Path $watchdogSrc)) {
-  $watchdogSrc = Join-Path $AgentDir "watchdog-agent.ps1"
-}
-if (-not (Test-Path $watchdogSrc)) {
-  Write-Host "ERROR: ไม่พบ watchdog-agent.ps1" -ForegroundColor Red
+$watchdogSrc = Join-Path $AgentDir "watchdog-agent.ps1"
+if (-not (Test-Path -LiteralPath $watchdogSrc)) {
+  Write-Host "ERROR: missing $watchdogSrc" -ForegroundColor Red
   exit 1
 }
 
-Copy-Item -Force $watchdogSrc (Join-Path $AgentDir "watchdog-agent.ps1")
 $watchdogPath = Join-Path $AgentDir "watchdog-agent.ps1"
-
 try { schtasks /Delete /TN $WatchdogTaskName /F 2>$null | Out-Null } catch {}
 
 $watchdogCmd = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$watchdogPath`" -AgentDir `"$AgentDir`" -TaskName `"$AgentTaskName`" -MaxLogAgeMin $MaxLogAgeMin"
@@ -57,7 +44,7 @@ schtasks /Create /TN $WatchdogTaskName /TR $watchdogCmd /SC MINUTE /MO $Watchdog
 schtasks /Run /TN $WatchdogTaskName 2>$null | Out-Null
 
 Write-Host ""
-Write-Host ('OK: Watchdog installed — every {0} min, restart agent if log stale > {1} min' -f $WatchdogEveryMin, $MaxLogAgeMin) -ForegroundColor Green
+Write-Host ('OK: Watchdog installed — every {0} min, restart if log stale > {1} min' -f $WatchdogEveryMin, $MaxLogAgeMin) -ForegroundColor Green
 Write-Host "  Watchdog Task: $WatchdogTaskName"
 Write-Host ""
 Write-Host "Check:" -ForegroundColor Cyan

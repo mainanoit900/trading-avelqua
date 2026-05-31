@@ -1,6 +1,5 @@
 # One-click bootstrap: download all agent files + install Desktop Task + Watchdog
-# Run (PowerShell Admin):
-#   powershell -NoProfile -ExecutionPolicy Bypass -File C:\avelqua-python-agent\bootstrap-agent.ps1 -Token "YOUR_TOKEN"
+# powershell -ExecutionPolicy Bypass -File C:\avelqua-python-agent\bootstrap-agent.ps1 -Token "YOUR_TOKEN"
 
 param(
   [Parameter(Mandatory = $true)]
@@ -11,9 +10,13 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ([string]::IsNullOrWhiteSpace($AgentDir)) {
+  $AgentDir = "C:\avelqua-python-agent"
+}
+
 New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $AgentDir "logs") | Out-Null
-Set-Location $AgentDir
+Set-Location -LiteralPath $AgentDir
 
 $files = @(
   "install-agent-desktop-with-watchdog.ps1",
@@ -33,5 +36,5 @@ foreach ($name in $files) {
 Write-Host ""
 Write-Host "Run installer..."
 $installer = Join-Path $AgentDir "install-agent-desktop-with-watchdog.ps1"
-& $installer -Token $Token -AgentDir $AgentDir
-if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Token $Token -AgentDir $AgentDir
+exit $LASTEXITCODE

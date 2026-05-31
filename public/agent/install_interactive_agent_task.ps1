@@ -1,8 +1,5 @@
-# รัน Agent แบบ Desktop User (แนะนำสำหรับ MT5 + BOT) — ไม่ใช้ NSSM Session 0
-# PowerShell แบบ Administrator ขณะ login RDP เป็น user ที่ใช้ MT5
-#
-# ตัวอย่าง:
-#   powershell -ExecutionPolicy Bypass -File .\install_interactive_agent_task.ps1 -Token "YOUR_TOKEN"
+# Desktop Agent Task (MT5 + BOT) — no NSSM Session 0
+# powershell -ExecutionPolicy Bypass -File C:\avelqua-python-agent\install_interactive_agent_task.ps1 -Token "YOUR_TOKEN"
 
 param(
   [Parameter(Mandatory = $false)]
@@ -16,38 +13,32 @@ param(
 
 $ErrorActionPreference = "Stop"
 
+if ([string]::IsNullOrWhiteSpace($AgentDir)) {
+  $AgentDir = "C:\avelqua-python-agent"
+}
+
 if ([string]::IsNullOrWhiteSpace($Token)) {
   $envFile = Join-Path $AgentDir ".env"
-  if (Test-Path $envFile) {
-    Get-Content $envFile | ForEach-Object {
+  if (Test-Path -LiteralPath $envFile) {
+    Get-Content -LiteralPath $envFile | ForEach-Object {
       if ($_ -match '^\s*AVELQUA_AGENT_TOKEN\s*=\s*(.+)\s*$') { $Token = $Matches[1].Trim().Trim('"') }
     }
   }
 }
 if ([string]::IsNullOrWhiteSpace($Token)) {
-  Write-Host "ERROR: ใส่ -Token หรือสร้าง $AgentDir\.env ที่มี AVELQUA_AGENT_TOKEN" -ForegroundColor Red
+  Write-Host "ERROR: pass -Token or set AVELQUA_AGENT_TOKEN in $AgentDir\.env" -ForegroundColor Red
   exit 1
 }
 
-$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { $AgentDir }
-if (Test-Path (Join-Path $scriptDir "agent.py")) {
-  New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
-  New-Item -ItemType Directory -Force -Path "$AgentDir\logs" | Out-Null
-  Copy-Item -Force (Join-Path $scriptDir "agent.py") (Join-Path $AgentDir "agent.py")
-  if (Test-Path (Join-Path $scriptDir "requirements.txt")) {
-    Copy-Item -Force (Join-Path $scriptDir "requirements.txt") (Join-Path $AgentDir "requirements.txt")
-  }
-  Copy-Item -Force (Join-Path $scriptDir "install_interactive_agent_task.ps1") (Join-Path $AgentDir "install_interactive_agent_task.ps1")
-  if (Test-Path (Join-Path $scriptDir "watchdog-agent.ps1")) {
-    Copy-Item -Force (Join-Path $scriptDir "watchdog-agent.ps1") (Join-Path $AgentDir "watchdog-agent.ps1")
-  }
-  if (Test-Path (Join-Path $scriptDir "install-agent-desktop-with-watchdog.ps1")) {
-    Copy-Item -Force (Join-Path $scriptDir "install-agent-desktop-with-watchdog.ps1") (Join-Path $AgentDir "install-agent-desktop-with-watchdog.ps1")
-  }
-}
-
 New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
-New-Item -ItemType Directory -Force -Path "$AgentDir\logs" | Out-Null
+$logsDir = Join-Path $AgentDir "logs"
+New-Item -ItemType Directory -Force -Path $logsDir | Out-Null
+
+$agentPy = Join-Path $AgentDir "agent.py"
+if (-not (Test-Path -LiteralPath $agentPy)) {
+  Write-Host "ERROR: missing $agentPy — download agent.py first" -ForegroundColor Red
+  exit 1
+}
 
 $envPath = Join-Path $AgentDir ".env"
 @"
@@ -56,31 +47,30 @@ AVELQUA_AGENT_TOKEN=$Token
 AVELQUA_MT5_ROOT=$Mt5Root
 AVELQUA_AGENT_DIR=$AgentDir
 AVELQUA_SERVICE_NAME=$NssmServiceName
-"@ | Set-Content -Path $envPath -Encoding UTF8
+"@ | Set-Content -LiteralPath $envPath -Encoding UTF8
 
-# หยุด NSSM — อย่ารันซ้ำกับ Task
 try { net stop $NssmServiceName 2>$null | Out-Null } catch {}
 try { sc.exe config $NssmServiceName start= disabled 2>$null | Out-Null } catch {}
 
 $python = (Get-Command python -ErrorAction SilentlyContinue).Source
 if (-not $python) { $python = (Get-Command py -ErrorAction SilentlyContinue).Source }
 if (-not $python) {
-  Write-Host "ERROR: ไม่พบ python — ติดตั้ง Python 3 และ Add to PATH" -ForegroundColor Red
+  Write-Host "ERROR: python not found — install Python 3 and add to PATH" -ForegroundColor Red
   exit 1
 }
 
-if (Test-Path (Join-Path $AgentDir "requirements.txt")) {
-  & $python -m pip install -q -r (Join-Path $AgentDir "requirements.txt")
+$requirements = Join-Path $AgentDir "requirements.txt"
+if (Test-Path -LiteralPath $requirements) {
+  & $python -m pip install -q -r $requirements
 }
 
-# หยุด agent python เก่า
 Get-CimInstance Win32_Process -Filter "Name='python.exe'" |
   Where-Object { $_.CommandLine -like "*$AgentDir*agent.py*" } |
   ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }
 
 try { schtasks /Delete /TN $TaskName /F 2>$null | Out-Null } catch {}
 
-$Action = New-ScheduledTaskAction -Execute $python -Argument "`"$AgentDir\agent.py`"" -WorkingDirectory $AgentDir
+$Action = New-ScheduledTaskAction -Execute $python -Argument "`"$agentPy`"" -WorkingDirectory $AgentDir
 $Trigger = New-ScheduledTaskTrigger -AtLogOn
 $Principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Highest
 $Settings = New-ScheduledTaskSettingsSet `
@@ -96,8 +86,6 @@ Start-ScheduledTask -TaskName $TaskName
 Write-Host ""
 Write-Host "OK: Agent Desktop Task installed" -ForegroundColor Green
 Write-Host "  Task: $TaskName"
-Write-Host "  User: $env:USERNAME (keep RDP session logged in — disconnect OK, do not Sign out)"
-$agentLog = Join-Path $AgentDir "logs\agent.log"
+Write-Host "  User: $env:USERNAME (keep RDP logged in — disconnect OK, no Sign out)"
+$agentLog = Join-Path $logsDir "agent.log"
 Write-Host "  Log:  $agentLog"
-Write-Host ""
-Write-Host "Optional: run install-agent-desktop-with-watchdog.ps1 for auto-restart watchdog" -ForegroundColor Yellow
