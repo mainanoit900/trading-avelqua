@@ -743,6 +743,15 @@ function resolveConnectPortSlot(summary, requestedSlot, usedSlotSet, busySlotSet
   return { ok: false, message: `PORT ตามแพ็กเกจเต็มแล้ว — ลบ PORT เก่าก่อน login พร้อมกัน` };
 }
 
+function normalizeMt5ConnectErrorMessage(err) {
+  const raw = String(err?.message || '').trim();
+  if (!raw) return 'เชื่อมต่อไม่สำเร็จ';
+  if (/uq_mt5_running_vps_port|duplicate key value violates unique constraint/i.test(raw)) {
+    return 'PORT นี้ถูกใช้งานอยู่แล้ว กรุณาลองเชื่อมต่อใหม่อีกครั้ง';
+  }
+  return raw;
+}
+
 /** ปิดสถานะ connecting/checking ที่ค้าง + ปลดล็อกพอร์ต VPS — ให้ล็อกอินซ้ำได้หลังครั้งก่อนล้มเหลว */
 async function expireStaleConnectingForLogin(userId, mt5Login, serverName) {
   const stale = await safeQuery(
@@ -2380,6 +2389,7 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
 
   } catch (e) {
     console.error('[MT5 CONNECT ERROR]', e);
+    const safeMsg = normalizeMt5ConnectErrorMessage(e);
 
     const uid = req.user?.id;
     if (pendingAccountId && uid) {
@@ -2395,7 +2405,7 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
         [
           pendingAccountId,
           uid,
-          String(e.message || 'เชื่อมต่อไม่สำเร็จ').slice(0, 900)
+          String(safeMsg || 'เชื่อมต่อไม่สำเร็จ').slice(0, 900)
         ]
       ).catch(() => {});
     }
@@ -2405,7 +2415,7 @@ console.log('[MT5 CONNECT COMMAND INSERTED]', {
     return res.json({
       ok: false,
       status: 'failed',
-      message: e.message
+      message: safeMsg
     });
 
   } finally {
