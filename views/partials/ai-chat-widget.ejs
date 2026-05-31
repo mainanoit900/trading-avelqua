@@ -3,7 +3,13 @@
     position: fixed;
     right: 20px;
     bottom: 20px;
-    z-index: 99999;
+    z-index: 2147483000;
+    pointer-events: none;
+  }
+
+  .ta-ai-chat-toggle,
+  .ta-ai-chat-box {
+    pointer-events: auto;
   }
 
   .ta-ai-chat-toggle {
@@ -266,13 +272,33 @@
     catch { return null; }
   }
 
+  function clampPos(r, b) {
+    const w = toggle.offsetWidth || 170;
+    const h = toggle.offsetHeight || 170;
+    const maxR = Math.max(8, window.innerWidth - w - 8);
+    const maxB = Math.max(8, window.innerHeight - h - 8);
+    return {
+      r: Math.min(Math.max(8, Number(r) || 20), maxR),
+      b: Math.min(Math.max(8, Number(b) || 20), maxB)
+    };
+  }
+
   function setPos(r, b) {
-    root.style.right = r + 'px';
-    root.style.bottom = b + 'px';
+    const p = clampPos(r, b);
+    root.style.right = p.r + 'px';
+    root.style.bottom = p.b + 'px';
+    root.style.left = 'auto';
+    root.style.top = 'auto';
+    return p;
   }
 
   const pos = load();
   if (pos) setPos(pos.r, pos.b);
+
+  window.addEventListener('resize', function () {
+    const s = getComputedStyle(root);
+    setPos(parseInt(s.right, 10), parseInt(s.bottom, 10));
+  });
 
   let drag = false, moved = false, sx = 0, sy = 0, sr = 20, sb = 20;
 
@@ -329,7 +355,8 @@
     drag = false;
     toggle.classList.remove('dragging');
     const s = getComputedStyle(root);
-    save(parseInt(s.right), parseInt(s.bottom));
+    const p = setPos(parseInt(s.right, 10), parseInt(s.bottom, 10));
+    save(p.r, p.b);
     try { toggle.releasePointerCapture(e.pointerId); } catch (_) {}
   };
 
