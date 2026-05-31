@@ -4,10 +4,10 @@ const cron = require('node-cron');
 const { query } = require('../config/database');
 const { pushText, lineEnabled } = require('./lineService');
 const {
-  fetchUserAccounts,
   buildDailyReportMessage,
   saveDailySnapshots
 } = require('../lib/linePnlReport');
+const { fetchActivePorts } = require('../lib/linePortfolio');
 const { ensureLineNotifyTables } = require('../lib/lineNotifySchema');
 
 async function sendDailyReport() {
@@ -28,7 +28,7 @@ async function sendDailyReport() {
       const msg = await buildDailyReportMessage(sub.user_id);
       if (!msg) continue;
       await pushText(sub.line_user_id, msg);
-      const accounts = await fetchUserAccounts(sub.user_id);
+      const accounts = await fetchActivePorts(sub.user_id);
       await saveDailySnapshots(sub.user_id, accounts);
     } catch (e) {
       console.error('[LineScheduler] error user', sub.user_id, e.message);
