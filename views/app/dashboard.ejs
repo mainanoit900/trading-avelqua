@@ -11,6 +11,26 @@ const displayName = (user && (user.full_name || user.name || user.email)) || saf
 const coinSymbol = (scoinSettings && scoinSettings.coin_symbol) || 'SCOIN';
 const safeError = typeof error !== 'undefined' ? error : '';
 const safeSuccess = typeof success !== 'undefined' ? success : '';
+const mt5Accounts = Array.isArray(typeof mt5BrokerAccounts !== 'undefined' ? mt5BrokerAccounts : null)
+  ? mt5BrokerAccounts
+  : [];
+const mt5Summary = (typeof mt5BrokerSummary !== 'undefined' && mt5BrokerSummary) ? mt5BrokerSummary : {};
+const dashBrokerRefreshSec = Number(typeof brokerRefreshSec !== 'undefined' ? brokerRefreshSec : 90) || 90;
+const fmtMoney = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+};
+const fmtPnlText = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return '-';
+  return (n > 0 ? '+' : '') + fmtMoney(n);
+};
+const fmtPnlClass = (v) => {
+  const n = Number(v);
+  if (!Number.isFinite(n)) return 'neu';
+  return n > 0 ? 'pos' : n < 0 ? 'neg' : 'neu';
+};
 %>
 
 <%- include('../partials/app-shell') %>
@@ -179,30 +199,42 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
       </div>
     </section>
 
-    <section class="dash-panel">
+    <section class="dash-panel" id="dashBrokerPanel">
       <div class="dash-panel-head">
         <div>
           <h3><%= safeT('dashboard.latest_broker_accounts', 'บัญชีโบรกเกอร์') %></h3>
+          <p class="dash-broker-hint">Login = Port · อัปเดตทุก <%= dashBrokerRefreshSec %> วิ</p>
         </div>
         <a href="/app/broker-accounts" class="dash-btn dash-btn-ghost" <%= !isIdentityVerified ? 'data-requires-identity="1"' : '' %>>
           <%= safeT('dashboard.view_all', 'ดูทั้งหมด') %>
         </a>
       </div>
       <div class="dash-panel-body">
-        <div class="dash-list">
-          <% if (!(brokerAccounts || []).length) { %>
-            <div class="dash-empty"><%= safeT('dashboard.no_broker_accounts', 'ยังไม่มีบัญชีโบรกเกอร์') %></div>
+        <div class="dash-list" id="dashBrokerList">
+          <% if (!mt5Accounts.length) { %>
+            <div class="dash-empty"><%= safeT('dashboard.no_broker_accounts', 'ยังไม่มี MT5 Login — เชื่อมต่อที่หน้า MT5') %></div>
           <% } else { %>
-            <% (brokerAccounts || []).slice(0, 5).forEach(function(a){ %>
-              <div class="dash-list-item">
-                <span class="dash-list-dot" aria-hidden="true"></span>
-                <div>
-                  <strong><%= a.broker_name %></strong>
-                  <span><%= a.account_login %> / <%= a.server_name %></span>
+            <% mt5Accounts.slice(0, 5).forEach(function(a){ %>
+              <div class="dash-list-item dash-broker-item">
+                <span class="dash-list-dot <%= a.isConnected ? '' : 'off' %>" aria-hidden="true"></span>
+                <div class="dash-broker-main">
+                  <strong>Port <%= a.port || '-' %> · Login <%= a.mt5Login %></strong>
+                  <span><%= a.broker %> / <%= a.server %></span>
                 </div>
+                <div class="dash-broker-equity">
+                  <span class="dash-broker-label">เริ่มต้น</span>
+                  <strong><%= fmtMoney(a.baselineEquity) %></strong>
+                  <span class="dash-broker-label">ปัจจุบัน</span>
+                  <strong><%= fmtMoney(a.currentEquity) %></strong>
+                </div>
+                <div class="dash-broker-pnl <%= fmtPnlClass(a.pnl) %>"><%= fmtPnlText(a.pnl) %></div>
               </div>
             <% }) %>
           <% } %>
+        </div>
+        <div class="dash-broker-total" id="dashBrokerTotal" <%= (mt5Summary.activeCount || 0) > 0 ? '' : 'hidden' %>>
+          <span>รวมกำไร/ขาดทุน (Login ที่เชื่อมต่อ <%= mt5Summary.activeCount || 0 %>)</span>
+          <strong class="<%= fmtPnlClass(mt5Summary.totalPnl) %>" id="dashBrokerTotalPnl"><%= fmtPnlText(mt5Summary.totalPnl) %></strong>
         </div>
       </div>
     </section>
@@ -236,6 +268,74 @@ const safeSuccess = typeof success !== 'undefined' ? success : '';
     </section>
   <% } %>
 </div>
+
+<script>
+  (function () {
+    const REFRESH_SEC = <%= dashBrokerRefreshSec %>;
+    const listEl = document.getElementById('dashBrokerList');
+    const totalEl = document.getElementById('dashBrokerTotal');
+    const totalPnlEl = document.getElementById('dashBrokerTotalPnl');
+
+    const fmtMoney = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return '-';
+      return n.toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    };
+    const fmtPnl = (v) => {
+      const n = Number(v);
+      if (!Number.isFinite(n)) return { text: '-', cls: 'neu' };
+      return { text: (n > 0 ? '+' : '') + fmtMoney(n), cls: n > 0 ? 'pos' : n < 0 ? 'neg' : 'neu' };
+    };
+
+    function renderBroker(data) {
+      if (!listEl) return;
+      const items = Array.isArray(data.items) ? data.items : [];
+      const summary = data.summary || {};
+
+      if (!items.length) {
+        listEl.innerHTML = '<div class="dash-empty">ยังไม่มี MT5 Login — <a href="/app/mt5">เชื่อมต่อที่หน้า MT5</a></div>';
+        if (totalEl) totalEl.hidden = true;
+        return;
+      }
+
+      listEl.innerHTML = items.slice(0, 5).map(function (a) {
+        const pnl = fmtPnl(a.pnl);
+        const dotCls = a.isConnected ? '' : ' off';
+        return '<div class="dash-list-item dash-broker-item">'
+          + '<span class="dash-list-dot' + dotCls + '" aria-hidden="true"></span>'
+          + '<div class="dash-broker-main"><strong>Port ' + (a.port || '-') + ' · Login ' + (a.mt5Login || '-') + '</strong>'
+          + '<span>' + (a.broker || '-') + ' / ' + (a.server || '-') + '</span></div>'
+          + '<div class="dash-broker-equity"><span class="dash-broker-label">เริ่มต้น</span><strong>' + fmtMoney(a.baselineEquity) + '</strong>'
+          + '<span class="dash-broker-label">ปัจจุบัน</span><strong>' + fmtMoney(a.currentEquity) + '</strong></div>'
+          + '<div class="dash-broker-pnl ' + pnl.cls + '">' + pnl.text + '</div>'
+          + '</div>';
+      }).join('');
+
+      if (totalEl && totalPnlEl) {
+        const active = Number(summary.activeCount || 0);
+        totalEl.hidden = active <= 0;
+        totalEl.querySelector('span').textContent = 'รวมกำไร/ขาดทุน (Login ที่เชื่อมต่อ ' + active + ')';
+        const tp = fmtPnl(summary.totalPnl);
+        totalPnlEl.textContent = tp.text;
+        totalPnlEl.className = tp.cls;
+      }
+    }
+
+    async function refreshBroker() {
+      if (!listEl) return;
+      try {
+        const res = await fetch('/app/broker-accounts/data', { credentials: 'same-origin', headers: { Accept: 'application/json' } });
+        const data = await res.json();
+        if (res.ok && data.ok) renderBroker(data);
+      } catch (_) {}
+    }
+
+    if (listEl) {
+      refreshBroker();
+      setInterval(refreshBroker, REFRESH_SEC * 1000);
+    }
+  })();
+</script>
 
 <script>
   (function () {

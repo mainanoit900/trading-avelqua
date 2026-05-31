@@ -415,6 +415,93 @@
   background:rgba(255,255,255,.02);
 }
 
+.dash-broker-hint{
+  margin:4px 0 0;
+  font-size:12px;
+  color:#64748b;
+}
+
+.dash-broker-item{
+  flex-wrap:wrap;
+  align-items:flex-start;
+  gap:10px 14px;
+}
+
+.dash-list-dot.off{
+  background:linear-gradient(135deg, #64748b, #475569);
+  box-shadow:none;
+}
+
+.dash-broker-main{
+  flex:1 1 160px;
+  min-width:0;
+}
+
+.dash-broker-equity{
+  display:grid;
+  grid-template-columns:auto auto;
+  gap:2px 12px;
+  align-items:baseline;
+  font-size:13px;
+}
+
+.dash-broker-label{
+  color:#64748b;
+  font-size:11px;
+}
+
+.dash-broker-equity strong{
+  color:#e2e8f0;
+  font-size:13px;
+  text-align:right;
+}
+
+.dash-broker-pnl{
+  margin-left:auto;
+  font-size:15px;
+  font-weight:800;
+  white-space:nowrap;
+}
+
+.dash-broker-pnl.pos{ color:#4ade80; }
+.dash-broker-pnl.neg{ color:#f87171; }
+.dash-broker-pnl.neu{ color:#cbd5e1; }
+
+.dash-broker-total{
+  margin-top:12px;
+  padding:14px 16px;
+  border-radius:14px;
+  border:1px solid rgba(56,189,248,.18);
+  background:rgba(56,189,248,.06);
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+  flex-wrap:wrap;
+}
+
+.dash-broker-total span{
+  color:#94a3b8;
+  font-size:13px;
+}
+
+.dash-broker-total strong{
+  font-size:18px;
+  font-weight:800;
+}
+
+.dash-broker-total strong.pos{ color:#4ade80; }
+.dash-broker-total strong.neg{ color:#f87171; }
+.dash-broker-total strong.neu{ color:#e2e8f0; }
+
+@media (max-width:720px){
+  .dash-broker-pnl{
+    width:100%;
+    margin-left:0;
+    text-align:right;
+  }
+}
+
 .dash-meta-grid{
   display:grid;
   grid-template-columns:repeat(2, minmax(0, 1fr));

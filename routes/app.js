@@ -679,11 +679,21 @@ router.get('/', async (req, res) => {
     [base.user.id]
   ).catch(() => ({ rows: [{ total: 0, total_spent: 0 }] }));
 
+  const mt5Portfolio = await fetchMt5LoginPortfolio(base.user.id).catch(() => ({
+    ok: false,
+    items: [],
+    summary: {},
+    refreshSec: MT5_CALENDAR_REFRESH_SEC
+  }));
+
   return res.render('app/dashboard', {
     pageTitle: 'Customer Portal',
     pageCss: 'app-dashboard.css',
     currentPath: '/app',
     showIdentityGate: !isIdentityVerified(base.user),
+    mt5BrokerAccounts: mt5Portfolio.items || [],
+    mt5BrokerSummary: mt5Portfolio.summary || {},
+    brokerRefreshSec: mt5Portfolio.refreshSec || MT5_CALENDAR_REFRESH_SEC,
     ...flash(req),
     ...base,
     paymentSummary: paymentsRes.rows[0]
