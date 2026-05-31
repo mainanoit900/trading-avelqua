@@ -539,6 +539,16 @@ def extract_port_no(path_text):
     return 0
 
 
+def system_port_no(folder_port: Any) -> int:
+    """Folder PORT-01 -> 101 for DB (matches assigned_port_no on web)."""
+    p = int(folder_port or 0)
+    if p <= 0:
+        return 0
+    if p >= 100:
+        return p
+    return 100 + p
+
+
 def send_port_health():
     ports = []
 
@@ -574,9 +584,9 @@ def send_port_health():
 
         for folder in sorted(mt5_root.glob("*PORT*")):
             port_no = extract_port_no(str(folder))
-
             if not port_no:
                 continue
+            db_port = system_port_no(port_no)
 
             run = running_map.get(port_no)
 
@@ -592,8 +602,9 @@ def send_port_health():
                     pass
 
             ports.append({
-                "port_no": port_no,
-                "port_number": port_no,
+                "port_no": db_port,
+                "port_number": db_port,
+                "folder_port": port_no,
                 "folder_path": str(folder),
                 "running": bool(run),
                 "is_running": bool(run),
