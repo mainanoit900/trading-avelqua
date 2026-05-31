@@ -90,6 +90,15 @@ function mt5LoginUserValidationMessage() {
   return 'Userไม่ถูกต้อง - ใช้ได้เฉพาะเลขขึ้นต้น 2 จำนวน 9 หลัก หรือขึ้นต้น 8 จำนวน 8 หลัก';
 }
 
+function normalizeMt5ConnectErrorMessage(err) {
+  const raw = String(err?.message || '').trim();
+  if (!raw) return 'เชื่อมต่อไม่สำเร็จ';
+  if (/uq_mt5_running_vps_port|duplicate key value violates unique constraint/i.test(raw)) {
+    return 'PORT นี้ถูกใช้งานอยู่แล้ว กรุณาลองเชื่อมต่อใหม่อีกครั้ง';
+  }
+  return raw;
+}
+
 function positiveMoney(v) {
   if (v == null || v === '') return null;
   const n = Number(v);
@@ -1105,15 +1114,16 @@ async function handleMt5ConnectProduction(req, res) {
       message: `กำลังเปิด MT5 — ${pickName} (${serverName})${queueNote}`
     });
   } catch (e) {
+    const safeMsg = normalizeMt5ConnectErrorMessage(e);
     if (attemptId) {
       await finalizeAttemptFailed(
         { attempt_id: attemptId, account_id: null },
-        e.message,
+        safeMsg,
         { evidenceSource: 'connect_route_error' }
       ).catch(() => {});
     }
-    if (reservedPort?.port_id) await releasePort(reservedPort.port_id, e.message);
-    return res.json({ ok: false, status: 'failed', message: e.message });
+    if (reservedPort?.port_id) await releasePort(reservedPort.port_id, safeMsg);
+    return res.json({ ok: false, status: 'failed', message: safeMsg });
   } finally {
     if (vpsLoginGateKey) await releaseVpsLoginSlot(vpsLoginGateKey).catch(() => {});
     if (loginLockKey) await redis.del(loginLockKey).catch(() => {});
