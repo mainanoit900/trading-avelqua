@@ -239,11 +239,12 @@
   let mt5PollAccountId = sessionStorage.getItem('mt5PollAccountId') || serverPendingAccountId || '';
   const urlParams = new URLSearchParams(window.location.search);
   function showMt5ConnectModal(type, message) {
-    if (type === 'error') {
+    if (type === 'error' || type === 'info') {
       document.querySelectorAll('.mt5-alert.success, #mt5SuccessAlert').forEach(el => el.remove());
     }
     const modalId = type === 'success' ? 'mt5SuccessModal' : 'mt5ErrorModal';
-    if (document.getElementById(modalId)) return;
+    const existing = document.getElementById(modalId);
+    if (existing) existing.remove();
     const isSuccess = type === 'success';
     const modal = document.createElement('div');
     modal.id = modalId;
@@ -1354,7 +1355,7 @@
   window.mt5UpdateRunSubmitState = mt5UpdateRunSubmitState;
 
   let mt5RunRenderSignature = '';
-  let mt5RunMetricsSignature = '';
+  let mt5RunMetricsSigCache = '';
   let mt5PortRefreshInFlight = null;
   let mt5LiveDashRefreshTimer = null;
 
@@ -1402,26 +1403,6 @@
     if (syncHidden && draft.sync_field) syncHidden.value = draft.sync_field;
   }
 
-  function mt5StartRunPrepareTimer() {
-    const box = document.getElementById('mt5RunPrepareBox');
-    const secEl = document.getElementById('mt5RunPrepareSec');
-    if (!box || !secEl) return;
-    if (mt5RunPrepareTimer) clearInterval(mt5RunPrepareTimer);
-    mt5RunPrepareStartedAt = Date.now();
-    mt5RunPrepareTimer = setInterval(function () {
-      const sec = Math.max(0, Math.floor((Date.now() - mt5RunPrepareStartedAt) / 1000));
-      secEl.textContent = String(sec);
-    }, 1000);
-    secEl.textContent = '0';
-  }
-
-  function mt5StopRunPrepareTimer() {
-    if (mt5RunPrepareTimer) {
-      clearInterval(mt5RunPrepareTimer);
-      mt5RunPrepareTimer = null;
-    }
-  }
-
   function mt5RunStructureSignature(accounts, bots) {
     return JSON.stringify({
       accounts: (accounts || []).map(function (a) {
@@ -1433,7 +1414,7 @@
     });
   }
 
-  function mt5RunMetricsSignature(accounts, activeInstances) {
+  function mt5RunMetricsSig(accounts, activeInstances) {
     return JSON.stringify({
       metrics: (accounts || []).map(function (a) {
         return [a.id, a.last_equity, a.last_balance];
@@ -1571,12 +1552,12 @@
         window.__mt5RunConfig = cfg;
         mt5RunState.activeInstances = Array.isArray(cfg.activeInstances) ? cfg.activeInstances.slice() : [];
         const nextStructure = mt5RunStructureSignature(cfg.connectedAccounts, cfg.bots || []);
-        const nextMetrics = mt5RunMetricsSignature(cfg.connectedAccounts, cfg.activeInstances);
+        const nextMetrics = mt5RunMetricsSig(cfg.connectedAccounts, cfg.activeInstances);
         const hasForm = !!document.getElementById('mt5RunForm');
         if (nextStructure !== mt5RunRenderSignature || !hasForm) {
           const runDraft = mt5CaptureRunFormDraft(document.getElementById('mt5RunForm'));
           mt5RunRenderSignature = nextStructure;
-          mt5RunMetricsSignature = nextMetrics;
+          mt5RunMetricsSigCache = nextMetrics;
           mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
           runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
           bindMt5RunForm();
@@ -1586,8 +1567,8 @@
             const capField = restoredForm.querySelector('input[name="capital_manual"]');
             if (capField) capField.dispatchEvent(new Event('input', { bubbles: true }));
           }
-        } else if (nextMetrics !== mt5RunMetricsSignature) {
-          mt5RunMetricsSignature = nextMetrics;
+        } else if (nextMetrics !== mt5RunMetricsSigCache) {
+          mt5RunMetricsSigCache = nextMetrics;
           mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
           mt5PatchRunFormFromState();
         } else {
@@ -1614,7 +1595,7 @@
       if (runPanel && accounts.length && !document.getElementById('mt5RunForm') && typeof renderMt5RunFormHtml === 'function') {
         try {
           mt5RunRenderSignature = mt5RunStructureSignature(accounts, cfg.bots || []);
-          mt5RunMetricsSignature = mt5RunMetricsSignature(accounts, cfg.activeInstances || []);
+          mt5RunMetricsSigCache = mt5RunMetricsSig(accounts, cfg.activeInstances || []);
           runPanel.innerHTML = renderMt5RunFormHtml(accounts, cfg.bots || []);
           bindMt5RunForm();
         } catch (_) {}
@@ -1698,7 +1679,7 @@
       mt5RunState.connectedAccounts,
       (window.__mt5RunConfig || {}).bots || []
     );
-    mt5RunMetricsSignature = mt5RunMetricsSignature(
+    mt5RunMetricsSigCache = mt5RunMetricsSig(
       mt5RunState.connectedAccounts,
       (window.__mt5RunConfig || {}).activeInstances || []
     );
@@ -1910,6 +1891,24 @@
 (function(){
   const packageExpired = <%= packageExpired ? 'true' : 'false' %>;
 
+function mt5ConnectNotify(type, message) {
+  const msg = String(message || '').trim() || (type === 'success' ? 'เชื่อมต่อสำเร็จ' : 'เชื่อมต่อไม่สำเร็จ');
+  if (typeof window.showMt5ConnectModal === 'function') {
+    window.showMt5ConnectModal(type === 'success' ? 'success' : 'error', msg);
+    return;
+  }
+  if (typeof window.mt5UiAlert === 'function') {
+    window.mt5UiAlert({
+      variant: type === 'success' ? 'success' : 'warning',
+      title: type === 'success' ? 'เชื่อมต่อสำเร็จ' : 'เชื่อมต่อไม่สำเร็จ',
+      message: msg
+    });
+    return;
+  }
+  alert(msg);
+}
+window.mt5ConnectNotify = mt5ConnectNotify;
+
 const mt5ConnectForm = document.getElementById('mt5ConnectForm');
 const mt5SelectedPortSlot = document.getElementById('mt5SelectedPortSlot');
 const mt5LoginInput = document.getElementById('mt5LoginInput');
@@ -1979,7 +1978,6 @@ function mt5SelectRunAccount(accountId, portSlot) {
   }
   const panel = document.getElementById('mt5RunPanel');
   const cfg = window.__mt5RunConfig || {};
-  mt5StopRunPrepareTimer();
   const existingForm = document.getElementById('mt5RunForm');
   if (existingForm && acc && typeof window.mt5ApplyRunAccountToForm === 'function' && window.mt5ApplyRunAccountToForm(acc)) {
     if (typeof window.mt5PatchRunFormFromState === 'function') window.mt5PatchRunFormFromState();
@@ -2151,13 +2149,13 @@ if (mt5ConnectForm) {
     e.preventDefault();
 
     if (packageExpired) {
-      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)('error', 'แพ็คเกจหมดอายุ กรุณาต่ออายุแพ็กเกจก่อนเชื่อมต่อ MT5');
+      mt5ConnectNotify('error', 'แพ็คเกจหมดอายุ กรุณาต่ออายุแพ็กเกจก่อนเชื่อมต่อ MT5');
       return false;
     }
 
     const mt5LoginValue = String(mt5LoginInput?.value || '').trim();
     if (!isAllowedMt5LoginUser(mt5LoginValue)) {
-      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)('error', mt5LoginUserValidationMessage());
+      mt5ConnectNotify('error', mt5LoginUserValidationMessage());
       return false;
     }
 
@@ -2169,7 +2167,7 @@ if (mt5ConnectForm) {
     ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"][data-account-id]')
     : null;
   if (!connectSlot) {
-    (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+    mt5ConnectNotify(
       'error',
       'ไม่มี PORT ว่าง — ลบ PORT เก่าหรือซื้อพอร์ตเพิ่มก่อน login พร้อมกัน'
     );
@@ -2180,12 +2178,12 @@ if (mt5ConnectForm) {
     const titleText = sameLogin ? String(sameLogin.textContent || '') : '';
   const loginOnCard = titleText.includes(mt5LoginValue);
     if (loginOnCard) {
-      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+      mt5ConnectNotify(
         'info',
         'บัญชีนี้เชื่อมต่อที่ PORT ' + connectSlot + ' อยู่แล้ว — ใช้ Run BOT หรือลบ PORT ก่อน login ใหม่'
       );
     } else {
-      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)(
+      mt5ConnectNotify(
         'error',
         'PORT ' + connectSlot + ' มีบัญชีอื่นอยู่แล้ว — เลือก PORT ว่าง หรือลบ PORT นี้ก่อน'
       );
@@ -2227,7 +2225,7 @@ if (mt5ConnectForm) {
             : 'เซิร์ฟเวอร์ตอบกลับไม่ถูกต้อง กรุณารีเฟรชหน้าแล้วลองอีกครั้ง'
         );
       }
-      const pop = typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert;
+      const pop = typeof mt5ConnectNotify === 'function' ? mt5ConnectNotify : (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : function (_t, m) { alert(m); });
 
       if (json.ok === true && json.status === 'connected' && (json.metricsReady || json.fastPath)) {
         if (typeof window.finishMt5ConnectSuccess === 'function') {
@@ -2254,7 +2252,7 @@ if (mt5ConnectForm) {
       if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     } catch (err) {
       await refreshMt5PortCards();
-      (typeof window.showMt5ConnectModal === 'function' ? window.showMt5ConnectModal : alert)('error', err.message || 'Login ไม่สำเร็จ');
+      mt5ConnectNotify('error', err.message || 'Login ไม่สำเร็จ');
       if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     }
 
