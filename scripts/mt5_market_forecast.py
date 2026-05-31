@@ -168,8 +168,8 @@ def _openai_fallback(stats: dict, err_msg: str) -> dict:
         "summary_th": f"AI ไม่พร้อม ({err_msg}) — ใช้สถิติย้อนหลังแทน",
         "outlook": stats.get("trend") or "neutral",
         "confidence": 40,
-        "market_view_th": "ไม่สามารถเรียก OpenAI ได้",
-        "risks": ["ตรวจสอบ OPENAI_API_KEY และการเชื่อมต่อ"],
+        "market_view_th": "ไม่สามารถเรียก",
+        "risks": ["ตรวจสอบ"],
         "recommendations": ["ลองกดวิเคราะห์ใหม่ภายหลัง"],
         "disclaimer": "เป็นการคาดการณ์ ไม่ใช่คำแนะนำการลงทุน",
     }
