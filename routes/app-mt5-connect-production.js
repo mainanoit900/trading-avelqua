@@ -24,7 +24,8 @@ const { reserveVpsPortForConnect } = require('../lib/mt5ReservePortForConnect');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot } = require('../lib/mt5PortAccount');
 const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
-const { assertFolderPortFreeForUser } = require('../lib/mt5PortSlotGuard');
+const { assertFolderPortFreeForUser, vpsPortNotBusyByOthersClause } = require('../lib/mt5PortSlotGuard');
+const { systemPortNoFromReservedPort } = require('../lib/mt5ReservedPortNo');
 const {
   createConnectAttempt,
   ensureMt5ConnectAttemptTables,
@@ -61,45 +62,18 @@ function clean(v) {
   return String(v || '').trim();
 }
 
-/** เลข port บน VPS สำหรับ agent — slot 2 → 102, ไม่ใช้ assigned_port_no ค้าง (เช่น 1) */
+/** เลข FolderPort บน VPS จากผลจองจริง — ไม่ map package slot → PORT-0X โดยตรง */
 function resolveConnectAllocPortNo(reservedPort, portSlot) {
-  const fromRow = num(reservedPort?.port_number || reservedPort?.port_no);
-  if (fromRow >= 100) return fromRow;
-  const slot = num(portSlot);
-  if (slot > 0) return adminPortToSystemPortNo(slot);
-  if (fromRow > 0 && fromRow <= 20) return adminPortToSystemPortNo(fromRow);
-  return fromRow || adminPortToSystemPortNo(num(parsePortNumber(reservedPort)));
+  void portSlot;
+  const fromReservation = systemPortNoFromReservedPort(reservedPort);
+  if (fromReservation > 0) return fromReservation;
+  return num(reservedPort?.port_number || reservedPort?.port_no);
 }
 
-/** ซ่อม account ที่ port_slot ไม่ตรง folder/port_no บน VPS */
+/** ไม่ rebinding slot→PORT-0X อัตโนมัติ (ชน user อื่นบน VPS ร่วม) — ใช้ผลจองจริงเท่านั้น */
 async function repairMisboundAccountPorts(userId) {
-  const uid = num(userId);
-  if (!uid) return 0;
-  const r = await query(
-    `
-    UPDATE vps_system.mt5_accounts a
-    SET port_id = p.id,
-        vps_id = p.vps_id,
-        assigned_port_no = p.port_no,
-        windows_port_no = p.port_no,
-        updated_at = NOW()
-    FROM vps_system.vps_ports p
-    WHERE a.user_id = $1
-      AND a.port_slot IS NOT NULL
-      AND a.port_slot > 0
-      AND p.port_no = (100 + a.port_slot)
-      AND COALESCE(TRIM(p.folder_path), '') <> ''
-      AND p.folder_path ~* ('-PORT-' || LPAD(a.port_slot::text, 2, '0') || '([^0-9]|$)')
-      AND (
-        a.port_id IS DISTINCT FROM p.id
-        OR COALESCE(a.assigned_port_no, 0) <> p.port_no
-        OR COALESCE(a.vps_id, 0) <> p.vps_id
-      )
-    RETURNING a.id, a.port_slot, p.port_no
-  `,
-    [uid]
-  ).catch(() => ({ rows: [] }));
-  return r.rows?.length || 0;
+  void userId;
+  return 0;
 }
 
 function num(v, def = 0) {
@@ -444,6 +418,7 @@ async function reserveBestPort(userId) {
             AND a.assigned_port_no=p.port_no
             AND LOWER(COALESCE(a.status,'')) IN ('connecting','checking','connected','ready','starting')
         )
+        ${vpsPortNotBusyByOthersClause(4)}
       ORDER BY
         COALESCE(n.cpu_percent,0) ASC,
         COALESCE(n.ram_percent,0) ASC,
@@ -452,7 +427,7 @@ async function reserveBestPort(userId) {
         p.port_no ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
-    `, [MAX_CPU, MAX_RAM, MAX_PING]);
+    `, [MAX_CPU, MAX_RAM, MAX_PING, userId]);
 
     const port = r.rows?.[0];
     if (!port) {

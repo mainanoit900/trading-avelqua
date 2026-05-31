@@ -68,6 +68,7 @@ const { acquireVpsLoginSlot, releaseVpsLoginSlot } = require('../lib/mt5LoginGat
 const { repairUserMt5PortBindings } = require('../lib/mt5CachedEquityLogin');
 const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
 const { assertFolderPortFreeForUser } = require('../lib/mt5PortSlotGuard');
+const { systemPortNoFromReservedPort } = require('../lib/mt5ReservedPortNo');
 const { debitScoin } = require('../services/scoinService');
 
 const router = express.Router();
@@ -1674,7 +1675,7 @@ router.get('/mt5/recovery-check', async (req, res) => {
       }
 
       const p = reserve.port;
-      const allocPortNo = num(p.port_number || parsePortNumber(p) || acc.port_slot);
+      const allocPortNo = systemPortNoFromReservedPort(p) || num(p.port_number || parsePortNumber(p) || acc.port_slot);
       await query(
         `
         UPDATE vps_system.mt5_accounts
@@ -2167,8 +2168,8 @@ console.log('[MT5 CONNECT START]', {
     }
 
     reservedPort = reserve.port;
-    const allocPortNo = num(
-      reservedPort.port_number || parsePortNumber(reservedPort) || portSlot
+    const allocPortNo = systemPortNoFromReservedPort(reservedPort) || num(
+      reservedPort.port_number || parsePortNumber(reservedPort)
     );
 
     const folderGuard = await assertFolderPortFreeForUser(
@@ -3050,9 +3051,17 @@ router.post('/mt5/run', async (req, res) => {
         throw new Error(reserve.message || 'ไม่มี VPS/PORT ว่างสำหรับ Run BOT — ลองใหม่อีกครั้ง');
       }
       reservedPortForRun = reserve.port;
-      const allocPortNo = num(
-        reservedPortForRun.port_number || reservedPortForRun.port_no || account.port_slot
+      const allocPortNo = systemPortNoFromReservedPort(reservedPortForRun) || num(
+        reservedPortForRun.port_number || reservedPortForRun.port_no
       );
+      const folderGuard = await assertFolderPortFreeForUser(
+        reservedPortForRun.vps_id,
+        allocPortNo,
+        userId
+      );
+      if (!folderGuard.ok) {
+        throw new Error(folderGuard.message);
+      }
       await query(
         `
         UPDATE vps_system.mt5_accounts

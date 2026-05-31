@@ -4693,7 +4693,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     log(f"MT5 TERMINAL={terminal}")
 
     try:
-        stop_stale_user_mt5_ports(port, port_dir, payload)
+        if os.getenv("AVELQUA_STOP_STALE_MT5", "0").strip().lower() in ("1", "true", "yes"):
+            stop_stale_user_mt5_ports(port, port_dir, payload)
     except Exception as e:
         log(f"STOP STALE MT5 ERROR port={port}: {e}")
 
@@ -5922,7 +5923,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     patch_mt5_experts_config(port_dir, True)
 
     try:
-        stop_stale_user_mt5_ports(port, port_dir, payload)
+        if os.getenv("AVELQUA_STOP_STALE_MT5", "0").strip().lower() in ("1", "true", "yes"):
+            stop_stale_user_mt5_ports(port, port_dir, payload)
     except Exception as e:
         log(f"RUN BOT STOP STALE MT5 ERROR port={port}: {e}")
 
