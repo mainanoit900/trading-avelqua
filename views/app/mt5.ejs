@@ -2644,6 +2644,7 @@ function mt5SyncLiveFastPoll(hasConnecting, pollFastSec) {
     if (mt5LiveFastPollTimer) clearInterval(mt5LiveFastPollTimer);
     mt5LiveFastPollTimer = setInterval(function () {
       loadMt5LiveDashboard(mt5LiveDashboardPage);
+      loadMt5HistoryDashboard(mt5HistoryDashboardPage);
     }, ms);
     mt5EnsureConnectingTick();
   } else if (mt5LiveFastPollTimer) {
@@ -2810,6 +2811,7 @@ async function loadMt5LiveDashboard(page) {
     bindMt5ManageMenus(box);
     mt5SyncLiveFastPoll(data.hasConnecting, data.pollFastSec);
     mt5TickConnectingTimers();
+    loadMt5HistoryDashboard(mt5HistoryDashboardPage);
   } catch (e) {
     box.innerHTML = '<div class="mt5-empty">Live Dashboard Error: ' + e.message + '</div>';
     mt5SyncLiveFastPoll(false);
@@ -2857,7 +2859,7 @@ loadMt5LiveDashboard();
 loadMt5HistoryDashboard();
 mt5EnsureConnectingTick();
 setInterval(function () {
-  loadMt5LiveDashboard(mt5LiveDashboardPage);
+  refreshMt5Dashboards();
 }, MT5_DASHBOARD_REFRESH_MS);
 </script>
 
