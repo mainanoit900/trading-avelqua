@@ -1510,7 +1510,21 @@
         }
         if (typeof mt5TickConnectingTimers === 'function') mt5TickConnectingTimers();
       }
-    } catch (_) {}
+    } catch (err) {
+      console.error('[refreshMt5PortCards]', err);
+      const cfg = window.__mt5RunConfig || {};
+      const accounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts : [];
+      const runPanel = document.getElementById('mt5RunPanel');
+      if (runPanel && accounts.length && !document.getElementById('mt5RunForm') && typeof renderMt5RunFormHtml === 'function') {
+        try {
+          mt5RunRenderSignature = mt5RunDataSignature(accounts, cfg.bots || []);
+          runPanel.innerHTML = renderMt5RunFormHtml(accounts, cfg.bots || []);
+          bindMt5RunForm();
+        } catch (_) {}
+      }
+    } finally {
+      if (document.getElementById('mt5RunForm')) mt5StopRunPrepareTimer();
+    }
   }
   window.refreshMt5PortCards = refreshMt5PortCards;
 
@@ -2565,6 +2579,17 @@ const MT5_CONNECTING_MAX_SEC = 180;
 let mt5LiveFastPollTimer = null;
 let mt5ConnectingTickTimer = null;
 const MT5_TH_TZ = 'Asia/Bangkok';
+
+function mt5DisplayPort(row) {
+  if (!row) return '-';
+  if (row.display_port != null && row.display_port !== '') return row.display_port;
+  const used = Number(row.port_used || 0);
+  if (used >= 1 && used <= 50) return used;
+  const assigned = Number(row.assigned_port_no || 0);
+  if (assigned >= 101 && assigned <= 150) return assigned - 100;
+  return assigned || '-';
+}
+window.mt5DisplayPort = mt5DisplayPort;
 
 function mt5FormatThaiDateTime(value) {
   if (!value) return '-';
