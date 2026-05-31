@@ -796,6 +796,9 @@ async function handleMt5ConnectProduction(req, res) {
           metricsReady: true,
           accountId: fastEarly.accountId,
           portSlot: fastEarly.portSlot || portSlotForFast,
+          vpsId: fastEarly.vpsId || null,
+          portId: fastEarly.portId || null,
+          portNo: fastEarly.portNo || null,
           balance: fastEarly.balance,
           equity: fastEarly.equity,
           message: fastEarly.message
