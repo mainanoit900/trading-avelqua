@@ -61,82 +61,196 @@
   gap: 24px;
 }
 
-.tree-level {
-  position: relative;
+/* ===== Premium referral tree ladder ===== */
+.ref-tree-premium {
+  overflow: hidden;
+  background:
+    radial-gradient(circle at top right, rgba(56, 189, 248, 0.08), transparent 38%),
+    radial-gradient(circle at bottom left, rgba(139, 92, 246, 0.1), transparent 42%),
+    linear-gradient(180deg, rgba(8, 18, 36, 0.98), rgba(6, 14, 28, 0.96));
 }
 
-.tree-level-badge {
+.tree-ladder {
+  display: grid;
+  gap: 0;
+  margin-top: 8px;
+  padding: 4px 0 8px;
+}
+
+.tree-rung {
+  display: grid;
+  grid-template-columns: 28px 1fr;
+  gap: 14px;
+  position: relative;
+  padding: 12px 0;
+}
+
+.tree-rung:not(:last-child)::after {
+  content: "";
+  position: absolute;
+  left: 13px;
+  top: 34px;
+  bottom: -12px;
+  width: 2px;
+  background: linear-gradient(180deg, rgba(99, 102, 241, 0.55), rgba(99, 102, 241, 0.08));
+}
+
+.tree-rung-rail {
+  display: flex;
+  justify-content: center;
+  padding-top: 6px;
+}
+
+.tree-rung-dot {
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  background: linear-gradient(135deg, #818cf8, #6366f1);
+  box-shadow: 0 0 0 4px rgba(99, 102, 241, 0.16), 0 0 14px rgba(99, 102, 241, 0.35);
+}
+
+.tree-rung-1 .tree-rung-dot { background: linear-gradient(135deg, #a78bfa, #7c3aed); box-shadow: 0 0 0 4px rgba(167, 139, 250, 0.14), 0 0 14px rgba(124, 58, 237, 0.28); }
+.tree-rung-2 .tree-rung-dot { background: linear-gradient(135deg, #818cf8, #4f46e5); }
+.tree-rung-3 .tree-rung-dot { background: linear-gradient(135deg, #38bdf8, #0284c7); box-shadow: 0 0 0 4px rgba(56, 189, 248, 0.14), 0 0 14px rgba(2, 132, 199, 0.25); }
+.tree-rung-4 .tree-rung-dot { background: linear-gradient(135deg, #34d399, #059669); box-shadow: 0 0 0 4px rgba(52, 211, 153, 0.12), 0 0 14px rgba(5, 150, 105, 0.22); }
+.tree-rung-5 .tree-rung-dot { background: linear-gradient(135deg, #fbbf24, #d97706); box-shadow: 0 0 0 4px rgba(251, 191, 36, 0.12), 0 0 14px rgba(217, 119, 6, 0.22); }
+
+.tree-rung-head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.tree-rung-badge {
   display: inline-flex;
   align-items: center;
-  gap: 8px;
-  min-height: 36px;
-  padding: 0 14px;
+  min-height: 28px;
+  padding: 0 12px;
   border-radius: 999px;
-  color: #fff;
-  background: linear-gradient(135deg, #3456ff 0%, #6d3dff 100%);
-  font-weight: 800;
-  margin-bottom: 14px;
-}
-
-.tree-level-badge small {
-  opacity: .85;
   font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0.02em;
+  color: #eef2ff;
+  background: rgba(99, 102, 241, 0.16);
+  border: 1px solid rgba(129, 140, 248, 0.28);
 }
 
-.tree-connector {
-  width: 2px;
-  height: 28px;
-  margin: 0 auto 14px;
-  background: linear-gradient(180deg, rgba(80,110,255,.9), rgba(80,110,255,.15));
+.tree-rung-1 .tree-rung-badge { color: #ede9fe; background: rgba(124, 58, 237, 0.16); border-color: rgba(167, 139, 250, 0.28); }
+.tree-rung-3 .tree-rung-badge { color: #e0f2fe; background: rgba(2, 132, 199, 0.14); border-color: rgba(56, 189, 248, 0.24); }
+.tree-rung-4 .tree-rung-badge { color: #d1fae5; background: rgba(5, 150, 105, 0.14); border-color: rgba(52, 211, 153, 0.22); }
+.tree-rung-5 .tree-rung-badge { color: #fef3c7; background: rgba(217, 119, 6, 0.14); border-color: rgba(251, 191, 36, 0.22); }
+
+.tree-rung-count {
+  font-size: 12px;
+  color: #94a3b8;
+  font-weight: 700;
 }
 
-.tree-cards {
+.tree-rung-members {
   display: flex;
   flex-wrap: wrap;
-  gap: 14px;
-  padding-left: 18px;
-  border-left: 2px dashed rgba(80,110,255,.24);
+  gap: 8px;
 }
 
-.tree-card {
-  min-width: 230px;
-  max-width: 260px;
-  text-align: left;
-  padding: 16px;
-  border-radius: 18px;
-  border: 1px solid rgba(130,154,197,.14);
-  background: linear-gradient(180deg, #0a1425 0%, #08111d 100%);
+.tree-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  max-width: 240px;
+  flex: 0 1 200px;
+  padding: 10px 12px;
+  border-radius: 14px;
+  border: 1px solid rgba(148, 163, 184, 0.14);
+  background: linear-gradient(145deg, rgba(15, 23, 42, 0.92), rgba(10, 18, 34, 0.88));
   color: #fff;
   cursor: pointer;
-  transition: transform .18s ease, border-color .18s ease, box-shadow .18s ease;
+  text-align: left;
+  transition: transform 0.16s ease, border-color 0.16s ease, box-shadow 0.16s ease;
+  box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.04);
 }
 
-.tree-card:hover {
-  transform: translateY(-2px);
-  border-color: rgba(100,120,255,.35);
-  box-shadow: 0 14px 30px rgba(0,0,0,.24);
+.tree-chip:hover {
+  transform: translateY(-1px);
+  border-color: rgba(129, 140, 248, 0.38);
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 }
 
-.tree-card-name {
+.tree-chip-avatar {
+  flex-shrink: 0;
+  width: 34px;
+  height: 34px;
+  border-radius: 10px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 14px;
+  font-weight: 900;
+  color: #e0e7ff;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.35), rgba(79, 70, 229, 0.22));
+  border: 1px solid rgba(129, 140, 248, 0.22);
+}
+
+.tree-chip-body {
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.tree-chip-row {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.tree-chip-name {
+  font-size: 13px;
   font-weight: 800;
-  margin-bottom: 6px;
+  color: #f8fafc;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tree-card-meta {
-  color: #8fa5ce;
-  font-size: 13px;
-  margin-bottom: 10px;
-  word-break: break-word;
+.tree-chip-id {
+  flex-shrink: 0;
+  font-size: 10px;
+  font-weight: 800;
+  color: #7dd3fc;
+  letter-spacing: 0.02em;
 }
 
-.tree-card-scoin {
-  font-size: 13px;
-  color: #cfe1ff;
+.tree-chip-email {
+  font-size: 11px;
+  color: #94a3b8;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-.tree-empty {
-  color: #8fa5ce;
-  padding: 12px 0;
+.tree-chip-scoin {
+  font-size: 11px;
+  font-weight: 800;
+  color: #67e8f9;
+  letter-spacing: 0.02em;
+}
+
+.tree-empty-chip {
+  display: inline-flex;
+  align-items: center;
+  min-height: 36px;
+  padding: 0 14px;
+  border-radius: 12px;
+  border: 1px dashed rgba(148, 163, 184, 0.18);
+  color: #64748b;
+  font-size: 12px;
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.tree-level {
+  position: relative;
 }
 
 .ref-table-wrap {
@@ -262,19 +376,19 @@ body.modal-open {
     grid-template-columns: 1fr;
   }
 
-  .tree-cards {
-    padding-left: 12px;
+  .tree-rung-members {
+    gap: 8px;
+  }
+
+  .tree-chip {
+    flex: 1 1 100%;
+    max-width: none;
   }
 }
 
 @media (max-width: 640px) {
   .ref-modal-grid {
     grid-template-columns: 1fr;
-  }
-
-  .tree-card {
-    width: 100%;
-    max-width: 100%;
   }
 }
 
@@ -365,8 +479,6 @@ body.modal-open {
 .ref-kpis{grid-template-columns:repeat(4,minmax(0,1fr)) !important;}
 .ref-link-bar{align-items:center;}
 .ref-link-bar .btn,.ref-link-bar button{height:44px;border-radius:14px;border:0;padding:0 18px;background:linear-gradient(135deg,#3456ff,#6d3dff);color:#fff;font-weight:900;cursor:pointer;}
-.tree-cards{display:grid !important;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));}
-.tree-card{width:100% !important;min-width:0 !important;max-width:none !important;display:block !important;background:linear-gradient(180deg,#0a1425 0%,#08111d 100%) !important;color:#fff !important;border:1px solid rgba(130,154,197,.18) !important;}
 .ref-table-wrap{width:100%;overflow-x:auto;-webkit-overflow-scrolling:touch;}
 .ref-table{border-collapse:separate;border-spacing:0;width:100%;}
 .ref-table th,.ref-table td{vertical-align:middle;}
