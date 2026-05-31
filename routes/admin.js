@@ -3951,6 +3951,15 @@ async function regenerateVpsAgentToken(req, res) {
       WHERE id=$1
     `, [id, newToken]);
 
+    const { systemVpsId } = await resolveSystemVpsId(id);
+    if (systemVpsId) {
+      await query(`
+        UPDATE vps_system.vps_nodes
+        SET agent_token=$2, updated_at=NOW()
+        WHERE id=$1
+      `, [systemVpsId, newToken]).catch(() => {});
+    }
+
     const admin = req.user || req.session.user || {};
 
     await query(`
