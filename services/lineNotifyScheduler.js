@@ -2,12 +2,10 @@
 
 const cron = require('node-cron');
 const { query } = require('../config/database');
-const { pushText, lineEnabled } = require('./lineService');
-const {
-  buildDailyReportMessage,
-  saveDailySnapshots
-} = require('../lib/linePnlReport');
+const { pushText, pushFlex, lineEnabled } = require('./lineService');
+const { saveDailySnapshots } = require('../lib/linePnlReport');
 const { fetchActivePorts } = require('../lib/linePortfolio');
+const { buildDailyReportFlex } = require('../lib/lineFlexUi');
 const { ensureLineNotifyTables } = require('../lib/lineNotifySchema');
 
 async function sendDailyReport() {
@@ -25,9 +23,9 @@ async function sendDailyReport() {
 
   for (const sub of subs.rows || []) {
     try {
-      const msg = await buildDailyReportMessage(sub.user_id);
-      if (!msg) continue;
-      await pushText(sub.line_user_id, msg);
+      const flex = await buildDailyReportFlex(sub.user_id);
+      if (!flex) continue;
+      await pushFlex(sub.line_user_id, flex.altText, flex.contents);
       const accounts = await fetchActivePorts(sub.user_id);
       await saveDailySnapshots(sub.user_id, accounts);
     } catch (e) {
