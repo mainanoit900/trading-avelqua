@@ -154,16 +154,25 @@ Equity ปัจจุบัน: {equity}
             outlook = "neutral"
         parsed["outlook"] = outlook
         return parsed
-    except (urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError) as err:
-        return {
-            "summary_th": f"AI ไม่พร้อม ({err}) — ใช้สถิติย้อนหลังแทน",
-            "outlook": stats.get("trend") or "neutral",
-            "confidence": 40,
-            "market_view_th": "ไม่สามารถเรียก OpenAI ได้",
-            "risks": ["ตรวจสอบ OPENAI_API_KEY และการเชื่อมต่อ"],
-            "recommendations": ["ลองกดวิเคราะห์ใหม่ภายหลัง"],
-            "disclaimer": "เป็นการคาดการณ์ ไม่ใช่คำแนะนำการลงทุน",
-        }
+    except urllib.error.HTTPError as err:
+        body = err.read().decode("utf-8", errors="replace")[:280]
+        err_msg = f"HTTP {err.code}: {body}"
+        return _openai_fallback(stats, err_msg)
+    except (urllib.error.URLError, json.JSONDecodeError, KeyError, ValueError, TimeoutError) as err:
+        err_msg = str(err) or repr(err)
+        return _openai_fallback(stats, err_msg)
+
+
+def _openai_fallback(stats: dict, err_msg: str) -> dict:
+    return {
+        "summary_th": f"AI ไม่พร้อม ({err_msg}) — ใช้สถิติย้อนหลังแทน",
+        "outlook": stats.get("trend") or "neutral",
+        "confidence": 40,
+        "market_view_th": "ไม่สามารถเรียก OpenAI ได้",
+        "risks": ["ตรวจสอบ OPENAI_API_KEY และการเชื่อมต่อ"],
+        "recommendations": ["ลองกดวิเคราะห์ใหม่ภายหลัง"],
+        "disclaimer": "เป็นการคาดการณ์ ไม่ใช่คำแนะนำการลงทุน",
+    }
 
 
 def outlook_factor(outlook: str) -> float:
