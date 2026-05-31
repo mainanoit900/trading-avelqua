@@ -19,6 +19,22 @@ function incomeTypeLabel(item) {
   return type || '-';
 }
 
+function fmtShortDate(value) {
+  if (!value) return '-';
+  try {
+    return new Date(value).toLocaleString('th-TH', {
+      timeZone: 'Asia/Bangkok',
+      day: '2-digit',
+      month: '2-digit',
+      year: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false
+    });
+  } catch (e) {
+    return '-';
+  }
+}
 function incomeRuleText(item) {
   const type = String((item && item.tx_type) || '');
   if (type === 'referral_first_purchase_bonus' || type === 'qualified_referral_bonus') return 'แนะนำตรงครั้งแรก: 60% ครั้งเดียว ไม่แบ่งสายงาน';
@@ -32,7 +48,7 @@ function incomeRuleText(item) {
 
 %>
 
-<% pageCss = '/css/app-referrals.css'; %>
+<% pageCss = 'app-referrals.css'; %>
 <%- include('../partials/app-shell') %>
 
 <style>
@@ -122,82 +138,71 @@ function incomeRuleText(item) {
   </div>
 </section>
 
-<section class="ref-income card" id="incomeDetails" style="margin-top:20px;">
+<section class="ref-income card ref-income-details" id="incomeDetails">
   <div class="card-head">
     <div>
       <h3>รายละเอียดรายได้ Scoin จากสายงาน / แนะนำตรง</h3>
-      <p class="muted">แสดงโบนัสแนะนำตรงครั้งแรก 60% และโบนัสสายงานซื้อซ้ำ 8/5/3/2/2</p>
+      <p class="muted">แสดงโบนัสแนะนำตรงครั้งแรก 60% และโบนัสสายงานซื้อซ้ำ 8/5/3/2/2 · 10 แถวต่อหน้า</p>
     </div>
   </div>
 
-  <div class="ref-table-wrap">
-    <table class="ref-table ref-income-table">
+  <div class="ref-table-wrap ref-income-table-wrap">
+    <table class="ref-table ref-income-table ref-income-table-compact">
       <thead>
         <tr>
-          <th>รหัสรายการ</th>
           <th>วันที่</th>
           <th>ประเภทโบนัส</th>
           <th>ชั้น</th>
-          <th>ID สมาชิก</th>
           <th>สมาชิกที่ซื้อ</th>
-          <th>แพ็กเกจ</th>
-          <th>ราคาแพ็กเกจ</th>
-          <th>สูตรแบ่ง</th>
-          <th>Scoin ที่ได้รับ</th>
+          <th>แพ็กเกจ / ราคา</th>
+          <th>%</th>
+          <th>Scoin</th>
         </tr>
       </thead>
       <tbody>
         <% if (!incomeDetails.length) { %>
           <tr>
-            <td colspan="10" class="ref-empty-row">ยังไม่มีรายได้ Scoin จากสายงาน</td>
+            <td colspan="7" class="ref-empty-row">ยังไม่มีรายได้ Scoin จากสายงาน</td>
           </tr>
         <% } %>
 
         <% incomeDetails.forEach(function(item){ %>
           <tr>
-            <td>#<%= item.display_id || item.id %></td>
-            <td><%= item.created_at ? new Date(item.created_at).toLocaleString('th-TH', {
-              timeZone: 'Asia/Bangkok',
-              year: 'numeric',
-              month: '2-digit',
-              day: '2-digit',
-              hour: '2-digit',
-              minute: '2-digit',
-              hour12: false
-            }) : '-' %></td>
-            <td><strong><%= incomeTypeLabel(item) %></strong><br><small class="ref-subtext"><%= item.tx_type || '-' %></small></td>
-            <td><span class="ref-level-pill">ชั้น <%= item.level_no || '-' %></span></td>
-            <td>#<%= item.buyer_display_id || '-' %></td>
-            <td>
-              <strong><%= item.buyer_name || '-' %></strong>
+            <td class="ref-date-cell">
+              <strong><%= fmtShortDate(item.created_at) %></strong>
+              <small class="ref-subtext">#<%= item.display_id || item.id %></small>
+            </td>
+            <td class="ref-type-cell" title="<%= incomeRuleText(item) %>"><%= incomeTypeLabel(item) %></td>
+            <td><span class="ref-level-pill"><%= item.level_no || '-' %></span></td>
+            <td class="ref-member-cell">
+              <strong>#<%= item.buyer_display_id || '-' %> · <%= item.buyer_name || '-' %></strong>
               <small class="ref-subtext"><%= item.buyer_email || '-' %></small>
             </td>
-            <td><%= item.package_name || '-' %></td>
-            <td class="ref-money">฿<%= Number(item.package_price_thb || item.package_amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %></td>
-            <td>
-              <span class="ref-percent"><%= Number(item.reward_percent || 0) > 0 ? Number(item.reward_percent || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 }) + '%' : '-' %></span>
-              <small class="ref-subtext"><%= incomeRuleText(item) %></small>
+            <td class="ref-package-cell">
+              <strong><%= item.package_name || '-' %></strong>
+              <small class="ref-subtext">฿<%= Number(item.package_price_thb || item.package_amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %></small>
             </td>
-            <td class="ref-scoin-plus">+<%= Number(item.amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %> Scoin</td>
+            <td class="ref-percent" title="<%= incomeRuleText(item) %>"><%= Number(item.reward_percent || 0) > 0 ? Number(item.reward_percent || 0).toLocaleString('th-TH', { maximumFractionDigits: 2 }) + '%' : '-' %></td>
+            <td class="ref-scoin-plus">+<%= Number(item.amount || 0).toLocaleString('th-TH', { minimumFractionDigits: 2, maximumFractionDigits: 4 }) %></td>
           </tr>
         <% }) %>
       </tbody>
     </table>
   </div>
 
-  <div class="wallet-actions ref-pager" style="justify-content:flex-end;margin-top:12px;">
-    <% if (incomePager && incomePager.page > 1) { %>
-      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page - 1 %>&memberPage=<%= memberPager.page %>#incomeDetails">ก่อนหน้า</a>
-    <% } %>
-
-    <span class="wallet-muted">
-      รายการ Scoin หน้า <%= incomePager.page %> / <%= incomePager.totalPages %>
-    </span>
-
-    <% if (incomePager && incomePager.page < incomePager.totalPages) { %>
-      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page + 1 %>&memberPage=<%= memberPager.page %>#incomeDetails">ถัดไป</a>
-    <% } %>
+  <% if (incomePager && incomePager.totalPages > 1) { %>
+  <div class="ref-pager">
+    <span class="ref-pager-info">หน้า <%= incomePager.page %> / <%= incomePager.totalPages %> · ทั้งหมด <%= Number(incomePager.total || 0).toLocaleString('th-TH') %> รายการ</span>
+    <div class="ref-pager-btns">
+      <% if (incomePager.page > 1) { %>
+        <a class="ref-pager-btn" href="/app/referrals?incomePage=<%= incomePager.page - 1 %>&memberPage=<%= memberPager.page %>#incomeDetails">ก่อนหน้า</a>
+      <% } %>
+      <% if (incomePager.page < incomePager.totalPages) { %>
+        <a class="ref-pager-btn" href="/app/referrals?incomePage=<%= incomePager.page + 1 %>&memberPage=<%= memberPager.page %>#incomeDetails">ถัดไป</a>
+      <% } %>
+    </div>
   </div>
+  <% } %>
 </section>
 
 <section class="ref-tree card">
@@ -308,23 +313,20 @@ function incomeRuleText(item) {
       </tbody>
     </table>
   </div>
-<div class="wallet-actions" style="justify-content:flex-end;margin-top:12px;">
-    <% if (memberPager && memberPager.page > 1) { %>
-      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page %>&memberPage=<%= memberPager.page - 1 %>#memberList">
-        ก่อนหน้า
-      </a>
-    <% } %>
 
-    <span class="wallet-muted">
-      หน้า <%= memberPager.page %> / <%= memberPager.totalPages %>
-    </span>
-
-    <% if (memberPager && memberPager.page < memberPager.totalPages) { %>
-      <a class="wallet-link-btn" href="/app/referrals?incomePage=<%= incomePager.page %>&memberPage=<%= memberPager.page + 1 %>#memberList">
-        ถัดไป
-      </a>
-    <% } %>
+  <% if (memberPager && memberPager.totalPages > 1) { %>
+  <div class="ref-pager">
+    <span class="ref-pager-info">หน้า <%= memberPager.page %> / <%= memberPager.totalPages %> · ทั้งหมด <%= Number(memberPager.total || 0).toLocaleString('th-TH') %> คน</span>
+    <div class="ref-pager-btns">
+      <% if (memberPager.page > 1) { %>
+        <a class="ref-pager-btn" href="/app/referrals?incomePage=<%= incomePager.page %>&memberPage=<%= memberPager.page - 1 %>#memberList">ก่อนหน้า</a>
+      <% } %>
+      <% if (memberPager.page < memberPager.totalPages) { %>
+        <a class="ref-pager-btn" href="/app/referrals?incomePage=<%= incomePager.page %>&memberPage=<%= memberPager.page + 1 %>#memberList">ถัดไป</a>
+      <% } %>
+    </div>
   </div>
+  <% } %>
 </section>
 
 <div class="ref-modal" id="refModal">

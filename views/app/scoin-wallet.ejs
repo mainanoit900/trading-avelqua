@@ -153,13 +153,10 @@ function fmtDate(value) {
 .wallet-network-badge{display:inline-flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;background:rgba(23,201,100,.12);border:1px solid rgba(23,201,100,.24);color:#9df2c2;font-size:12px;font-weight:700}
 .wallet-balance-main{font-size:42px;line-height:1.05;font-weight:900;color:#fff;margin:18px 0 8px;word-break:break-word}
 .wallet-balance-sub{color:#8fa5ce;font-size:14px}
-.wallet-coin-actions{position:relative;display:flex;gap:4px;flex-wrap:nowrap;margin-top:18px;padding:4px;border-radius:16px;border:1px solid rgba(130,154,197,.16);background:rgba(255,255,255,.04)}
-.wallet-coin-actions-indicator{position:absolute;top:4px;left:4px;height:calc(100% - 8px);border-radius:12px;background:linear-gradient(135deg,#3456ff 0%,#6d3dff 100%);box-shadow:0 8px 22px rgba(52,86,255,.32);transition:transform .28s cubic-bezier(.4,0,.2,1),width .28s cubic-bezier(.4,0,.2,1);z-index:0;pointer-events:none}
-.wallet-coin-actions-indicator.is-hidden{opacity:0;visibility:hidden}
-.wallet-coin-action{position:relative;z-index:1;min-width:0;flex:1;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 12px;border-radius:12px;border:none;background:transparent;color:#94a3b8;font-weight:800;text-decoration:none;cursor:pointer;transition:color .2s ease}
-.wallet-coin-action:hover{color:#dbeafe}
-.wallet-coin-action.active{color:#fff}
-.wallet-coin-action.primary{background:transparent}
+.wallet-coin-actions{display:flex;gap:10px;flex-wrap:wrap;margin-top:18px}
+.wallet-coin-action{min-width:120px;flex:1;display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16px;border-radius:14px;border:1px solid rgba(130,154,197,.18);background:rgba(255,255,255,.06);color:#dbeafe;font-weight:800;text-decoration:none;cursor:pointer;transition:background .18s ease,border-color .18s ease,color .18s ease,box-shadow .18s ease}
+.wallet-coin-action:hover{color:#fff;border-color:rgba(130,154,197,.28)}
+.wallet-coin-action.active{border-color:transparent;color:#fff;background:linear-gradient(135deg,#3456ff 0%,#6d3dff 100%);box-shadow:0 8px 22px rgba(52,86,255,.28)}
 .wallet-address-card{display:grid;grid-template-columns:168px 1fr;gap:18px;align-items:center}
 .wallet-qr{width:168px;height:168px;border-radius:18px;border:1px solid rgba(130,154,197,.16);background:#fff;padding:8px}
 .wallet-qr-placeholder{width:168px;height:168px;border-radius:18px;border:1px dashed rgba(130,154,197,.24);display:flex;align-items:center;justify-content:center;color:#8fa5ce;font-size:13px;text-align:center;padding:12px}
@@ -192,8 +189,7 @@ function fmtDate(value) {
       <div class="wallet-stat"><span>กันวงเงิน (ขายรออนุมัติ)</span><strong><%= fmtNum(scoinLocked, 2, 4) %></strong></div>
       <div class="wallet-stat"><span>ค่าธรรมเนียมโอน</span><strong><%= fmtNum((scoinSettings && scoinSettings.transfer_fee_percent) || 1.2, 2, 2) %>%</strong></div>
     </div>
-    <div class="wallet-coin-actions" id="walletTabBar">
-      <div class="wallet-coin-actions-indicator is-hidden" id="walletTabIndicator" aria-hidden="true"></div>
+    <div class="wallet-coin-actions">
       <button type="button" class="wallet-coin-action" data-wallet-tab="transfer">โอน</button>
       <button type="button" class="wallet-coin-action" data-wallet-tab="market">ซื้อ / ขาย</button>
       <button type="button" class="wallet-coin-action" data-wallet-tab="activity">ประวัติ</button>
@@ -433,20 +429,6 @@ function copyText(text){
   navigator.clipboard.writeText(text).then(()=>alert('คัดลอกแล้ว')).catch(()=>alert('คัดลอกไม่สำเร็จ'));
 }
 function copyWalletCode(){copyText(document.getElementById('walletCodeText')?.innerText?.trim());}
-function updateWalletTabIndicator(name){
-  const bar=document.getElementById('walletTabBar');
-  const indicator=document.getElementById('walletTabIndicator');
-  const btn=bar?.querySelector('[data-wallet-tab="'+name+'"]');
-  if(!indicator||!bar||!btn){
-    if(indicator)indicator.classList.add('is-hidden');
-    return;
-  }
-  indicator.classList.remove('is-hidden');
-  const barRect=bar.getBoundingClientRect();
-  const btnRect=btn.getBoundingClientRect();
-  indicator.style.width=btnRect.width+'px';
-  indicator.style.transform='translateX('+(btnRect.left-barRect.left)+'px)';
-}
 function setWalletTab(name){
   const panels={
     overview:['wallet-panel-overview'],
@@ -468,18 +450,9 @@ function setWalletTab(name){
   document.querySelectorAll('[data-wallet-tab]').forEach(btn=>{
     btn.classList.toggle('active', !!tab && btn.getAttribute('data-wallet-tab')===tab);
   });
-  if(tab)updateWalletTabIndicator(tab);
-  else{
-    const indicator=document.getElementById('walletTabIndicator');
-    if(indicator)indicator.classList.add('is-hidden');
-  }
 }
 document.querySelectorAll('[data-wallet-tab]').forEach(btn=>{
   btn.addEventListener('click',()=>setWalletTab(btn.getAttribute('data-wallet-tab')));
-});
-window.addEventListener('resize',()=>{
-  const active=document.querySelector('[data-wallet-tab].active');
-  if(active)setWalletTab(active.getAttribute('data-wallet-tab'));
 });
 const SCOIN_PRICE=<%= Number((scoinSettings && scoinSettings.current_price_thb) || 1) %>;
 function bindScoinThbPair(scoinId,thbId){const s=document.getElementById(scoinId),t=document.getElementById(thbId);if(!s||!t)return;let syncing=false;s.addEventListener('input',()=>{if(syncing)return;syncing=true;const v=Number(s.value||0);t.value=v>0?(v*SCOIN_PRICE).toFixed(2):'';syncing=false;});t.addEventListener('input',()=>{if(syncing)return;syncing=true;const v=Number(t.value||0);s.value=v>0?(v/SCOIN_PRICE).toFixed(4):'';syncing=false;});}

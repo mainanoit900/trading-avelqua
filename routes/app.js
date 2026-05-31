@@ -3173,6 +3173,7 @@ router.get('/referrals', async (req, res) => {
 
   return res.render('app/referrals', {
     pageTitle: 'My Referral Network',
+    pageCss: 'app-referrals.css',
     currentPath: '/app/referrals',
     ...flash(req),
     ...base,
