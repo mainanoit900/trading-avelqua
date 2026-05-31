@@ -1,0 +1,50 @@
+Avelqua Windows VPS Agent - Install Guide
+=========================================
+
+Each Windows VPS needs its own Agent TOKEN from Admin panel.
+
+Before install
+--------------
+1. Windows Server with RDP login (stay logged in; disconnect OK, no Sign out)
+2. Python 3.10+ installed, "Add python.exe to PATH" checked
+3. PowerShell as Administrator
+4. Copy Agent TOKEN: Admin -> VPS -> select node -> Edit -> Agent TOKEN -> Copy
+
+Method A - One command (recommended)
+------------------------------------
+Open PowerShell (Admin), paste (replace YOUR_TOKEN):
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "iwr 'https://trading.avelqua.com/agent/install-windows-vps-agent.ps1' -OutFile $env:TEMP\install-windows-vps-agent.ps1 -UseBasicParsing; powershell -NoProfile -ExecutionPolicy Bypass -File $env:TEMP\install-windows-vps-agent.ps1 -Token 'YOUR_TOKEN'"
+
+Method B - CMD file
+-------------------
+1. Download: https://trading.avelqua.com/agent/install-windows-vps-agent.cmd
+2. Right-click -> Run as administrator
+3. Or: install-windows-vps-agent.cmd YOUR_TOKEN
+
+Method C - Manual download
+--------------------------
+1. mkdir C:\avelqua-python-agent
+2. Download install-windows-vps-agent.ps1 into that folder
+3. powershell -NoProfile -ExecutionPolicy Bypass -File C:\avelqua-python-agent\install-windows-vps-agent.ps1 -Token "YOUR_TOKEN"
+
+After install
+-------------
+Check log:
+  Get-Content C:\avelqua-python-agent\agent.log -Tail 20
+
+Should see:
+  HEARTBEAT status=online
+  PORT HEALTH SENT count=...
+
+Optional params
+---------------
+-Mt5Root "D:\MT5_PORTS"     if MT5 not in C:\MT5_PORTS
+-AgentDir "D:\avelqua-agent" if you want another folder
+
+Files installed to C:\avelqua-python-agent\
+  agent.py, .env, logs\, Scheduled Tasks: AvelquaPythonAgentDesktop + AvelquaAgentWatchdog
+
+Do NOT use NSSM for MT5 agent (Session 0 breaks MT5 UI).
+
+Support: https://trading.avelqua.com/admin/vps
