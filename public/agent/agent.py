@@ -155,6 +155,21 @@ def _redis_cmd_listener_loop() -> None:
             time.sleep(5.0)
 
 
+def apply_force_stop_ports(items: Any) -> None:
+    for item in items or []:
+        port = payload_get(item, "port", "portNumber", "port_no")
+        if not port:
+            continue
+        try:
+            stop_mt5_port_only(port, dict(item))
+            log(
+                f"PACKAGE EXPIRED KILL port={port} login={item.get('mt5_login') or '-'} "
+                f"userId={item.get('userId') or item.get('user_id') or '-'}"
+            )
+        except Exception as kill_err:
+            log(f"PACKAGE EXPIRED KILL ERROR port={port}: {kill_err}")
+
+
 def poll_agent_command_batch(max_per_tick: int) -> bool:
     """Poll /queue (optionally long-wait). Returns True if at least one command was handled."""
     wait_ms = max(0, int(os.getenv("AVELQUA_QUEUE_WAIT_MS", str(QUEUE_WAIT_MS)) or 0))
@@ -168,8 +183,12 @@ def poll_agent_command_batch(max_per_tick: int) -> bool:
     handled_any = False
     async_types = {"connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"}
     async_ports_used: set = set()
+    force_stop_done = False
     for _ in range(max(1, max_per_tick)):
         res = api("GET", queue_path, timeout=req_timeout)
+        if not force_stop_done:
+            apply_force_stop_ports((res or {}).get("force_stop_ports"))
+            force_stop_done = True
         cmd = res.get("command")
         if not cmd:
             if res.get("pendingCount"):
@@ -576,15 +595,7 @@ def send_port_health():
             "ports": ports
         })
 
-        for item in (res or {}).get("force_stop_ports") or []:
-            port = payload_get(item, "port", "portNumber", "port_no")
-            if not port:
-                continue
-            try:
-                stop_mt5_port_only(port, dict(item))
-                log(f"PACKAGE EXPIRED KILL port={port} login={item.get('mt5_login') or '-'}")
-            except Exception as kill_err:
-                log(f"PACKAGE EXPIRED KILL ERROR port={port}: {kill_err}")
+        apply_force_stop_ports((res or {}).get("force_stop_ports"))
 
         log(f"PORT HEALTH SENT count={len(ports)}")
 

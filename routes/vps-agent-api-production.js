@@ -501,80 +501,10 @@ async function findNode(req) {
   return r.rows?.[0] || null;
 }
 
-async function userHasActivePackage(userId) {
-  const uid = Number(userId || 0);
-  if (!uid) return false;
-  const r = await query(
-    `
-    SELECT 1
-    FROM user_subscriptions s
-    WHERE s.user_id = $1
-      AND LOWER(TRIM(COALESCE(s.status, ''))) NOT IN ('cancelled', 'deleted', 'expired')
-      AND (s.end_at IS NULL OR s.end_at > NOW())
-    LIMIT 1
-  `,
-    [uid]
-  ).catch(() => ({ rows: [] }));
-  return !!(r.rows && r.rows.length);
-}
-
-async function findExpiredPackageKillPorts(nodeId, ports) {
-  const kills = [];
-  const seen = new Set();
-  for (const p of ports) {
-    const running = !!(p.running ?? p.is_running ?? p.isRunning);
-    if (!running) continue;
-    const portNo = Number(p.port_no || p.portNo || p.portNumber || 0);
-    if (!portNo) continue;
-    const login = String(p.mt5_login || p.mt5Login || '').trim();
-    const folderPath = String(p.folder_path || p.folderPath || '').trim();
-    let userId = null;
-    if (login) {
-      const owner = await query(
-        `
-        SELECT user_id
-        FROM vps_system.mt5_accounts
-        WHERE mt5_login = $1
-        ORDER BY updated_at DESC NULLS LAST, id DESC
-        LIMIT 1
-      `,
-        [login]
-      ).catch(() => ({ rows: [] }));
-      userId = owner.rows?.[0]?.user_id || null;
-    }
-    if (!userId) {
-      const locked = await query(
-        `
-        SELECT locked_by_user_id
-        FROM vps_system.vps_ports
-        WHERE vps_id = $1 AND port_no = $2
-        LIMIT 1
-      `,
-        [nodeId, portNo]
-      ).catch(() => ({ rows: [] }));
-      userId = locked.rows?.[0]?.locked_by_user_id || null;
-    }
-    if (!userId) continue;
-    if (await userHasActivePackage(userId)) continue;
-    const key = `${portNo}:${folderPath || login || userId}`;
-    if (seen.has(key)) continue;
-    seen.add(key);
-    kills.push({
-      port: portNo,
-      port_no: portNo,
-      portNumber: portNo,
-      folder_path: folderPath,
-      vpsFolderPath: folderPath,
-      mt5_login: login || null,
-      userId: Number(userId),
-      reason: 'package_expired',
-      forceKill: true,
-      closeMt5: true,
-      killMt5: true
-    });
-  }
-  return kills;
-}
+const {
+  findExpiredPackageKillPorts,
+  sweepNodePackageExpiry
+} = require('../lib/mt5ExpiryEnforcer');
 
 router.post('/heartbeat', async (req, res) => {
   try {
@@ -871,6 +801,8 @@ router.get('/queue', async (req, res) => {
     await ensureAgentTables();
     const node = await findNode(req);
     if (!node) return res.status(401).json({ ok: false, message: 'INVALID_AGENT' });
+
+    const forceStopPorts = await sweepNodePackageExpiry(node.id).catch(() => []);
 
     await query(`
       UPDATE vps_system.vps_nodes
@@ -1341,7 +1273,8 @@ router.get('/queue', async (req, res) => {
         ok: true,
         command: null,
         pendingCount: Number(pendingCount.rows?.[0]?.c || 0),
-        processingLoginCount: Number(processingLogin.rows?.[0]?.c || 0)
+        processingLoginCount: Number(processingLogin.rows?.[0]?.c || 0),
+        force_stop_ports: forceStopPorts
       });
     }
 
@@ -1367,6 +1300,7 @@ router.get('/queue', async (req, res) => {
 
     return res.json({
       ok: true,
+      force_stop_ports: forceStopPorts,
       command: {
         id: pickedRow.id,
         commandType: pickedRow.command_type,

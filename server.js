@@ -41,22 +41,28 @@ let mt5ExpiryEnforcerRunning = false;
 const MT5_EXPIRY_ENFORCER_ENABLED =
   String(process.env.MT5_EXPIRY_ENFORCER_ENABLED || 'true').toLowerCase() !== 'false';
 const MT5_EXPIRY_ENFORCER_INTERVAL_MS = Math.max(
-  60 * 1000,
-  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 60 * 1000)
+  15 * 1000,
+  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 15 * 1000)
 );
 
-if (MT5_EXPIRY_ENFORCER_ENABLED) {
-  setInterval(async () => {
-    if (mt5ExpiryEnforcerRunning) return;
-    mt5ExpiryEnforcerRunning = true;
-    try {
-      await runMt5ExpiryEnforcerOnce();
-    } catch (e) {
-      console.error('MT5 expiry enforcer error:', e);
-    } finally {
-      mt5ExpiryEnforcerRunning = false;
+async function runMt5ExpiryEnforcerSafe() {
+  if (mt5ExpiryEnforcerRunning) return;
+  mt5ExpiryEnforcerRunning = true;
+  try {
+    const result = await runMt5ExpiryEnforcerOnce();
+    if (result.expiredUsers > 0 || result.expiredSubscriptions > 0 || result.stoppedUsers > 0) {
+      console.log('[mt5-expiry-enforcer]', JSON.stringify(result));
     }
-  }, MT5_EXPIRY_ENFORCER_INTERVAL_MS);
+  } catch (e) {
+    console.error('MT5 expiry enforcer error:', e);
+  } finally {
+    mt5ExpiryEnforcerRunning = false;
+  }
+}
+
+if (MT5_EXPIRY_ENFORCER_ENABLED) {
+  runMt5ExpiryEnforcerSafe();
+  setInterval(runMt5ExpiryEnforcerSafe, MT5_EXPIRY_ENFORCER_INTERVAL_MS);
 }
 
 app.set('trust proxy', 1);
