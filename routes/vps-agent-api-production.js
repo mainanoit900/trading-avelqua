@@ -653,7 +653,7 @@ router.post('/port-health', async (req, res) => {
     const { reconcileBotsFromPortHealth } = require('../lib/mt5BotPortHealthSync');
     await reconcileBotsFromPortHealth(node.id, ports).catch(() => {});
 
-    const forceStopPorts = await findExpiredPackageKillPorts(node.id, ports);
+    const forceStopPorts = await sweepNodePackageExpiry(node.id, ports);
 
     return res.json({ ok: true, count: ports.length, force_stop_ports: forceStopPorts });
   } catch (e) {

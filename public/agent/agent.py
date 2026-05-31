@@ -156,7 +156,7 @@ def _redis_cmd_listener_loop() -> None:
 
 
 _FORCE_STOP_LAST: Dict[int, float] = {}
-_FORCE_STOP_COOLDOWN_SEC = float(os.getenv("AVELQUA_FORCE_STOP_COOLDOWN_SEC", "90"))
+_FORCE_STOP_COOLDOWN_SEC = float(os.getenv("AVELQUA_FORCE_STOP_COOLDOWN_SEC", "30"))
 
 
 def apply_force_stop_ports(items: Any) -> None:
