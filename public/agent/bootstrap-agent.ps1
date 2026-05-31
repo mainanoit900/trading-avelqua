@@ -33,4 +33,5 @@ foreach ($name in $files) {
 Write-Host ""
 Write-Host "Run installer..."
 $installer = Join-Path $AgentDir "install-agent-desktop-with-watchdog.ps1"
-& powershell.exe -NoProfile -ExecutionPolicy Bypass -File $installer -Token $Token -AgentDir $AgentDir
+& $installer -Token $Token -AgentDir $AgentDir
+if ($LASTEXITCODE -and $LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

@@ -29,7 +29,7 @@ if ([string]::IsNullOrWhiteSpace($Token)) {
   exit 1
 }
 
-$scriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
+$scriptDir = if ($PSScriptRoot) { $PSScriptRoot } elseif ($MyInvocation.MyCommand.Path) { Split-Path -Parent $MyInvocation.MyCommand.Path } else { $AgentDir }
 if (Test-Path (Join-Path $scriptDir "agent.py")) {
   New-Item -ItemType Directory -Force -Path $AgentDir | Out-Null
   New-Item -ItemType Directory -Force -Path "$AgentDir\logs" | Out-Null
@@ -37,7 +37,7 @@ if (Test-Path (Join-Path $scriptDir "agent.py")) {
   if (Test-Path (Join-Path $scriptDir "requirements.txt")) {
     Copy-Item -Force (Join-Path $scriptDir "requirements.txt") (Join-Path $AgentDir "requirements.txt")
   }
-  Copy-Item -Force $MyInvocation.MyCommand.Path (Join-Path $AgentDir "install_interactive_agent_task.ps1")
+  Copy-Item -Force (Join-Path $scriptDir "install_interactive_agent_task.ps1") (Join-Path $AgentDir "install_interactive_agent_task.ps1")
   if (Test-Path (Join-Path $scriptDir "watchdog-agent.ps1")) {
     Copy-Item -Force (Join-Path $scriptDir "watchdog-agent.ps1") (Join-Path $AgentDir "watchdog-agent.ps1")
   }
