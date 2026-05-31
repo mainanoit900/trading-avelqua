@@ -206,13 +206,6 @@
     <div id="mt5RunPanel">
     <% if (!connectedRunAccounts || connectedRunAccounts.length === 0) { %>
       <div class="mt5-empty">กรุณาเชื่อมต่อ MT5 ก่อน แล้วระบบจะแสดงตัวเลือก Run BOT</div>
-    <% } else { %>
-      <div id="mt5RunPrepareBox" class="mt5-run-prepare-box">
-        <div class="mt5-run-prepare-ring" aria-hidden="true"></div>
-        <p class="mt5-run-prepare-title">กำลังเตรียมฟอร์ม Run BOT...</p>
-        <p class="mt5-run-prepare-timer">ใช้เวลา <b id="mt5RunPrepareSec">0</b> วินาที</p>
-        <p class="mt5-run-prepare-hint">โหลด PORT · บอท · สถานะล่าสุด</p>
-      </div>
     <% } %>
     </div>
   </section>
@@ -1358,10 +1351,23 @@
   window.mt5SyncRunConnectedAccounts = mt5SyncRunConnectedAccounts;
   window.mt5ApplyRunAccountToForm = mt5ApplyRunAccountToForm;
   window.mt5FindRunAccountBySlot = mt5FindRunAccountBySlot;
+  window.mt5UpdateRunSubmitState = mt5UpdateRunSubmitState;
 
   let mt5RunRenderSignature = '';
-  let mt5RunPrepareStartedAt = Date.now();
-  let mt5RunPrepareTimer = null;
+  let mt5RunMetricsSignature = '';
+  let mt5PortRefreshInFlight = null;
+  let mt5LiveDashRefreshTimer = null;
+
+  function mt5ScheduleLiveDashRefresh() {
+    if (mt5LiveDashRefreshTimer) clearTimeout(mt5LiveDashRefreshTimer);
+    mt5LiveDashRefreshTimer = setTimeout(function () {
+      mt5LiveDashRefreshTimer = null;
+      if (typeof loadMt5LiveDashboard === 'function') {
+        loadMt5LiveDashboard(typeof mt5LiveDashboardPage !== 'undefined' ? mt5LiveDashboardPage : 1);
+      }
+    }, 250);
+  }
+  window.mt5ScheduleLiveDashRefresh = mt5ScheduleLiveDashRefresh;
 
   function mt5CaptureRunFormDraft(form) {
     if (!form) return null;
@@ -1416,10 +1422,10 @@
     }
   }
 
-  function mt5RunDataSignature(accounts, bots) {
+  function mt5RunStructureSignature(accounts, bots) {
     return JSON.stringify({
       accounts: (accounts || []).map(function (a) {
-        return [a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.last_equity, a.last_balance, a.status];
+        return [a.id, a.port_slot, a.assigned_port_no, a.mt5_login, a.status];
       }),
       bots: (bots || []).map(function (b) {
         return [b.code || b.bot_code || '', b.label || b.display_name || b.bot_name || ''];
@@ -1427,9 +1433,107 @@
     });
   }
 
+  function mt5RunMetricsSignature(accounts, activeInstances) {
+    return JSON.stringify({
+      metrics: (accounts || []).map(function (a) {
+        return [a.id, a.last_equity, a.last_balance];
+      }),
+      active: (activeInstances || []).map(function (row) {
+        return [
+          row.id,
+          row.mt5_account_id,
+          row.status,
+          row.raw_status,
+          row.connecting_since,
+          row.agent_command_status
+        ];
+      })
+    });
+  }
+
+  function mt5PatchRunFormFromState() {
+    const form = document.getElementById('mt5RunForm');
+    if (!form) return false;
+    const selected = mt5SelectedRunAccount();
+    if (!selected) return false;
+    mt5ApplyRunAccountToForm(selected);
+    const active = mt5SelectedRunInstance();
+    const hasActive = !!active;
+    const expired = !!(window.__mt5RunConfig || {}).packageExpired;
+    const runBtn = form.querySelector('.mt5-run-submit-btn');
+    const stopBtn = form.querySelector('.mt5-stop-btn');
+    const stopDisabled = form.querySelector('.mt5-run-secondary-disabled');
+    const note = form.querySelector('.mt5-run-action-note');
+    const actionButtons = form.querySelector('.mt5-run-action-buttons');
+    if (runBtn) {
+      runBtn.textContent = expired
+        ? 'แพ็คเกจหมดอายุ'
+        : hasActive
+          ? (String(active.status || '') === 'running' ? 'BOT กำลังรันอยู่' : 'BOT กำลังเชื่อมต่อ...')
+          : 'Run BOT';
+    }
+    if (actionButtons) {
+      let existingStop = form.querySelector('.mt5-stop-btn');
+      let existingDisabled = form.querySelector('.mt5-run-secondary-disabled');
+      if (hasActive) {
+        if (existingDisabled) existingDisabled.remove();
+        if (!existingStop) {
+          const btn = document.createElement('button');
+          btn.type = 'button';
+          btn.className = 'mt5-btn mt5-run-secondary mt5-stop-btn';
+          btn.setAttribute('data-stop-id', String(active.id));
+          btn.textContent = 'Stop BOT';
+          actionButtons.appendChild(btn);
+        } else {
+          existingStop.setAttribute('data-stop-id', String(active.id));
+          existingStop.disabled = false;
+          existingStop.classList.remove('mt5-run-secondary-disabled');
+        }
+      } else if (!existingDisabled && actionButtons) {
+        if (existingStop) existingStop.remove();
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'mt5-btn mt5-run-secondary mt5-run-secondary-disabled';
+        btn.disabled = true;
+        btn.textContent = 'Stop BOT';
+        actionButtons.appendChild(btn);
+      }
+    }
+    let connectMeta = document.getElementById('mt5RunConnectingMeta');
+    if (hasActive && String(active.status || '') !== 'running') {
+      const since = active.connecting_since || active.started_at || '';
+      const hint = active.connecting_hint || (typeof mt5ConnectingHint === 'function' ? mt5ConnectingHint(active) : 'กำลังเปิดบอท');
+      const sec = typeof mt5ConnectingElapsedSec === 'function' ? mt5ConnectingElapsedSec(since) : 0;
+      const html =
+        '<div class="mt5-run-connecting-meta" id="mt5RunConnectingMeta" data-since="' + mt5Esc(since) + '" data-hint="' + mt5Esc(hint) + '">' +
+        '<b>กำลังเปิดบอท</b> — ใช้เวลา <b>' + sec + '</b> วินาที · ' + mt5Esc(hint) +
+        ' · โดยทั่วไป 30–90 วิ</div>';
+      if (connectMeta) {
+        connectMeta.outerHTML = html;
+      } else if (note && note.parentNode) {
+        note.insertAdjacentHTML('afterend', html);
+      }
+    } else if (connectMeta) {
+      connectMeta.remove();
+    }
+    if (note && !runBtn?.disabled) {
+      note.textContent = hasActive ? mt5ActiveRunPortNote(active) : 'พร้อมส่งคำสั่ง Run ไปยัง PORT ที่เลือก';
+      note.style.color = '';
+    }
+    mt5UpdateRunSubmitState(form);
+    return true;
+  }
+  window.mt5PatchRunFormFromState = mt5PatchRunFormFromState;
+
+  function mt5RunDataSignature(accounts, bots) {
+    return mt5RunStructureSignature(accounts, bots);
+  }
+
   async function refreshMt5PortCards() {
+    if (mt5PortRefreshInFlight) return mt5PortRefreshInFlight;
+    mt5PortRefreshInFlight = (async function () {
     try {
-      const res = await fetch('/app/mt5/ports-state', {
+      const res = await fetch('/app/mt5/ports-state?poll=1', {
         credentials: 'same-origin',
         cache: 'no-store',
         headers: { Accept: 'application/json' }
@@ -1466,11 +1570,13 @@
         cfg.bots = Array.isArray(data.bots) && data.bots.length ? data.bots : (cfg.bots || []);
         window.__mt5RunConfig = cfg;
         mt5RunState.activeInstances = Array.isArray(cfg.activeInstances) ? cfg.activeInstances.slice() : [];
-        const nextSignature = mt5RunDataSignature(cfg.connectedAccounts, cfg.bots || []);
-        if (nextSignature !== mt5RunRenderSignature || !document.getElementById('mt5RunForm')) {
+        const nextStructure = mt5RunStructureSignature(cfg.connectedAccounts, cfg.bots || []);
+        const nextMetrics = mt5RunMetricsSignature(cfg.connectedAccounts, cfg.activeInstances);
+        const hasForm = !!document.getElementById('mt5RunForm');
+        if (nextStructure !== mt5RunRenderSignature || !hasForm) {
           const runDraft = mt5CaptureRunFormDraft(document.getElementById('mt5RunForm'));
-          mt5RunRenderSignature = nextSignature;
-          mt5StopRunPrepareTimer();
+          mt5RunRenderSignature = nextStructure;
+          mt5RunMetricsSignature = nextMetrics;
           mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
           runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
           bindMt5RunForm();
@@ -1480,35 +1586,25 @@
             const capField = restoredForm.querySelector('input[name="capital_manual"]');
             if (capField) capField.dispatchEvent(new Event('input', { bubbles: true }));
           }
+        } else if (nextMetrics !== mt5RunMetricsSignature) {
+          mt5RunMetricsSignature = nextMetrics;
+          mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
+          mt5PatchRunFormFromState();
         } else {
           mt5RunState.connectedAccounts = Array.isArray(cfg.connectedAccounts) ? cfg.connectedAccounts.slice() : [];
           if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
-          const runForm = document.getElementById('mt5RunForm');
-          if (runForm) mt5UpdateRunSubmitState(runForm);
         }
+        if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
+        const runForm = document.getElementById('mt5RunForm');
+        if (runForm) mt5UpdateRunSubmitState(runForm);
         const hasConnectingRun = (cfg.activeInstances || []).some(function (row) {
           return String(row.status || '') === 'connecting';
         });
-        if (hasConnectingRun) {
-          const sel = mt5SelectedRunInstance();
-          if (sel && String(sel.status || '') === 'connecting' && !document.getElementById('mt5RunConnectingMeta')) {
-            const runDraft = mt5CaptureRunFormDraft(document.getElementById('mt5RunForm'));
-            mt5RunRenderSignature = '';
-            mt5StopRunPrepareTimer();
-            runPanel.innerHTML = renderMt5RunFormHtml(cfg.connectedAccounts, cfg.bots || []);
-            bindMt5RunForm();
-            const restoredForm = document.getElementById('mt5RunForm');
-            mt5RestoreRunFormDraft(restoredForm, runDraft);
-            if (restoredForm && runDraft) {
-              const capField = restoredForm.querySelector('input[name="capital_manual"]');
-              if (capField) capField.dispatchEvent(new Event('input', { bubbles: true }));
-            }
-          }
-        }
         if (typeof mt5SyncLiveFastPoll === 'function') {
           mt5SyncLiveFastPoll(hasConnectingRun, 5);
         }
         if (typeof mt5TickConnectingTimers === 'function') mt5TickConnectingTimers();
+        mt5ScheduleLiveDashRefresh();
       }
     } catch (err) {
       console.error('[refreshMt5PortCards]', err);
@@ -1517,14 +1613,17 @@
       const runPanel = document.getElementById('mt5RunPanel');
       if (runPanel && accounts.length && !document.getElementById('mt5RunForm') && typeof renderMt5RunFormHtml === 'function') {
         try {
-          mt5RunRenderSignature = mt5RunDataSignature(accounts, cfg.bots || []);
+          mt5RunRenderSignature = mt5RunStructureSignature(accounts, cfg.bots || []);
+          mt5RunMetricsSignature = mt5RunMetricsSignature(accounts, cfg.activeInstances || []);
           runPanel.innerHTML = renderMt5RunFormHtml(accounts, cfg.bots || []);
           bindMt5RunForm();
         } catch (_) {}
       }
     } finally {
-      if (document.getElementById('mt5RunForm')) mt5StopRunPrepareTimer();
+      mt5PortRefreshInFlight = null;
     }
+    })();
+    return mt5PortRefreshInFlight;
   }
   window.refreshMt5PortCards = refreshMt5PortCards;
 
@@ -1593,12 +1692,20 @@
     window.history.replaceState({}, '', '/app/mt5');
   }
   clearLegacyMt5QueryState();
-  mt5StartRunPrepareTimer();
   const initialRunPanel = document.getElementById('mt5RunPanel');
   if (initialRunPanel && mt5RunState.connectedAccounts && mt5RunState.connectedAccounts.length) {
-    mt5RunRenderSignature = mt5RunDataSignature(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
-    mt5StopRunPrepareTimer();
-    initialRunPanel.innerHTML = renderMt5RunFormHtml(mt5RunState.connectedAccounts, (window.__mt5RunConfig || {}).bots || []);
+    mt5RunRenderSignature = mt5RunStructureSignature(
+      mt5RunState.connectedAccounts,
+      (window.__mt5RunConfig || {}).bots || []
+    );
+    mt5RunMetricsSignature = mt5RunMetricsSignature(
+      mt5RunState.connectedAccounts,
+      (window.__mt5RunConfig || {}).activeInstances || []
+    );
+    initialRunPanel.innerHTML = renderMt5RunFormHtml(
+      mt5RunState.connectedAccounts,
+      (window.__mt5RunConfig || {}).bots || []
+    );
     bindMt5RunForm();
     if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
   }
@@ -1872,9 +1979,15 @@ function mt5SelectRunAccount(accountId, portSlot) {
   }
   const panel = document.getElementById('mt5RunPanel');
   const cfg = window.__mt5RunConfig || {};
-  if (panel && typeof window.renderMt5RunFormHtml === 'function' && typeof window.bindMt5RunForm === 'function') {
+  mt5StopRunPrepareTimer();
+  const existingForm = document.getElementById('mt5RunForm');
+  if (existingForm && acc && typeof window.mt5ApplyRunAccountToForm === 'function' && window.mt5ApplyRunAccountToForm(acc)) {
+    if (typeof window.mt5PatchRunFormFromState === 'function') window.mt5PatchRunFormFromState();
+  } else if (panel && typeof window.renderMt5RunFormHtml === 'function' && typeof window.bindMt5RunForm === 'function') {
     panel.innerHTML = window.renderMt5RunFormHtml(runState.connectedAccounts, cfg.bots || []);
     window.bindMt5RunForm();
+  }
+  if (acc) {
     const summary = document.getElementById('mt5RunPortSummary');
     if (summary) {
       summary.style.borderColor = 'rgba(56,189,248,.85)';
@@ -1886,6 +1999,7 @@ function mt5SelectRunAccount(accountId, portSlot) {
     }
   }
   if (typeof window.mt5UpdateSharedPortSelections === 'function') window.mt5UpdateSharedPortSelections();
+  if (typeof window.mt5ScheduleLiveDashRefresh === 'function') window.mt5ScheduleLiveDashRefresh();
 }
 window.mt5SelectRunAccount = mt5SelectRunAccount;
 
@@ -2649,9 +2763,10 @@ function mt5DisplayStatus(row) {
   if (s === 'running' || s === 'connecting' || s === 'stopped' || s === 'fail' || s === 'failed') {
     return s === 'failed' ? 'fail' : s;
   }
-  if (s === 'failed' || s === 'error') return 'fail';
+  if (s === 'error') return 'fail';
   if (s === 'pending' || s === 'restarting' || s === 'starting') return 'connecting';
-  return s || 'connecting';
+  if (s === 'connected' || s === 'ready') return 'stopped';
+  return s || 'stopped';
 }
 
 function mt5ConnectingElapsedSec(since) {

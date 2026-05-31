@@ -1726,7 +1726,7 @@ router.get('/mt5/recovery-check', async (req, res) => {
   }
 });
 
-function buildPortCardState(acc, activeAccountIds) {
+function buildPortCardState(acc, activeByAccount) {
   const accStatus = acc ? String(acc.status || '').toLowerCase() : '';
   const hasEquity =
     acc &&
@@ -1734,10 +1734,18 @@ function buildPortCardState(acc, activeAccountIds) {
       (acc.last_balance != null && acc.last_balance !== '' && Number.isFinite(Number(acc.last_balance))));
   const canUse = !!(acc && accStatus === 'connected' && hasEquity);
   const accountId = acc ? Number(acc.id) : 0;
-  const botRunning = accountId > 0 && activeAccountIds && activeAccountIds.has(accountId);
+  const activeInst =
+    accountId > 0 && activeByAccount instanceof Map ? activeByAccount.get(accountId) : null;
+  const activeDisplay = String(activeInst?.status || activeInst?.display_status || '').toLowerCase();
+  const botRunning = activeDisplay === 'running';
+  const botConnecting = activeDisplay === 'connecting';
   let statusLabel = 'ว่าง';
-  if (canUse) statusLabel = botRunning ? 'กำลังรัน BOT' : 'พร้อมรัน';
-  else if (accStatus === 'connecting' || accStatus === 'starting') statusLabel = botRunning ? 'กำลังเปิดบอท...' : 'กำลังเปิด MT5...';
+  if (canUse) {
+    if (botRunning) statusLabel = 'กำลังรัน BOT';
+    else if (botConnecting) statusLabel = 'กำลังเปิดบอท...';
+    else statusLabel = 'พร้อมรัน';
+  } else if (accStatus === 'connecting' || accStatus === 'starting') {
+    statusLabel = botConnecting || botRunning ? 'กำลังเปิดบอท...' : 'กำลังเปิด MT5...';
   else if (accStatus === 'checking') statusLabel = 'กำลังตรวจ Login';
   else if (accStatus === 'failed') statusLabel = 'Login ไม่ผ่าน';
   else if (accStatus === 'ready') statusLabel = 'ต้องเชื่อมต่อใหม่';
@@ -1745,6 +1753,7 @@ function buildPortCardState(acc, activeAccountIds) {
 
   let cssClass = '';
   if (botRunning) cssClass = 'bot-running';
+  else if (botConnecting && canUse) cssClass = 'checking';
   else if (canUse) cssClass = 'connected';
   else if (accStatus === 'connecting' || accStatus === 'starting' || accStatus === 'checking') {
     cssClass = 'checking';
@@ -1767,7 +1776,10 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
   try {
     await ensureBotCatalog().catch((e) => console.error('[ensureBotCatalog]', e.message));
     const userId = req.user.id;
-    await repairUserMt5PortBindings(userId).catch(() => {});
+    const isPoll = String(req.query.poll || req.query.lite || '').trim() === '1';
+    if (!isPoll) {
+      await repairUserMt5PortBindings(userId).catch(() => {});
+    }
     const summary = await getPortSummaryReadOnly(userId);
     const accounts = await safeQuery(
       `
@@ -1788,16 +1800,16 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       remainingCapital: 0,
       activeBotCount: 0
     }));
-    const activeAccountIds = new Set(
-      (activeRunInstances || [])
-        .map((row) => Number(row.mt5_account_id || 0))
-        .filter((id) => id > 0)
-    );
+    const activeByAccount = new Map();
+    for (const row of activeRunInstances || []) {
+      const aid = Number(row.mt5_account_id || 0);
+      if (aid > 0 && !activeByAccount.has(aid)) activeByAccount.set(aid, row);
+    }
 
     const ports = [];
     for (let slot = 1; slot <= summary.totalPorts; slot++) {
       const acc = pickAccountForPortSlot(accounts, slot);
-      const meta = buildPortCardState(acc, activeAccountIds);
+      const meta = buildPortCardState(acc, activeByAccount);
       const equity = acc?.last_equity ?? acc?.last_balance;
       const equityPart =
         equity != null && equity !== '' ? ` / Equity: ${equity}` : '';
