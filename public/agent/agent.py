@@ -60,7 +60,7 @@ AGENT_DIR = Path(os.getenv("AVELQUA_AGENT_DIR", r"C:\avelqua-python-agent"))
 AGENT_FILE = Path(os.getenv("AVELQUA_AGENT_FILE", str(AGENT_DIR / "agent.py")))
 MT5_ROOT = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
 LOG_DIR = AGENT_DIR / "logs"
-LOG_FILE = AGENT_DIR / "agent.log"
+LOG_FILE = LOG_DIR / "agent.log"
 STOP_FLAG = AGENT_DIR / "agent.disabled"
 LOGIN_UI_LOCK_FILE = AGENT_DIR / "login-ui.lock"  # legacy global (port 0 fallback only)
 
