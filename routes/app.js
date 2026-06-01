@@ -33,7 +33,8 @@ const {
   formatSubscriptionDisplayLabel,
   formatPackagePaymentDisplayLabel,
   formatSubscriptionSourceLabel,
-  formatSubscriptionDateTime
+  formatSubscriptionDateTime,
+  applyPaidPackageSubscription
 } = require('../lib/subscriptionPackage');
 const { isIdentityVerified, requireIdentityVerified } = require('../middleware/requireIdentity');
 const { fetchCalendarPerformance, fetchMt5LoginPortfolio } = require('../lib/mt5CalendarPerformance');
@@ -396,6 +397,181 @@ async function finalizeFreeCouponFromPackagesPage(req, base, couponCode) {
     createdAt: Date.now()
   };
   return { paymentId };
+}
+
+async function applyFreeCouponInstantly({ user, couponCode, source = 'app_packages_free_coupon_instant' }) {
+  const uid = Number(user?.id || 0);
+  const code = String(couponCode || '').trim().toUpperCase();
+  if (!uid) throw new Error('ไม่พบผู้ใช้งาน');
+  if (!code) throw new Error('กรุณากรอกโค้ดคูปองฟรี');
+
+  const client = await getClient();
+  try {
+    await client.query('BEGIN');
+
+    const couponRes = await client.query(
+      `SELECT *
+       FROM coupons
+       WHERE UPPER(coupon_code) = $1
+         AND is_active = TRUE
+         AND (expires_at IS NULL OR expires_at > NOW())
+       LIMIT 1
+       FOR UPDATE`,
+      [code]
+    );
+    const coupon = couponRes.rows[0];
+    if (!coupon || !isFreePackageCoupon(coupon)) {
+      throw new Error('คูปองฟรีไม่ถูกต้อง หรือหมดอายุแล้ว');
+    }
+
+    const alreadyUsed = await client.query(
+      `SELECT id
+       FROM coupon_usages
+       WHERE coupon_id = $1
+         AND user_id = $2
+       LIMIT 1`,
+      [coupon.id, uid]
+    );
+    if (alreadyUsed.rows.length > 0) {
+      throw new Error('คูปองนี้ถูกใช้งานแล้ว');
+    }
+
+    const activeSubRes = await client.query(
+      `SELECT id
+       FROM user_subscriptions
+       WHERE user_id = $1
+         AND status = 'active'
+         AND (end_at IS NULL OR end_at > NOW())
+       ORDER BY COALESCE(end_at, created_at) DESC NULLS LAST, id DESC
+       LIMIT 1`,
+      [uid]
+    );
+    if (activeSubRes.rows[0]) {
+      throw new Error('คุณมีแพ็กเกจใช้อยู่ ไม่สามารถใช้แพ็กเกจฟรีได้');
+    }
+
+    if (Number(coupon.usage_limit || 0) > 0 && Number(coupon.used_count || 0) >= Number(coupon.usage_limit || 0)) {
+      throw new Error('คูปองฟรีนี้ถูกใช้ครบจำนวนแล้ว');
+    }
+
+    const freeDays = Number(coupon.free_days || 0);
+    const freeGroup = String(coupon.free_package_group || '').trim().toUpperCase();
+    if (freeDays <= 0) throw new Error('คูปองฟรีนี้ยังไม่ได้กำหนดจำนวนวัน');
+    if (!['BASIC', 'PRO', 'ADVANCED'].includes(freeGroup)) {
+      throw new Error('คูปองฟรีนี้ยังไม่ได้กำหนดประเภทแพ็กเกจ');
+    }
+
+    const freePkgRes = await client.query(
+      `SELECT *
+       FROM packages
+       WHERE UPPER(group_name) = $1
+         AND is_enabled = TRUE
+       ORDER BY days ASC, price ASC, id ASC
+       LIMIT 1`,
+      [freeGroup]
+    );
+    const freePkg = freePkgRes.rows[0];
+    if (!freePkg) throw new Error('ไม่พบแพ็กเกจสำหรับคูปองฟรีนี้');
+
+    const packageName = buildFreeCouponPackageName(freeGroup, freeDays);
+    const paymentRef = `FREE-${coupon.id}-${uid}-${Date.now()}`;
+    const paymentInsert = await client.query(
+      `INSERT INTO payments (
+        user_id,
+        package_id,
+        payer_name,
+        payer_email,
+        package_name_snapshot,
+        amount,
+        discount_amount,
+        final_amount,
+        currency_code,
+        payment_method,
+        payment_status,
+        paid_at,
+        auto_confirmed_at,
+        auto_confirm_note,
+        payment_ref,
+        coupon_id,
+        coupon_code_snapshot,
+        raw_payload,
+        created_at,
+        updated_at
+      ) VALUES (
+        $1,$2,$3,$4,$5,0,0,0,'THB','free_coupon','paid',
+        NOW(),NOW(),'Free coupon confirmed instantly',$6,$7,$8,$9::jsonb,NOW(),NOW()
+      ) RETURNING id`,
+      [
+        uid,
+        freePkg.id,
+        user?.full_name || user?.email || '',
+        user?.email || '',
+        packageName,
+        paymentRef,
+        coupon.id,
+        coupon.coupon_code,
+        JSON.stringify({
+          source,
+          coupon: {
+            id: coupon.id,
+            code: coupon.coupon_code,
+            type: 'free',
+            free_days: freeDays,
+            free_package_group: freeGroup
+          }
+        })
+      ]
+    );
+    const paymentId = Number(paymentInsert.rows[0]?.id || 0);
+    if (!paymentId) throw new Error('ไม่สามารถสร้างรายการชำระเงินคูปองฟรีได้');
+
+    const packageForSubscription = {
+      ...freePkg,
+      days: freeDays,
+      group_name: freeGroup,
+      name_th: packageName,
+      name_en: packageName,
+      name: packageName
+    };
+
+    await applyPaidPackageSubscription({
+      client,
+      userId: uid,
+      packageRow: packageForSubscription,
+      sourceChannel: `free_coupon:${paymentId}`
+    });
+
+    await client.query(
+      `INSERT INTO coupon_usages (
+         coupon_id,
+         user_id,
+         payment_id,
+         used_at,
+         note
+       ) VALUES ($1,$2,$3,NOW(),$4)`,
+      [coupon.id, uid, paymentId, `free_coupon_instant:${packageName}:${freeDays}days`]
+    );
+
+    await client.query(
+      `UPDATE coupons
+       SET used_count = COALESCE(used_count, 0) + 1,
+           updated_at = NOW(),
+           is_active = CASE
+             WHEN usage_limit > 0 AND COALESCE(used_count, 0) + 1 >= usage_limit THEN FALSE
+             ELSE is_active
+           END
+       WHERE id = $1`,
+      [coupon.id]
+    );
+
+    await client.query('COMMIT');
+    return { paymentId, packageName, freeDays, couponCode: coupon.coupon_code };
+  } catch (error) {
+    await client.query('ROLLBACK').catch(() => null);
+    throw error;
+  } finally {
+    client.release();
+  }
 }
 
 async function activatePackagePayment(paymentId, webhookPayload = {}) {
@@ -926,82 +1102,25 @@ router.post('/packages/free-coupon', async (req, res) => {
       req.session.error = 'กรุณากรอกโค้ดคูปองฟรี';
       return res.redirect('/app/packages');
     }
-
-    const couponRes = await query(`
-      SELECT *
-      FROM coupons
-      WHERE UPPER(coupon_code) = $1
-        AND is_active = TRUE
-        AND (expires_at IS NULL OR expires_at > NOW())
-      LIMIT 1
-    `, [couponCode]);
-
-    const coupon = couponRes.rows[0];
-
-    if (!coupon || !isFreePackageCoupon(coupon)) {
-      req.session.error = 'คูปองฟรีไม่ถูกต้อง หรือหมดอายุแล้ว';
-      return res.redirect('/app/packages');
-    }
-
-    const alreadyUsed = await query(`
-      SELECT id, used_at
-      FROM coupon_usages
-      WHERE coupon_id = $1 AND user_id = $2
-      ORDER BY used_at DESC
-      LIMIT 1
-    `, [coupon.id, base.user.id]);
-
-    if (alreadyUsed.rows.length) {
-      req.session.error = 'คูปองนี้ถูกใช้งานแล้ว';
-      req.session.couponUsedHistoryUrl = `/admin/coupons?used_coupon=${encodeURIComponent(couponCode)}#coupon-usage-history`;
-      return res.redirect('/app/packages');
-    }
-
-    const activeSubRes = await query(
-      `SELECT id
-       FROM user_subscriptions
-       WHERE user_id = $1
-         AND status = 'active'
-         AND (end_at IS NULL OR end_at > NOW())
-       ORDER BY COALESCE(end_at, created_at) DESC NULLS LAST, id DESC
-       LIMIT 1`,
-      [base.user.id]
-    ).catch(() => ({ rows: [] }));
-
-    if (activeSubRes.rows[0]) {
-      req.session.error = 'คุณมีแพ็กเกจใช้อยู่ ไม่สามารถใช้แพ็กเกจฟรีได้';
-      return res.redirect('/app/packages');
-    }
-
-    const freeDays = Number(coupon.free_days || 0);
-    const freeGroup = String(coupon.free_package_group || '').trim().toUpperCase();
-    if (freeDays <= 0) {
-      req.session.error = 'คูปองฟรีนี้ยังไม่ได้กำหนดจำนวนวัน';
-      return res.redirect('/app/packages');
-    }
-    if (!['BASIC', 'PRO', 'ADVANCED'].includes(freeGroup)) {
-      req.session.error = 'คูปองฟรีนี้ยังไม่ได้กำหนดประเภทแพ็กเกจ';
-      return res.redirect('/app/packages');
-    }
-    if (Number(coupon.usage_limit || 0) > 0 && Number(coupon.used_count || 0) >= Number(coupon.usage_limit || 0)) {
-      req.session.error = 'คูปองฟรีนี้ถูกใช้ครบจำนวนแล้ว';
-      return res.redirect('/app/packages');
-    }
-
-    req.session.packagesFreeCouponPreview = {
-      couponId: coupon.id,
-      couponCode: coupon.coupon_code,
-      couponName: coupon.coupon_name || coupon.description || 'คูปองฟรี',
-      couponType: 'ฟรี',
-      packageGroup: freeGroup,
-      freeDays
-    };
+    await applyFreeCouponInstantly({
+      user: base.user,
+      couponCode,
+      source: 'app_packages_free_coupon_modal'
+    });
+    delete req.session.packagesFreeCouponPreview;
+    delete req.session.freeCouponPreview;
     req.session.success = 'ใช้คูปองสำเร็จ';
-
     return res.redirect('/app/packages');
   } catch (error) {
-    console.error('packages free coupon preview error:', error);
-    req.session.error = 'ตรวจสอบคูปองฟรีไม่สำเร็จ';
+    const message = String(error?.message || '').trim();
+    console.error('packages free coupon apply error:', error);
+    req.session.error = message || 'ใช้คูปองฟรีไม่สำเร็จ';
+    if ((message || '').includes('คูปองนี้ถูกใช้งานแล้ว')) {
+      const code = String(req.body.coupon_code || '').trim().toUpperCase();
+      if (code) {
+        req.session.couponUsedHistoryUrl = `/admin/coupons?used_coupon=${encodeURIComponent(code)}#coupon-usage-history`;
+      }
+    }
     return res.redirect('/app/packages');
   }
 });
@@ -1019,19 +1138,25 @@ router.post('/packages/free-coupon/confirm', async (req, res) => {
       req.session.error = 'ไม่พบรหัสคูปองฟรี';
       return res.redirect('/app/packages');
     }
-
-    const result = await finalizeFreeCouponFromPackagesPage(req, base, couponCode);
-    if (result.error) {
-      req.session.error = result.error;
-      return res.redirect('/app/packages');
-    }
-
+    await applyFreeCouponInstantly({
+      user: base.user,
+      couponCode,
+      source: 'app_packages_free_coupon_confirm'
+    });
     delete req.session.packagesFreeCouponPreview;
-    req.session.success = 'ตรวจสอบรายละเอียดคูปองฟรี แล้วกดยืนยันเพื่อเปิดใช้งานแพ็กเกจ';
-    return res.redirect(`/app/package-payment/${result.paymentId}`);
+    delete req.session.freeCouponPreview;
+    req.session.success = 'ใช้คูปองสำเร็จ';
+    return res.redirect('/app/packages');
   } catch (error) {
-    console.error('packages free coupon confirm redirect error:', error);
-    req.session.error = 'ยืนยันคูปองฟรีไม่สำเร็จ';
+    const message = String(error?.message || '').trim();
+    console.error('packages free coupon confirm error:', error);
+    req.session.error = message || 'ยืนยันคูปองฟรีไม่สำเร็จ';
+    if ((message || '').includes('คูปองนี้ถูกใช้งานแล้ว')) {
+      const code = String(req.body.coupon_code || '').trim().toUpperCase();
+      if (code) {
+        req.session.couponUsedHistoryUrl = `/admin/coupons?used_coupon=${encodeURIComponent(code)}#coupon-usage-history`;
+      }
+    }
     return res.redirect('/app/packages');
   }
 });
