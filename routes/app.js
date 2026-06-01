@@ -608,36 +608,12 @@ async function activatePackagePayment(paymentId, webhookPayload = {}) {
       const pkgRes = await client.query(`SELECT * FROM packages WHERE id=$1 LIMIT 1`, [paymentRow.package_id]);
       const pkg = pkgRes.rows[0];
       if (pkg) {
-        const subRes = await client.query(`SELECT * FROM user_subscriptions WHERE user_id=$1 ORDER BY id DESC LIMIT 1`, [paymentRow.user_id]);
-        const oldSub = subRes.rows[0];
-        const now = new Date();
-        let startDate = now;
-        let endDate = new Date();
-        if (oldSub && oldSub.end_at && new Date(oldSub.end_at) > now) {
-          startDate = new Date(oldSub.start_at || now);
-          endDate = new Date(oldSub.end_at);
-        }
-        endDate.setDate(endDate.getDate() + Number(pkg.days || 0));
-        if (oldSub) {
-          await client.query(
-            `UPDATE user_subscriptions
-             SET package_id=$1,
-                 package_name_snapshot=$2,
-                 start_at=$3,
-                 end_at=$4,
-                 status='active',
-                 updated_at=NOW()
-             WHERE id=$5`,
-            [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]
-          );
-        } else {
-          await client.query(
-            `INSERT INTO user_subscriptions
-             (user_id, package_id, package_name_snapshot, start_at, end_at, status, created_at, updated_at)
-             VALUES ($1,$2,$3,$4,$5,'active',NOW(),NOW())`,
-            [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]
-          );
-        }
+        await applyPaidPackageSubscription({
+          client,
+          userId: paymentRow.user_id,
+          packageRow: pkg,
+          sourceChannel: `payment:${paymentRow.id}`
+        });
       }
     }
 
@@ -666,38 +642,17 @@ async function activatePackageAfterPaid({ client, paymentRow }) {
   const pkg = pkgRes.rows[0];
   if (!pkg) return null;
 
-  const subRes = await client.query(`SELECT * FROM user_subscriptions WHERE user_id=$1 ORDER BY id DESC LIMIT 1`, [paymentRow.user_id]);
-  const oldSub = subRes.rows[0];
-  const now = new Date();
-  let startDate = now;
-  let endDate = new Date();
-  if (oldSub && oldSub.end_at && new Date(oldSub.end_at) > now) {
-    startDate = new Date(oldSub.start_at || now);
-    endDate = new Date(oldSub.end_at);
-  }
-  endDate.setDate(endDate.getDate() + Number(pkg.days || 0));
-
-  if (oldSub) {
-    await client.query(
-      `UPDATE user_subscriptions
-       SET package_id=$1,
-           package_name_snapshot=$2,
-           start_at=$3,
-           end_at=$4,
-           status='active',
-           updated_at=NOW()
-       WHERE id=$5`,
-      [pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate, oldSub.id]
-    );
-  } else {
-    await client.query(
-      `INSERT INTO user_subscriptions
-       (user_id, package_id, package_name_snapshot, start_at, end_at, status, created_at, updated_at)
-       VALUES ($1,$2,$3,$4,$5,'active',NOW(),NOW())`,
-      [paymentRow.user_id, pkg.id, pkg.name_th || pkg.name_en || pkg.name, startDate, endDate]
-    );
-  }
-  return { package: pkg, startDate, endDate };
+  const applied = await applyPaidPackageSubscription({
+    client,
+    userId: paymentRow.user_id,
+    packageRow: pkg,
+    sourceChannel: `payment:${paymentRow.id}`
+  });
+  return {
+    package: pkg,
+    startDate: applied?.startDate || null,
+    endDate: applied?.endDate || null
+  };
 }
 
 async function payPackageWithScoin({ userId, paymentId }) {
