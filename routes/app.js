@@ -953,13 +953,44 @@ router.post('/packages/free-coupon', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
+    const activeSubRes = await query(
+      `SELECT id
+       FROM user_subscriptions
+       WHERE user_id = $1
+         AND status = 'active'
+         AND (end_at IS NULL OR end_at > NOW())
+       ORDER BY COALESCE(end_at, created_at) DESC NULLS LAST, id DESC
+       LIMIT 1`,
+      [base.user.id]
+    ).catch(() => ({ rows: [] }));
+
+    if (activeSubRes.rows[0]) {
+      req.session.error = 'คุณมีแพ็กเกจใช้อยู่ ไม่สามารถใช้แพ็กเกจฟรีได้';
+      return res.redirect('/app/packages');
+    }
+
+    const freeDays = Number(coupon.free_days || 0);
+    const freeGroup = String(coupon.free_package_group || '').trim().toUpperCase();
+    if (freeDays <= 0) {
+      req.session.error = 'คูปองฟรีนี้ยังไม่ได้กำหนดจำนวนวัน';
+      return res.redirect('/app/packages');
+    }
+    if (!['BASIC', 'PRO', 'ADVANCED'].includes(freeGroup)) {
+      req.session.error = 'คูปองฟรีนี้ยังไม่ได้กำหนดประเภทแพ็กเกจ';
+      return res.redirect('/app/packages');
+    }
+    if (Number(coupon.usage_limit || 0) > 0 && Number(coupon.used_count || 0) >= Number(coupon.usage_limit || 0)) {
+      req.session.error = 'คูปองฟรีนี้ถูกใช้ครบจำนวนแล้ว';
+      return res.redirect('/app/packages');
+    }
+
     req.session.packagesFreeCouponPreview = {
       couponId: coupon.id,
       couponCode: coupon.coupon_code,
       couponName: coupon.coupon_name || coupon.description || 'คูปองฟรี',
       couponType: 'ฟรี',
-      packageGroup: String(coupon.free_package_group || '').toUpperCase(),
-      freeDays: Number(coupon.free_days || 0)
+      packageGroup: freeGroup,
+      freeDays
     };
 
     return res.redirect('/app/packages');
@@ -971,8 +1002,6 @@ router.post('/packages/free-coupon', async (req, res) => {
 });
 
 router.post('/packages/free-coupon/confirm', async (req, res) => {
-  const client = await getClient();
-
   try {
     const base = await getBaseData(req);
     const preview = req.session.packagesFreeCouponPreview;
@@ -986,226 +1015,19 @@ router.post('/packages/free-coupon/confirm', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
-    await client.query('BEGIN');
-
-    const couponRes = await client.query(
-      `SELECT *
-       FROM coupons
-       WHERE UPPER(coupon_code) = $1
-         AND is_active = TRUE
-         AND (expires_at IS NULL OR expires_at > NOW())
-       LIMIT 1
-       FOR UPDATE`,
-      [couponCode]
-    );
-
-    const coupon = couponRes.rows[0];
-
-    if (!coupon || !isFreePackageCoupon(coupon)) {
-      await client.query('ROLLBACK');
-      req.session.error = 'คูปองฟรีไม่ถูกต้อง หรือหมดอายุแล้ว';
+    const result = await finalizeFreeCouponFromPackagesPage(req, base, couponCode);
+    if (result.error) {
+      req.session.error = result.error;
       return res.redirect('/app/packages');
     }
-
-    const usedRes = await client.query(
-      `SELECT id, used_at
-       FROM coupon_usages
-       WHERE coupon_id = $1
-         AND user_id = $2
-       ORDER BY used_at DESC
-       LIMIT 1`,
-      [coupon.id, base.user.id]
-    );
-
-    if (usedRes.rows.length > 0) {
-      await client.query('ROLLBACK');
-      req.session.error = 'คูปองฟรีนี้ถูกใช้งานแล้ว';
-      return res.redirect('/app/packages');
-    }
-
-    if (Number(coupon.usage_limit || 0) > 0 && Number(coupon.used_count || 0) >= Number(coupon.usage_limit || 0)) {
-      await client.query('ROLLBACK');
-      req.session.error = 'คูปองฟรีนี้ถูกใช้ครบจำนวนแล้ว';
-      return res.redirect('/app/packages');
-    }
-
-    const freeDays = Number(coupon.free_days || 0);
-    const freeGroup = String(coupon.free_package_group || '').trim().toUpperCase();
-
-    if (freeDays <= 0 || !freeGroup) {
-      await client.query('ROLLBACK');
-      req.session.error = 'คูปองฟรีนี้ยังไม่ได้กำหนดจำนวนวันหรือระดับแพ็กเกจ';
-      return res.redirect('/app/packages');
-    }
-
-    const pkgRes = await client.query(
-      `SELECT *
-       FROM packages
-       WHERE UPPER(group_name) = $1
-         AND is_enabled = TRUE
-       ORDER BY days ASC, price ASC, id ASC
-       LIMIT 1`,
-      [freeGroup]
-    );
-
-    const pkg = pkgRes.rows[0];
-
-    if (!pkg) {
-      await client.query('ROLLBACK');
-      req.session.error = 'ไม่พบแพ็กเกจสำหรับคูปองฟรีนี้';
-      return res.redirect('/app/packages');
-    }
-
-    const packageName = buildFreeCouponPackageName(freeGroup, freeDays);
-    const startAt = new Date();
-    const endAt = new Date(startAt.getTime() + freeDays * 24 * 60 * 60 * 1000);
-
-    const paymentRes = await client.query(
-      `INSERT INTO payments (
-        user_id,
-        package_id,
-        payer_name,
-        payer_email,
-        package_name_snapshot,
-        amount,
-        discount_amount,
-        final_amount,
-        currency_code,
-        payment_method,
-        payment_status,
-        paid_at,
-        auto_confirmed_at,
-        auto_confirm_note,
-        payment_ref,
-        coupon_id,
-        coupon_code_snapshot,
-        raw_payload,
-        created_at,
-        updated_at
-      )
-      VALUES (
-        $1,$2,$3,$4,$5,
-        0,0,0,
-        'THB',
-        'free_coupon',
-        'paid',
-        NOW(),
-        NOW(),
-        'Free coupon confirmed from packages page',
-        $6,
-        $7,
-        $8,
-        $9::jsonb,
-        NOW(),
-        NOW()
-      )
-      RETURNING id`,
-      [
-        base.user.id,
-        pkg.id,
-        base.user.full_name || base.user.email || '',
-        base.user.email || '',
-        packageName,
-        `FREE-${coupon.id}-${base.user.id}-${Date.now()}`,
-        coupon.id,
-        coupon.coupon_code,
-        JSON.stringify({
-          source: 'app_packages_free_coupon_confirm',
-          coupon: {
-            id: coupon.id,
-            code: coupon.coupon_code,
-            type: 'free',
-            free_days: freeDays,
-            free_package_group: freeGroup
-          }
-        })
-      ]
-    );
-
-    const paymentId = paymentRes.rows[0].id;
-
-    await client.query(
-      `INSERT INTO user_subscriptions (
-        user_id,
-        package_id,
-        package_name_snapshot,
-        source_channel,
-        status,
-        start_at,
-        end_at,
-        lot_min,
-        lot_max,
-        ports_min,
-        ports_max,
-        profit_min,
-        profit_max,
-        profit_label,
-        created_at,
-        updated_at
-      )
-      VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())`,
-      [
-        base.user.id,
-        pkg.id,
-        packageName,
-        `free_coupon:${paymentId}`,
-        startAt,
-        endAt,
-        Number(pkg.lot_min || 0),
-        Number(pkg.lot_max || 0),
-        Number(pkg.ports_min || 0),
-        Number(pkg.ports_max || 0),
-        pkg.profit_min === null || pkg.profit_min === undefined ? null : Number(pkg.profit_min || 0),
-        pkg.profit_max === null || pkg.profit_max === undefined ? null : Number(pkg.profit_max || 0),
-        pkg.profit_label_th || pkg.profit_label_en || ''
-      ]
-    );
-
-    await client.query(
-      `INSERT INTO coupon_usages (
-        coupon_id,
-        user_id,
-        payment_id,
-        used_at,
-        note
-      )
-      VALUES ($1,$2,$3,NOW(),$4)`,
-      [
-        coupon.id,
-        base.user.id,
-        paymentId,
-        `free_coupon_confirmed:${packageName}:${freeDays}days`
-      ]
-    );
-
-    await client.query(
-      `UPDATE coupons
-       SET used_count = COALESCE(used_count, 0) + 1,
-           updated_at = NOW(),
-           is_active = CASE
-             WHEN usage_limit > 0
-              AND COALESCE(used_count, 0) + 1 >= usage_limit
-             THEN FALSE
-             ELSE is_active
-           END
-       WHERE id = $1`,
-      [coupon.id]
-    );
-
-    await client.query('COMMIT');
 
     delete req.session.packagesFreeCouponPreview;
-    delete req.session.freeCouponPreview;
-
-    req.session.success = `ใช้คูปองฟรีสำเร็จ เปิดใช้งาน ${packageName} ${freeDays} วันแล้ว`;
-    return res.redirect('/app/packages');
+    req.session.success = 'ตรวจสอบรายละเอียดคูปองฟรี แล้วกดยืนยันเพื่อเปิดใช้งานแพ็กเกจ';
+    return res.redirect(`/app/package-payment/${result.paymentId}`);
   } catch (error) {
-    await client.query('ROLLBACK').catch(() => null);
-    console.error('packages free coupon confirm direct error:', error);
+    console.error('packages free coupon confirm redirect error:', error);
     req.session.error = 'ยืนยันคูปองฟรีไม่สำเร็จ';
     return res.redirect('/app/packages');
-  } finally {
-    client.release();
   }
 });
 

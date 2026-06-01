@@ -60,6 +60,8 @@ function paymentMethodText(p) {
   if (isScoinPackagePayment(p)) return isTH ? 'Scoin' : 'Scoin';
   if (isFreeCouponPackagePayment(p)) return isTH ? 'คูปองฟรี' : 'Free Coupon';
   const m = String(p.payment_method || '').toLowerCase();
+  if (m === 'stripe_card') return isTH ? 'บัตรเครดิต (Stripe)' : 'Credit Card (Stripe)';
+  if (m === 'stripe_promptpay') return isTH ? 'PromptPay QR (Stripe)' : 'PromptPay QR (Stripe)';
   if (m === 'credit_card') return isTH ? 'บัตรเครดิต' : 'Credit Card';
   if (m === 'promptpay_qr') return isTH ? 'PromptPay QR' : 'PromptPay QR';
   if (m === 'bank_transfer') return isTH ? 'โอนเงิน' : 'Bank Transfer';
