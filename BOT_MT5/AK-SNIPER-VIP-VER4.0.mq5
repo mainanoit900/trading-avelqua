@@ -176,10 +176,10 @@ int OnInit()
    if(GlobalVariableCheck(gv_dd_pct_name)) all_time_max_dd_pct = GlobalVariableGet(gv_dd_pct_name);
    
    // Initialize Indicators
-   handle_adx = iADX(_Symbol, PERIOD_CURRENT, InpAdxPeriod);
-   handle_bb  = iBands(_Symbol, PERIOD_CURRENT, InpBbPeriod, 0, 2.0, PRICE_CLOSE);
-   handle_atr = iATR(_Symbol, PERIOD_CURRENT, InpAtrPeriod);
-   handle_ema = iMA(_Symbol, PERIOD_CURRENT, InpEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
+   handle_adx = iADX(_Symbol, PERIOD_M15, InpAdxPeriod);
+   handle_bb  = iBands(_Symbol, PERIOD_M15, InpBbPeriod, 0, 2.0, PRICE_CLOSE);
+   handle_atr = iATR(_Symbol, PERIOD_M15, InpAtrPeriod);
+   handle_ema = iMA(_Symbol, PERIOD_M15, InpEmaPeriod, 0, MODE_EMA, PRICE_CLOSE);
    
    if(handle_adx == INVALID_HANDLE || handle_bb == INVALID_HANDLE || handle_atr == INVALID_HANDLE || handle_ema == INVALID_HANDLE)
      {
@@ -499,8 +499,8 @@ bool IsTrendTooStrongToGrid()
      }
    
    double high_arr[], low_arr[];
-   if(CopyHigh(_Symbol, PERIOD_CURRENT, 1, InpBreakoutBars, high_arr) > 0 && 
-      CopyLow(_Symbol, PERIOD_CURRENT, 1, InpBreakoutBars, low_arr) > 0)
+   if(CopyHigh(_Symbol, PERIOD_M15, 1, InpBreakoutBars, high_arr) > 0 && 
+      CopyLow(_Symbol, PERIOD_M15, 1, InpBreakoutBars, low_arr) > 0)
      {
       double highest_high = high_arr[ArrayMaximum(high_arr)];
       double lowest_low   = low_arr[ArrayMinimum(low_arr)];
