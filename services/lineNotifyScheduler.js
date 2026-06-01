@@ -181,7 +181,9 @@ function startLineScheduler() {
     console.log('[LineScheduler] skipped — LINE_CHANNEL_ACCESS_TOKEN not set');
     return;
   }
-  const expr = String(process.env.LINE_DAILY_CRON || '0 7 * * 1-5');
+  // ส่งรายงานเวลา 07:00 ตามเวลาไทย
+  // จันทร์-พฤหัส และสรุปวันศุกร์ส่งเช้าวันเสาร์
+  const expr = String(process.env.LINE_DAILY_CRON || '0 7 * * 1-4,6');
   cron.schedule(
     expr,
     () => {
