@@ -848,6 +848,7 @@ async function getCurrentSubscription(userId) {
             p.group_name,
             p.days,
             pay.payment_method,
+            pay.raw_payload AS payment_raw_payload,
             c.free_days AS coupon_free_days,
             c.free_package_group AS coupon_free_package_group
      FROM user_subscriptions s
@@ -1245,18 +1246,18 @@ router.get('/package-payment/free', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
-    const result = await finalizeFreeCouponFromPackagesPage(req, base, couponCode);
-    if (result.error) {
-      req.session.error = result.error;
-      delete req.session.freeCouponPreview;
-      return res.redirect('/app/packages');
-    }
-
-    req.session.success = 'ตรวจสอบรายละเอียดคูปองฟรี แล้วกดยืนยันเพื่อเปิดใช้งานแพ็กเกจ';
-    return res.redirect(`/app/package-payment/${result.paymentId}`);
+    await applyFreeCouponInstantly({
+      user: base.user,
+      couponCode,
+      source: 'app_packages_free_coupon_box'
+    });
+    delete req.session.packagesFreeCouponPreview;
+    delete req.session.freeCouponPreview;
+    req.session.success = 'ใช้คูปองสำเร็จ';
+    return res.redirect('/app/packages');
   } catch (error) {
     console.error('package-payment/free error:', error);
-    req.session.error = 'เปิดหน้าชำระเงินคูปองฟรีไม่สำเร็จ';
+    req.session.error = String(error?.message || '').trim() || 'เปิดหน้าชำระเงินคูปองฟรีไม่สำเร็จ';
     delete req.session.freeCouponPreview;
     return res.redirect('/app/packages');
   }
