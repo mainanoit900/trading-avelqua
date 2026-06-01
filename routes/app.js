@@ -1753,8 +1753,6 @@ router.post('/package-payment/:id/confirm-free-coupon', async (req, res) => {
       return res.redirect(`/app/package-payment/${paymentId}`);
     }
 
-    const startAt = new Date();
-    const endAt = new Date(startAt.getTime() + freeDays * 24 * 60 * 60 * 1000);
     const packageName = buildFreeCouponPackageName(freeGroup, freeDays);
     const paymentRef = `FREE-${payment.id}-${Date.now()}`;
 
@@ -1778,14 +1776,21 @@ router.post('/package-payment/:id/confirm-free-coupon', async (req, res) => {
       [freePkg.id, packageName, coupon.id, coupon.coupon_code, paymentRef, JSON.stringify({ coupon: { id: coupon.id, code: coupon.coupon_code, type: 'free', free_days: freeDays, free_package_group: freeGroup, override_package: true, original_package_id: payment.package_id, confirmed_at: new Date().toISOString() } }), payment.id]
     );
 
-    await client.query(
-      `INSERT INTO user_subscriptions (
-         user_id, package_id, package_name_snapshot, source_channel, status,
-         start_at, end_at, lot_min, lot_max, ports_min, ports_max,
-         profit_min, profit_max, profit_label, created_at, updated_at
-       ) VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12,$13,NOW(),NOW())`,
-      [base.user.id, freePkg.id, packageName, `free_coupon:${payment.id}`, startAt, endAt, Number(freePkg.lot_min || 0), Number(freePkg.lot_max || 0), Number(freePkg.ports_min || 0), Number(freePkg.ports_max || 0), freePkg.profit_min === null || freePkg.profit_min === undefined ? null : Number(freePkg.profit_min || 0), freePkg.profit_max === null || freePkg.profit_max === undefined ? null : Number(freePkg.profit_max || 0), freePkg.profit_label_th || freePkg.profit_label_en || '']
-    );
+    const packageForSubscription = {
+      ...freePkg,
+      days: freeDays,
+      group_name: freeGroup,
+      name_th: packageName,
+      name_en: packageName,
+      name: packageName
+    };
+
+    await applyPaidPackageSubscription({
+      client,
+      userId: base.user.id,
+      packageRow: packageForSubscription,
+      sourceChannel: `free_coupon:${payment.id}`
+    });
 
     await client.query(
       `UPDATE coupons
