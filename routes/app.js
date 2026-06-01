@@ -949,7 +949,7 @@ router.post('/packages/free-coupon', async (req, res) => {
     `, [coupon.id, base.user.id]);
 
     if (alreadyUsed.rows.length) {
-      req.session.error = 'คูปองฟรีนี้ถูกใช้งานแล้ว';
+      req.session.error = 'คูปองนี้ถูกใช้งานแล้ว';
       return res.redirect('/app/packages');
     }
 
@@ -992,6 +992,7 @@ router.post('/packages/free-coupon', async (req, res) => {
       packageGroup: freeGroup,
       freeDays
     };
+    req.session.success = 'ใช้คูปองสำเร็จ';
 
     return res.redirect('/app/packages');
   } catch (error) {

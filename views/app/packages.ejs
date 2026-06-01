@@ -83,6 +83,50 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
 <% var pageCss = '/css/app-packages.css'; %>
 <%- include('../partials/app-shell') %>
 
+<% if (error || success) { %>
+  <div class="scoin-confirm-modal show" id="packagesFlashModal" aria-hidden="false">
+    <div class="scoin-confirm-backdrop" data-packages-flash-close></div>
+    <div class="scoin-confirm-card" role="dialog" aria-modal="true">
+      <button type="button" class="scoin-confirm-x" data-packages-flash-close aria-label="ปิด">×</button>
+      <div class="scoin-confirm-icon">
+        <% if (error) { %>
+          <i class="fa-solid fa-triangle-exclamation"></i>
+        <% } else { %>
+          <i class="fa-solid fa-circle-check"></i>
+        <% } %>
+      </div>
+      <span class="package-chip"><%= error ? 'แจ้งเตือน' : 'สำเร็จ' %></span>
+      <h3><%= error ? 'ไม่สามารถใช้งานคูปองได้' : 'ดำเนินการสำเร็จ' %></h3>
+      <p><%= error || success %></p>
+      <div class="scoin-confirm-actions">
+        <button type="button" class="scoin-modal-confirm" data-packages-flash-close>ตกลง</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    (function () {
+      const modal = document.getElementById('packagesFlashModal');
+      if (!modal) return;
+      document.body.classList.add('scoin-modal-open');
+
+      function closeModal() {
+        modal.classList.remove('show');
+        modal.setAttribute('aria-hidden', 'true');
+        document.body.classList.remove('scoin-modal-open');
+      }
+
+      modal.querySelectorAll('[data-packages-flash-close]').forEach(function (el) {
+        el.addEventListener('click', closeModal);
+      });
+
+      document.addEventListener('keydown', function (event) {
+        if (event.key === 'Escape') closeModal();
+      });
+    })();
+  </script>
+<% } %>
+
 <section class="package-lux-hero">
   <div class="package-hero-glow"></div>
 
