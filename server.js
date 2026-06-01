@@ -4,6 +4,7 @@ const cookieParser = require('cookie-parser');
 const path = require('path');
 const express = require('express');
 const session = require('express-session');
+const PgSession = require('connect-pg-simple')(session);
 const passport = require('passport');
 const GoogleStrategy = require('passport-google-oauth20').Strategy;
 const rateLimit = require('express-rate-limit');
@@ -12,7 +13,7 @@ const helmet = require('helmet');
 const { injectUser } = require('./middleware/requireAuth');
 const { appUserLocals } = require('./middleware/appUserLocals');
 const { languageMiddleware, normalizeLocale, localeCache, reloadLocaleCache } = require('./services/i18n');
-const { query, repairVpsAgentCommandSequences } = require('./config/database');
+const { query, pool, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
 
 const app = express();
@@ -107,9 +108,14 @@ app.use(
     secret: process.env.SESSION_SECRET || 'trading-avelqua-secret',
     resave: false,
     saveUninitialized: false,
+    store: new PgSession({
+      pool,
+      tableName: 'user_sessions',
+      createTableIfMissing: true
+    }),
     cookie: {
       httpOnly: true,
-      secure: false,
+      secure: String(process.env.SESSION_COOKIE_SECURE || '').toLowerCase() === 'true',
       sameSite: 'lax',
       maxAge: 1000 * 60 * 60 * 24 * 7
     }
