@@ -1404,7 +1404,8 @@ router.get('/coupons', async (req, res) => {
     currentPath: '/admin/coupons',
     coupons: couponsRes.rows,
     usages: usageRes.rows,
-    latestCouponUsages: latestCouponUsagesRes.rows
+    latestCouponUsages: latestCouponUsagesRes.rows,
+    usedCouponQuery: String(req.query.used_coupon || '').trim()
   }));
 });
 

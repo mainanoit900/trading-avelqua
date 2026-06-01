@@ -844,6 +844,8 @@ router.get('/packages', async (req, res) => {
   }
 
   const base = await getBaseData(req);
+  const couponUsedHistoryUrl = req.session.couponUsedHistoryUrl || '';
+  delete req.session.couponUsedHistoryUrl;
   const { packages, groupedPackages } = await getEnabledPackagesForApp();
 
   await query(`
@@ -910,7 +912,8 @@ router.get('/packages', async (req, res) => {
     })),
     paymentPage: page,
     paymentTotalPages: totalPages,
-    packagesFreeCouponPreview: req.session.packagesFreeCouponPreview || null
+    packagesFreeCouponPreview: req.session.packagesFreeCouponPreview || null,
+    couponUsedHistoryUrl
   });
 });
 
@@ -950,6 +953,7 @@ router.post('/packages/free-coupon', async (req, res) => {
 
     if (alreadyUsed.rows.length) {
       req.session.error = 'คูปองนี้ถูกใช้งานแล้ว';
+      req.session.couponUsedHistoryUrl = `/admin/coupons?used_coupon=${encodeURIComponent(couponCode)}#coupon-usage-history`;
       return res.redirect('/app/packages');
     }
 

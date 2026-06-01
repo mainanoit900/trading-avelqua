@@ -6,6 +6,7 @@
     ? coupons
     : (typeof db !== 'undefined' && db && Array.isArray(db.coupons) ? db.coupons : []);
   const usageRows = Array.isArray(typeof usages !== 'undefined' ? usages : null) ? usages : [];
+  const usedCouponSearchValue = String(typeof usedCouponQuery !== 'undefined' ? usedCouponQuery : '').trim();
 
   function toNumber(value, fallback = 0) {
     const num = Number(value);
@@ -333,7 +334,7 @@
           <h2><%= safeT('admin.coupons.used_title', 'คูปองที่ใช้แล้ว') %></h2>
           <p><%= safeT('admin.coupons.used_desc', 'แสดงรายการที่ถูกใช้ไปแล้วเพื่ออ้างอิง') %></p>
         </div>
-        <input class="coupon-simple-search" type="search" id="usedCouponSearch" placeholder="ค้นหาโค้ดที่ใช้แล้ว">
+        <input class="coupon-simple-search" type="search" id="usedCouponSearch" placeholder="ค้นหาโค้ดที่ใช้แล้ว" value="<%= usedCouponSearchValue %>">
       </div>
 
       <div class="coupon-table-wrap">
@@ -370,7 +371,7 @@
     </section>
   <% } %>
 
-  <div class="card mt-4">
+  <div class="card mt-4" id="coupon-usage-history">
     <div class="card-header">
       ประวัติการใช้คูปองล่าสุด
     </div>
@@ -563,6 +564,7 @@
       }).from(target).save();
     });
 
+    if (document.getElementById('usedCouponSearch')?.value) filterUsedCoupons();
     updateSelectedCounter();
   })();
 

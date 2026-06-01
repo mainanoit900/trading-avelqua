@@ -3,6 +3,7 @@ const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || ke
 const currentLang = String(typeof lang !== 'undefined' ? lang : 'th').toLowerCase();
 const isTH = currentLang === 'th';
 const dateLocale = isTH ? 'th-TH' : 'en-US';
+const couponUsedHistoryUrl = String(typeof couponUsedHistoryUrl !== 'undefined' ? couponUsedHistoryUrl : '').trim();
 
 const groups = ['basic', 'pro', 'advanced'];
 const groupLabels = { basic: 'BASIC', pro: 'PRO', advanced: 'ADVANCED' };
@@ -99,6 +100,9 @@ const totalPackages = groups.reduce((sum, key) => sum + (((groupedPackages && gr
       <h3><%= error ? 'ไม่สามารถใช้งานคูปองได้' : 'ดำเนินการสำเร็จ' %></h3>
       <p><%= error || success %></p>
       <div class="scoin-confirm-actions">
+        <% if (error && String(error).includes('คูปองนี้ถูกใช้งานแล้ว') && couponUsedHistoryUrl) { %>
+          <a href="<%= couponUsedHistoryUrl %>" class="scoin-modal-cancel">ดูประวัติการใช้งาน</a>
+        <% } %>
         <button type="button" class="scoin-modal-confirm" data-packages-flash-close>ตกลง</button>
       </div>
     </div>
