@@ -733,6 +733,11 @@ ensureOptionalTables()
     } catch (e) {
       console.error('[PackagePaymentAutoCancel] start error:', e.message);
     }
+    try {
+      require('./services/stripePendingPaymentReconcileScheduler').startStripePendingPaymentReconcileScheduler();
+    } catch (e) {
+      console.error('[StripePendingReconcile] start error:', e.message);
+    }
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
     });
