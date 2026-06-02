@@ -63,6 +63,10 @@ const { postTransaction } = require('../lib/scoinLedger');
 const { applyPaidPackageSubscription } = require('../lib/subscriptionPackage');
 
 const { syncNewsNow } = require('../services/newsSyncService');
+const {
+  PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC,
+  autoCancelPendingPackagePaymentsOnce
+} = require('../services/packagePaymentAutoCancelScheduler');
 
 const router = express.Router();
 
@@ -966,13 +970,7 @@ router.post('/packages/:id/delete', async (req, res) => {
 
 async function autoCancelExpiredPayments() {
   try {
-    await query(`
-      UPDATE payments
-      SET payment_status='cancelled',
-          updated_at=NOW()
-      WHERE payment_status IN ('pending','waiting','unpaid')
-      AND created_at < NOW() - INTERVAL '20 minutes'
-    `);
+    await autoCancelPendingPackagePaymentsOnce();
 
     await query(`
       UPDATE scoin_market_orders
@@ -985,7 +983,10 @@ async function autoCancelExpiredPayments() {
         AND created_at < NOW() - INTERVAL '24 hours'
     `);
   } catch (e) {
-    console.error('autoCancelExpiredPayments:', e.message);
+    console.error(
+      `autoCancelExpiredPayments: timeout=${PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC}s`,
+      e.message
+    );
   }
 }
 

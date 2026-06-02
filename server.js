@@ -74,14 +74,15 @@ app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
 
 const REQUEST_BODY_LIMIT = process.env.REQUEST_BODY_LIMIT || '8mb';
-const STRIPE_WEBHOOK_PATH = '/app/stripe/webhook';
+const STRIPE_WEBHOOK_PATHS = ['/app/stripe/webhook', '/payment/stripe/webhook'];
 
 app.use(helmet({ contentSecurityPolicy: false }));
 app.use(express.urlencoded({ extended: true, limit: REQUEST_BODY_LIMIT }));
 app.use(express.json({
   limit: REQUEST_BODY_LIMIT,
   verify: (req, _res, buf) => {
-    if (String(req.originalUrl || '').startsWith(STRIPE_WEBHOOK_PATH)) {
+    const originalUrl = String(req.originalUrl || '');
+    if (STRIPE_WEBHOOK_PATHS.some((pathPrefix) => originalUrl.startsWith(pathPrefix))) {
       req.rawBody = Buffer.from(buf);
     }
   }
@@ -265,6 +266,7 @@ app.use('/app', require('./routes/app-mt5-bot'));
 app.use('/', require('./routes/web'));
 app.use('/admin', require('./routes/admin'));
 app.use('/app', require('./routes/app'));
+app.use('/payment', require('./routes/payment-stripe-webhook'));
 app.use('/app/api', require('./routes/scoin-api'));
 app.use('/', require('./routes/cart'));
 app.use('/', require('./routes/payment'));
@@ -725,6 +727,11 @@ ensureOptionalTables()
       require('./services/lineNotifyScheduler').startLineScheduler();
     } catch (e) {
       console.error('[LineScheduler] start error:', e.message);
+    }
+    try {
+      require('./services/packagePaymentAutoCancelScheduler').startPackagePaymentAutoCancelScheduler();
+    } catch (e) {
+      console.error('[PackagePaymentAutoCancel] start error:', e.message);
     }
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);

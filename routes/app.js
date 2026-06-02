@@ -12,6 +12,7 @@ const {
   isStripeReady,
   createStripeCheckoutForPackage,
   createStripeCheckoutForScoin,
+  retrieveStripeCheckoutSession,
   constructStripeWebhookEvent
 } = require('../services/stripeService');
 const {
@@ -42,7 +43,24 @@ const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
-router.post('/stripe/webhook', async (req, res) => {
+const packagePaymentTimeoutSecEnv = Number.parseInt(
+  process.env.PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC || '600',
+  10
+);
+const PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC =
+  Number.isFinite(packagePaymentTimeoutSecEnv) && packagePaymentTimeoutSecEnv > 0
+    ? Math.max(600, packagePaymentTimeoutSecEnv)
+    : 600;
+const PACKAGE_PAYMENT_PENDING_TIMEOUT_MS = PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC * 1000;
+
+function isPackagePaymentExpired(createdAt) {
+  if (!createdAt) return false;
+  const createdMs = new Date(createdAt).getTime();
+  if (!Number.isFinite(createdMs)) return false;
+  return (Date.now() - createdMs) > PACKAGE_PAYMENT_PENDING_TIMEOUT_MS;
+}
+
+async function handleStripeWebhook(req, res) {
   try {
     if (!isStripeReady()) {
       return res.status(503).json({ ok: false, error: 'stripe is not enabled' });
@@ -150,7 +168,9 @@ router.post('/stripe/webhook', async (req, res) => {
     console.error('stripe webhook error:', error);
     return res.status(400).json({ ok: false, error: 'invalid webhook' });
   }
-});
+}
+
+router.post('/stripe/webhook', handleStripeWebhook);
 router.use(requireLogin);
 router.use(requireIdentityVerified);
 
@@ -577,12 +597,15 @@ async function applyFreeCouponInstantly({ user, couponCode, source = 'app_packag
 async function activatePackagePayment(paymentId, webhookPayload = {}) {
   const client = await getClient();
   let paymentRow = null;
+  const isStripeCallback = !!(webhookPayload && webhookPayload.stripe_success_callback);
   const isStripePayload =
     !!(webhookPayload && (webhookPayload.stripe_event_id || webhookPayload.stripe_session_id));
-  const webhookPayloadKey = isStripePayload ? 'stripe_webhook' : 'kbank_webhook';
-  const autoConfirmNote = isStripePayload
-    ? 'Stripe webhook auto confirm'
-    : 'KBank webhook auto confirm';
+  const webhookPayloadKey = isStripeCallback
+    ? 'stripe_callback'
+    : (isStripePayload ? 'stripe_webhook' : 'kbank_webhook');
+  const autoConfirmNoteBase = isStripeCallback
+    ? 'Stripe success callback auto confirm'
+    : (isStripePayload ? 'Stripe webhook auto confirm' : 'KBank webhook auto confirm');
 
   try {
     await client.query('BEGIN');
@@ -590,7 +613,17 @@ async function activatePackagePayment(paymentId, webhookPayload = {}) {
     paymentRow = paymentRes.rows[0];
     if (!paymentRow) throw new Error('payment not found');
 
-    if (String(paymentRow.payment_status || '') === 'paid') {
+    const paymentStatus = String(paymentRow.payment_status || '').trim().toLowerCase();
+    const autoConfirmNote = paymentStatus === 'cancelled'
+      ? `${autoConfirmNoteBase} (recovered from cancelled)`
+      : autoConfirmNoteBase;
+    if (paymentStatus === 'paid') {
+      await client.query('ROLLBACK');
+      return paymentRow;
+    }
+    const allowStripeRecoverFromCancelled =
+      paymentStatus === 'cancelled' && (isStripePayload || isStripeCallback);
+    if (!['pending', 'waiting', 'unpaid'].includes(paymentStatus) && !allowStripeRecoverFromCancelled) {
       await client.query('ROLLBACK');
       return paymentRow;
     }
@@ -670,7 +703,7 @@ async function payPackageWithScoin({ userId, paymentId }) {
     const payment = paymentRes.rows[0];
     if (!payment) throw new Error('ไม่พบรายการชำระเงิน');
     if (String(payment.payment_status || '').toLowerCase() !== 'pending') throw new Error('รายการนี้ไม่อยู่ในสถานะรอชำระ');
-    if (payment.created_at && (Date.now() - new Date(payment.created_at).getTime()) > 20 * 60 * 1000) {
+    if (isPackagePaymentExpired(payment.created_at)) {
       await client.query(`UPDATE payments SET payment_status='cancelled', updated_at=NOW() WHERE id=$1`, [payment.id]);
       throw new Error('รายการนี้หมดอายุแล้ว');
     }
@@ -986,7 +1019,7 @@ router.get('/packages', async (req, res) => {
     WHERE user_id = $1
       AND package_id IS NOT NULL
       AND payment_status = 'pending'
-      AND created_at < NOW() - INTERVAL '20 minutes'
+      AND created_at < NOW() - INTERVAL '${PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC} seconds'
   `, [base.user.id]).catch(() => null);
 
   const page = Math.max(1, Number(req.query.page || 1));
@@ -1128,7 +1161,7 @@ router.post('/packages/:id/buy', async (req, res) => {
       WHERE user_id = $1
         AND package_id IS NOT NULL
         AND payment_status = 'pending'
-        AND created_at < NOW() - INTERVAL '20 minutes'
+        AND created_at < NOW() - INTERVAL '${PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC} seconds'
     `, [base.user.id]);
 
     const pkgRes = await query(
@@ -1148,7 +1181,7 @@ router.post('/packages/:id/buy', async (req, res) => {
        WHERE user_id = $1
          AND package_id = $2
          AND payment_status = 'pending'
-         AND created_at >= NOW() - INTERVAL '20 minutes'
+         AND created_at >= NOW() - INTERVAL '${PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC} seconds'
        ORDER BY id DESC
        LIMIT 1`,
       [base.user.id, pkg.id]
@@ -1175,7 +1208,11 @@ router.post('/packages/:id/buy', async (req, res) => {
         base.user.email || '',
         packageName,
         price,
-        JSON.stringify({ source: 'app_packages_page', expires_in_minutes: 20, package_id: pkg.id })
+        JSON.stringify({
+          source: 'app_packages_page',
+          expires_in_seconds: PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC,
+          package_id: pkg.id
+        })
       ]
     );
 
@@ -1223,6 +1260,9 @@ router.get('/package-payment/:id', async (req, res) => {
     const base = await getBaseData(req);
     const rawId = Number(req.params.id || 0);
     const couponFromQuery = String(req.query.coupon || '').trim().toUpperCase();
+    const paymentProvider = String(req.query.provider || '').trim().toLowerCase();
+    const paymentResult = String(req.query.result || '').trim().toLowerCase();
+    const stripeSessionId = String(req.query.session_id || '').trim();
 
     let paymentRes = await query(
       `SELECT * FROM payments
@@ -1245,7 +1285,7 @@ router.get('/package-payment/:id', async (req, res) => {
            WHERE user_id = $1
              AND package_id IS NOT NULL
              AND payment_status = 'pending'
-             AND created_at < NOW() - INTERVAL '20 minutes'`,
+             AND created_at < NOW() - INTERVAL '${PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC} seconds'`,
           [base.user.id]
         );
 
@@ -1255,7 +1295,7 @@ router.get('/package-payment/:id', async (req, res) => {
            WHERE user_id = $1
              AND package_id = $2
              AND payment_status = 'pending'
-             AND created_at >= NOW() - INTERVAL '20 minutes'
+             AND created_at >= NOW() - INTERVAL '${PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC} seconds'
            ORDER BY id DESC
            LIMIT 1`,
           [base.user.id, pkg.id]
@@ -1283,7 +1323,7 @@ router.get('/package-payment/:id', async (req, res) => {
               price,
               JSON.stringify({
                 source: 'app_packages_free_coupon_modal',
-                expires_in_minutes: 20,
+                expires_in_seconds: PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC,
                 package_id: pkg.id
               })
             ]
@@ -1305,8 +1345,57 @@ router.get('/package-payment/:id', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
-    if (payment.payment_status === 'pending' && payment.created_at &&
-        (Date.now() - new Date(payment.created_at).getTime()) > 20 * 60 * 1000) {
+    if (paymentProvider === 'stripe' && paymentResult === 'success' && stripeSessionId) {
+      const paymentStatus = String(payment.payment_status || '').trim().toLowerCase();
+      if (paymentStatus === 'paid') {
+        req.session.success = 'ชำระเงินสำเร็จแล้ว';
+        return res.redirect(`/app/package-payment/${payment.id}`);
+      }
+
+      try {
+        if (!isStripeReady()) {
+          throw new Error('stripe is not enabled');
+        }
+        const session = await retrieveStripeCheckoutSession(stripeSessionId);
+        const sessionPaymentStatus = String(session?.payment_status || '').trim().toLowerCase();
+        const sessionPaymentId = Number(session?.metadata?.local_payment_id || session?.client_reference_id || 0);
+        if (sessionPaymentStatus === 'paid' && sessionPaymentId === Number(payment.id)) {
+          await activatePackagePayment(payment.id, {
+            stripe_session_id: session.id,
+            stripe_payment_intent: session.payment_intent || null,
+            stripe_success_callback: true
+          });
+          req.session.success = 'ชำระเงินสำเร็จ ระบบยืนยันให้อัตโนมัติแล้ว';
+        } else if (sessionPaymentStatus !== 'paid') {
+          if (paymentStatus === 'pending' && isPackagePaymentExpired(payment.created_at)) {
+            await query(
+              `UPDATE payments
+               SET payment_status = 'cancelled',
+                   updated_at = NOW()
+               WHERE id = $1
+                 AND payment_status = 'pending'`,
+              [payment.id]
+            ).catch(() => null);
+            req.session.error = 'รายการนี้หมดอายุแล้ว';
+            return res.redirect('/app/packages');
+          }
+          req.session.error = 'ระบบกำลังรอยืนยันผลชำระเงินจาก Stripe กรุณาลองใหม่อีกครั้ง';
+        } else {
+          req.session.error = 'ข้อมูลการชำระเงินไม่ตรงกับรายการนี้';
+        }
+      } catch (stripeError) {
+        console.error('stripe callback confirm error:', stripeError);
+        req.session.error = 'ตรวจสอบผลชำระเงินไม่สำเร็จ กรุณาลองอีกครั้ง';
+      }
+      return res.redirect(`/app/package-payment/${payment.id}`);
+    }
+
+    if (paymentProvider === 'stripe' && paymentResult === 'cancel') {
+      req.session.error = 'ยกเลิกการชำระเงินแล้ว';
+      return res.redirect(`/app/package-payment/${payment.id}`);
+    }
+
+    if (String(payment.payment_status || '').trim().toLowerCase() === 'pending' && isPackagePaymentExpired(payment.created_at)) {
       await query(
         `UPDATE payments SET payment_status='cancelled', updated_at=NOW() WHERE id=$1`,
         [payment.id]
@@ -1875,7 +1964,7 @@ router.post('/package-payment/:id/pay', async (req, res) => {
       return res.redirect('/app/packages');
     }
 
-    if (payment.created_at && (Date.now() - new Date(payment.created_at).getTime()) > 20 * 60 * 1000) {
+    if (isPackagePaymentExpired(payment.created_at)) {
       await query(`UPDATE payments SET payment_status='cancelled', updated_at=NOW() WHERE id=$1`, [payment.id]);
       req.session.error = 'รายการนี้หมดอายุแล้ว';
       return res.redirect('/app/packages');
@@ -3689,3 +3778,4 @@ router.post('/kbank/package-webhook', async (req, res) => {
 
 
 module.exports = router;
+module.exports.handleStripeWebhook = handleStripeWebhook;

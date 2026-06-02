@@ -149,6 +149,13 @@ async function createStripeCheckoutForScoin(order) {
   };
 }
 
+async function retrieveStripeCheckoutSession(sessionId) {
+  const stripe = getStripeClientOrThrow();
+  const id = String(sessionId || '').trim();
+  if (!id) throw new Error('missing stripe session id');
+  return stripe.checkout.sessions.retrieve(id);
+}
+
 function constructStripeWebhookEvent(req) {
   const stripe = getStripeClientOrThrow();
   const cfg = getStripeConfig();
@@ -170,5 +177,6 @@ module.exports = {
   isStripeReady,
   createStripeCheckoutForPackage,
   createStripeCheckoutForScoin,
+  retrieveStripeCheckoutSession,
   constructStripeWebhookEvent
 };
