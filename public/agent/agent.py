@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-05-29-equity-before-close-v118"
+AGENT_BUILD_ID = "2026-06-03-m15-single-mt5-v119"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -656,6 +656,148 @@ def stop_stale_user_mt5_ports(port: Any, port_dir: Path, payload: Optional[Dict[
     return {"stopped": stopped, "keepOpen": sorted(keep), "userPorts": sorted(user_ports)}
 
 
+def mt5_processes_for_port_dir(port_dir: Path) -> List[Any]:
+    out: List[Any] = []
+    for p in list(iter_terminal_processes()):
+        try:
+            exe = p.info.get("exe") or ""
+            cmd = " ".join(p.info.get("cmdline") or [])
+            if exe_belongs_to_port_dir(exe, port_dir) or exe_belongs_to_port_dir(cmd, port_dir):
+                out.append(p)
+        except Exception:
+            pass
+    return out
+
+
+def enforce_single_mt5_process_for_port_dir(
+    port_dir: Path,
+    keep_pid: Optional[int] = None,
+    reason: str = "enforce_single_mt5",
+) -> Dict[str, Any]:
+    procs = mt5_processes_for_port_dir(port_dir)
+    if len(procs) <= 1:
+        return {"ok": True, "killed": [], "kept": [int(getattr(p, "pid", 0) or 0) for p in procs]}
+
+    def _score(proc: Any) -> float:
+        try:
+            return float(proc.create_time() or 0.0)
+        except Exception:
+            return 0.0
+
+    keep_proc = None
+    if keep_pid:
+        for proc in procs:
+            try:
+                if int(getattr(proc, "pid", 0) or 0) == int(keep_pid):
+                    keep_proc = proc
+                    break
+            except Exception:
+                pass
+    if keep_proc is None:
+        keep_proc = sorted(procs, key=_score, reverse=True)[0]
+
+    keep_id = int(getattr(keep_proc, "pid", 0) or 0)
+    killed: List[int] = []
+    for proc in procs:
+        pid = int(getattr(proc, "pid", 0) or 0)
+        if not pid or pid == keep_id:
+            continue
+        try:
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=2)
+            killed.append(pid)
+            log(f"DEDUPE MT5 PROCESS folder={port_dir} keep={keep_id} kill={pid} reason={reason}")
+        except Exception as e:
+            log(f"DEDUPE MT5 PROCESS ERROR folder={port_dir} pid={pid} reason={reason}: {e}")
+
+    return {"ok": True, "killed": killed, "kept": [keep_id]}
+
+
+def close_all_positions_mt5_api(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    if os.name != "nt":
+        return {"ok": False, "reason": "not_windows"}
+    payload = payload or {}
+    port_dir = resolve_mt5_port_dir(port, payload)
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists():
+        return {"ok": False, "reason": "terminal_missing", "terminal": str(terminal)}
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception as e:
+        return {"ok": False, "reason": "mt5_module_missing", "error": str(e)[:300]}
+
+    closed = 0
+    failed: List[Dict[str, Any]] = []
+    try:
+        with contextlib.suppress(Exception):
+            mt5.shutdown()
+        if not mt5.initialize(path=str(terminal)):
+            return {"ok": False, "reason": "initialize_failed", "last_error": str(mt5.last_error())}
+
+        positions = mt5.positions_get()
+        if not positions:
+            with contextlib.suppress(Exception):
+                mt5.shutdown()
+            return {"ok": True, "closed": 0, "remaining": 0, "failed": []}
+
+        for pos in positions:
+            try:
+                ticket = int(getattr(pos, "ticket", 0) or 0)
+                symbol = str(getattr(pos, "symbol", "") or "").strip()
+                volume = float(getattr(pos, "volume", 0.0) or 0.0)
+                ptype = int(getattr(pos, "type", -1))
+                if not ticket or not symbol or volume <= 0:
+                    continue
+                mt5.symbol_select(symbol, True)
+                tick = mt5.symbol_info_tick(symbol)
+                if tick is None:
+                    failed.append({"ticket": ticket, "reason": "no_tick"})
+                    continue
+                close_type = mt5.ORDER_TYPE_SELL if ptype == mt5.ORDER_TYPE_BUY else mt5.ORDER_TYPE_BUY
+                price = float(tick.bid if ptype == mt5.ORDER_TYPE_BUY else tick.ask)
+                request = {
+                    "action": mt5.TRADE_ACTION_DEAL,
+                    "symbol": symbol,
+                    "volume": volume,
+                    "type": close_type,
+                    "position": ticket,
+                    "price": price,
+                    "deviation": 120,
+                    "magic": 991124,
+                    "comment": "avelqua_close_all",
+                    "type_time": mt5.ORDER_TIME_GTC,
+                    "type_filling": mt5.ORDER_FILLING_IOC,
+                }
+                result = mt5.order_send(request)
+                retcode = int(getattr(result, "retcode", -1) or -1) if result is not None else -1
+                if retcode in (0, mt5.TRADE_RETCODE_DONE, mt5.TRADE_RETCODE_PLACED):
+                    closed += 1
+                else:
+                    failed.append({
+                        "ticket": ticket,
+                        "retcode": retcode,
+                        "comment": str(getattr(result, "comment", "") or "") if result is not None else "",
+                    })
+            except Exception as item_err:
+                failed.append({"ticket": int(getattr(pos, "ticket", 0) or 0), "error": str(item_err)[:300]})
+
+        remaining = mt5.positions_get()
+        out = {
+            "ok": len(failed) == 0,
+            "closed": closed,
+            "remaining": len(remaining or []),
+            "failed": failed,
+        }
+        with contextlib.suppress(Exception):
+            mt5.shutdown()
+        return out
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            mt5.shutdown()
+        return {"ok": False, "reason": "exception", "error": str(e)[:500], "closed": closed, "failed": failed}
+
+
 def send_port_health():
     ports = []
 
@@ -663,6 +805,14 @@ def send_port_health():
         mt5_root = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
 
         running_map = {}
+
+        for folder in sorted(mt5_root.glob("*PORT*")):
+            try:
+                if not folder.is_dir():
+                    continue
+                enforce_single_mt5_process_for_port_dir(folder, reason="port_health_sweep")
+            except Exception as dedupe_err:
+                log(f"PORT HEALTH DEDUPE ERROR folder={folder}: {dedupe_err}")
 
         for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
             try:
@@ -4803,6 +4953,14 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     journal_since = time.time()
     proc = launch_mt5("initial")
     proc_pid = proc.pid if proc else None
+    try:
+        enforce_single_mt5_process_for_port_dir(
+            port_dir,
+            keep_pid=(int(proc_pid) if proc_pid else None),
+            reason="start_mt5_bot_launch",
+        )
+    except Exception as dedupe_err:
+        log(f"START MT5 DEDUPE ERROR port={port}: {dedupe_err}")
     send_connect_result(
         payload,
         "starting",
@@ -5969,6 +6127,14 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
+    try:
+        enforce_single_mt5_process_for_port_dir(
+            port_dir,
+            keep_pid=(int(proc_pid) if proc_pid else None),
+            reason="run_bot_launch",
+        )
+    except Exception as dedupe_err:
+        log(f"RUN BOT DEDUPE ERROR port={port}: {dedupe_err}")
     journal_since = time.time()
     log(f"RUN BOT LAUNCH port={port} login={login} expert={startup_expert or '-'} period={period}")
     token = acquire_login_ui_lock(port, timeout_sec=45)
@@ -6655,6 +6821,9 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             force_kill = ctype in ("force_stop_mt5", "kill_mt5") or str(
                 payload_get(payload, "forceKill", "killMt5", "closeMt5") or ""
             ).lower() in ("1", "true", "yes")
+            close_all_positions = str(
+                payload_get(payload, "closeAllPositions", "close_all_positions") or ""
+            ).lower() in ("1", "true", "yes")
             soft_only = str(payload_get(payload, "stopTradingOnly", "softStop") or "").lower() in (
                 "1",
                 "true",
@@ -6666,6 +6835,15 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 stop_soft = soft_only or (not force_kill)
             else:
                 stop_soft = soft_only and not force_kill
+            if close_all_positions:
+                try:
+                    close_result = close_all_positions_mt5_api(port, stop_payload)
+                    log(
+                        f"CLOSE ALL POSITIONS port={port} ok={close_result.get('ok')} "
+                        f"closed={close_result.get('closed')} remaining={close_result.get('remaining')}"
+                    )
+                except Exception as close_err:
+                    log(f"CLOSE ALL POSITIONS ERROR port={port}: {close_err}")
             if stop_soft:
                 command_result(cmd_id, True, stop_bot_trading_only(port, stop_payload))
             elif folder:
