@@ -103,8 +103,9 @@
           <% const hasEquityPort = acc && ((acc.last_equity != null && acc.last_equity !== '') || (acc.last_balance != null && acc.last_balance !== '')); %>
           <% const botRunningOnPort = acc && activeBotAccountIds.has(Number(acc.id)); %>
           <% const portCssClass = botRunningOnPort ? 'bot-running' : (canUsePort ? 'connected' : (accStatus === 'connecting' || accStatus === 'starting' ? 'checking' : (acc ? 'cancelled' : ''))); %>
-          <% const cardPick = !acc || canUsePort || accStatus === 'connecting' || accStatus === 'checking' || accStatus === 'starting' || (accStatus === 'failed' && hasEquityPort); %>
-          <div class="port-item <%= portCssClass %><%= cardPick ? ' port-card-pick' : '' %>" data-port-slot="<%= i %>"<%= acc ? (' data-account-id="' + acc.id + '"') : '' %><%= cardPick ? ' role="button" tabindex="0"' : '' %>>
+          <% const canRetryLoginPort = acc && (accStatus === 'failed' || accStatus === 'ready'); %>
+          <% const cardPick = !acc || canUsePort || accStatus === 'connecting' || accStatus === 'checking' || accStatus === 'starting' || canRetryLoginPort || (accStatus === 'failed' && hasEquityPort); %>
+          <div class="port-item <%= portCssClass %><%= cardPick ? ' port-card-pick' : '' %>" data-port-slot="<%= i %>" data-status="<%= accStatus %>"<%= acc ? (' data-account-id="' + acc.id + '" data-mt5-login="' + acc.mt5_login + '"') : '' %><%= cardPick ? ' role="button" tabindex="0"' : '' %>>
             <div class="port-main">
               <div>
                 <b>PORT <%= i %></b>
@@ -995,17 +996,19 @@
   }
 
   function renderPortItemHtml(p) {
+    const st = String(p.status || '').toLowerCase();
+    const retryable = !!(p.accountId && ['failed', 'ready'].includes(st));
     const del = p.accountId
       ? '<form method="POST" action="/app/mt5/account/' + p.accountId + '/delete" class="port-delete-form" onclick="event.stopPropagation()">' +
         '<button class="mt5-btn mini delete" type="submit" onclick="event.stopPropagation()">ลบ</button></form>'
       : '';
     const actions = p.accountId ? '<div class="port-actions" onclick="event.stopPropagation()">' + del + '</div>' : '';
-    const pickable = !!(p.canPick || (p.accountId && (p.canUse || ['connected', 'connecting', 'checking', 'starting'].includes(String(p.status || '').toLowerCase()))));
+    const pickable = !!(p.canPick || retryable || (p.accountId && (p.canUse || ['connected', 'connecting', 'checking', 'starting'].includes(st))));
     const pickCls = pickable ? ' port-card-pick' : '';
-    const pickTitle = p.canUse ? ' title="คลิกเลือก PORT นี้เพื่อ Run BOT"' : (pickable ? ' title="คลิกเลือก PORT นี้เพื่อ Login MT5"' : '');
+    const pickTitle = p.canUse && !retryable ? ' title="คลิกเลือก PORT นี้เพื่อ Run BOT"' : (pickable ? ' title="คลิกเลือก PORT นี้เพื่อ Login MT5"' : '');
     const pickAttr = pickable
-      ? pickTitle + ' data-port-slot="' + p.slot + '"' + (p.accountId ? ' data-account-id="' + p.accountId + '"' : '') + ' role="button" tabindex="0"'
-      : ' data-port-slot="' + p.slot + '"' + (p.accountId ? ' data-account-id="' + p.accountId + '"' : '');
+      ? pickTitle + ' data-port-slot="' + p.slot + '" data-status="' + mt5Esc(st) + '"' + (p.accountId ? ' data-account-id="' + p.accountId + '"' : '') + (p.mt5_login ? ' data-mt5-login="' + mt5Esc(p.mt5_login) + '"' : '') + ' role="button" tabindex="0"'
+      : ' data-port-slot="' + p.slot + '" data-status="' + mt5Esc(st) + '"' + (p.accountId ? ' data-account-id="' + p.accountId + '"' : '') + (p.mt5_login ? ' data-mt5-login="' + mt5Esc(p.mt5_login) + '"' : '');
     return (
       '<div class="port-item ' + mt5Esc(p.cssClass) + pickCls + '"' + pickAttr + '>' +
       '<div class="port-main"><div><b>PORT ' + p.slot + '</b><small>' + mt5Esc(p.sublabel) + '</small></div>' +
@@ -1931,12 +1934,28 @@ function mt5SelectPortSlot(slot) {
 
 /** เลือก PORT ว่างอัตโนมัติเมื่อกดเชื่อมต่อ (login พร้อมกันคนละ PORT) */
 function mt5AutoPickEmptyConnectSlot() {
+  const mt5LoginValue = String(mt5LoginInput?.value || '').trim();
+  function cardStatus(card) {
+    return String(card?.getAttribute('data-status') || '').toLowerCase();
+  }
+  function cardLogin(card) {
+    return String(card?.getAttribute('data-mt5-login') || '').trim();
+  }
+  function canUseCardForConnect(card) {
+    if (!card) return false;
+    const accountId = Number(card.getAttribute('data-account-id') || 0);
+    if (!accountId) return true;
+    const st = cardStatus(card);
+    if (!['failed', 'ready'].includes(st)) return false;
+    const loginOnCard = cardLogin(card);
+    return !loginOnCard || !mt5LoginValue || loginOnCard === mt5LoginValue || st === 'failed';
+  }
   const current = Number(mt5SelectedPortSlot?.value || 0);
   if (current) {
     const curCard = document.querySelector(
-      '.port-card-pick[data-port-slot="' + current + '"]:not([data-account-id])'
+      '.port-card-pick[data-port-slot="' + current + '"]'
     );
-    if (curCard) return current;
+    if (canUseCardForConnect(curCard)) return current;
   }
   const empty = document.querySelector('.port-card-pick[data-port-slot]:not([data-account-id])');
   if (empty) {
@@ -1946,7 +1965,7 @@ function mt5AutoPickEmptyConnectSlot() {
       return slot;
     }
   }
-  return current;
+  return 0;
 }
 window.mt5AutoPickEmptyConnectSlot = mt5AutoPickEmptyConnectSlot;
 
@@ -2009,9 +2028,11 @@ function mt5UpdateSharedPortSelections() {
   document.querySelectorAll('.port-card-pick').forEach(function (el) {
     const slot = Number(el.getAttribute('data-port-slot') || 0);
     const accountId = Number(el.getAttribute('data-account-id') || 0);
+    const st = String(el.getAttribute('data-status') || '').toLowerCase();
+    const isConnectPick = !accountId || ['failed', 'ready'].includes(st);
     const isRunPick = (!!accountId && accountId === runAccountId) || (!!runPortSlot && !!accountId && slot === runPortSlot);
     el.classList.toggle('selected-run', isRunPick);
-    el.classList.toggle('selected-connect', !accountId && !!connectSlot && slot === connectSlot);
+    el.classList.toggle('selected-connect', isConnectPick && !!connectSlot && slot === connectSlot);
   });
 }
 
@@ -2025,7 +2046,8 @@ function mt5InitPortListClickDelegation() {
     if (!card) return;
     const accountId = Number(card.getAttribute('data-account-id') || 0);
     const slot = Number(card.getAttribute('data-port-slot') || 0);
-    if (accountId) {
+    const st = String(card.getAttribute('data-status') || '').toLowerCase();
+    if (accountId && st === 'connected') {
       mt5SelectRunAccount(accountId, slot);
       return;
     }
@@ -2038,7 +2060,8 @@ function mt5InitPortListClickDelegation() {
     e.preventDefault();
     const accountId = Number(card.getAttribute('data-account-id') || 0);
     const slot = Number(card.getAttribute('data-port-slot') || 0);
-    if (accountId) {
+    const st = String(card.getAttribute('data-status') || '').toLowerCase();
+    if (accountId && st === 'connected') {
       mt5SelectRunAccount(accountId, slot);
       return;
     }
@@ -2160,12 +2183,12 @@ if (mt5ConnectForm) {
     }
 
     const connectSlot = mt5AutoPickEmptyConnectSlot();
-  const connectCard = connectSlot
-    ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"]:not([data-account-id])')
+  const selectedConnectCard = connectSlot
+    ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"]')
     : null;
-  const reconnectCard = connectSlot
-    ? document.querySelector('.port-card-pick[data-port-slot="' + connectSlot + '"][data-account-id]')
-    : null;
+  const selectedAccountId = Number(selectedConnectCard?.getAttribute('data-account-id') || 0);
+  const selectedStatus = String(selectedConnectCard?.getAttribute('data-status') || '').toLowerCase();
+  const selectedLogin = String(selectedConnectCard?.getAttribute('data-mt5-login') || '').trim();
   if (!connectSlot) {
     mt5ConnectNotify(
       'error',
@@ -2173,22 +2196,41 @@ if (mt5ConnectForm) {
     );
     return false;
   }
-  if (reconnectCard && !connectCard) {
-    const sameLogin = reconnectCard.querySelector('small');
-    const titleText = sameLogin ? String(sameLogin.textContent || '') : '';
-  const loginOnCard = titleText.includes(mt5LoginValue);
-    if (loginOnCard) {
+  if (selectedAccountId) {
+    const sameLogin = selectedLogin === mt5LoginValue;
+    const canRetrySelected =
+      selectedStatus === 'failed' ||
+      (selectedStatus === 'ready' && sameLogin);
+    if (selectedStatus === 'connected' && sameLogin) {
       mt5ConnectNotify(
         'info',
         'บัญชีนี้เชื่อมต่อที่ PORT ' + connectSlot + ' อยู่แล้ว — ใช้ Run BOT หรือลบ PORT ก่อน login ใหม่'
       );
-    } else {
-      mt5ConnectNotify(
-        'error',
-        'PORT ' + connectSlot + ' มีบัญชีอื่นอยู่แล้ว — เลือก PORT ว่าง หรือลบ PORT นี้ก่อน'
-      );
+      return false;
     }
-    return false;
+    if (['connecting', 'checking', 'starting'].includes(selectedStatus) && sameLogin) {
+      mt5ConnectNotify(
+        'info',
+        'PORT ' + connectSlot + ' กำลังเชื่อมต่อบัญชีนี้อยู่แล้ว — กรุณารอผลการตรวจสอบ'
+      );
+      return false;
+    }
+    if (!canRetrySelected) {
+      if (sameLogin) {
+        mt5ConnectNotify(
+          'info',
+          'บัญชีนี้มีรายการอยู่ที่ PORT ' + connectSlot + ' แล้ว — ใช้ Run BOT หรือลบ PORT ก่อน login ใหม่'
+        );
+      } else {
+        mt5ConnectNotify(
+          'error',
+          'PORT ' + connectSlot + ' มีบัญชีอื่นอยู่แล้ว — เลือก PORT ว่าง หรือลบ PORT นี้ก่อน'
+        );
+      }
+      return false;
+    } else {
+      mt5SelectPortSlot(connectSlot);
+    }
   }
 
     const mt5ConnectBtn = document.getElementById('mt5ConnectBtn');
