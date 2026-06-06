@@ -294,6 +294,18 @@ async function processCommandResultSideEffects(node, commandId, ctype, pl, resul
   }
 
   const ctypeLow = String(ctype || '').toLowerCase();
+  if (
+    ok
+    && (ctypeLow === 'stop_mt5' || ctypeLow === 'login_exit_mt5' || ctypeLow === 'force_stop_mt5' || ctypeLow === 'kill_mt5')
+  ) {
+    const portNo = Number(pl?.portNo || pl?.port_no || pl?.assignedPortNo || pl?.assigned_port_no || 0);
+    const vpsId = Number(node?.id || pl?.vpsId || pl?.vps_id || 0);
+    if (vpsId && portNo) {
+      const { clearPortHealthRunning } = require('../lib/adminVpsBridge');
+      await clearPortHealthRunning(vpsId, portNo).catch(() => {});
+    }
+  }
+
   if (ctypeLow === 'stop_mt5_bot' || ctypeLow === 'stop_bot') {
     const remaining = Number(result?.positionsClosed?.remaining ?? result?.remaining ?? 0);
     const retry = Number(pl?.haltRetry ?? pl?.halt_retry ?? 0);
@@ -1440,7 +1452,47 @@ router.post('/connect-result', async (req, res) => {
       `, [portId, status === 'connected' ? 'locked' : 'locked']).catch(() => {});
     }
 
+    const rawStatus = String(req.body.status || '').toLowerCase();
+    const isAuthFail = rawStatus === 'failed_auth';
+
     const outcome = await ingestConnectResultEvent(node, req.body).catch(() => ({ ok: true }));
+
+    if (isAuthFail && accountId) {
+      const journalEvidence = String(req.body.journalEvidence || req.body.journal_evidence || '').trim();
+      const mt5Login = String(req.body.mt5Login || req.body.mt5_login || '').trim();
+      const journalVerdict = journalEvidence && mt5Login
+        ? parseMt5JournalOutcome(journalEvidence, mt5Login)
+        : null;
+      const failMsg = (journalVerdict === 'failed' || isAuthFail) ? MT5_FAIL_USER_MSG : (message || 'MT5 login failed');
+
+      await query(`
+        UPDATE vps_system.mt5_accounts
+        SET status='failed', last_error=$2, last_login_message=$2, updated_at=NOW()
+        WHERE id=$1
+          AND LOWER(COALESCE(status, '')) NOT IN ('connected', 'ready', 'deleted', 'cancelled', 'expired')
+      `, [accountId, failMsg]).catch(() => {});
+
+      const attemptId = String(req.body.attemptId || req.body.attempt_id || '').trim();
+      if (attemptId) {
+        await query(`
+          UPDATE vps_system.mt5_connect_attempts
+          SET status='failed', terminal=TRUE, login_verified=FALSE,
+              last_message=$2, last_error=$2, finished_at=COALESCE(finished_at, NOW()), updated_at=NOW()
+          WHERE attempt_id=$1
+            AND (terminal IS NULL OR terminal = FALSE)
+        `, [attemptId, failMsg]).catch(() => {});
+      }
+
+      if (portId) {
+        await query(`
+          UPDATE vps_system.vps_ports
+          SET status='available', locked_by_user_id=NULL, locked_until=NULL,
+              process_id=NULL, mt5_login=NULL, last_error=$2, updated_at=NOW()
+          WHERE id=$1
+        `, [portId, failMsg]).catch(() => {});
+      }
+    }
+
     return res.json({ ok: true, ...outcome });
   } catch (e) {
     console.error('[CONNECT RESULT ERROR]', e);
