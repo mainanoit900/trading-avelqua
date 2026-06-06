@@ -667,10 +667,16 @@ async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) 
     WHERE vps_id=$1
       AND assigned_port_no=$2
       AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting', 'connected', 'ready')
+      AND NOT EXISTS (
+        SELECT 1 FROM vps_system.bot_instances bi
+        WHERE bi.mt5_account_id = vps_system.mt5_accounts.id
+          AND bi.stopped_at IS NULL
+          AND LOWER(TRIM(COALESCE(bi.status, ''))) IN ('running', 'pending', 'restarting', 'starting', 'connecting')
+      )
   `;
   if (keepAccountId) {
     params.push(keepAccountId);
-    sql += ` AND id <> $3`;
+    sql += ` AND id <> $${params.length}`;
   }
   await query(sql, params).catch(() => {});
 }
@@ -702,18 +708,9 @@ async function isUserPortSlotAvailable(userId, slot, totalPorts) {
   const s = num(slot);
   const max = num(totalPorts);
   if (s < 1 || s > max) return false;
-  const r = await query(
-    `
-    SELECT 1
-    FROM vps_system.mt5_accounts
-    WHERE user_id=$1
-      AND port_slot=$2
-      AND LOWER(COALESCE(status, '')) = ANY($3::text[])
-    LIMIT 1
-  `,
-    [userId, s, USER_PORT_SLOT_BUSY_STATUSES]
-  ).catch(() => ({ rows: [] }));
-  return !(r.rows || []).length;
+  const { getUserBusyPortSlots } = require('../lib/mt5PortSlotGuard');
+  const busy = await getUserBusyPortSlots(userId).catch(() => []);
+  return !busy.includes(s);
 }
 
 async function getReusablePortSlotAccount(userId, slot, mt5Login, serverName) {
@@ -741,18 +738,9 @@ async function getReusablePortSlotAccount(userId, slot, mt5Login, serverName) {
 }
 
 async function getNextUserSlot(userId, totalPorts) {
-  const used = await query(
-    `
-    SELECT port_slot
-    FROM vps_system.mt5_accounts
-    WHERE user_id=$1
-      AND port_slot IS NOT NULL
-      AND LOWER(COALESCE(status, '')) = ANY($2::text[])
-  `,
-    [userId, USER_PORT_SLOT_BUSY_STATUSES]
-  );
-
-  const set = new Set((used.rows || []).map((r) => num(r.port_slot)));
+  const { getUserBusyPortSlots } = require('../lib/mt5PortSlotGuard');
+  const busy = await getUserBusyPortSlots(userId).catch(() => []);
+  const set = new Set(busy.map((s) => num(s)).filter((s) => s > 0));
   for (let i = 1; i <= totalPorts; i++) {
     if (!set.has(i)) return i;
   }
@@ -895,7 +883,15 @@ async function handleMt5ConnectProduction(req, res) {
     }
 
     if (requestedSlot > 0) {
-      const reserve = await reserveVpsPortForConnect(userId, null, requestedSlot);
+      // reuse same folder port ที่ slot นี้เคยใช้ เพื่อไม่ให้ข้าม folder
+      const slotPortRow = await query(
+        `SELECT port_id FROM vps_system.mt5_accounts
+         WHERE user_id=$1 AND port_slot=$2 AND port_id IS NOT NULL
+         ORDER BY updated_at DESC LIMIT 1`,
+        [userId, requestedSlot]
+      ).catch(() => ({ rows: [] }));
+      const existingPortId = Number(slotPortRow.rows?.[0]?.port_id || 0) || null;
+      const reserve = await reserveVpsPortForConnect(userId, existingPortId, requestedSlot);
       if (!reserve.ok) throw new Error(reserve.message);
       reservedPort = reserve.port;
     } else if (retryPort) {

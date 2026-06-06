@@ -36,7 +36,9 @@ const {
   isProductionBot,
   validateRunCapital,
   botUiMeta,
-  botKind
+  botKind,
+  loginCurrencyScale,
+  loginCurrencyLabel
 } = require('../lib/mt5BotPresets');
 const { buildEaTimeProfile } = require('../lib/mt5EaTimeProfile');
 const { buildEaSetPayloadFields } = require('../lib/mt5EaSet');
@@ -1796,7 +1798,17 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
       FROM vps_system.mt5_accounts a
       WHERE a.user_id=$1
         AND a.port_slot IS NOT NULL
-        AND LOWER(TRIM(COALESCE(a.status,''))) NOT IN ('deleted', 'expired')
+        AND (
+          LOWER(TRIM(COALESCE(a.status,''))) NOT IN ('deleted', 'expired')
+          OR EXISTS (
+            SELECT 1 FROM vps_system.bot_instances bi
+            WHERE bi.mt5_account_id = a.id
+              AND bi.stopped_at IS NULL
+              AND LOWER(TRIM(COALESCE(bi.status, ''))) IN (
+                'running', 'pending', 'starting', 'connecting', 'restarting'
+              )
+          )
+        )
       ORDER BY a.port_slot ASC NULLS LAST, a.id ASC
     `,
       [userId]
@@ -1827,6 +1839,8 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
         accountId: acc ? Number(acc.id) : null,
         mt5_login: acc?.mt5_login || null,
         status: acc?.status || null,
+        last_balance: acc?.last_balance ?? null,
+        last_equity: acc?.last_equity ?? null,
         canUse: meta.canUse,
         cssClass: meta.cssClass,
         canPick: meta.canPick || !acc,
@@ -1932,7 +1946,17 @@ router.get('/mt5', async (req, res) => {
     FROM vps_system.mt5_accounts a
     WHERE a.user_id=$1
       AND a.port_slot IS NOT NULL
-      AND LOWER(TRIM(COALESCE(a.status,''))) NOT IN ('deleted', 'expired')
+      AND (
+        LOWER(TRIM(COALESCE(a.status,''))) NOT IN ('deleted', 'expired')
+        OR EXISTS (
+          SELECT 1 FROM vps_system.bot_instances bi
+          WHERE bi.mt5_account_id = a.id
+            AND bi.stopped_at IS NULL
+            AND LOWER(TRIM(COALESCE(bi.status, ''))) IN (
+              'running', 'pending', 'starting', 'connecting', 'restarting'
+            )
+        )
+      )
     ORDER BY a.port_slot ASC, a.id ASC
   `, [userId]);
 
@@ -2083,15 +2107,17 @@ console.log('[MT5 CONNECT START]', {
         AND LOWER(TRIM(COALESCE(status,''))) IN ('connecting','checking')
     `, [userId]);
 
+    const { getUserBusyPortSlots } = require('../lib/mt5PortSlotGuard');
     const busySlots = await safeQuery(`
       SELECT port_slot, mt5_login
       FROM vps_system.mt5_accounts
       WHERE user_id=$1
         AND LOWER(TRIM(COALESCE(status,''))) IN ('connected','ready')
     `, [userId]);
+    const busyFromBots = await getUserBusyPortSlots(userId).catch(() => []);
 
     const usedSlotSet = new Set((usedSlots || []).map((r) => num(r.port_slot)));
-    const busySlotSet = new Set();
+    const busySlotSet = new Set(busyFromBots.map((s) => num(s)).filter((s) => s > 0));
     for (const row of busySlots || []) {
       const slot = num(row.port_slot);
       if (!slot) continue;
@@ -2493,6 +2519,14 @@ async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_d
           )
         ]
       ).catch((e) => console.error('[PORT] stop_mt5 on delete/cancel:', e.message || e));
+
+      if (stopNodeId && stopPortNo) {
+        await query(`
+          UPDATE vps_system.vps_port_health
+          SET running=FALSE, mt5_login=NULL, balance=NULL, equity=NULL, updated_at=NOW()
+          WHERE node_id=$1 AND port_number=$2
+        `, [stopNodeId, stopPortNo]).catch(() => {});
+      }
     }
   }
 
@@ -2954,12 +2988,25 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
     const runTimeMode = String(req.query.run_time_mode || 'auto').toLowerCase() === '24h' ? '24h' : 'auto';
     const capital = num(req.query.capital_manual || req.query.capital);
     const manualLot = num(req.query.manual_lot);
+    const mt5AccountId = num(req.query.mt5_account_id || req.query.account_id);
     const botRows = await query(
       `SELECT * FROM vps_system.bot_catalog WHERE UPPER(bot_code)=UPPER($1) AND is_active=TRUE LIMIT 1`,
       [botCode]
     );
     const bot = botRows.rows[0];
     if (!bot) return res.json({ ok: false, message: 'ไม่พบ BOT' });
+
+    let currencyScale = 1;
+    if (mt5AccountId) {
+      const accRow = await query(
+        `SELECT mt5_login FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`,
+        [mt5AccountId, req.user.id]
+      ).catch(() => ({ rows: [] }));
+      if (accRow.rows[0]?.mt5_login) {
+        currencyScale = loginCurrencyScale(accRow.rows[0].mt5_login);
+      }
+    }
+
     const summary = await getPortSummary(req.user.id);
     const lotMeta = packageLotLimits(summary);
     const syncField = String(req.query.sync_field || 'capital').toLowerCase() === 'lot' ? 'lot' : 'capital';
@@ -2969,7 +3016,8 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
       syncField,
       equityFallback: 0,
       lotMin: lotMeta.lotMin,
-      lotMax: lotMeta.lotMax
+      lotMax: lotMeta.lotMax,
+      currencyScale
     });
     const calc = computePresetForBot(
       bot,
@@ -2979,8 +3027,10 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
       lotMeta.lotMin,
       lotMeta.lotMax,
       lotMeta.defaultLot,
-      resolved.syncField
+      resolved.syncField,
+      currencyScale
     );
+    const runSummary = buildRunSummary(calc, tradeLevel, runTimeMode);
     return res.json({
       ok: true,
       preview: {
@@ -2995,13 +3045,14 @@ router.get('/mt5/run-preset', requireLogin, async (req, res) => {
         showLotField: calc.showLotField,
         minCapital: calc.minCapital,
         packageCapped: calc.packageCapped,
+        currencyScale,
         runTimeMode,
-        timeLabel: runTimeMode === '24h' ? 'Open 24H.' : 'Auto trading',
+        timeLabel: runSummary.timeLabel,
         equityBudget: await getUserEquityCapitalBudget(req.user.id, {
-          excludeAccountId: num(req.query.mt5_account_id || req.query.account_id)
+          excludeAccountId: mt5AccountId || null
         }).catch(() => null)
       },
-      ui: botUiMeta(bot)
+      ui: botUiMeta(bot, currencyScale)
     });
   } catch (e) {
     return res.json({ ok: false, message: e.message });
@@ -3118,18 +3169,22 @@ router.post('/mt5/run', async (req, res) => {
     if (!bot) throw new Error('ไม่พบ BOT ที่เลือก');
     if (!isProductionBot(bot)) throw new Error('BOT นี้ไม่ได้เปิดให้ใช้งานบนหน้าเว็บนี้');
 
+    const currencyScale = loginCurrencyScale(account.mt5_login);
+    const currencyUnit = loginCurrencyLabel(account.mt5_login);
+
     const capitalResolved = resolveRunCapitalAndLot({
       capitalManual,
       manualLot,
       syncField,
       equityFallback: num(account.last_equity || account.last_balance || account.capital_override, 0),
       lotMin: lotMeta.lotMin,
-      lotMax: lotMeta.lotMax
+      lotMax: lotMeta.lotMax,
+      currencyScale
     });
     const capital = num(capitalResolved.capital, 0);
     const effectiveManualLot = num(capitalResolved.manualLot, 0);
     const effectiveSyncField = capitalResolved.syncField || syncField;
-    const capitalCheck = validateRunCapital(capital, bot);
+    const capitalCheck = validateRunCapital(capital, bot, currencyScale);
     if (!capitalCheck.ok) throw new Error(capitalCheck.message);
 
     const calc = computePresetForBot(
@@ -3140,10 +3195,12 @@ router.post('/mt5/run', async (req, res) => {
       lotMeta.lotMin,
       lotMeta.lotMax,
       lotMeta.defaultLot,
-      effectiveSyncField
+      effectiveSyncField,
+      currencyScale
     );
     if (botKind(bot) === 'queen' && num(calc.lot) <= 0) {
-      throw new Error('เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ 10,000 USD)');
+      const minCap = calc.minCapital || (100 * currencyScale);
+      throw new Error(`เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ ${minCap.toLocaleString()} ${currencyUnit})`);
     }
     let lot = num(calc.lot);
     if (lot <= 0 && botKind(bot) === 'quantum') lot = 0.01;
@@ -3319,6 +3376,8 @@ router.post('/mt5/run', async (req, res) => {
       portSlot: account.port_slot || 1,
       keepMt5Open: true,
       stopTradingOnly: false,
+      currencyScale,
+      currencyUnit,
       queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
       },
       portIsolation
