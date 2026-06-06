@@ -24,7 +24,8 @@ const {
   resolveAdminPortMt5State,
   isAgentMt5Running,
   reconcilePortIdleWhenAgentFree,
-  queueForceStopMt5
+  queueForceStopMt5,
+  syncStaleAdminAllocations
 } = require('../lib/adminVpsBridge');
 const { clearFolderPortBinding } = require('../lib/mt5PortCleanup');
 
@@ -2879,6 +2880,7 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
   try {
     await ensureVpsAllocationsAdminColumns();
     const nodeId = Number(req.params.id);
+    await syncStaleAdminAllocations(nodeId).catch(() => 0);
 
     let ports = await query(`
       SELECT *, node_id AS vps_id
@@ -3187,7 +3189,7 @@ async function adminStopPortRow(portRow, sourceTable, portDbId, options = {}) {
   if (sourceTable === 'vps_allocations') {
     await query(`
       UPDATE vps_allocations
-      SET status='free', user_id=NULL, mt5_login=NULL, mt5_status='stopped', is_active=TRUE, updated_at=NOW()
+      SET status='free', user_id=NULL, mt5_status='stopped', is_active=TRUE, updated_at=NOW()
       WHERE id=$1
     `, [portDbId]).catch(() => {});
     if (adminNodeId && portNo) {
@@ -3214,7 +3216,7 @@ async function adminDisablePortRow(portRow, sourceTable, portDbId) {
     if (adminNodeId && portNo) {
       await query(`
         UPDATE vps_allocations
-        SET user_id=NULL, mt5_login=NULL, mt5_status='stopped', updated_at=NOW()
+        SET user_id=NULL, mt5_status='stopped', updated_at=NOW()
         WHERE node_id=$1 AND (${VPS_ALLOC_PORT_NO_SQL})=$2
       `, [adminNodeId, portNo]).catch(() => {});
     }
@@ -3248,7 +3250,7 @@ async function adminEnablePortRow(portRow, sourceTable, portDbId) {
     if (adminNodeId && portNo) {
       await query(`
         UPDATE vps_allocations
-        SET user_id=NULL, mt5_login=NULL, mt5_status='stopped', last_error=NULL, updated_at=NOW()
+        SET user_id=NULL, mt5_status='stopped', last_error=NULL, updated_at=NOW()
         WHERE node_id=$1 AND (${VPS_ALLOC_PORT_NO_SQL})=$2
       `, [adminNodeId, portNo]).catch(() => {});
     }
