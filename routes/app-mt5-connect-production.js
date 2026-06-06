@@ -885,9 +885,17 @@ async function handleMt5ConnectProduction(req, res) {
     if (requestedSlot > 0) {
       // reuse same folder port ที่ slot นี้เคยใช้ เพื่อไม่ให้ข้าม folder
       const slotPortRow = await query(
-        `SELECT port_id FROM vps_system.mt5_accounts
-         WHERE user_id=$1 AND port_slot=$2 AND port_id IS NOT NULL
-         ORDER BY updated_at DESC LIMIT 1`,
+        `
+        SELECT port_id
+        FROM vps_system.mt5_accounts
+        WHERE user_id=$1
+          AND port_slot=$2
+          AND port_id IS NOT NULL
+          AND assigned_port_no = (100 + port_slot)
+          AND LOWER(COALESCE(status, '')) NOT IN ('deleted', 'expired', 'cancelled')
+        ORDER BY updated_at DESC
+        LIMIT 1
+      `,
         [userId, requestedSlot]
       ).catch(() => ({ rows: [] }));
       const existingPortId = Number(slotPortRow.rows?.[0]?.port_id || 0) || null;
