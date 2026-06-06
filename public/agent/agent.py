@@ -83,7 +83,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-bot-dedupe-fix-v130"
+AGENT_BUILD_ID = "2026-06-06-bot-mohicans-dedupe-v131"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -737,6 +737,61 @@ def enforce_single_mt5_process_for_port_dir(
             log(f"DEDUPE MT5 PROCESS ERROR folder={port_dir} pid={pid} reason={reason}: {e}")
 
     return {"ok": True, "killed": killed, "kept": [keep_id]}
+
+
+def kill_stray_terminal64_processes(
+    login: str = "",
+    port_dir: Optional[Path] = None,
+    *,
+    reason: str = "kill_stray",
+) -> Dict[str, Any]:
+    """ปิด terminal64 ที่ไม่ผูกกับ port_dir เป้าหมาย (เช่น AppData non-portable ซ้ำกับ portable)."""
+    mt5_root_low = str(Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))).lower()
+    killed: List[int] = []
+    for proc in list(iter_terminal_processes()):
+        try:
+            pid = int(getattr(proc, "pid", 0) or 0)
+            if pid <= 0:
+                continue
+            exe = str(proc.info.get("exe") or "")
+            cmd_parts = proc.info.get("cmdline") or []
+            cmdline = " ".join(str(a) for a in cmd_parts if a)
+            exe_low = exe.lower()
+            cmd_low = cmdline.lower()
+
+            if port_dir and (
+                exe_belongs_to_port_dir(exe, port_dir) or exe_belongs_to_port_dir(cmdline, port_dir)
+            ):
+                continue
+
+            under_mt5_ports = (mt5_root_low and mt5_root_low in exe_low) or (mt5_root_low and mt5_root_low in cmd_low)
+            is_portable = "/portable" in cmd_low
+            is_stray = (not under_mt5_ports) or (under_mt5_ports and not is_portable)
+            if not is_stray:
+                continue
+
+            title_text = ""
+            try:
+                ps = f"(Get-Process -Id {pid} -ErrorAction SilentlyContinue).MainWindowTitle"
+                title_text = (_run_powershell(ps, timeout=2) or "").strip()
+            except Exception:
+                pass
+
+            login_s = str(login or "").strip()
+            if login_s and title_text and login_s not in title_text:
+                continue
+
+            proc.kill()
+            with contextlib.suppress(Exception):
+                proc.wait(timeout=2)
+            killed.append(pid)
+            log(
+                f"KILL STRAY MT5 pid={pid} reason={reason} "
+                f"exe={(exe or '')[:80]} title={(title_text or '')[:60]}"
+            )
+        except Exception as e:
+            log(f"KILL STRAY MT5 ERROR reason={reason}: {e}")
+    return {"action": "kill_stray_terminal64", "reason": reason, "killed": killed, "ok": True}
 
 
 def close_all_positions_mt5_api(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -3875,10 +3930,17 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
 
     key = str(port)
     wait_timeout = 0.0
-    if str(ctype or "").lower() in ("run_mt5_bot", "run_mt5", "restart_mt5_bot", "restart_mt5", "restart_port"):
+    is_bot_run_spawn = str(ctype or "").lower() in (
+        "run_mt5_bot",
+        "run_mt5",
+        "restart_mt5_bot",
+        "restart_mt5",
+        "restart_port",
+    )
+    if is_bot_run_spawn:
         wait_timeout = 45.0
     deadline = time.time() + wait_timeout
-    _evict_login_after = time.time() + 8.0
+    _evict_login_after = time.time() if is_bot_run_spawn else time.time() + 8.0
 
     while True:
         reap_connect_workers()
@@ -3887,11 +3949,26 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
             if prev and prev.poll() is None:
                 if wait_timeout > 0 and time.time() < deadline:
                     prev_pid = getattr(prev, "pid", "")
-                    is_bot_run = str(ctype or "").lower() in ("run_mt5_bot", "run_mt5")
-                    if is_bot_run and time.time() > _evict_login_after:
+                    if is_bot_run_spawn and time.time() >= _evict_login_after:
                         prev_ctype = ACTIVE_CONNECT_WORKER_CTYPES.get(key, "").lower()
                         if prev_ctype in ("connect_mt5", "login_mt5"):
                             log(f"WORKER EVICT login-worker for bot_run port={port} pid={prev_pid} prev_type={prev_ctype}")
+                            try:
+                                port_dir = resolve_mt5_port_dir(port, payload)
+                                kill_all_mt5_for_port_dir(
+                                    port,
+                                    port_dir,
+                                    payload,
+                                    reason="evict_login_for_bot",
+                                    max_wait_sec=6.0,
+                                )
+                                kill_stray_terminal64_processes(
+                                    str(payload_get(payload, "mt5Login", "login") or "").strip(),
+                                    port_dir,
+                                    reason="evict_login_for_bot",
+                                )
+                            except Exception as evict_err:
+                                log(f"WORKER EVICT MT5 CLEAN ERROR port={port}: {evict_err}")
                             try:
                                 prev.kill()
                             except Exception:
@@ -5035,6 +5112,8 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     try:
         kill_mt5_by_folder(port_dir)
+        kill_all_mt5_for_port_dir(port, port_dir, payload, reason="connect_prelaunch", max_wait_sec=8.0)
+        kill_stray_terminal64_processes(login, port_dir, reason="connect_prelaunch")
         remove_mt5_login_ini(port_dir)
         clear_mt5_login_cache(port_dir)
         stop_mt5_port_only(port, payload)
@@ -6282,17 +6361,19 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if login and password:
         try:
-            if mt5_processes_for_port_dir(port_dir):
-                kill_all_mt5_for_port_dir(
-                    port,
-                    port_dir,
-                    payload,
-                    reason="run_bot_prelaunch",
-                    max_wait_sec=8.0,
-                )
-                _kill_deadline = time.time() + 4.0
-                while time.time() < _kill_deadline and mt5_processes_for_port_dir(port_dir):
-                    time.sleep(0.3)
+            kill_all_mt5_for_port_dir(
+                port,
+                port_dir,
+                payload,
+                reason="run_bot_prelaunch",
+                max_wait_sec=12.0,
+            )
+            kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch")
+            _kill_deadline = time.time() + 5.0
+            while time.time() < _kill_deadline and mt5_processes_for_port_dir(port_dir):
+                kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch_wait")
+                time.sleep(0.3)
+            kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch_final")
             clear_mt5_port_session(port_dir)
             clear_mt5_login_cache(port_dir)
             remove_mt5_login_ini(port_dir)

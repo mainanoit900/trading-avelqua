@@ -32,13 +32,13 @@ input double   InpLotSize              = 0.02;       // Lot Size (เริ่�
 input double   InpLotPlus              = 0.02;       // Lot Plus (ระบบบวก Lot ไม่ใช่คูณ)
 input int      InpPipStep              = 345;        // Pip Step (point)
 input int      InpTakeProfitAverage    = 100;        // Take Profit Average (point)
-input double   InpTrailingStartMoney   = 8.0;        // Trailing Start ($)
-input double   InpTrailingStopMoney    = 5.0;        // Trailing Stop ($)
+input double   InpTrailingStartMoney   = 8.0;        // Trailing Start (¢)
+input double   InpTrailingStopMoney    = 5.0;        // Trailing Stop (¢)
 input double   InpCutLossPct           = 100.0;      // Cut Loss (%)
 
 //--- Daily Limit & Server Protection ---
-input double   InpDailyProfitTarget    = 0.0;      // Daily Profit Target ($) [0 = ไม่ใช้งาน]
-input double   InpDailyLossLimit       = 0.0;      // Daily Loss Limit ($) [0 = ไม่ใช้งาน]
+input double   InpDailyProfitTarget    = 0.0;      // Daily Profit Target (¢) [0 = ไม่ใช้งาน]
+input double   InpDailyLossLimit       = 0.0;      // Daily Loss Limit (¢) [0 = ไม่ใช้งาน]
 input int      InpMaxDailyCommands     = 30000;      // ลิมิตส่งคำสั่งเข้า Server ต่อวัน (กันโบรกแบน)
 
 //--- Time Filter (อิงเวลาประเทศไทย UTC+7) 3 Sessions ---
@@ -156,10 +156,14 @@ int OnInit()
    string brokerName = AccountInfoString(ACCOUNT_COMPANY);
    StringToUpper(brokerName); // แปลงเป็นตัวพิมพ์ใหญ่เพื่อความแม่นยำในการตรวจ
 
-   // ตรวจหาคำว่า "XM" หรือ "MH MARKETS" ในชื่อบริษัทโบรกเกอร์
-   if(StringFind(brokerName, "XM") < 0 && StringFind(brokerName, "MOHICANS MARKETS LTD") < 0)
+   // XM / MH Markets / Mohicans Markets (โบรกที่ระบบใช้)
+   bool brokerOk =
+      (StringFind(brokerName, "XM") >= 0)
+      || (StringFind(brokerName, "MH MARKETS") >= 0)
+      || (StringFind(brokerName, "MOHICANS") >= 0);
+   if(!brokerOk)
    {
-      Alert("โบรกเกอร์ไม่ถูกต้อง! อนุญาตเฉพาะ XM และ MH Markets เท่านั้น (โบรกปัจจุบัน: ", brokerName, ")");
+      Alert("โบรกเกอร์ไม่ถูกต้อง! อนุญาตเฉพาะ XM, MH Markets และ Mohicans Markets (โบรกปัจจุบัน: ", brokerName, ")");
       return(INIT_FAILED);
    }
    // =========================================================
@@ -194,9 +198,18 @@ int OnInit()
    }
      
    UpdateDashboard();
-   
+
+   // ปิด order เก่าทั้งหมดของ Magic Number นี้ทุกครั้งที่เปิดบอทใหม่
+   for(int _ci = PositionsTotal() - 1; _ci >= 0; _ci--)
+   {
+      ulong _ct = PositionGetTicket(_ci);
+      if(_ct == 0 || !PositionSelectByTicket(_ct)) continue;
+      if(PositionGetInteger(POSITION_MAGIC) == (long)InpMagicNumber && PositionGetString(POSITION_SYMBOL) == _Symbol)
+         trade.PositionClose(_ct);
+   }
+
    AvelquaBotCloseOnInit();
-     
+
    return(INIT_SUCCEEDED);
   }
 
