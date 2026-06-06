@@ -2907,14 +2907,33 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
       const basePath =
         p.folder_path || p.base_path || live.folder_path || dbUse.folder_path || `C:\\MT5_PORTS\\${portName}`;
 
-      if (isAgentMt5Running(live) === false && (dbUse.running || ['locked', 'used', 'running', 'busy', 'full'].includes(String(p.status || '').toLowerCase()))) {
-        reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
-      }
-
-      const state = resolveAdminPortMt5State({ live, dbUse, adminDisabled });
+      const state = resolveAdminPortMt5State({
+        live,
+        dbUse,
+        adminDisabled,
+        allocationStatus: p.status
+      });
       const inUse = state.inUse;
+      const locked = state.locked;
       const orphanRunning = state.orphanRunning;
       const mt5Login = state.mt5Login || live?.mt5_login || dbUse?.mt5_login || p.mt5_login || null;
+      const rowStatus = adminDisabled
+        ? 'disabled'
+        : inUse
+          ? 'used'
+          : locked
+            ? 'locked'
+            : orphanRunning
+              ? 'orphan'
+              : 'free';
+
+      if (
+        isAgentMt5Running(live) === false
+        && !locked
+        && (dbUse.running || ['locked', 'used', 'running', 'busy', 'full'].includes(String(p.status || '').toLowerCase()))
+      ) {
+        reconcilePortIdleWhenAgentFree(nodeId, portNo, basePath).catch(() => {});
+      }
 
       return {
         ...p,
@@ -2928,9 +2947,10 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
         is_active: !adminDisabled,
         admin_disabled: adminDisabled,
         is_used: inUse,
+        is_locked: locked,
         orphan_running: orphanRunning,
-        live_status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
-        status: adminDisabled ? 'disabled' : inUse ? 'used' : orphanRunning ? 'orphan' : 'free',
+        live_status: rowStatus,
+        status: rowStatus,
         live_pid: live?.pid || live?.process_id || null,
         live_running: (inUse || orphanRunning) && !adminDisabled,
         usage_source: state.usageSource,
@@ -2950,14 +2970,24 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
     for (const row of rows) {
       const key = Number(row.port_number || 0) || row.id;
       const off = portAdminOff.get(key) === true;
+      const rowStatus = off
+        ? 'disabled'
+        : row.is_used
+          ? 'used'
+          : row.is_locked
+            ? 'locked'
+            : row.orphan_running
+              ? 'orphan'
+              : 'free';
       const normalized = {
         ...row,
         admin_disabled: off,
         is_active: !off,
         is_used: off ? false : row.is_used,
+        is_locked: off ? false : row.is_locked,
         orphan_running: off ? false : row.orphan_running,
-        status: off ? 'disabled' : row.is_used ? 'used' : row.orphan_running ? 'orphan' : 'free',
-        live_status: off ? 'disabled' : row.is_used ? 'used' : row.orphan_running ? 'orphan' : 'free',
+        status: rowStatus,
+        live_status: rowStatus,
         live_running: off ? false : row.live_running
       };
       const prev = dedupe.get(key);
@@ -2979,9 +3009,10 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
 
     const totalPorts = cleanRows.length;
     const activePorts = cleanRows.filter((p) => p.is_used === true && !p.admin_disabled).length;
+    const lockedPorts = cleanRows.filter((p) => p.is_locked === true && !p.admin_disabled).length;
     const orphanPorts = cleanRows.filter((p) => p.orphan_running === true && !p.admin_disabled).length;
     const freePorts = cleanRows.filter(
-      (p) => !p.admin_disabled && !p.is_used && !p.orphan_running
+      (p) => !p.admin_disabled && !p.is_used && !p.is_locked && !p.orphan_running
     ).length;
 
     res.json({
@@ -2989,6 +3020,7 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
       stats: {
         total_ports: totalPorts,
         active_ports: activePorts,
+        locked_ports: lockedPorts,
         orphan_ports: orphanPorts,
         free_ports: freePorts
       },
