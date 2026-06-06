@@ -766,6 +766,12 @@ def kill_stray_terminal64_processes(
 
             under_mt5_ports = (mt5_root_low and mt5_root_low in exe_low) or (mt5_root_low and mt5_root_low in cmd_low)
             is_portable = "/portable" in cmd_low
+
+            # Portable MT5 ของ FolderPort อื่น — เก็บไว้ (รันบอทพร้อมกันหลาย user)
+            if port_dir and under_mt5_ports and is_portable:
+                continue
+
+            # AppData / default install หรือ non-portable ใต้ MT5_PORTS — ถือว่า stray
             is_stray = (not under_mt5_ports) or (under_mt5_ports and not is_portable)
             if not is_stray:
                 continue
@@ -777,8 +783,9 @@ def kill_stray_terminal64_processes(
             except Exception:
                 pass
 
+            # อย่าใช้ title filter กับ AppData — ตอน Login dialog title ยังไม่มีเลขบัญชี
             login_s = str(login or "").strip()
-            if login_s and title_text and login_s not in title_text:
+            if under_mt5_ports and login_s and title_text and login_s not in title_text:
                 continue
 
             proc.kill()
@@ -792,6 +799,19 @@ def kill_stray_terminal64_processes(
         except Exception as e:
             log(f"KILL STRAY MT5 ERROR reason={reason}: {e}")
     return {"action": "kill_stray_terminal64", "reason": reason, "killed": killed, "ok": True}
+
+
+def ensure_single_portable_mt5_for_port(
+    port_dir: Path,
+    keep_pid: Optional[int] = None,
+    login: str = "",
+    *,
+    reason: str = "ensure_single_mt5",
+) -> Dict[str, Any]:
+    """คง MT5 portable เดียวของ FolderPort — ปิด AppData/ซ้ำก่อน dedupe ในโฟลเดอร์."""
+    stray = kill_stray_terminal64_processes(login, port_dir, reason=f"{reason}_stray")
+    dedupe = enforce_single_mt5_process_for_port_dir(port_dir, keep_pid=keep_pid, reason=reason)
+    return {"stray": stray, "dedupe": dedupe}
 
 
 def close_all_positions_mt5_api(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -5260,9 +5280,10 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
     proc = launch_mt5("initial")
     proc_pid = proc.pid if proc else None
     try:
-        enforce_single_mt5_process_for_port_dir(
+        ensure_single_portable_mt5_for_port(
             port_dir,
             keep_pid=(int(proc_pid) if proc_pid else None),
+            login=login,
             reason="start_mt5_bot_launch",
         )
     except Exception as dedupe_err:
@@ -6446,9 +6467,10 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     proc = _popen_hidden([str(terminal), "/portable", f"/config:{cfg}"], cwd=str(port_dir))
     proc_pid = proc.pid if proc else None
     try:
-        enforce_single_mt5_process_for_port_dir(
+        ensure_single_portable_mt5_for_port(
             port_dir,
             keep_pid=(int(proc_pid) if proc_pid else None),
+            login=login,
             reason="run_bot_launch",
         )
     except Exception as dedupe_err:
@@ -6467,6 +6489,16 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
     finally:
         release_login_ui_lock(port, token)
+
+    try:
+        ensure_single_portable_mt5_for_port(
+            port_dir,
+            keep_pid=(int(proc_pid) if proc_pid else None),
+            login=login,
+            reason="run_bot_post_login_form",
+        )
+    except Exception as dedupe_err:
+        log(f"RUN BOT POST LOGIN DEDUPE ERROR port={port}: {dedupe_err}")
 
     journal_timeout = int(
         payload_get(payload, "journalTimeoutSec", "journal_timeout_sec")
@@ -6493,6 +6525,16 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
         raise RuntimeError(login_msg or "MT5 login failed during bot run")
 
+    try:
+        ensure_single_portable_mt5_for_port(
+            port_dir,
+            keep_pid=(int(proc_pid) if proc_pid else None),
+            login=login,
+            reason="run_bot_post_login_verify",
+        )
+    except Exception as dedupe_err:
+        log(f"RUN BOT POST VERIFY DEDUPE ERROR port={port}: {dedupe_err}")
+
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     ui_target: Dict[str, Any] = {}
     for _wait in range(15):
@@ -6517,6 +6559,16 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as gate_err:
         trade_gate = {"ok": False, "error": str(gate_err)[:300]}
         log(f"MT5 TEST TRADE ERROR port={port}: {gate_err}")
+
+    try:
+        ensure_single_portable_mt5_for_port(
+            port_dir,
+            keep_pid=(int(proc_pid) if proc_pid else None),
+            login=login,
+            reason="run_bot_post_test_trade",
+        )
+    except Exception as dedupe_err:
+        log(f"RUN BOT POST TEST TRADE DEDUPE ERROR port={port}: {dedupe_err}")
 
     snap = account_snapshot(port, payload)
     bal = snap.get("balance")
