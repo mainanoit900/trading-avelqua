@@ -459,6 +459,25 @@
     return mt5Num(account.last_equity, mt5Num(account.last_balance, 0));
   }
 
+  // ===== Currency Detection =====
+  function mt5IsUsdLogin(mt5Login) {
+    return /^8/.test(String(mt5Login || '').trim());
+  }
+  function mt5CurrencyScale(mt5Login) {
+    return mt5IsUsdLogin(mt5Login) ? 1 : 100;
+  }
+  function mt5CurrencyLabel(mt5Login) {
+    return mt5IsUsdLogin(mt5Login) ? 'USD' : 'US Cent';
+  }
+  function mt5ActiveCurrencyScale() {
+    const acc = typeof mt5SelectedRunAccount === 'function' ? mt5SelectedRunAccount() : null;
+    return mt5CurrencyScale(acc ? acc.mt5_login : '');
+  }
+  function mt5ActiveCurrencyLabel() {
+    const acc = typeof mt5SelectedRunAccount === 'function' ? mt5SelectedRunAccount() : null;
+    return mt5CurrencyLabel(acc ? acc.mt5_login : '');
+  }
+
   function mt5FmtMoney(v) {
     const n = mt5Num(v, 0);
     return n.toLocaleString('en-US', { maximumFractionDigits: 2 });
@@ -490,13 +509,14 @@
     const cap = mt5Num(capital, 0);
     const budget = mt5EquityBudget(account ? account.id : 0);
     const acctEq = mt5RunAccountCapital(account);
+    const unit = account ? mt5CurrencyLabel(account.mt5_login) : mt5ActiveCurrencyLabel();
     if (acctEq > 0 && cap > acctEq + 0.0001) {
-      return 'เงินทุนเกิน Equity ของ Login นี้ (' + mt5FmtMoney(acctEq) + ' USD)';
+      return 'เงินทุนเกิน Equity ของ Login นี้ (' + mt5FmtMoney(acctEq) + ' ' + unit + ')';
     }
     if (budget.totalEquity > 0 && cap > budget.remainingCapital + 0.0001) {
       return 'เงินทุนรวมเกิน Equity — ลงทุนแล้ว ' + mt5FmtMoney(budget.allocatedCapital) +
-        ' / ' + mt5FmtMoney(budget.totalEquity) + ' USD เหลือลงทุนได้อีก ' +
-        mt5FmtMoney(budget.remainingCapital) + ' USD';
+        ' / ' + mt5FmtMoney(budget.totalEquity) + ' ' + unit + ' เหลือลงทุนได้อีก ' +
+        mt5FmtMoney(budget.remainingCapital) + ' ' + unit;
     }
     return MT5_EQUITY_CAPITAL_MSG;
   }
@@ -536,17 +556,22 @@
     return 'legacy';
   }
 
-  function mt5LotFromCapital(capital) {
+  // scale=1 → USD (login 8), scale=100 → US Cent (login 2)
+  function mt5LotFromCapital(capital, currencyScale) {
     const cap = mt5Num(capital, 0);
     if (cap <= 0) return 0;
-    return Number(((cap / 100) * 0.01).toFixed(4));
+    const scale = mt5Num(currencyScale, 1) || 1;
+    // USD: 100 = 0.01 lot; US Cent: 10000 = 0.01 lot
+    return Number((cap / (10000 * scale)).toFixed(4));
   }
 
-  function mt5CapitalFromLot(lot) {
+  function mt5CapitalFromLot(lot, currencyScale) {
     const l = mt5Num(lot, 0);
     if (l <= 0) return 0;
+    const scale = mt5Num(currencyScale, 1) || 1;
+    // capitalPer001Lot=10000 means 1 std lot = 10000 USD; for US Cent multiply by scale
     const per = mt5Num((window.__mt5RunConfig || {}).capitalPer001Lot, 10000);
-    return Number((l * per).toFixed(2));
+    return Number((l * per * scale).toFixed(2));
   }
 
   function mt5RoundTrailLow(v) {
@@ -561,41 +586,65 @@
     return frac > 0.5 ? Math.ceil(x) : Math.floor(x);
   }
 
-  function mt5AkTrailing(lot, level, capital) {
+  function mt5AkTrailing(lot, level, capital, currencyScale) {
     const l = mt5Num(lot, 0.01);
     const cap = mt5Num(capital, 0);
+    const scale = mt5Num(currencyScale, 1) || 1;
     const lv = mt5NormalizeTradeLevel(level);
+    // risk threshold scales with currency (300 USD or 30000 US Cent)
+    const riskThreshold = 300 * scale;
     if (lv === 'high') {
       return { tStart: Number((l * 200).toFixed(2)), tStop: Number((l * 100).toFixed(2)) };
     }
-    if (cap >= 300 && lv === 'low') {
+    if (cap >= riskThreshold && lv === 'low') {
       return { tStart: mt5RoundTrailLow(l * 170), tStop: mt5RoundTrailLow(l * 70) };
     }
-    if (cap >= 300 && lv === 'medium') {
+    if (cap >= riskThreshold && lv === 'medium') {
       return { tStart: mt5RoundTrailLow(l * 170), tStop: mt5RoundTrailMedStop(l * 85) };
     }
     return { tStart: Number((l * 170).toFixed(2)), tStop: Number((l * 85).toFixed(2)) };
   }
 
-  function mt5QueenLot(capital) {
+  function mt5QueenLot(capital, currencyScale) {
     const cap = mt5Num(capital, 0);
-    if (cap < 10000) return 0;
-    return Number((Math.floor(cap / 10000) * 0.01).toFixed(2));
+    const scale = mt5Num(currencyScale, 1) || 1;
+    // 100 USD or 10000 US Cent per 0.01 lot
+    const threshold = 100 * scale;
+    if (cap < threshold) return 0;
+    return Number((Math.floor(cap / threshold) * 0.01).toFixed(2));
   }
 
-  function mt5MinCapitalForBot(code) {
+  function mt5MinCapitalForBot(code, currencyScale) {
+    const scale = mt5Num(currencyScale, 0) || mt5ActiveCurrencyScale();
     const ui = ((window.__mt5RunConfig || {}).botUi || {})[code] || {};
-    return mt5Num(ui.minCapital, 100);
+    // minCapitalUsd มาจาก server (BOT_MIN_CAPITAL_USD), คูณ scale เพื่อให้ตรงสกุลเงิน
+    const usdMin = mt5Num(ui.minCapitalUsd, mt5Num(ui.minCapital, 100));
+    return usdMin * scale;
   }
 
-  function mt5CapitalHintForBot(code) {
-    const ui = ((window.__mt5RunConfig || {}).botUi || {})[code] || {};
-    return ui.capitalHint || ('ขั้นต่ำ ' + mt5MinCapitalForBot(code));
+  function mt5CapitalHintForBot(code, currencyScale) {
+    const scale = mt5Num(currencyScale, 0) || mt5ActiveCurrencyScale();
+    const unit = mt5ActiveCurrencyLabel();
+    const minCap = mt5MinCapitalForBot(code, scale);
+    const kind = mt5BotKind(code);
+    const perLot = 100 * scale;
+    if (kind === 'ak') {
+      return `ขั้นต่ำ ${minCap.toLocaleString()} ${unit} · ${perLot.toLocaleString()} ${unit} ต่อ 0.01 Lot · แก้ทุนหรือ Lot ได้`;
+    }
+    if (kind === 'queen') {
+      return `อิงจาก Equity · ขั้นต่ำ ${minCap.toLocaleString()} ${unit} · ทุน ${perLot.toLocaleString()} ${unit} ต่อ +0.01 Lot`;
+    }
+    if (kind === 'quantum') {
+      return `อิงจาก Equity · ขั้นต่ำ ${minCap.toLocaleString()} ${unit} · บอทคำนวณอัตโนมัติ (M15)`;
+    }
+    return `ขั้นต่ำ ${minCap.toLocaleString()} ${unit}`;
   }
 
-  function mt5CapitalLabelForBot(code) {
-    const minCap = mt5MinCapitalForBot(code);
-    return 'เงินทุน (ขั้นต่ำ ' + minCap + ')';
+  function mt5CapitalLabelForBot(code, currencyScale) {
+    const scale = mt5Num(currencyScale, 0) || mt5ActiveCurrencyScale();
+    const minCap = mt5MinCapitalForBot(code, scale);
+    const unit = mt5ActiveCurrencyLabel();
+    return `เงินทุน (ขั้นต่ำ ${minCap.toLocaleString()} ${unit})`;
   }
 
   function mt5DefaultCapitalForBot(code, equity) {
@@ -604,17 +653,21 @@
     if (kind === 'queen' || kind === 'quantum') {
       return eq > 0 ? eq : 0;
     }
-    const ui = ((window.__mt5RunConfig || {}).botUi || {})[code] || {};
-    return eq > 0 ? eq : mt5Num(ui.minCapital, 100);
+    return eq > 0 ? eq : mt5MinCapitalForBot(code);
   }
 
   function mt5InitialRunDefaults(selected, botCode) {
-    const minCap = mt5MinCapitalForBot(botCode);
-    const preview = mt5ComputeRunPreset(botCode, minCap, 0, 'medium', 'auto', 'capital');
+    const scale = selected ? mt5CurrencyScale(selected.mt5_login) : mt5ActiveCurrencyScale();
+    const minCap = mt5MinCapitalForBot(botCode, scale);
     const cfg = window.__mt5RunConfig || {};
+    const kind = mt5BotKind(botCode);
+    const actualCapital = selected ? mt5RunAccountCapital(selected) : 0;
+    // ทุกบอท: ใช้ Equity ของบัญชีเป็นค่าเริ่มต้น ถ้าไม่มีให้ใช้ minCap
+    const startCap = actualCapital > 0 ? actualCapital : minCap;
+    const preview = mt5ComputeRunPreset(botCode, startCap, 0, 'medium', 'auto', 'capital', scale);
     return {
-      capital: preview.capital > 0 ? preview.capital : minCap,
-      lot: mt5BotKind(botCode) === 'quantum'
+      capital: preview.capital > 0 ? preview.capital : startCap,
+      lot: kind === 'quantum'
         ? mt5Num(cfg.packageDefaultLot, cfg.packageLotMax || 0.05)
         : (preview.lot > 0 ? preview.lot : mt5Num(cfg.packageDefaultLot, cfg.packageLotMin || 0.01))
     };
@@ -653,18 +706,20 @@
     let acc = connected.find(function (a) { return Number(a.port_slot) === n; });
     if (acc) return acc;
     const ports = (window.__mt5RunConfig || {}).ports || [];
-    const card = ports.find(function (p) { return Number(p.slot) === n && p.accountId && p.canUse; });
+    // หา port ที่มี accountId — ไม่บังคับ canUse เพื่อรองรับ port ที่รัน BOT อยู่
+    const card = ports.find(function (p) { return Number(p.slot) === n && p.accountId && p.canUse; })
+               || ports.find(function (p) { return Number(p.slot) === n && p.accountId; });
     if (!card) return null;
     return {
       id: Number(card.accountId),
       port_slot: n,
       mt5_login: card.mt5_login || null,
-      last_equity: null,
-      last_balance: null
+      last_equity: card.last_equity != null ? card.last_equity : null,
+      last_balance: card.last_balance != null ? card.last_balance : null
     };
   }
 
-  function mt5ApplyRunAccountToForm(acc) {
+  function mt5ApplyRunAccountToForm(acc, preserveCapital) {
     const form = document.getElementById('mt5RunForm');
     if (!form || !acc) return false;
     const id = Number(acc.id || 0);
@@ -681,7 +736,19 @@
         (eq > 0 ? (' · Equity <b style="color:#fff">' + mt5Esc(eq) + '</b>') : '');
     }
     const botSelect = form.querySelector('select[name="bot_code"]');
-    if (botSelect) botSelect.dispatchEvent(new Event('change', { bubbles: true }));
+    if (botSelect) {
+      if (preserveCapital) {
+        const capitalInput = form.querySelector('input[name="capital_manual"]');
+        const savedCapital = capitalInput ? capitalInput.value : null;
+        botSelect.dispatchEvent(new Event('change', { bubbles: true }));
+        if (savedCapital !== null && capitalInput && mt5Num(savedCapital, 0) > 0) {
+          capitalInput.value = savedCapital;
+          capitalInput.dispatchEvent(new Event('input', { bubbles: true }));
+        }
+      } else {
+        botSelect.dispatchEvent(new Event('change', { bubbles: true }));
+      }
+    }
     return true;
   }
 
@@ -756,7 +823,7 @@
       : 'กำลังเปิดบอทบน VPS — โดยทั่วไป 30–90 วิ';
   }
 
-  function mt5ComputeRunPreset(botCode, capital, manualLot, tradeLevel, runTimeMode, syncField) {
+  function mt5ComputeRunPreset(botCode, capital, manualLot, tradeLevel, runTimeMode, syncField, currencyScale) {
     const cfg = window.__mt5RunConfig || {};
     const lotMin = mt5Num(cfg.packageLotMin, 0.01);
     const lotMax = mt5Num(cfg.packageLotMax, 0.05);
@@ -764,7 +831,9 @@
     const level = mt5NormalizeTradeLevel(tradeLevel);
     const mode = String(runTimeMode || 'auto').toLowerCase();
     const timeLabel = mode === '24h' ? 'Open 24H.' : 'Auto trading';
-    const minCap = mt5MinCapitalForBot(botCode);
+    const scale = mt5Num(currencyScale, 0) || mt5ActiveCurrencyScale();
+    const unit = mt5ActiveCurrencyLabel();
+    const minCap = mt5MinCapitalForBot(botCode, scale);
     let cap = mt5Num(capital, 0);
     let lot = 0;
     let packageCapped = false;
@@ -780,16 +849,18 @@
         tStop: 0,
         pipStep: 345,
         takeProfitAverage: 100,
-        minCapital: 50000,
+        minCapital: minCap,
         packageCapped: false,
-        warning: cap < 50000 ? 'เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ 50,000 USD)' : '',
+        currencyScale: scale,
+        warning: cap < minCap ? `เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ ${minCap.toLocaleString()} ${unit})` : '',
         runTimeMode: mode,
         timeLabel: timeLabel + ' · TF M15'
       };
     }
 
     if (kind === 'queen') {
-      lot = mt5Clamp(mt5QueenLot(cap), lotMin, lotMax);
+      lot = mt5Clamp(mt5QueenLot(cap, scale), lotMin, lotMax);
+      const perLot = 100 * scale;
       return {
         botKind: 'queen',
         lot: lot,
@@ -799,11 +870,14 @@
         tStop: 0,
         pipStep: 345,
         takeProfitAverage: 100,
-        minCapital: 10000,
+        minCapital: minCap,
         packageCapped: false,
-        warning: cap < 10000 ? 'เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ 10,000 USD)' : (lot <= 0 ? 'ทุนไม่ถึงขั้นต่ำสำหรับ Lot 0.01' : ''),
+        currencyScale: scale,
+        warning: cap < minCap
+          ? `เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ ${minCap.toLocaleString()} ${unit})`
+          : (lot <= 0 ? `ทุนไม่ถึงขั้นต่ำสำหรับ Lot 0.01 (ขั้นต่ำ ${minCap.toLocaleString()} ${unit})` : ''),
         runTimeMode: mode,
-        timeLabel: 'บอทตั้ง Lot อัตโนมัติ (ทุน 10,000 USD / +0.01 Lot)'
+        timeLabel: `บอทตั้ง Lot อัตโนมัติ (ทุน ${perLot.toLocaleString()} ${unit} / +0.01 Lot)`
       };
     }
 
@@ -811,37 +885,37 @@
       const manual = mt5Num(manualLot, 0);
       if (sync === 'lot' && manual > 0) {
         lot = mt5Clamp(manual, lotMin, lotMax);
-        cap = mt5CapitalFromLot(lot);
+        cap = mt5CapitalFromLot(lot, scale);
       } else if (manual > 0 && cap > 0) {
-        const lotFromCap = mt5Clamp(mt5LotFromCapital(cap), lotMin, lotMax);
+        const lotFromCap = mt5Clamp(mt5LotFromCapital(cap, scale), lotMin, lotMax);
         const lotManual = mt5Clamp(manual, lotMin, lotMax);
         if (Math.abs(lotFromCap - lotManual) < 0.0005) {
           lot = lotManual;
         } else if (sync === 'lot') {
           lot = lotManual;
-          cap = mt5CapitalFromLot(lot);
+          cap = mt5CapitalFromLot(lot, scale);
         } else {
-          const ideal = mt5LotFromCapital(cap);
+          const ideal = mt5LotFromCapital(cap, scale);
           lot = mt5Clamp(ideal, lotMin, lotMax);
           if (ideal > lotMax + 0.0001) {
             packageCapped = true;
-            cap = mt5CapitalFromLot(lot);
           }
         }
       } else {
-        const ideal = mt5LotFromCapital(cap);
-        lot = mt5Clamp(ideal, lotMin, lotMax);
+        const ideal = mt5LotFromCapital(cap, scale);
         if (ideal > lotMax + 0.0001) {
           packageCapped = true;
-          cap = mt5CapitalFromLot(lot);
+          lot = lotMax;
+        } else {
+          lot = mt5Clamp(ideal, lotMin, lotMax);
         }
       }
-      const trail = mt5AkTrailing(lot, level, cap);
+      const trail = mt5AkTrailing(lot, level, cap, scale);
       let warning = '';
       if (packageCapped) {
-        warning = 'Lot ถูกจำกัดตามแพ็กเกจ (สูงสุด ' + mt5Fixed(lotMax) + ') — ปรับเงินทุนเป็น ' + mt5Fixed(cap);
+        warning = `Lot ถูกจำกัดตามแพ็กเกจ (สูงสุด ${mt5Fixed(lotMax)}) — รัน Lot ${mt5Fixed(lot)}`;
       }
-      if (cap < minCap) warning = 'เงินทุนต้องไม่ต่ำกว่า ' + minCap;
+      if (cap < minCap) warning = `เงินทุนต้องไม่ต่ำกว่า ${minCap.toLocaleString()} ${unit}`;
       return {
         botKind: 'ak',
         lot: lot,
@@ -853,6 +927,7 @@
         takeProfitAverage: 100,
         minCapital: minCap,
         packageCapped: packageCapped,
+        currencyScale: scale,
         warning: warning,
         runTimeMode: mode,
         timeLabel: timeLabel
@@ -868,8 +943,9 @@
       tStop: 0,
       pipStep: 345,
       takeProfitAverage: 100,
-      minCapital: 100,
+      minCapital: minCap,
       packageCapped: false,
+      currencyScale: scale,
       warning: '',
       runTimeMode: mode,
       timeLabel: timeLabel
@@ -886,7 +962,8 @@
     const warn = preview.warning
       ? '<div style="color:#fbbf24;margin-top:6px">⚠ ' + mt5Esc(preview.warning) + '</div>'
       : '';
-    let grid = '<span>เงินทุน</span><b>' + mt5Esc(preview.capital) + '</b>';
+    const summaryUnit = preview.currencyScale ? mt5CurrencyLabel(preview.currencyScale === 1 ? '8' : '2') : mt5ActiveCurrencyLabel();
+    let grid = '<span>เงินทุน</span><b>' + mt5Esc(preview.capital) + ' ' + mt5Esc(summaryUnit) + '</b>';
     if (preview.botKind !== 'quantum') {
       grid += '<span>Lot / Lot+</span><b>' + mt5Esc(preview.lot) + ' / ' + mt5Esc(preview.lotPlus) + '</b>';
     }
@@ -926,22 +1003,24 @@
       lotInput.readOnly = kind === 'queen';
       lotInput.disabled = kind === 'quantum';
     }
+    const acctScaleLocal = mt5ActiveCurrencyScale();
     const levelSelect = form.querySelector('select[name="trade_level"]');
     if (levelSelect && kind === 'ak') {
+      const riskThreshold = 300 * acctScaleLocal;
       ['low', 'medium'].forEach(function (lv) {
         const opt = levelSelect.querySelector('option[value="' + lv + '"]');
         if (!opt) return;
-        const hide = cap < 300;
+        const hide = cap < riskThreshold;
         opt.hidden = hide;
         opt.disabled = hide;
         opt.style.display = hide ? 'none' : '';
       });
-      if (cap < 300) levelSelect.value = 'high';
+      if (cap < riskThreshold) levelSelect.value = 'high';
     }
     const capHint = form.querySelector('.mt5-capital-hint');
-    if (capHint) capHint.textContent = mt5CapitalHintForBot(code);
+    if (capHint) capHint.textContent = mt5CapitalHintForBot(code, acctScaleLocal);
     const capLabel = form.querySelector('.mt5-capital-label');
-    if (capLabel) capLabel.textContent = mt5CapitalLabelForBot(code);
+    if (capLabel) capLabel.textContent = mt5CapitalLabelForBot(code, acctScaleLocal);
     const lotHint = form.querySelector('.mt5-lot-hint');
     if (lotHint) {
       lotHint.textContent = kind === 'queen'
@@ -987,7 +1066,19 @@
     if (blockReason) btn.setAttribute('data-block-reason', blockReason);
     else btn.removeAttribute('data-block-reason');
     if (note && btn.disabled && blockReason) {
-      note.textContent = blockReason;
+      if (hasActive && capital > 0) {
+        const activeInst = mt5SelectedRunInstance();
+        const runningCapital = activeInst ? mt5Num(activeInst.capital_used || activeInst.capitalUsed, 0) : 0;
+        const capitalChanged = runningCapital > 0 && Math.abs(capital - runningCapital) > 0.001;
+        if (capitalChanged) {
+          const unit = selectedAccount ? mt5CurrencyLabel(selectedAccount.mt5_login) : '';
+          note.textContent = blockReason + ' · Stop BOT แล้ว Run ใหม่เพื่อใช้เงินทุน ' + capital.toLocaleString() + (unit ? ' ' + unit : '');
+        } else {
+          note.textContent = blockReason;
+        }
+      } else {
+        note.textContent = blockReason;
+      }
       note.style.color = '#fbbf24';
     } else if (note) {
       note.style.color = '';
@@ -1038,8 +1129,9 @@
       return '<option value="' + code + '">' + label + '</option>';
     }).join('');
     const initialBotCode = (bots && bots[0]) ? String(bots[0].code || bots[0].bot_code || '').trim() : 'AK-SNIPER-VIP-VER4.0';
-    const initialMinCap = mt5MinCapitalForBot(initialBotCode);
-    const initialCapitalLabel = mt5CapitalLabelForBot(initialBotCode);
+    const acctScale = mt5CurrencyScale(selected.mt5_login);
+    const initialMinCap = mt5MinCapitalForBot(initialBotCode, acctScale);
+    const initialCapitalLabel = mt5CapitalLabelForBot(initialBotCode, acctScale);
     const initDefaults = mt5InitialRunDefaults(selected, initialBotCode);
     const budget = mt5EquityBudget(selected.id);
     const budgetLine = budget.totalEquity > 0
@@ -1073,7 +1165,7 @@
       '<div class="mt5-run-time-mode-wrap"><label>เวลาเปิดออเดอร์</label><select name="run_time_mode"><option value="auto" selected>Auto trading</option><option value="24h">Open 24H.</option></select></div>' +
       '</div>' +
       '<div class="mt5-form-row">' +
-      '<div><label class="mt5-capital-label">' + mt5Esc(initialCapitalLabel) + '</label><input type="number" step="0.01" min="' + mt5Esc(initialMinCap) + '" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('Equity: ' + mt5Esc(actualCapital)) : 'กรอกเงินทุน') + '" value="' + (initDefaults.capital > 0 ? mt5Esc(mt5Fixed(initDefaults.capital)) : '') + '"><small class="mt5-capital-hint" style="color:#94a3b8;display:block;margin-top:4px">' + mt5Esc(mt5CapitalHintForBot(initialBotCode)) + '</small></div>' +
+      '<div><label class="mt5-capital-label">' + mt5Esc(initialCapitalLabel) + '</label><input type="number" step="0.01" min="' + mt5Esc(initialMinCap) + '" name="capital_manual" class="form-control" placeholder="' + (actualCapital > 0 ? ('Equity: ' + mt5Esc(actualCapital)) : 'กรอกเงินทุน') + '" value="' + (initDefaults.capital > 0 ? mt5Esc(mt5Fixed(initDefaults.capital)) : '') + '"><small class="mt5-capital-hint" style="color:#94a3b8;display:block;margin-top:4px">' + mt5Esc(mt5CapitalHintForBot(initialBotCode, acctScale)) + '</small></div>' +
       '<div class="mt5-run-lot-wrap"><label>Lot Size</label><input name="manual_lot" type="number" step="0.01" min="' + mt5Esc(lotMin) + '" max="' + mt5Esc(lotMax) + '" value="' + mt5Esc(mt5Fixed(initDefaults.lot)) + '"><small class="mt5-lot-hint" style="color:#94a3b8;display:block;margin-top:4px">สูงสุดตามแพ็กเกจ ' + mt5Esc(mt5Fixed(lotMax)) + '</small></div>' +
       '<div class="mt5-run-action-box">' +
       '<label>คำสั่ง BOT</label>' +
@@ -1119,17 +1211,23 @@
       if (syncHidden) syncHidden.value = syncField;
       if (changedField === 'bot_code') {
         syncField = 'capital';
-        const minCap = mt5MinCapitalForBot(botSelect.value);
+        const botKindNew = mt5BotKind(botSelect.value);
+        const acctForBot = typeof mt5SelectedRunAccount === 'function' ? mt5SelectedRunAccount() : selected;
+        const acctScale = acctForBot ? mt5CurrencyScale(acctForBot.mt5_login) : mt5ActiveCurrencyScale();
+        const minCap = mt5MinCapitalForBot(botSelect.value, acctScale);
+        const acctEquity = acctForBot ? mt5RunAccountCapital(acctForBot) : 0;
+        const startCapForBot = acctEquity > 0 ? acctEquity : minCap;
         const botPreview = mt5ComputeRunPreset(
           botSelect.value,
-          minCap,
+          startCapForBot,
           0,
           levelSelect ? levelSelect.value : 'medium',
           timeSelect ? timeSelect.value : 'auto',
-          'capital'
+          'capital',
+          acctScale
         );
-        capitalInput.value = botPreview.capital > 0 ? mt5Fixed(botPreview.capital) : (minCap > 0 ? mt5Fixed(minCap) : '');
-        if (mt5BotKind(botSelect.value) !== 'quantum') {
+        capitalInput.value = botPreview.capital > 0 ? mt5Fixed(botPreview.capital) : (startCapForBot > 0 ? mt5Fixed(startCapForBot) : '');
+        if (botKindNew !== 'quantum') {
           lotInput.value = mt5Fixed(botPreview.lot);
         }
       }
@@ -1137,7 +1235,8 @@
       hidden.value = String(selected.id);
       const actualCapital = mt5RunAccountCapital(selected);
       const botCode = botSelect.value;
-      const minCap = mt5MinCapitalForBot(botCode);
+      const runScale = mt5CurrencyScale(selected.mt5_login);
+      const minCap = mt5MinCapitalForBot(botCode, runScale);
       capitalInput.min = String(minCap);
       capitalInput.placeholder = actualCapital > 0 ? ('Equity: ' + actualCapital) : 'กรอกเงินทุน';
 
@@ -1156,7 +1255,8 @@
         manualLot,
         levelSelect ? levelSelect.value : 'medium',
         timeSelect ? timeSelect.value : 'auto',
-        syncField
+        syncField,
+        runScale
       );
 
       if (syncField === 'lot' && mt5BotKind(botCode) === 'ak') {
@@ -1227,6 +1327,7 @@
     form.addEventListener('submit', function (e) {
       e.preventDefault();
       const selected = mt5SelectedRunAccount();
+      const submitScale = selected ? mt5CurrencyScale(selected.mt5_login) : mt5ActiveCurrencyScale();
       const capitalInput = form.querySelector('input[name="capital_manual"]');
       const botSelect = form.querySelector('select[name="bot_code"]');
       const lotInput = form.querySelector('input[name="manual_lot"]');
@@ -1237,7 +1338,7 @@
       const submitLot = mt5Num(lotInput ? lotInput.value : 0, 0);
       let submitCapital = submitCapitalRaw;
       if (submitCapital <= 0 && submitLot > 0 && syncField === 'lot') {
-        submitCapital = mt5CapitalFromLot(submitLot);
+        submitCapital = mt5CapitalFromLot(submitLot, submitScale);
       } else if (submitCapital <= 0 && selected) {
         submitCapital = mt5RunAccountCapital(selected);
       }
@@ -1247,7 +1348,8 @@
         submitLot,
         form.querySelector('select[name="trade_level"]')?.value || 'medium',
         form.querySelector('select[name="run_time_mode"]')?.value || 'auto',
-        syncField
+        syncField,
+        submitScale
       );
       if (syncHidden) syncHidden.value = syncField;
       mt5RenderRunPresetSummary(form, preview);
@@ -1284,9 +1386,7 @@
           lotInput.value = mt5Fixed(preview.lot);
         }
         if (syncHidden) syncHidden.value = syncField;
-        if (selected && typeof mt5ApplyRunAccountToForm === 'function') {
-          mt5ApplyRunAccountToForm(selected);
-        } else if (selected) {
+        if (selected) {
           const hiddenAcc = form.querySelector('#mt5RunAccountId');
           if (hiddenAcc) hiddenAcc.value = String(selected.id);
         }
@@ -1440,7 +1540,7 @@
     if (!form) return false;
     const selected = mt5SelectedRunAccount();
     if (!selected) return false;
-    mt5ApplyRunAccountToForm(selected);
+    mt5ApplyRunAccountToForm(selected, true);
     const active = mt5SelectedRunInstance();
     const hasActive = !!active;
     const expired = !!(window.__mt5RunConfig || {}).packageExpired;
@@ -1987,6 +2087,18 @@ function mt5SelectRunAccount(accountId, portSlot) {
     acc = (cfg.connectedAccounts || []).find(function (a) { return Number(a.id) === id; });
     if (acc) runState.connectedAccounts = (cfg.connectedAccounts || []).slice();
   }
+  // fallback สุดท้าย: สร้าง minimal acc จาก id+slot เพื่อให้ fast-path ทำงานได้เสมอ
+  if (!acc && id) {
+    const cfg = window.__mt5RunConfig || {};
+    const portEntry = (cfg.ports || []).find(function (p) { return Number(p.accountId) === id; });
+    acc = {
+      id: id,
+      port_slot: slot || (portEntry ? Number(portEntry.slot) : null),
+      mt5_login: portEntry ? (portEntry.mt5_login || null) : null,
+      last_equity: portEntry ? (portEntry.last_equity != null ? portEntry.last_equity : null) : null,
+      last_balance: portEntry ? (portEntry.last_balance != null ? portEntry.last_balance : null) : null
+    };
+  }
   if (acc) {
     runState.selectedAccountId = Number(acc.id);
     sessionStorage.setItem('mt5RunAccountId', String(acc.id));
@@ -2291,11 +2403,13 @@ if (mt5ConnectForm) {
 
       pop('error', json.message || 'Login ไม่สำเร็จ');
       await refreshMt5PortCards();
-      if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+      if (typeof window.mt5ResetConnectUi === 'function') window.mt5ResetConnectUi();
+      else if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     } catch (err) {
       await refreshMt5PortCards();
       mt5ConnectNotify('error', err.message || 'Login ไม่สำเร็จ');
-      if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
+      if (typeof window.mt5ResetConnectUi === 'function') window.mt5ResetConnectUi();
+      else if (typeof window.mt5UnlockConnectBtn === 'function') window.mt5UnlockConnectBtn();
     }
 
     return false;
@@ -2578,11 +2692,11 @@ function mt5PnlChartsPanel(json, instanceId) {
       </div>
       <div class="mt5-pnl-dual-chart-wrap">
         <div class="mt5-pnl-legend">
-          <span class="leg profit">— กำไร</span>
-          <span class="leg loss">— ขาดทุน</span>
+          <span class="leg profit">▲ Bullish</span>
+          <span class="leg loss">▼ Bearish</span>
+          <span class="leg ohlc-tip" id="mt5PnlTip${uid}"></span>
         </div>
-        <svg class="mt5-pnl-dual-chart" id="mt5PnlSvg${uid}" viewBox="0 0 100 100" preserveAspectRatio="none" aria-label="กราฟกำไรและขาดทุน"></svg>
-        <div class="mt5-pnl-xlabels" id="mt5PnlX${uid}"></div>
+        <canvas class="mt5-pnl-dual-chart" id="mt5PnlSvg${uid}" aria-label="กราฟแท่งเทียน Equity"></canvas>
       </div>
       <div class="mt5-pnl-day-rail" id="mt5PnlRail${uid}">
         <div class="mt5-pnl-day-track" id="mt5PnlTrack${uid}"></div>
@@ -2605,28 +2719,232 @@ function mt5PnlChartsPanel(json, instanceId) {
   `;
 }
 
-function mt5RenderDualLineChart(svgEl, rows, uid) {
-  if (!svgEl) return;
-  const profit = rows.map(function (r) { return Math.max(0, Number(r.profit || 0)); });
-  const loss = rows.map(function (r) { return Math.max(0, Number(r.loss || 0)); });
-  const maxVal = Math.max(0.01, ...profit, ...loss, 1);
-  function linePts(vals) {
-    if (!vals.length) return '';
-    return vals.map(function (v, idx) {
-      const x = (idx / Math.max(1, vals.length - 1)) * 100;
-      const y = 100 - ((v / maxVal) * 74 + 12);
-      return x + ',' + y;
-    }).join(' ');
+const _mt5CandleStore = {};
+
+function mt5BuildOhlcCandles(rows, targetCount) {
+  if (!rows || !rows.length) return [];
+  if (rows.length === 1) {
+    const r = rows[0];
+    return [{ open: r.equity, high: r.equity, low: r.equity, close: r.equity, time: r.time, endTime: r.time, pnl: r.pnl, bull: true }];
   }
-  const gid = 'mt5Dual' + uid;
-  svgEl.innerHTML =
-    '<defs>' +
-    '<linearGradient id="' + gid + 'P" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(34,197,94,.25)"/><stop offset="100%" stop-color="rgba(34,197,94,0)"/></linearGradient>' +
-    '<linearGradient id="' + gid + 'L" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stop-color="rgba(239,68,68,.22)"/><stop offset="100%" stop-color="rgba(239,68,68,0)"/></linearGradient>' +
-    '</defs>' +
-    '<line x1="0" y1="88" x2="100" y2="88" stroke="rgba(148,163,184,.2)" stroke-width="0.5"/>' +
-    '<polyline fill="none" stroke="#4ade80" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" points="' + linePts(profit) + '"/>' +
-    '<polyline fill="none" stroke="#f87171" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" points="' + linePts(loss) + '"/>';
+  const groupSize = Math.max(1, Math.round(rows.length / Math.max(1, targetCount)));
+  const candles = [];
+  for (let i = 0; i < rows.length; i += groupSize) {
+    const sl = rows.slice(i, Math.min(i + groupSize, rows.length));
+    if (!sl.length) continue;
+    const open = sl[0].equity, close = sl[sl.length - 1].equity;
+    candles.push({
+      open, close,
+      high: sl.reduce(function(m, r) { return Math.max(m, r.equity); }, open),
+      low: sl.reduce(function(m, r) { return Math.min(m, r.equity); }, open),
+      time: sl[0].time, endTime: sl[sl.length - 1].time,
+      pnl: sl[sl.length - 1].pnl, bull: close >= open
+    });
+  }
+  return candles;
+}
+
+function mt5DrawCandleFrame(canvasEl, candles, hoverX) {
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const W = canvasEl.clientWidth || canvasEl.offsetWidth || 300;
+  const H = canvasEl.clientHeight || canvasEl.offsetHeight || 200;
+  if (canvasEl.width !== Math.round(W * dpr) || canvasEl.height !== Math.round(H * dpr)) {
+    canvasEl.width = Math.round(W * dpr);
+    canvasEl.height = Math.round(H * dpr);
+  }
+  const ctx = canvasEl.getContext('2d');
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const PL = 54, PR = 10, PT = 14, PB = 24;
+  const plotW = W - PL - PR, plotH = H - PT - PB;
+
+  let allHigh = candles.reduce(function(m, c) { return Math.max(m, c.high); }, -Infinity);
+  let allLow  = candles.reduce(function(m, c) { return Math.min(m, c.low);  }, Infinity);
+  if (!Number.isFinite(allHigh)) allHigh = 1;
+  if (!Number.isFinite(allLow))  allLow  = 0;
+  const rng = Math.max(allHigh - allLow, 0.01);
+  const yMax = allHigh + rng * 0.10, yMin = allLow - rng * 0.10, yRng = yMax - yMin;
+
+  const toX = function(i) { return PL + (i + 0.5) * (plotW / candles.length); };
+  const toY = function(p) { return PT + plotH * (1 - (p - yMin) / yRng); };
+
+  // Background
+  const bg = ctx.createLinearGradient(0, 0, 0, H);
+  bg.addColorStop(0, 'rgba(13,18,36,0.97)');
+  bg.addColorStop(1, 'rgba(2,4,16,0.99)');
+  ctx.fillStyle = bg;
+  if (ctx.roundRect) { ctx.beginPath(); ctx.roundRect(0, 0, W, H, 10); ctx.fill(); }
+  else { ctx.fillRect(0, 0, W, H); }
+
+  // Horizontal grid + price labels
+  const gridN = 5;
+  ctx.font = '9px "SF Mono",monospace';
+  for (let gi = 0; gi <= gridN; gi++) {
+    const gy = PT + (gi / gridN) * plotH;
+    const gp = yMax - (gi / gridN) * yRng;
+    ctx.strokeStyle = 'rgba(148,163,184,0.07)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(PL, gy); ctx.lineTo(W - PR, gy); ctx.stroke();
+    ctx.fillStyle = 'rgba(148,163,184,0.45)';
+    ctx.textAlign = 'right';
+    const lbl = rng > 200 ? Math.round(gp).toLocaleString() : gp.toFixed(2);
+    ctx.fillText(lbl, PL - 3, gy + 3.5);
+  }
+
+  // Vertical grid
+  const vStep = Math.max(1, Math.floor(candles.length / 6));
+  for (let vi = 0; vi < candles.length; vi += vStep) {
+    ctx.strokeStyle = 'rgba(148,163,184,0.04)';
+    ctx.lineWidth = 0.5;
+    ctx.beginPath(); ctx.moveTo(toX(vi), PT); ctx.lineTo(toX(vi), PT + plotH); ctx.stroke();
+  }
+
+  const cw = Math.max(2, (plotW / candles.length) * 0.60);
+
+  // Find hover index
+  let hovIdx = -1;
+  if (hoverX != null) {
+    let minD = Infinity;
+    candles.forEach(function(c, i) {
+      const d = Math.abs(toX(i) - hoverX);
+      if (d < minD) { minD = d; hovIdx = i; }
+    });
+    if (minD > cw * 3) hovIdx = -1;
+  }
+
+  // Draw candles
+  candles.forEach(function(c, i) {
+    const x = toX(i);
+    const openY = toY(c.open), closeY = toY(c.close);
+    const highY = toY(c.high), lowY  = toY(c.low);
+    const isHov = i === hovIdx;
+    const bull = c.bull;
+
+    // Wick
+    ctx.strokeStyle = bull ? (isHov ? 'rgba(134,239,172,1)' : 'rgba(134,239,172,0.7)') : (isHov ? 'rgba(252,165,165,1)' : 'rgba(252,165,165,0.7)');
+    ctx.lineWidth = isHov ? 1.5 : 1;
+    ctx.beginPath(); ctx.moveTo(x, highY); ctx.lineTo(x, lowY); ctx.stroke();
+
+    if (isHov) { ctx.shadowBlur = 12; ctx.shadowColor = bull ? 'rgba(34,197,94,0.7)' : 'rgba(239,68,68,0.7)'; }
+
+    // Body
+    const bodyTop = Math.min(openY, closeY);
+    const bodyH = Math.max(1.5, Math.abs(closeY - openY));
+    const alpha = isHov ? 1 : 0.84;
+    const gBody = ctx.createLinearGradient(x - cw/2, bodyTop, x + cw/2, bodyTop + bodyH);
+    if (bull) {
+      gBody.addColorStop(0, 'rgba(34,197,94,' + alpha + ')');
+      gBody.addColorStop(1, 'rgba(16,185,129,' + (alpha * 0.75) + ')');
+    } else {
+      gBody.addColorStop(0, 'rgba(239,68,68,' + alpha + ')');
+      gBody.addColorStop(1, 'rgba(185,28,28,' + (alpha * 0.75) + ')');
+    }
+    ctx.fillStyle = gBody;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(x - cw/2, bodyTop, cw, bodyH, [1]);
+    else ctx.rect(x - cw/2, bodyTop, cw, bodyH);
+    ctx.fill();
+    ctx.strokeStyle = bull ? 'rgba(134,239,172,0.85)' : 'rgba(252,165,165,0.85)';
+    ctx.lineWidth = 0.5;
+    ctx.stroke();
+    ctx.shadowBlur = 0; ctx.shadowColor = 'transparent';
+  });
+
+  // Crosshair + tooltip on hover
+  if (hovIdx >= 0) {
+    const c = candles[hovIdx];
+    const x = toX(hovIdx);
+    const midY = toY((c.high + c.low) / 2);
+
+    ctx.strokeStyle = 'rgba(148,163,184,0.25)';
+    ctx.lineWidth = 0.5;
+    ctx.setLineDash([2, 3]);
+    ctx.beginPath(); ctx.moveTo(x, PT); ctx.lineTo(x, PT + plotH); ctx.stroke();
+    ctx.setLineDash([]);
+
+    // Bottom time badge
+    const tStr = c.time + (c.endTime !== c.time ? '–' + c.endTime : '');
+    ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    const tw = ctx.measureText(tStr).width + 10;
+    const tx = Math.min(W - PR - tw/2, Math.max(PL + tw/2, x));
+    ctx.fillStyle = 'rgba(30,41,59,0.95)';
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(tx - tw/2, H - PB + 3, tw, 14, [3]);
+    else ctx.rect(tx - tw/2, H - PB + 3, tw, 14);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(226,232,240,0.9)';
+    ctx.fillText(tStr, tx, H - PB + 13);
+
+    // OHLC tooltip box
+    const boxW = 88, boxH = 74;
+    let bx = x + 8;
+    if (bx + boxW > W - PR) bx = x - boxW - 8;
+    const by = Math.max(PT, Math.min(PT + plotH - boxH, midY - boxH/2));
+    ctx.fillStyle = 'rgba(10,16,38,0.95)';
+    ctx.strokeStyle = c.bull ? 'rgba(34,197,94,0.45)' : 'rgba(239,68,68,0.45)';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    if (ctx.roundRect) ctx.roundRect(bx, by, boxW, boxH, [6]);
+    else ctx.rect(bx, by, boxW, boxH);
+    ctx.fill(); ctx.stroke();
+
+    const dir = c.bull ? '▲' : '▼';
+    const dirClr = c.bull ? '#86efac' : '#fca5a5';
+    ctx.font = 'bold 10px monospace'; ctx.textAlign = 'left';
+    ctx.fillStyle = dirClr;
+    ctx.fillText(dir + ' ' + (c.pnl >= 0 ? '+' : '') + Number(c.pnl || 0).toFixed(2), bx + 6, by + 14);
+    ctx.font = '9px monospace'; ctx.fillStyle = 'rgba(203,213,225,0.85)';
+    [['O', c.open], ['H', c.high], ['L', c.low], ['C', c.close]].forEach(function(lr, li) {
+      ctx.fillStyle = li === 3 ? (c.bull ? '#86efac' : '#fca5a5') : 'rgba(203,213,225,0.85)';
+      ctx.fillText(lr[0] + ': ' + Number(lr[1]).toFixed(2), bx + 6, by + 27 + li * 12);
+    });
+  } else {
+    // Static X-axis labels
+    ctx.fillStyle = 'rgba(148,163,184,0.45)';
+    ctx.font = '9px monospace'; ctx.textAlign = 'center';
+    const labelStep = Math.max(1, Math.floor(candles.length / 4));
+    candles.forEach(function(c, i) {
+      if (i % labelStep === 0 || i === candles.length - 1) {
+        ctx.fillText(c.time, toX(i), PT + plotH + 15);
+      }
+    });
+  }
+}
+
+function mt5RenderCandleChart(canvasEl, rows, uid) {
+  if (!canvasEl) return;
+  const target = Math.min(50, Math.max(8, Math.floor((rows || []).length / 2)));
+  const candles = mt5BuildOhlcCandles(rows || [], target);
+  _mt5CandleStore[uid] = candles;
+
+  function drawFrame() {
+    if (!canvasEl.clientWidth) { requestAnimationFrame(drawFrame); return; }
+    mt5DrawCandleFrame(canvasEl, candles.length ? candles : []);
+  }
+  requestAnimationFrame(drawFrame);
+
+  if (canvasEl._mt5CandleBound) return;
+  canvasEl._mt5CandleBound = true;
+  canvasEl._mt5CandleUid = uid;
+
+  canvasEl.addEventListener('mousemove', function(e) {
+    const c = _mt5CandleStore[canvasEl._mt5CandleUid];
+    if (!c || !c.length) return;
+    const rect = canvasEl.getBoundingClientRect();
+    mt5DrawCandleFrame(canvasEl, c, e.clientX - rect.left);
+  });
+  canvasEl.addEventListener('mouseleave', function() {
+    const c = _mt5CandleStore[canvasEl._mt5CandleUid];
+    if (c && c.length) mt5DrawCandleFrame(canvasEl, c);
+  });
+  canvasEl.addEventListener('touchmove', function(e) {
+    if (!e.touches.length) return;
+    const c = _mt5CandleStore[canvasEl._mt5CandleUid];
+    if (!c || !c.length) return;
+    const rect = canvasEl.getBoundingClientRect();
+    mt5DrawCandleFrame(canvasEl, c, e.touches[0].clientX - rect.left);
+  }, { passive: true });
 }
 
 function mt5InitPnlChartWidget(instanceId, json) {
@@ -2650,12 +2968,7 @@ function mt5InitPnlChartWidget(instanceId, json) {
     track.querySelectorAll('.mt5-pnl-day-chip').forEach(function (chip) {
       chip.classList.toggle('active', chip.getAttribute('data-day') === day.dayKey);
     });
-    mt5RenderDualLineChart(svg, day.rows, uid);
-    if (xlabels) {
-      const labels = day.rows.map(function (r) { return r.time; });
-      const show = labels.length <= 8 ? labels : [labels[0], labels[Math.floor(labels.length / 2)], labels[labels.length - 1]];
-      xlabels.innerHTML = show.map(function (t) { return '<span>' + mt5ManageEscape(t) + '</span>'; }).join('');
-    }
+    mt5RenderCandleChart(svg, day.rows, uid);
     if (tbody) {
       const maxRows = 6;
       const rows = day.rows.length > maxRows ? day.rows.slice(-maxRows) : day.rows;
@@ -2982,7 +3295,6 @@ function renderMt5DashboardTable(data, opts) {
     html += '<button type="button" class="mt5-manage-item" onclick="openMt5InstanceDetail(this)" ' + detailAttrs + '>รายละเอียด</button>';
     if (headLive) {
       html += '<button type="button" class="mt5-manage-item" onclick="openMt5EquityGraph(this)" ' + detailAttrs + '>กราฟ</button>';
-      html += '<form method="POST" action="/app/mt5/request-restart/' + i.id + '" onsubmit="return confirm(\'ยืนยัน Restart BOT รายการนี้ใช่ไหม?\')"><button class="mt5-manage-item" type="submit">Restart</button></form>';
     } else {
       html += '<button type="button" class="mt5-manage-item" onclick="openMt5InstanceAnalysis(this)" ' + detailAttrs + '>วิเคราะห์</button>';
     }
@@ -3158,12 +3470,12 @@ setInterval(function () {
 .mt5-pnl-day-head{display:flex;align-items:baseline;justify-content:space-between;gap:10px;flex-wrap:wrap}
 .mt5-pnl-day-head b{color:#f8fafc;font-size:14px}
 .mt5-pnl-day-head small{color:#94a3b8;font-size:11px}
-.mt5-pnl-dual-chart-wrap{padding:12px 12px 8px;border-radius:16px;background:linear-gradient(180deg,rgba(15,23,42,.94),rgba(2,6,23,.98));border:1px solid rgba(148,163,184,.16)}
-.mt5-pnl-legend{display:flex;gap:14px;margin-bottom:6px;font-size:12px;font-weight:700}
+.mt5-pnl-dual-chart-wrap{padding:10px 10px 6px;border-radius:16px;background:linear-gradient(180deg,rgba(8,12,28,0.97),rgba(2,4,16,0.99));border:1px solid rgba(56,189,248,.13);box-shadow:0 0 28px rgba(0,0,0,.5),inset 0 1px 0 rgba(255,255,255,.04)}
+.mt5-pnl-legend{display:flex;align-items:center;gap:12px;margin-bottom:6px;font-size:11px;font-weight:800;letter-spacing:.03em}
 .mt5-pnl-legend .leg.profit{color:#86efac}
 .mt5-pnl-legend .leg.loss{color:#fca5a5}
-.mt5-pnl-dual-chart{width:100%;height:200px;display:block;border-radius:12px;background:linear-gradient(180deg,rgba(2,6,23,.35),rgba(15,23,42,.15))}
-.mt5-pnl-xlabels{display:flex;justify-content:space-between;gap:6px;margin-top:4px;font-size:10px;color:#94a3b8}
+.mt5-pnl-legend .leg.ohlc-tip{color:#7dd3fc;font-size:10px;font-weight:600;margin-left:auto;opacity:.8}
+.mt5-pnl-dual-chart{width:100%;height:220px;display:block;border-radius:10px;cursor:crosshair}
 .mt5-pnl-day-rail{overflow-x:auto;cursor:grab;padding:4px 2px 8px;scrollbar-width:thin;scrollbar-color:rgba(148,163,184,.4) transparent}
 .mt5-pnl-day-rail.dragging{cursor:grabbing;user-select:none}
 .mt5-pnl-day-rail::-webkit-scrollbar{height:6px}
@@ -3201,7 +3513,7 @@ setInterval(function () {
 .mt5-manage-card--graph .mt5-pnl-day-head small{font-size:8px}
 .mt5-manage-card--graph .mt5-pnl-dual-chart-wrap{padding:6px;flex-shrink:0}
 .mt5-manage-card--graph .mt5-pnl-legend{font-size:9px;gap:8px;margin-bottom:2px}
-.mt5-manage-card--graph .mt5-pnl-dual-chart{height:72px}
+.mt5-manage-card--graph .mt5-pnl-dual-chart{height:180px}
 .mt5-manage-card--graph .mt5-pnl-xlabels{font-size:8px;margin-top:2px}
 .mt5-manage-card--graph .mt5-pnl-day-rail{overflow:visible;cursor:default;padding:0;flex-shrink:0}
 .mt5-manage-card--graph .mt5-pnl-day-track{flex-wrap:wrap;min-width:0;gap:4px;padding:0}
@@ -3211,7 +3523,7 @@ setInterval(function () {
 .mt5-manage-card--graph .mt5-pnl-table-wrap{flex:1;min-height:0;overflow:hidden;max-height:none;border-radius:8px}
 .mt5-manage-card--graph .mt5-pnl-table{font-size:9px;width:100%}
 .mt5-manage-card--graph .mt5-pnl-table th,.mt5-manage-card--graph .mt5-pnl-table td{padding:3px 5px;line-height:1.2}
-@media(max-width:720px){.mt5-pnl-summary{grid-template-columns:1fr 1fr}.mt5-pnl-dual-chart{height:160px}.mt5-manage-card--graph .mt5-pnl-day-chip{flex:1 1 calc(33% - 4px)}.mt5-manage-card--graph .mt5-pnl-dual-chart{height:64px}}
+@media(max-width:720px){.mt5-pnl-summary{grid-template-columns:1fr 1fr}.mt5-pnl-dual-chart{height:180px}.mt5-manage-card--graph .mt5-pnl-day-chip{flex:1 1 calc(33% - 4px)}.mt5-manage-card--graph .mt5-pnl-dual-chart{height:140px}}
 @media(max-width:700px){.mt5-manage-grid,.mt5-manage-analysis{grid-template-columns:1fr}.mt5-manage-dropdown{min-width:148px}}
 </style>
 

@@ -70,10 +70,10 @@ function resolveConnectAllocPortNo(reservedPort, portSlot) {
   return num(reservedPort?.port_number || reservedPort?.port_no);
 }
 
-/** ไม่ rebinding slot→PORT-0X อัตโนมัติ (ชน user อื่นบน VPS ร่วม) — ใช้ผลจองจริงเท่านั้น */
+/** แก้บัญชีที่ผูก FolderPort ไม่ตรง package port_slot (ข้อมูลค้างจากบั๊กเก่า) */
 async function repairMisboundAccountPorts(userId) {
-  void userId;
-  return 0;
+  const { repairMisboundSlotFolderBindings } = require('../lib/mt5ReservePortForConnect');
+  return repairMisboundSlotFolderBindings(userId).catch(() => 0);
 }
 
 function num(v, def = 0) {
