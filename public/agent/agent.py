@@ -93,7 +93,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-single-mt5-v133"
+AGENT_BUILD_ID = "2026-06-06-journal-auth-gate-v134"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4919,6 +4919,26 @@ def _journal_server_auth_failed(text: str, since_ts: float, server: str = LOCKED
     return False
 
 
+def _title_fallback_denied_by_journal(
+    port_dir: Path,
+    login: str,
+    journal_chunk: str,
+    journal_since: float,
+    server: str = LOCKED_MT5_SERVER,
+) -> Tuple[bool, str]:
+    """อย่ายอมรับ window title ถ้า Journal บอก authorization failed แล้ว"""
+    chunk = str(journal_chunk or "").strip()
+    if chunk:
+        if _journal_server_auth_failed(chunk, journal_since, server):
+            return True, chunk
+        if mt5_has_login_failure_text(chunk):
+            return True, chunk
+    probe, fresh = _quick_journal_probe(port_dir, login, journal_since)
+    if probe is False:
+        return True, fresh or chunk
+    return False, fresh or chunk
+
+
 def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[Optional[bool], str]:
     """อ่าน journal ครั้งเดียว — True/False/None(ยังไม่รู้)"""
     login = str(login).strip()
@@ -5347,8 +5367,15 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
         and titles
         and login in str(titles)
     ):
-        ok = True
-        msg = "window verified (journal timeout)"
+        denied, deny_chunk = _title_fallback_denied_by_journal(port_dir, login, journal_chunk, journal_since)
+        if denied:
+            ok = False
+            msg = JOURNAL_FAIL_MSG
+            if deny_chunk:
+                journal_chunk = deny_chunk
+        else:
+            ok = True
+            msg = "window verified (journal timeout)"
 
     if not ok:
         if msg == JOURNAL_TIMEOUT_MSG:
@@ -6540,8 +6567,15 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     titles = window_title_for_login(port, payload)
     if not login_ok and login_msg == JOURNAL_TIMEOUT_MSG and titles and login in str(titles):
-        login_ok = True
-        login_msg = "window verified (journal timeout)"
+        denied, deny_chunk = _title_fallback_denied_by_journal(port_dir, login, journal_chunk, journal_since)
+        if denied:
+            login_ok = False
+            login_msg = JOURNAL_FAIL_MSG
+            if deny_chunk:
+                journal_chunk = deny_chunk
+        else:
+            login_ok = True
+            login_msg = "window verified (journal timeout)"
     if not login_ok:
         preview_fail = capture_mt5_window_base64(port, payload)
         send_connect_result(
