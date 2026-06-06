@@ -93,7 +93,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-connect-fail-notify-v132"
+AGENT_BUILD_ID = "2026-06-06-single-mt5-v133"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3182,16 +3182,7 @@ def account_snapshot(
             payload_get(payload, "purposeType", "purpose_type") or ""
         ).strip().lower() == "bot_run"
         if login_equity_purpose and terminal_up and keep_mt5_for_bot:
-            api_snap = account_snapshot_mt5_api(port_dir, payload)
-            if api_snap.get("loginMismatch"):
-                snap["loginMismatch"] = True
-                snap["observedLogin"] = str(api_snap.get("observedLogin") or "").strip()
-                snap["source"] = str(api_snap.get("source") or "mt5_api_reject")
-                return snap
-            if _snap_positive(api_snap):
-                snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
-                return snap
-            log(f"MT5 SNAPSHOT BOT RUN READ port={port} (skip isolated API — MT5 already open)")
+            log(f"MT5 SNAPSHOT BOT RUN READ port={port} (skip in-process API — MT5 already open)")
         elif login_equity_purpose and terminal_up:
             login_hint = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
             password = str(payload_get(payload or {}, "mt5Password", "password") or "")
@@ -3254,10 +3245,12 @@ def account_snapshot(
                 snap.update({k: v for k, v in api_snap.items() if v is not None and v != ""})
                 return snap
 
-        skip_inproc_api = login_equity_purpose
+        skip_inproc_api = login_equity_purpose or terminal_up or keep_mt5_for_bot
         if not skip_inproc_api:
             api_snap = account_snapshot_mt5_api(port_dir, payload)
-        elif terminal_up and login_equity_purpose:
+        elif terminal_up or keep_mt5_for_bot:
+            log(f"MT5 SNAPSHOT INPROC API SKIP port={port} terminal_up={terminal_up} bot_run={keep_mt5_for_bot}")
+        elif login_equity_purpose:
             log(f"MT5 SNAPSHOT INPROC API SKIP port={port} (login_equity uses isolated only)")
         if api_snap.get("loginMismatch"):
             snap["loginMismatch"] = True
@@ -3325,6 +3318,18 @@ def mt5_test_trade(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {"ok": False, "reason": "terminal_missing", "terminal": str(terminal)}
+    skip_when_running = str(os.getenv("AVELQUA_SKIP_MT5_TEST_TRADE_WHEN_RUNNING", "1")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
+    )
+    if skip_when_running and mt5_running_for_port_dir(port_dir):
+        return {
+            "ok": True,
+            "skipped": True,
+            "reason": "terminal_already_running",
+            "terminalInfo": {"tradeAllowed": None},
+        }
     try:
         import MetaTrader5 as mt5  # type: ignore
     except Exception as e:
@@ -3395,10 +3400,15 @@ def mt5_test_trade(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[
             mt5.shutdown()
         except Exception:
             pass
+        ensure_single_portable_mt5_for_port(port_dir, reason="test_trade_shutdown")
         return out
     except Exception as e:
         try:
             mt5.shutdown()
+        except Exception:
+            pass
+        try:
+            ensure_single_portable_mt5_for_port(port_dir, reason="test_trade_exception")
         except Exception:
             pass
         return {"ok": False, "reason": "exception", "error": str(e)[:500]}
@@ -3985,8 +3995,13 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
             if prev and prev.poll() is None:
                 if wait_timeout > 0 and time.time() < deadline:
                     prev_pid = getattr(prev, "pid", "")
-                    if is_bot_run_spawn and time.time() >= _evict_login_after:
-                        prev_ctype = ACTIVE_CONNECT_WORKER_CTYPES.get(key, "").lower()
+                    prev_ctype = ACTIVE_CONNECT_WORKER_CTYPES.get(key, "").lower()
+                    if is_bot_run_spawn and prev_ctype in ("run_mt5_bot", "run_mt5"):
+                        log(
+                            f"WORKER WAIT bot_run port={port} cmd_id={cmd_id} "
+                            f"busy_pid={prev_pid} remaining={max(0.0, deadline - time.time()):.1f}s"
+                        )
+                    elif is_bot_run_spawn and time.time() >= _evict_login_after:
                         if prev_ctype in ("connect_mt5", "login_mt5"):
                             log(f"WORKER EVICT login-worker for bot_run port={port} pid={prev_pid} prev_type={prev_ctype}")
                             try:
@@ -6587,6 +6602,16 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         log(f"RUN BOT POST TEST TRADE DEDUPE ERROR port={port}: {dedupe_err}")
 
     snap = account_snapshot(port, payload)
+    try:
+        ensure_single_portable_mt5_for_port(
+            port_dir,
+            keep_pid=(int(proc_pid) if proc_pid else None),
+            login=login,
+            reason="run_bot_post_snapshot",
+        )
+    except Exception as dedupe_err:
+        log(f"RUN BOT POST SNAPSHOT DEDUPE ERROR port={port}: {dedupe_err}")
+
     bal = snap.get("balance")
     eq = snap.get("equity")
     profit = None
