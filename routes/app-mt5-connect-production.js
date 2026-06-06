@@ -20,7 +20,6 @@ const {
   buildMt5LoginPayload,
   adminPortToSystemPortNo
 } = require('../lib/adminVpsPortPicker');
-const { reserveVpsPortForConnect } = require('../lib/mt5ReservePortForConnect');
 const { setAdminAllocationStatus, parsePortNumber } = require('../lib/adminVpsBridge');
 const { clearOtherAccountsOnPortSlot, upsertAccountForPortSlot } = require('../lib/mt5PortAccount');
 const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../lib/mt5PortIsolation');
@@ -207,7 +206,7 @@ async function ensureEquityOnConnect(account, userId) {
   }
   if (!cmdId) return false;
 
-  const deadline = Date.now() + 12000;
+  const deadline = Date.now() + 10000;
   while (Date.now() < deadline) {
     const snapRow = await query(`
       SELECT status, result
@@ -225,7 +224,7 @@ async function ensureEquityOnConnect(account, userId) {
       return false;
     }
     if (status === 'failed' || status === 'cancelled') return false;
-    await waitMs(450);
+    await waitMs(350);
   }
   return false;
 }
@@ -238,7 +237,10 @@ function mt5LoginLockKey(mt5Login, serverName) {
   return `mt5:connect:login:${String(serverName || '').toLowerCase()}:${String(mt5Login || '').trim()}`;
 }
 
+let runtimeColumnsReady = false;
+
 async function ensureRuntimeColumns() {
+  if (runtimeColumnsReady) return;
   await query(`CREATE SCHEMA IF NOT EXISTS vps_system`).catch(() => {});
   await ensureMt5ConnectAttemptTables().catch(() => {});
 
@@ -318,6 +320,7 @@ async function ensureRuntimeColumns() {
       updated_at TIMESTAMPTZ DEFAULT NOW()
     )
   `).catch(() => {});
+  runtimeColumnsReady = true;
 }
 
 const { packagePortCapForGroup, computePortEntitlement } = require('../lib/mt5PortEntitlement');
@@ -420,6 +423,7 @@ async function reserveBestPort(userId) {
         AND COALESCE(n.cpu_percent,0) <= COALESCE(n.max_cpu_percent, $1)
         AND COALESCE(n.ram_percent,0) <= COALESCE(n.max_ram_percent, $2)
         AND COALESCE(n.ping_ms,0) <= COALESCE(n.max_ping_ms, $3)
+        AND (p.port_no BETWEEN 101 AND 120 OR p.port_no BETWEEN 1 AND 20)
         AND NOT EXISTS (
           SELECT 1
           FROM vps_system.mt5_accounts a
@@ -600,55 +604,23 @@ async function findInFlightLoginCommand({ userId, mt5Login, serverName } = {}) {
   return r.rows?.[0] || null;
 }
 
-async function findRetryPortForLogin(userId, mt5Login, serverName) {
+/** บัญชีเดิมที่ retry login ได้ — ไม่ reuse FolderPort เก่า (จอง folder ว่างใหม่) */
+async function findRetryAccountForLogin(userId, mt5Login, serverName) {
   const r = await query(
     `
-    SELECT
-      a.id AS account_id,
-      a.port_id,
-      a.vps_id,
-      p.port_no AS port_no,
-      a.port_slot,
-      p.folder_path
-    FROM vps_system.mt5_accounts a
-    JOIN vps_system.vps_ports p ON p.id = a.port_id
-    WHERE a.user_id = $1
-      AND a.mt5_login = $2
-      AND COALESCE(a.server_name, a.mt5_server, '') = $3
-      AND LOWER(COALESCE(a.status, '')) IN ('failed', 'deleted', 'connecting', 'starting', 'checking')
-    ORDER BY a.updated_at DESC
+    SELECT id AS account_id, port_slot, status
+    FROM vps_system.mt5_accounts
+    WHERE user_id = $1
+      AND mt5_login = $2
+      AND COALESCE(server_name, mt5_server, '') = $3
+      AND LOWER(COALESCE(status, '')) IN ('failed', 'ready', 'connecting', 'starting', 'checking')
+    ORDER BY updated_at DESC
     LIMIT 1
   `,
     [userId, mt5Login, serverName]
   ).catch(() => ({ rows: [] }));
 
-  const row = r.rows?.[0];
-  if (!row?.port_id || !row.folder_path) return null;
-
-  await clearExpiredLocks();
-  await query(
-    `
-    UPDATE vps_system.vps_ports
-    SET
-      status = 'locked',
-      locked_by_user_id = $1,
-      locked_until = NOW() + ($2::text || ' minutes')::interval,
-      last_error = NULL,
-      updated_at = NOW()
-    WHERE id = $3
-      AND LOWER(COALESCE(status, '')) IN ('available', 'free', 'idle', 'failed')
-  `,
-    [userId, PORT_LOCK_MINUTES, row.port_id]
-  ).catch(() => {});
-
-  return {
-    port_id: row.port_id,
-    vps_id: row.vps_id,
-    port_no: row.port_no,
-    port_slot: row.port_slot,
-    folder_path: row.folder_path,
-    account_id: row.account_id
-  };
+  return r.rows?.[0] || null;
 }
 
 /** ปล่อยแถว mt5_accounts ที่ค้างบน vps+port เดียวกัน (กัน uq_mt5_running_vps_port ตอน INSERT) */
@@ -770,12 +742,8 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(mt5LoginInUseMessage(duplicate));
     }
 
-    const requestedSlot = num(req.body.port_slot || req.body.portSlot);
-    let portSlotForFast = requestedSlot;
-    if (!portSlotForFast) {
-      const retryPortEarly = await findRetryPortForLogin(userId, mt5Login, serverName);
-      portSlotForFast = Number(retryPortEarly?.port_slot || 0) || (await getNextUserSlot(userId, totalPorts));
-    }
+    const retryAccountEarly = await findRetryAccountForLogin(userId, mt5Login, serverName);
+    let portSlotForFast = Number(retryAccountEarly?.port_slot || 0) || (await getNextUserSlot(userId, totalPorts));
 
     // กัน login_mt5 ผีค้างคิวจากรอบก่อน (เคส fast-login แล้ว Agent มาเปิด MT5 ซ้อน)
     await cancelPendingLoginCommands({ mt5Login });
@@ -849,73 +817,32 @@ async function handleMt5ConnectProduction(req, res) {
       if (fastEarlyErr) throw new Error(fastEarlyErr);
     }
 
-    const retryPort = await findRetryPortForLogin(userId, mt5Login, serverName);
-    let portSlot;
-
-    if (requestedSlot > 0) {
-      const reusableSlotAccount = await getReusablePortSlotAccount(
-        userId,
-        requestedSlot,
-        mt5Login,
-        serverName
-      );
-      const sameLoginCanRetry = Boolean(reusableSlotAccount);
-      if (!sameLoginCanRetry && !(await isUserPortSlotAvailable(userId, requestedSlot, totalPorts))) {
-        throw new Error(`PORT ${requestedSlot} ไม่ว่าง กรุณาเลือก PORT ที่ยังไม่ใช้งาน`);
-      }
-      portSlot = requestedSlot;
-    } else if (retryPort) {
-      portSlot = Number(retryPort.port_slot) || 0;
-      if (portSlot && !(await isUserPortSlotAvailable(userId, portSlot, totalPorts))) {
-        portSlot = await getNextUserSlot(userId, totalPorts);
-      }
-      if (!portSlot) portSlot = await getNextUserSlot(userId, totalPorts);
-    } else {
+    const retryAccount = retryAccountEarly || (await findRetryAccountForLogin(userId, mt5Login, serverName));
+    let portSlot = Number(retryAccount?.port_slot || 0);
+    if (portSlot && !(await isUserPortSlotAvailable(userId, portSlot, totalPorts))) {
       portSlot = await getNextUserSlot(userId, totalPorts);
-      if (!portSlot) {
-        throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
-      }
+    }
+    if (!portSlot) portSlot = await getNextUserSlot(userId, totalPorts);
+    if (!portSlot) {
+      throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
     }
 
-    if (requestedSlot > 0) {
-      // reuse same folder port ที่ slot นี้เคยใช้ เพื่อไม่ให้ข้าม folder
-      const slotPortRow = await query(
-        `
-        SELECT port_id
-        FROM vps_system.mt5_accounts
-        WHERE user_id=$1
-          AND port_slot=$2
-          AND port_id IS NOT NULL
-          AND assigned_port_no = (100 + port_slot)
-          AND LOWER(COALESCE(status, '')) NOT IN ('deleted', 'expired', 'cancelled')
-        ORDER BY updated_at DESC
-        LIMIT 1
-      `,
-        [userId, requestedSlot]
-      ).catch(() => ({ rows: [] }));
-      const existingPortId = Number(slotPortRow.rows?.[0]?.port_id || 0) || null;
-      const reserve = await reserveVpsPortForConnect(userId, existingPortId, requestedSlot);
-      if (!reserve.ok) throw new Error(reserve.message);
-      reservedPort = reserve.port;
-    } else if (retryPort) {
-      const reserve = await reserveVpsPortForConnect(userId, null, portSlot);
-      if (!reserve.ok) throw new Error(reserve.message);
-      reservedPort = reserve.port;
+    const reserve = await reserveBestPort(userId);
+    if (!reserve.ok) throw new Error(reserve.message);
+    reservedPort = reserve.port;
+
+    if (retryAccount?.account_id) {
       await cancelPendingLoginCommands({
         portId: reservedPort.port_id,
-        accountId: retryPort.account_id,
+        accountId: retryAccount.account_id,
         mt5Login
       });
-    } else {
-      const reserve = await reserveBestPort(userId);
-      if (!reserve.ok) throw new Error(reserve.message);
-      reservedPort = reserve.port;
     }
 
-    lockKey = userLockKey(userId, portSlot);
+    lockKey = userLockKey(userId, 0);
     const locked = await redis.set(lockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
     if (!locked) {
-      throw new Error(`PORT ${portSlot} กำลังเชื่อมต่ออยู่ กรุณารอสักครู่`);
+      throw new Error('กำลังเชื่อมต่อ MT5 อยู่ กรุณารอสักครู่');
     }
 
     const allocPortNo = resolveConnectAllocPortNo(reservedPort, portSlot);
@@ -1085,11 +1012,16 @@ async function handleMt5ConnectProduction(req, res) {
 
 async function handleMt5ConnectStatusProduction(req, res) {
   try {
-    await ensureRuntimeColumns();
+    const poll = String(req.query.poll || '').trim() === '1';
+    if (!poll) {
+      await ensureRuntimeColumns();
+    }
     const userId = req.user.id;
-    await repairMisboundAccountPorts(userId).catch(() => {});
+    if (!poll) {
+      await repairMisboundAccountPorts(userId).catch(() => {});
+    }
     const accountId = num(req.query.accountId || req.query.account_id);
-    const data = await getConnectStatusForUser(userId, accountId).catch(() => null);
+    const data = await getConnectStatusForUser(userId, accountId, { poll }).catch(() => null);
     if (!data) {
       return res.json({ ok: false, message: 'ไม่สามารถอ่านสถานะการเชื่อมต่อได้' });
     }
