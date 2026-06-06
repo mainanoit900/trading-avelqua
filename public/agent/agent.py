@@ -82,16 +82,16 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-03-m15-single-mt5-v119"
+AGENT_BUILD_ID = "2026-06-06-login-exit-kill-all-v126"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
 _MT5_LOGIN_INI = os.getenv("AVELQUA_MT5_LOGIN_INI", "startup.ini").strip()
 MT5_LOGIN_INI_NAME = _MT5_LOGIN_INI if _MT5_LOGIN_INI else "startup.ini"
 LEGACY_MT5_LOGIN_INI = "avelqua-login.ini"
-# Windows: true = เปิด MT5 โชว์หน้าจอบน VPS (ตรวจรหัสผ่านได้จาก title bar / RDP)
-SHOW_MT5_WINDOW = os.getenv("AVELQUA_MT5_SHOW_WINDOW", "true").lower() != "false"
-MT5_RUNBOT_PERIOD = str(os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "H1") or "H1").strip().upper() or "H1"
+# Windows: false = MT5 รันใน background ไม่ขึ้นหน้าจอ (ค่า default)
+SHOW_MT5_WINDOW = os.getenv("AVELQUA_MT5_SHOW_WINDOW", "false").lower() not in ("false", "0", "no")
+MT5_RUNBOT_PERIOD = str(os.getenv("AVELQUA_MT5_RUNBOT_PERIOD", "M15") or "M15").strip().upper() or "M15"
 
 AGENT_DIR.mkdir(parents=True, exist_ok=True)
 LOG_DIR.mkdir(parents=True, exist_ok=True)
@@ -224,6 +224,7 @@ def poll_agent_command_batch(max_per_tick: int) -> bool:
 # ตัวอย่าง bytes_sent/recv ครั้งก่อน — คำนวณ Mbps ระหว่าง heartbeat
 _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 0.0}
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
+ACTIVE_CONNECT_WORKER_CTYPES: Dict[str, str] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
 MT5_API_LOCK = threading.Lock()  # legacy fallback when port unknown
 MT5_API_FILE_LOCK = AGENT_DIR / "mt5-api-global.lock"
@@ -810,7 +811,16 @@ def send_port_health():
             try:
                 if not folder.is_dir():
                     continue
-                enforce_single_mt5_process_for_port_dir(folder, reason="port_health_sweep")
+                if port_folder_reserved_idle(folder) and mt5_processes_for_port_dir(folder):
+                    port_no = extract_port_no(str(folder))
+                    kill_all_mt5_for_port_dir(
+                        port_no,
+                        folder,
+                        {"vpsFolderPath": str(folder), "folder_path": str(folder)},
+                        reason="port_health_reserved_idle",
+                    )
+                else:
+                    enforce_single_mt5_process_for_port_dir(folder, reason="port_health_sweep")
             except Exception as dedupe_err:
                 log(f"PORT HEALTH DEDUPE ERROR folder={folder}: {dedupe_err}")
 
@@ -1029,16 +1039,16 @@ def close_mt5_after_login_success(
     kill_payload.setdefault("vpsFolderPath", str(port_dir))
     kill_payload.setdefault("folder_path", str(port_dir))
     try:
-        res = stop_mt5_port_only(port, kill_payload)
+        res = kill_all_mt5_for_port_dir(port, port_dir, kill_payload, reason=reason)
         stopped = list(res.get("stopped") or [])
-        taskkill = list(res.get("taskkill") or [])
-        if stopped or taskkill:
+        remaining = list(res.get("remaining") or [])
+        if stopped:
             log(
                 f"CLOSE MT5 AFTER LOGIN port={port} reason={reason} "
-                f"stopped={stopped} taskkill={taskkill}"
+                f"stopped={stopped} remaining={remaining}"
             )
         else:
-            log(f"CLOSE MT5 AFTER LOGIN port={port} reason={reason} no_pids_matched")
+            log(f"CLOSE MT5 AFTER LOGIN port={port} reason={reason} no_pids_matched remaining={remaining}")
         return res
     except Exception as e:
         log(f"CLOSE MT5 AFTER LOGIN ERROR port={port} reason={reason}: {e}")
@@ -1131,6 +1141,118 @@ def stop_mt5_port_only(port: Any, payload: Optional[Dict[str, Any]] = None) -> D
         "port_dir": str(port_dir),
         "stopped": stopped,
         "taskkill": taskkill,
+    }
+
+
+def port_folder_reserved_idle(port_dir: Path) -> bool:
+    """PORT ถูกจองหลัง login แล้ว แต่ยังไม่รันบอท — MT5 ควรปิดหมด."""
+    try:
+        if not port_folder_reservation_path(port_dir).is_file():
+            return False
+        return not read_avelqua_trading_gate(port_dir)
+    except Exception:
+        return False
+
+
+def kill_all_mt5_for_port_dir(
+    port: Any,
+    port_dir: Path,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    reason: str = "kill_all",
+) -> Dict[str, Any]:
+    """ปิด terminal64 ทุกตัวของ PORT นี้ (รวม cross-session) จนไม่เหลือค้าง."""
+    kill_payload = dict(payload or {})
+    kill_payload.setdefault("forceKill", True)
+    kill_payload.setdefault("closeMt5", True)
+    kill_payload.setdefault("killMt5", True)
+    kill_payload.setdefault("vpsFolderPath", str(port_dir))
+    kill_payload.setdefault("folder_path", str(port_dir))
+
+    stopped: List[int] = []
+    taskkill: List[Dict[str, Any]] = []
+    root_esc = port_dir_path_prefix(port_dir).replace("'", "''").lower()
+    deadline = time.time() + float(os.getenv("AVELQUA_KILL_ALL_MT5_TIMEOUT_SEC", "8"))
+
+    while time.time() < deadline:
+        if os.name == "nt" and root_esc:
+            ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+$root = '{root_esc}'
+Get-Process terminal64 -ErrorAction SilentlyContinue |
+  Where-Object {{ $_.Path -and $_.Path.ToLower().StartsWith($root) }} |
+  ForEach-Object {{
+    Stop-Process -Id $_.Id -Force -ErrorAction SilentlyContinue
+    Write-Output ('KILLED=' + $_.Id)
+  }}
+"""
+            try:
+                out = _run_powershell(ps, timeout=6) or ""
+                for line in out.splitlines():
+                    line = str(line or "").strip()
+                    if not line.startswith("KILLED="):
+                        continue
+                    try:
+                        pid = int(line.split("=", 1)[1])
+                    except Exception:
+                        continue
+                    if pid > 0 and pid not in stopped:
+                        stopped.append(pid)
+                        log(f"KILL ALL MT5 PS port={port} pid={pid} reason={reason}")
+            except Exception as ps_err:
+                log(f"KILL ALL MT5 PS ERROR port={port} reason={reason}: {ps_err}")
+
+        for pid in _mt5_collect_target_pids(port, kill_payload):
+            if pid <= 0 or pid in stopped:
+                continue
+            try:
+                pr = subprocess.run(
+                    ["taskkill", "/PID", str(pid), "/T", "/F"],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                    creationflags=(subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0),
+                )
+                taskkill.append({"pid": pid, "returncode": getattr(pr, "returncode", None), "source": reason})
+                stopped.append(pid)
+                log(f"KILL ALL MT5 TASKKILL port={port} pid={pid} reason={reason}")
+            except Exception:
+                pass
+
+        for proc in list(mt5_processes_for_port_dir(port_dir)):
+            try:
+                pid = int(getattr(proc, "pid", 0) or 0)
+                if pid <= 0:
+                    continue
+                proc.kill()
+                with contextlib.suppress(Exception):
+                    proc.wait(timeout=2)
+                if pid not in stopped:
+                    stopped.append(pid)
+                    log(f"KILL ALL MT5 PSUTIL port={port} pid={pid} reason={reason}")
+            except Exception:
+                pass
+
+        if not mt5_processes_for_port_dir(port_dir):
+            break
+        time.sleep(0.35)
+
+    remaining = [
+        int(getattr(p, "pid", 0) or 0)
+        for p in mt5_processes_for_port_dir(port_dir)
+        if int(getattr(p, "pid", 0) or 0) > 0
+    ]
+    if remaining:
+        log(f"KILL ALL MT5 REMAINING port={port} reason={reason} pids={remaining}")
+    return {
+        "action": "kill_all_mt5",
+        "port": port,
+        "port_dir": str(port_dir),
+        "reason": reason,
+        "stopped": stopped,
+        "taskkill": taskkill,
+        "remaining": remaining,
+        "ok": len(remaining) == 0,
     }
 
 
@@ -3360,6 +3482,7 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
     STARTF_USESHOWWINDOW = 0x00000001
     SW_SHOWNORMAL = 1
     SW_HIDE = 0
+    SW_SHOWMINIMIZED = 2
     SecurityImpersonation = 2
     TokenPrimary = 1
 
@@ -3421,7 +3544,7 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
             return None
 
         command_line = subprocess.list2cmdline(args)
-        creation_flags = CREATE_UNICODE_ENVIRONMENT | (CREATE_NEW_CONSOLE if SHOW_MT5_WINDOW else CREATE_NO_WINDOW)
+        creation_flags = CREATE_UNICODE_ENVIRONMENT | CREATE_NEW_CONSOLE
 
         LOGON_WITH_PROFILE = 1
         for session_id in session_ids:
@@ -3448,7 +3571,7 @@ def _spawn_windows_interactive_process(args: List[str], cwd: Optional[str] = Non
                 startup.cb = ctypes.sizeof(STARTUPINFOW)
                 startup.lpDesktop = "winsta0\\default"
                 startup.dwFlags = STARTF_USESHOWWINDOW
-                startup.wShowWindow = SW_SHOWNORMAL if SHOW_MT5_WINDOW else SW_HIDE
+                startup.wShowWindow = SW_SHOWNORMAL if SHOW_MT5_WINDOW else SW_SHOWMINIMIZED
                 cmd_buf = ctypes.create_unicode_buffer(command_line)
                 cwd_text = str(cwd or "") or None
 
@@ -3670,6 +3793,7 @@ def reap_connect_workers() -> None:
             if rc is None:
                 continue
             ACTIVE_CONNECT_WORKERS.pop(key, None)
+            ACTIVE_CONNECT_WORKER_CTYPES.pop(key, None)
             try:
                 clear_worker_state(int(key), getattr(proc, "pid", None))
             except Exception:
@@ -3710,6 +3834,7 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
     if str(ctype or "").lower() in ("run_mt5_bot", "run_mt5", "restart_mt5_bot", "restart_mt5", "restart_port"):
         wait_timeout = 45.0
     deadline = time.time() + wait_timeout
+    _evict_login_after = time.time() + 8.0
 
     while True:
         reap_connect_workers()
@@ -3718,6 +3843,18 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
             if prev and prev.poll() is None:
                 if wait_timeout > 0 and time.time() < deadline:
                     prev_pid = getattr(prev, "pid", "")
+                    is_bot_run = str(ctype or "").lower() in ("run_mt5_bot", "run_mt5")
+                    if is_bot_run and time.time() > _evict_login_after:
+                        prev_ctype = ACTIVE_CONNECT_WORKER_CTYPES.get(key, "").lower()
+                        if prev_ctype in ("connect_mt5", "login_mt5"):
+                            log(f"WORKER EVICT login-worker for bot_run port={port} pid={prev_pid} prev_type={prev_ctype}")
+                            try:
+                                prev.kill()
+                            except Exception:
+                                pass
+                            ACTIVE_CONNECT_WORKERS.pop(key, None)
+                            ACTIVE_CONNECT_WORKER_CTYPES.pop(key, None)
+                            break
                     log(
                         f"WORKER WAIT port={port} cmd_id={cmd_id} type={ctype} "
                         f"busy_pid={prev_pid} remaining={max(0.0, deadline - time.time()):.1f}s"
@@ -3757,6 +3894,7 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
 
     with ACTIVE_CONNECT_WORKERS_LOCK:
         ACTIVE_CONNECT_WORKERS[key] = proc
+        ACTIVE_CONNECT_WORKER_CTYPES[key] = str(ctype or "").lower()
 
     write_worker_state(port, {
         "pid": proc.pid,
@@ -4391,6 +4529,8 @@ Start-Sleep -Milliseconds 350
 [System.Windows.Forms.SendKeys]::SendWait("{{DOWN}}{{ENTER}}")
 Start-Sleep -Milliseconds 200
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+Start-Sleep -Milliseconds 300
+[W32]::ShowWindow($p.MainWindowHandle, 6) | Out-Null
 Write-Output "TARGET_FOUND=1"
 exit 0
 """
@@ -4468,6 +4608,8 @@ Start-Sleep -Milliseconds 400
 [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
 Start-Sleep -Milliseconds 500
 [System.Windows.Forms.SendKeys]::SendWait("%n")
+Start-Sleep -Milliseconds 300
+[W32]::ShowWindow($dlg.MainWindowHandle, 6) | Out-Null
 Write-Output "TARGET_FOUND=1"
 exit 0
 """
@@ -4926,7 +5068,16 @@ def start_mt5_bot(payload: Dict[str, Any]) -> Dict[str, Any]:
             stop_mt5_port_only(port, payload)
         except Exception as e:
             log(f"STOP OLD MT5 ERROR: {e}")
-        time.sleep(0.35)
+        # Wait until all MT5 processes are actually dead before clearing files
+        _launch_deadline = time.time() + 4.0
+        while time.time() < _launch_deadline:
+            remaining = mt5_processes_for_port_dir(port_dir)
+            if not remaining:
+                break
+            for _p in remaining:
+                with contextlib.suppress(Exception):
+                    _p.kill()
+            time.sleep(0.3)
         # ล้าง journal เก่าของ PORT นี้ก่อนเริ่ม attempt ใหม่
         # เพื่อไม่ให้ backend อ่าน authorized ของรอบก่อนมาฟันธง success ผิดบัญชี
         clear_mt5_logs(port_dir)
@@ -6088,9 +6239,19 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if login and password:
         try:
-            if mt5_running_for_port_dir(port_dir):
+            if mt5_processes_for_port_dir(port_dir):
                 stop_mt5_port_only(port, payload)
-                time.sleep(0.35)
+                # Wait until all MT5 processes are actually dead before clearing files
+                # (accounts.dat file lock released only after process fully terminates)
+                _kill_deadline = time.time() + 4.0
+                while time.time() < _kill_deadline:
+                    remaining = mt5_processes_for_port_dir(port_dir)
+                    if not remaining:
+                        break
+                    for _p in remaining:
+                        with contextlib.suppress(Exception):
+                            _p.kill()
+                    time.sleep(0.3)
             clear_mt5_port_session(port_dir)
             clear_mt5_login_cache(port_dir)
             remove_mt5_login_ini(port_dir)
@@ -6110,9 +6271,11 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             startup_expert_parameters=startup_set,
         )
 
-    if mt5_running_for_port_dir(port_dir):
+    if mt5_processes_for_port_dir(port_dir):
         stop_mt5_port_only(port, payload)
-        time.sleep(2)
+        _kill_deadline2 = time.time() + 3.0
+        while time.time() < _kill_deadline2 and mt5_processes_for_port_dir(port_dir):
+            time.sleep(0.3)
 
     patched_cfg = patch_mt5_experts_config(port_dir, True)
     log(f"PATCH AUTO TRADING CONFIG port={port} files={patched_cfg}")
@@ -6755,7 +6918,20 @@ def handle_command(cmd: Dict[str, Any]) -> None:
                 exit_payload.setdefault("closeMt5", True)
                 exit_payload.setdefault("killMt5", True)
                 log(f"LOGIN_ONLY: closing MT5 port={port}")
-                command_result(cmd_id, True, stop_mt5_port_only(port, exit_payload))
+                try:
+                    port_dir = resolve_mt5_port_dir(port, exit_payload)
+                except Exception:
+                    port_dir = None
+                if port_dir is not None:
+                    res = kill_all_mt5_for_port_dir(
+                        port,
+                        port_dir,
+                        exit_payload,
+                        reason="login_exit_mt5",
+                    )
+                else:
+                    res = stop_mt5_port_only(port, exit_payload)
+                command_result(cmd_id, True, res)
                 return
             folder = payload_get(payload, "folder_path", "vpsFolderPath")
             port = payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort")
