@@ -708,7 +708,8 @@ async function handleMt5ConnectProduction(req, res) {
   try {
     await ensureRuntimeColumns();
 
-    const userId = req.user.id;
+    const userId = Number((req.user || req.session?.user)?.id || 0);
+    if (!userId) throw new Error('กรุณาเข้าสู่ระบบใหม่');
     await repairMisboundAccountPorts(userId).catch(() => {});
     const mt5Login = clean(req.body.mt5_login || req.body.mt5Login);
     const mt5Password = clean(req.body.mt5_password || req.body.mt5Password);
@@ -1018,7 +1019,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
     if (!poll) {
       await ensureRuntimeColumns();
     }
-    const userId = req.user.id;
+    const userId = Number((req.user || req.session?.user)?.id || 0);
+    if (!userId) throw new Error('กรุณาเข้าสู่ระบบใหม่');
     if (!poll) {
       await repairMisboundAccountPorts(userId).catch(() => {});
     }
@@ -1036,7 +1038,8 @@ async function handleMt5ConnectStatusProduction(req, res) {
 async function handleMt5StartBot(req, res) {
   try {
     await ensureMt5ConnectAttemptTables();
-    const userId = req.user.id;
+    const userId = Number((req.user || req.session?.user)?.id || 0);
+    if (!userId) throw new Error('กรุณาเข้าสู่ระบบใหม่');
     const results = await startBotRunPhase2(userId, req.body || {});
     return res.json({
       ok: true,

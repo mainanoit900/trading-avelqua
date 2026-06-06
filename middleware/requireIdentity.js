@@ -50,8 +50,13 @@ async function requireIdentityVerified(req, res, next) {
 
   req.session.error = 'กรุณายืนยันตัวตนก่อนใช้งานเมนูอื่น';
 
-  if (req.method === 'GET' && req.get('Accept')?.includes('application/json')) {
-    return res.status(403).json({ ok: false, error: 'identity_required' });
+  const accept = String(req.get('Accept') || '');
+  if (accept.includes('application/json')) {
+    return res.status(403).json({
+      ok: false,
+      error: 'identity_required',
+      message: 'กรุณายืนยันตัวตนก่อนใช้งานเมนูอื่น'
+    });
   }
 
   return res.redirect('/app/identity');
