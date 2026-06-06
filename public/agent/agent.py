@@ -24,6 +24,16 @@ if os.name == "nt":
     from ctypes import wintypes
 
 
+ENV_FORCE_OVERRIDE_KEYS = frozenset({
+    "AVELQUA_AGENT_TOKEN",
+    "AVELQUA_SERVER_URL",
+    "AVELQUA_MT5_ROOT",
+    "AVELQUA_AGENT_DIR",
+    "AVELQUA_AGENT_TASK_NAME",
+    "AVELQUA_SERVICE_NAME",
+})
+
+
 def load_env_file(path: Path) -> None:
     try:
         if not path.exists():
@@ -35,7 +45,7 @@ def load_env_file(path: Path) -> None:
             k, v = line.split("=", 1)
             k = k.strip()
             v = v.strip().strip('"').strip("'")
-            if k and not os.getenv(k):
+            if k and (k in ENV_FORCE_OVERRIDE_KEYS or not os.getenv(k)):
                 os.environ[k] = v
     except Exception:
         pass
@@ -309,6 +319,12 @@ def api(method: str, path_or_url: str, body: Optional[Dict[str, Any]] = None, ti
     if body is not None:
         headers["Content-Type"] = "application/json"
     r = requests.request(method.upper(), url, headers=headers, json=body, timeout=timeout)
+    if r.status_code == 401:
+        tail = AGENT_TOKEN[-8:] if len(str(AGENT_TOKEN or "")) >= 8 else "short"
+        log(
+            f"API 401 INVALID_AGENT url={url} token_tail={tail} "
+            f"env_file={ENV_FILE.exists()} placeholder={AGENT_TOKEN == 'PUT_YOUR_AGENT_TOKEN_HERE'}"
+        )
     r.raise_for_status()
     if not r.text:
         return {}
@@ -6852,31 +6868,81 @@ def restart_service_later(service_name: str, exit_process: bool = True) -> None:
         threading.Thread(target=_exit_after_delay, daemon=True).start()
 
 
+def _upsert_env_file_keys(updates: Dict[str, str]) -> None:
+    """Merge key=value pairs into C:\\avelqua-python-agent\\.env"""
+    clean_updates = {
+        str(k).strip(): str(v).strip()
+        for k, v in (updates or {}).items()
+        if str(k).strip() and str(v).strip()
+    }
+    if not clean_updates:
+        return
+    lines: List[str] = []
+    if ENV_FILE.exists():
+        lines = ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
+    found: Dict[str, bool] = {k: False for k in clean_updates}
+    out: List[str] = []
+    for line in lines:
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out.append(line)
+            continue
+        key = stripped.split("=", 1)[0].strip()
+        if key in clean_updates:
+            out.append(f"{key}={clean_updates[key]}")
+            found[key] = True
+        else:
+            out.append(line)
+    for key, val in clean_updates.items():
+        if not found.get(key):
+            out.append(f"{key}={val}")
+        os.environ[key] = val
+    ENV_FILE.parent.mkdir(parents=True, exist_ok=True)
+    ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
 def _sync_agent_env_build_id(build_id: str) -> None:
     """อัปเดต .env ให้ AVELQUA_AGENT_VERSION ตรงกับ build จริง (กัน heartbeat รายงานเวอร์ชันเก่าค้าง)"""
     try:
-        lines: List[str] = []
-        if ENV_FILE.exists():
-            lines = ENV_FILE.read_text(encoding="utf-8", errors="ignore").splitlines()
-        key = "AVELQUA_AGENT_VERSION"
-        found = False
-        out: List[str] = []
-        for line in lines:
-            if line.strip().startswith(f"{key}="):
-                out.append(f"{key}={build_id}")
-                found = True
-            else:
-                out.append(line)
-        if not found:
-            out.append(f"{key}={build_id}")
-        ENV_FILE.write_text("\n".join(out) + "\n", encoding="utf-8")
-        os.environ[key] = build_id
-        log(f"AGENT ENV SYNC {key}={build_id}")
+        _upsert_env_file_keys({"AVELQUA_AGENT_VERSION": build_id})
+        log(f"AGENT ENV SYNC AVELQUA_AGENT_VERSION={build_id}")
     except Exception as e:
         log(f"AGENT ENV SYNC ERROR: {e}")
 
 
+def _sync_agent_env_credentials(payload: Optional[Dict[str, Any]] = None) -> None:
+    """เขียน token/server ลง .env — ใช้ตอน deploy จากเซิร์ฟเวอร์ หรือค่าที่โหลดได้แล้ว"""
+    payload = payload or {}
+    token = str(payload_get(payload, "agentToken", "agent_token") or AGENT_TOKEN or "").strip()
+    server = str(
+        payload_get(payload, "serverUrl", "server_url", default=SERVER_URL) or SERVER_URL or ""
+    ).strip().rstrip("/")
+    updates: Dict[str, str] = {}
+    if token and token != "PUT_YOUR_AGENT_TOKEN_HERE":
+        updates["AVELQUA_AGENT_TOKEN"] = token
+    if server:
+        updates["AVELQUA_SERVER_URL"] = server
+    if str(AGENT_DIR):
+        updates["AVELQUA_AGENT_DIR"] = str(AGENT_DIR)
+    if str(MT5_ROOT):
+        updates["AVELQUA_MT5_ROOT"] = str(MT5_ROOT)
+    if SERVICE_NAME:
+        updates["AVELQUA_SERVICE_NAME"] = SERVICE_NAME
+    if DESKTOP_TASK_NAME:
+        updates["AVELQUA_AGENT_TASK_NAME"] = DESKTOP_TASK_NAME
+    try:
+        _upsert_env_file_keys(updates)
+        if updates:
+            log(
+                "AGENT ENV CREDENTIALS SYNC "
+                f"token_tail={(token[-8:] if len(token) >= 8 else 'short')} server={server}"
+            )
+    except Exception as e:
+        log(f"AGENT ENV CREDENTIALS SYNC ERROR: {e}")
+
+
 try:
+    _sync_agent_env_credentials()
     _sync_agent_env_build_id(AGENT_BUILD_ID)
 except Exception:
     pass
@@ -6939,6 +7005,7 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
     m = re.search(r'AGENT_BUILD_ID\s*=\s*["\']([^"\']+)["\']', content)
     if m:
         build_id = m.group(1).strip()
+    _sync_agent_env_credentials(payload)
     _sync_agent_env_build_id(build_id)
 
     log(f"PYTHON AGENT UPDATED path={agent_path} backup={backup} build={build_id}")

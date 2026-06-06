@@ -501,7 +501,12 @@ function ensureAgentTables() {
 }
 
 async function findNode(req) {
-  const token = req.headers['x-agent-token'] || req.body?.agent_token || req.query?.token || '';
+  let token = req.headers['x-agent-token'] || req.body?.agent_token || req.query?.token || '';
+  if (!token) {
+    const auth = String(req.headers.authorization || req.headers.Authorization || '').trim();
+    const m = auth.match(/^Bearer\s+(.+)$/i);
+    if (m) token = String(m[1] || '').trim();
+  }
   if (!token) return null;
 
   const r = await query(`
