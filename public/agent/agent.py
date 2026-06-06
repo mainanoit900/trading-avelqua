@@ -56,6 +56,7 @@ except Exception:  # pragma: no cover - psutil may not be installed yet
 SERVER_URL = os.getenv("AVELQUA_SERVER_URL", "https://trading.avelqua.com/api/vps-agent").rstrip("/")
 AGENT_TOKEN = os.getenv("AVELQUA_AGENT_TOKEN", "PUT_YOUR_AGENT_TOKEN_HERE")
 SERVICE_NAME = os.getenv("AVELQUA_SERVICE_NAME", "AvelquaPythonAgent")
+DESKTOP_TASK_NAME = os.getenv("AVELQUA_AGENT_TASK_NAME", "AvelquaPythonAgentDesktop")
 AGENT_DIR = Path(os.getenv("AVELQUA_AGENT_DIR", r"C:\avelqua-python-agent"))
 AGENT_FILE = Path(os.getenv("AVELQUA_AGENT_FILE", str(AGENT_DIR / "agent.py")))
 MT5_ROOT = Path(os.getenv("AVELQUA_MT5_ROOT", r"C:\MT5_PORTS"))
@@ -82,7 +83,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-service-restart-fix-v128"
+AGENT_BUILD_ID = "2026-06-06-desktop-task-restart-v129"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -6622,47 +6623,43 @@ def poll_running_mt5_list() -> None:
 
 
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
-    """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
+    """รีสตาร์ท Agent ผ่าน Desktop Scheduled Task (ไม่ใช้ NSSM — MT5 ต้องรันใน session ผู้ใช้เพื่อแสดงกราฟ)"""
     global _LAST_DEPLOY_RESTART_AT
     if os.name != "nt":
-        log("SERVICE RESTART SKIPPED: not Windows")
+        log("AGENT RESTART SKIPPED: not Windows")
+        return
+    task_name = str(DESKTOP_TASK_NAME or "").strip()
+    if not task_name:
+        log("AGENT RESTART SKIPPED: AVELQUA_AGENT_TASK_NAME not set")
         return
     _LAST_DEPLOY_RESTART_AT = time.time()
     sleep_sec = float(os.getenv("AVELQUA_SERVICE_RESTART_DELAY_SEC", "0.5"))
     exit_delay = float(os.getenv("AVELQUA_SERVICE_EXIT_DELAY_SEC", "1"))
     restart_log = str(AGENT_DIR / "logs" / "service-restart.log")
+    agent_dir = str(AGENT_DIR).replace("'", "''")
+    task_ps = task_name.replace("'", "''")
     ps = (
-        f"$svc='{service_name}'; $log='{restart_log}'; "
+        f"$task='{task_ps}'; $agentDir='{agent_dir}'; $log='{restart_log}'; "
         f"function W($m){{Add-Content -Path $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' '+$m)}}; "
         f"Start-Sleep -Seconds {sleep_sec}; "
-        f"try {{ "
-        f"  $s=Get-Service -Name $svc -ErrorAction Stop; "
-        f"  if ($s.StartType -eq 'Disabled') {{ "
-        f"    Set-Service -Name $svc -StartupType Automatic; W 'enabled service (was Disabled)' "
-        f"  }} "
-        f"}} catch {{ W ('get-service: '+$_.Exception.Message) }}; "
-        f"$nssm=Get-Command nssm -ErrorAction SilentlyContinue; "
-        f"if ($nssm) {{ & nssm restart $svc 2>&1 | ForEach-Object {{ W $_ }}; Start-Sleep -Seconds 1 }}; "
-        f"Restart-Service -Name $svc -Force -ErrorAction SilentlyContinue; "
+        f"W ('desktop task restart task='+$task); "
+        f"Get-CimInstance Win32_Process -Filter \"Name='python.exe'\" | "
+        f"Where-Object {{ $_.CommandLine -like ('*'+$agentDir+'*agent.py*') }} | "
+        f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }}; "
         f"Start-Sleep -Seconds 1; "
-        f"$r=Get-Service -Name $svc -ErrorAction SilentlyContinue; "
-        f"if (-not $r -or $r.Status -ne 'Running') {{ "
-        f"  sc.exe config $svc start= auto; "
-        f"net stop $svc 2>$null; net start $svc 2>&1 | ForEach-Object {{ W $_ }} "
-        f"}}; "
-        f"$f=Get-Service -Name $svc -ErrorAction SilentlyContinue; "
-        f"W ('final status='+(if($f){{$f.Status}}else{{'missing'}})+' startType='+(if($f){{$f.StartType}}else{{'?'}}))"
+        f"schtasks /Run /TN $task 2>&1 | ForEach-Object {{ W $_ }}; "
+        f"W 'desktop task run scheduled'"
     )
     subprocess.Popen(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
         creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
     )
-    log(f"SERVICE RESTART SCHEDULED name={service_name} exit_process={exit_process}")
+    log(f"AGENT RESTART SCHEDULED desktop_task={task_name} exit_process={exit_process}")
 
     if exit_process:
         def _exit_after_delay() -> None:
             time.sleep(max(0.5, exit_delay))
-            log("AGENT EXIT after deploy/restart — loading new agent.py on service start")
+            log("AGENT EXIT after deploy/restart — loading new agent.py")
             os._exit(0)
 
         import threading
