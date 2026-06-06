@@ -22,7 +22,20 @@ const { requireLogin } = require('../middleware/requireAuth');
 const { requireIdentityVerified } = require('../middleware/requireIdentity');
 const { query, getClient, repairVpsAgentCommandSequences } = require('../config/database');
 const { parseMt5JournalOutcome } = require('../lib/mt5JournalVerify');
-const { pickAccountForPortSlot } = require('../lib/mt5PortAccount');
+const { pickAccountForPortSlot, isRunnableMt5Account } = require('../lib/mt5PortAccount');
+
+function mapRunnableMt5Account(row) {
+  return {
+    id: Number(row.id),
+    port_slot: Number(row.port_slot || 0),
+    assigned_port_no: Number(row.assigned_port_no || 0),
+    mt5_login: row.mt5_login,
+    last_balance: row.last_balance,
+    last_equity: row.last_equity,
+    running_bots: Number(row.running_bots || 0),
+    status: String(row.status || '').toLowerCase()
+  };
+}
 const {
   packageLotLimits,
   normalizeTradeLevel,
@@ -1736,11 +1749,7 @@ router.get('/mt5/recovery-check', async (req, res) => {
 
 function buildPortCardState(acc, activeByAccount) {
   const accStatus = acc ? String(acc.status || '').toLowerCase() : '';
-  const hasEquity =
-    acc &&
-    ((acc.last_equity != null && acc.last_equity !== '' && Number.isFinite(Number(acc.last_equity))) ||
-      (acc.last_balance != null && acc.last_balance !== '' && Number.isFinite(Number(acc.last_balance))));
-  const canUse = !!(acc && accStatus === 'connected' && hasEquity);
+  const canUse = isRunnableMt5Account(acc);
   const accountId = acc ? Number(acc.id) : 0;
   const activeInst =
     accountId > 0 && activeByAccount instanceof Map ? activeByAccount.get(accountId) : null;
@@ -1775,7 +1784,7 @@ function buildPortCardState(acc, activeByAccount) {
     canUse ||
     accStatus === 'connecting' ||
     accStatus === 'checking' ||
-    (accStatus === 'failed' && hasEquity);
+    (accStatus === 'failed' && isRunnableMt5Account(acc));
 
   return { accStatus, canUse, statusLabel, cssClass, slotBusy, canPick: !acc || canPickForRun };
 }
@@ -1850,15 +1859,8 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     }
 
     const connectedAccounts = (accounts || [])
-      .filter((a) => String(a.status || '').toLowerCase() === 'connected')
-      .map((a) => ({
-        id: Number(a.id),
-        port_slot: Number(a.port_slot),
-        assigned_port_no: Number(a.assigned_port_no || 0),
-        mt5_login: a.mt5_login,
-        last_balance: a.last_balance,
-        last_equity: a.last_equity
-      }));
+      .filter((a) => isRunnableMt5Account(a))
+      .map((a) => mapRunnableMt5Account(a));
 
     const bots = (await safeQuery(
       `SELECT id, bot_code, display_name, bot_name FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`,
@@ -1965,16 +1967,8 @@ router.get('/mt5', async (req, res) => {
   );
 
   const connectedRunAccounts = (accounts || [])
-    .filter((row) => String(row.status || '').toLowerCase() === 'connected')
-    .map((row) => ({
-      id: Number(row.id),
-      port_slot: Number(row.port_slot || 0),
-      assigned_port_no: Number(row.assigned_port_no || 0),
-      mt5_login: row.mt5_login,
-      last_balance: row.last_balance,
-      last_equity: row.last_equity,
-      running_bots: Number(row.running_bots || 0)
-    }));
+    .filter((row) => isRunnableMt5Account(row))
+    .map((row) => mapRunnableMt5Account(row));
 
   const bots = (await safeQuery(`SELECT * FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`, []))
     .filter((row) => isProductionBot(row));
@@ -2031,6 +2025,32 @@ router.get('/mt5', async (req, res) => {
     : num(summary.pkg.duration_days || summary.pkg.days || summary.pkg.package_days, 0);
   const displayPackageDaysText = displayPackageDays > 0 ? `${displayPackageDays} วัน` : '-';
 
+  const activeByAccount = new Map();
+  for (const row of activeRunInstances || []) {
+    const aid = Number(row.mt5_account_id || 0);
+    if (aid > 0 && !activeByAccount.has(aid)) activeByAccount.set(aid, row);
+  }
+  const initialPortCards = [];
+  for (let slot = 1; slot <= summary.totalPorts; slot++) {
+    const acc = pickAccountForPortSlot(portSlotAccounts || accounts, slot);
+    const meta = buildPortCardState(acc, activeByAccount);
+    const equity = acc?.last_equity ?? acc?.last_balance;
+    const equityPart = equity != null && equity !== '' ? ` / Equity: ${equity}` : '';
+    initialPortCards.push({
+      slot,
+      accountId: acc ? Number(acc.id) : null,
+      mt5_login: acc?.mt5_login || null,
+      status: acc?.status || null,
+      last_balance: acc?.last_balance ?? null,
+      last_equity: acc?.last_equity ?? null,
+      canUse: meta.canUse,
+      cssClass: meta.cssClass,
+      canPick: meta.canPick || !acc,
+      statusLabel: meta.statusLabel,
+      sublabel: acc ? `Login: ${acc.mt5_login}${equityPart}` : 'ยังไม่เชื่อมต่อ'
+    });
+  }
+
   return res.render('app/mt5', {
     pageTitle: 'เชื่อมต่อ MT5',
     pageCss: 'app-mt5-bot.css',
@@ -2052,6 +2072,7 @@ router.get('/mt5', async (req, res) => {
     pendingConnectAccountId: pendingConnectAccount ? pendingConnectAccount.id : null,
     bots,
     connectedRunAccounts,
+    initialPortCards,
     activeRunInstances,
     equityBudget,
     runBotUi,
@@ -2987,7 +3008,7 @@ router.post('/mt5/run', async (req, res) => {
       await query(`SELECT * FROM vps_system.mt5_accounts WHERE id=$1 AND user_id=$2 LIMIT 1`, [mt5AccountId, userId])
     ).rows[0];
     if (!account) throw new Error('ไม่พบบัญชี MT5 ของคุณ');
-    if (String(account.status || '').toLowerCase() !== 'connected') {
+    if (!isRunnableMt5Account(account)) {
       throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
     }
 
@@ -3257,7 +3278,7 @@ router.post('/mt5/run', async (req, res) => {
     );
     account = accountRows.rows[0];
     if (!account) throw new Error('ไม่พบบัญชี MT5 ของคุณ');
-    if (String(account.status || '').toLowerCase() !== 'connected') {
+    if (!isRunnableMt5Account(account)) {
       throw new Error('PORT นี้ยังไม่พร้อมใช้งาน กรุณาเชื่อมต่อ MT5 ให้สำเร็จก่อน');
     }
 
