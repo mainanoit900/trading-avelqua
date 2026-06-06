@@ -2495,7 +2495,8 @@ async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_d
       windowsPortNo: accRow.windows_port_no,
       folderPath: accRow.folder_path,
       mt5Login: accRow.mt5_login,
-      reason
+      reason,
+      forceRelease: true
     }).catch((e) => console.error('[PORT] clearFolderPortBinding:', e.message || e));
   }
 

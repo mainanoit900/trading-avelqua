@@ -23,8 +23,10 @@ const {
   lookupDbUsage,
   resolveAdminPortMt5State,
   isAgentMt5Running,
-  reconcilePortIdleWhenAgentFree
+  reconcilePortIdleWhenAgentFree,
+  queueForceStopMt5
 } = require('../lib/adminVpsBridge');
+const { clearFolderPortBinding } = require('../lib/mt5PortCleanup');
 
 function formatBytes(size) {
   const n = Number(size || 0);
@@ -3088,67 +3090,75 @@ async function adminStopPortRow(portRow, sourceTable, portDbId, options = {}) {
   const mt5Login = String(portRow.mt5_login || portRow.current_mt5_login || '').trim() || null;
   const { systemVpsId } = await resolveSystemVpsId(adminNodeId);
   const systemPortNos = adminSystemPortNos(portNo);
+  const primarySystemPort = systemPortNos.find((n) => n >= 100) || portNo;
   const reason = String(options.reason || 'admin_port_stop');
+  const nodeIds = [...new Set([adminNodeId, systemVpsId].filter((x) => x > 0))];
+  const portNos = systemPortNos.length ? systemPortNos : [portNo];
 
-  if (systemVpsId && folderPath) {
-    await queueSystemAgentCommand(
-      systemVpsId,
-      'stop_mt5',
-      {
-        port: portNo,
-        portNumber: portNo,
-        port_no: portNo,
-        portSlot: portNo,
-        portName,
-        vpsPortName: portName,
-        folder_path: folderPath,
-        folderPath,
-        vpsFolderPath: folderPath,
-        mt5Login,
-        login: mt5Login,
-        reason,
-        purpose: reason,
-        forceKill: true,
-        closeMt5: true,
-        killMt5: true,
-        clearReservation: true,
-        sourceTable
-      },
-      portDbId
-    );
+  const boundAccs = await query(
+    `
+    SELECT DISTINCT
+      a.id,
+      a.user_id,
+      a.port_slot,
+      a.port_id,
+      a.assigned_port_no,
+      a.windows_port_no,
+      a.mt5_login
+    FROM vps_system.mt5_accounts a
+    LEFT JOIN vps_system.vps_ports p ON p.id = a.port_id
+    WHERE LOWER(COALESCE(a.status, '')) IN ('ready', 'connected', 'checking', 'connecting', 'starting', 'failed')
+      AND (
+        (a.vps_id = ANY($1::bigint[]) AND COALESCE(a.assigned_port_no, a.windows_port_no) = ANY($2::int[]))
+        OR (p.vps_id = ANY($1::bigint[]) AND p.port_no = ANY($2::int[]))
+        OR ($3::text <> '' AND TRIM(COALESCE(p.folder_path, '')) = TRIM($3))
+      )
+  `,
+    [nodeIds, portNos, folderPath || '']
+  ).catch(() => ({ rows: [] }));
+
+  for (const acc of boundAccs.rows || []) {
+    await clearFolderPortBinding({
+      userId: acc.user_id,
+      accountId: acc.id,
+      vpsId: systemVpsId,
+      portId: acc.port_id,
+      portSlot: acc.port_slot,
+      assignedPortNo: acc.assigned_port_no,
+      windowsPortNo: acc.windows_port_no,
+      folderPath,
+      mt5Login: acc.mt5_login,
+      reason,
+      forceRelease: true
+    }).catch(() => {});
   }
 
-  const nodeIds = [...new Set([adminNodeId, systemVpsId].filter((x) => x > 0))];
+  if (systemVpsId) {
+    await clearFolderPortBinding({
+      vpsId: systemVpsId,
+      assignedPortNo: primarySystemPort,
+      folderPath,
+      mt5Login,
+      reason,
+      forceRelease: true
+    }).catch(() => {});
+    await queueForceStopMt5(systemVpsId, primarySystemPort, folderPath, reason).catch(() => false);
+  }
+
   if (nodeIds.length && portNo) {
-    await query(`
-      UPDATE vps_system.vps_port_health
-      SET running=FALSE, pid='[]'::jsonb, mt5_login=NULL, process_id=NULL, updated_at=NOW()
-      WHERE node_id = ANY($1::bigint[]) AND port_number = ANY($2::int[])
-    `, [nodeIds, systemPortNos.length ? systemPortNos : [portNo]]).catch(() => {});
-
-    const portNos = systemPortNos.length ? systemPortNos : [portNo];
-    await query(
-      `
-      UPDATE vps_system.mt5_accounts a
-      SET status='cancelled', vps_id=NULL, port_id=NULL, assigned_port_no=NULL,
-          windows_port_no=NULL, last_error='Admin ปิด PORT', updated_at=NOW()
-      FROM vps_system.vps_ports p
-      WHERE a.id = p.id
-        AND p.vps_id = ANY($1::bigint[])
-        AND p.port_no = ANY($2::int[])
-        AND LOWER(COALESCE(a.status,'')) IN ('ready','connected','checking','connecting','starting','failed')
-    `,
-      [nodeIds, portNos]
-    ).catch(() => {});
-
     await query(
       `
       UPDATE vps_system.mt5_accounts
-      SET status='cancelled', vps_id=NULL, port_id=NULL, assigned_port_no=NULL,
-          windows_port_no=NULL, last_error='Admin ปิด PORT', updated_at=NOW()
+      SET status='cancelled',
+          vps_id=NULL,
+          port_id=NULL,
+          assigned_port_no=NULL,
+          windows_port_no=NULL,
+          last_error='Admin ปิด PORT',
+          updated_at=NOW()
       WHERE vps_id = ANY($1::bigint[])
         AND COALESCE(assigned_port_no, windows_port_no) = ANY($2::int[])
-        AND LOWER(COALESCE(status,'')) IN ('ready','connected','checking','connecting','starting','failed')
+        AND LOWER(COALESCE(status, '')) IN ('ready', 'connected', 'checking', 'connecting', 'starting', 'failed')
     `,
       [nodeIds, portNos]
     ).catch(() => {});
@@ -3157,26 +3167,19 @@ async function adminStopPortRow(portRow, sourceTable, portDbId, options = {}) {
       await query(
         `
         UPDATE vps_system.mt5_accounts a
-        SET status='cancelled', vps_id=NULL, port_id=NULL, assigned_port_no=NULL,
-            windows_port_no=NULL, last_error='Admin ปิด PORT', updated_at=NOW()
+        SET status='cancelled',
+            vps_id=NULL,
+            port_id=NULL,
+            assigned_port_no=NULL,
+            windows_port_no=NULL,
+            last_error='Admin ปิด PORT',
+            updated_at=NOW()
         FROM vps_system.vps_ports p
         WHERE a.port_id = p.id
           AND TRIM(COALESCE(p.folder_path, '')) = TRIM($1)
-          AND LOWER(COALESCE(a.status,'')) IN ('ready','connected','checking','connecting','starting','failed')
+          AND LOWER(COALESCE(a.status, '')) IN ('ready', 'connected', 'checking', 'connecting', 'starting', 'failed')
       `,
         [folderPath]
-      ).catch(() => {});
-    }
-
-    if (systemVpsId) {
-      await query(
-        `
-        UPDATE vps_system.vps_ports
-        SET status='available', mt5_login=NULL, current_mt5_login=NULL, process_id=NULL,
-            locked_by_user_id=NULL, locked_until=NULL, last_error=NULL, updated_at=NOW()
-        WHERE vps_id=$1 AND port_no = ANY($2::int[])
-      `,
-        [systemVpsId, systemPortNos.length ? systemPortNos : [portNo]]
       ).catch(() => {});
     }
   }
