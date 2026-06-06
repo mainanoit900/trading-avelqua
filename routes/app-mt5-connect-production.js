@@ -433,9 +433,11 @@ async function reserveBestPort(userId) {
         )
         ${vpsPortNotBusyByOthersClause(4)}
       ORDER BY
-        COALESCE(n.cpu_percent,0) ASC,
-        COALESCE(n.ram_percent,0) ASC,
-        COALESCE(n.ping_ms,0) ASC,
+        COALESCE(
+          NULLIF((regexp_match(COALESCE(n.node_code, n.node_name, ''), '(?i)(?:VPS[-_]?WIN[-_]?|VPS[-_]?)(\\d+)'))[1], '')::int,
+          NULLIF((regexp_match(COALESCE(n.node_code, n.node_name, ''), '(\\d+)$'))[1], '')::int,
+          n.id
+        ) ASC,
         p.vps_id ASC,
         p.port_no ASC
       FOR UPDATE SKIP LOCKED
