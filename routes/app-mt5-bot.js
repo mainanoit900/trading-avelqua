@@ -72,6 +72,7 @@ const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../
 const { assertFolderPortFreeForUser } = require('../lib/mt5PortSlotGuard');
 const { systemPortNoFromReservedPort } = require('../lib/mt5ReservedPortNo');
 const { debitScoin } = require('../services/scoinService');
+const { folderPathForPortNo, vpsPortNameForNo } = require('../lib/mt5AccountPort');
 
 const router = express.Router();
 
@@ -3134,20 +3135,14 @@ router.post('/mt5/run', async (req, res) => {
       [account.port_id || null, nodePreview.id, assignedPortNo]
     );
     const portCtx = portCtxRows.rows[0] || {};
-    const folderPath = String(
-      portCtx.folder_path
-      || `C:\\MT5_PORTS\\${String(nodePreview.node_code || 'VPS-WIN-01').trim() || 'VPS-WIN-01'}-PORT-${String(assignedPortNo).padStart(2, '0')}`
-    ).trim();
-    const vpsPortName = String(
-      nodePreview.node_code && assignedPortNo
-        ? `${String(nodePreview.node_code).trim()}-PORT-${String(assignedPortNo).padStart(2, '0')}`
-        : ''
-    ).trim();
+    const nodeCode = String(nodePreview.node_code || 'VPS-WIN-01').trim() || 'VPS-WIN-01';
+    const folderPath = folderPathForPortNo(assignedPortNo, portCtx.folder_path, nodeCode);
+    const vpsPortName = vpsPortNameForNo(assignedPortNo, nodeCode);
 
     const usePhase2BotRun = String(process.env.MT5_PHASE2_BOT_RUN || '1').trim() !== '0';
     if (usePhase2BotRun) await assertNoRecentBotRunAttempt(mt5AccountId);
 
-    const runGate = await acquireVpsRunBotSlot(preVpsId);
+    const runGate = await acquireVpsRunBotSlot(preVpsId, null, assignedPortNo);
     vpsRunLockKey = runGate.lockKey;
     runGateWaitedMs = runGate.waitedMs || 0;
 
