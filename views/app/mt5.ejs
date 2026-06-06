@@ -16,7 +16,7 @@
     <div class="mt5-hero-premium">
       <div class="mt5-kicker"><%= safeT('mt5.kicker', 'MH Markets / MT5 Connector') %></div>
       <h1><%= safeT('mt5.hero_title', 'เชื่อมต่อ MT5 และรัน BOT ทองคำ') %></h1>
-      <p class="mt5-hero-desc"><%= safeT('mt5.hero_desc', 'เลือก PORT ตามแพ็กเกจ เชื่อมต่อบัญชี MT5 และรันบอทเทรดทอง XAUUSD ได้ในที่เดียว') %></p>
+      <p class="mt5-hero-desc"><%= safeT('mt5.hero_desc', 'PORT แพ็กเกจเป็นของแต่ละ User — Login จะเลือกช่องว่างให้อัตโนมัติ ส่วน FolderPort บน VPS ใช้รัน MT5 ชั่วคราว แล้วรันบอททอง XAUUSD ได้ในที่เดียว') %></p>
       <div class="mt5-hero-tags">
         <span class="mt5-hero-tag">🥇 XAUUSD</span>
         <span class="mt5-hero-tag">⚡ <%= safeT('mt5.tag_auto', 'Auto Login') %></span>
@@ -88,8 +88,8 @@
   <section class="mt5-grid mt5-grid-2">
     <div class="mt5-card">
       <div class="mt5-card-head">
-        <h2><%= safeT('mt5.section_port', '1) PORT แพ็กเกจ — สำหรับ Run BOT') %></h2>
-        <span>แพ็กเกจให้ <%= includedPorts || 1 %> PORT (สูงสุด <%= packagePortRange || ('1 - ' + packageMaxPorts) %>) · ใช้ได้ <%= totalPorts %> PORT / Lot <%= packageLotMin %>-<%= packageLotMax %> · <b style="color:#7dd3fc">คลิก PORT พร้อมรัน = เลือกบัญชีเปิดบอท</b></span>
+        <h2><%= safeT('mt5.section_port', '1) PORT แพ็กเกจ (ของคุณ) — สำหรับ Run BOT') %></h2>
+        <span>ช่อง PORT 1–<%= totalPorts %> เป็นสิทธิ์ตามแพ็กเกจของ User นี้เท่านั้น · Lot <%= packageLotMin %>-<%= packageLotMax %> · <b style="color:#7dd3fc">คลิก PORT พร้อมรัน = เลือกบัญชีเปิดบอท</b></span>
       </div>
       <div class="port-list" id="mt5PortList">
         <% const activeBotAccountIds = new Set((activeRunInstances || []).map(function (r) { return Number(r.mt5_account_id || 0); }).filter(function (id) { return id > 0; })); %>
@@ -151,7 +151,7 @@
     <div class="mt5-card">
       <div class="mt5-card-head">
         <h2><%= safeT('mt5.section_login', '2) Login MT5') %></h2>
-        <span>Server: <%= fixedServer %> — ระบบหา FolderPort ว่าง (1–20) อัตโนมัติ · ไม่ต้องเลือก PORT</span>
+        <span>Server: <%= fixedServer %> — ระบบเลือก <b>PORT แพ็กเกจว่างของคุณ</b> + <b>FolderPort ว่างบน VPS</b> (1–20) อัตโนมัติ · ไม่ต้องเลือกเอง</span>
       </div>
 
 

@@ -820,6 +820,7 @@ async function handleMt5ConnectProduction(req, res) {
       if (fastEarlyErr) throw new Error(fastEarlyErr);
     }
 
+    // ชั้นที่ 1: PORT แพ็กเกจ (port_slot 1–N) — ของ user คนนี้ ถ้าช่องว่างเลือกอัตโนมัติ
     const retryAccount = retryAccountEarly || (await findRetryAccountForLogin(userId, mt5Login, serverName));
     let portSlot = Number(retryAccount?.port_slot || 0);
     if (portSlot && !(await isUserPortSlotAvailable(userId, portSlot, totalPorts))) {
@@ -830,6 +831,7 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
     }
 
+    // ชั้นที่ 2: FolderPort บน VPS (101–120) — ทรัพยากรร่วมของ VPS สำหรับเปิด MT5 ชั่วคราว
     const reserve = await reserveBestPort(userId);
     if (!reserve.ok) throw new Error(reserve.message);
     reservedPort = reserve.port;
