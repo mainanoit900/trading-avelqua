@@ -587,12 +587,8 @@ const {
 } = require('../lib/adminVpsPortPicker');
 const { reserveVpsPortForConnect, vpsPortFolderRegexForSlot } = require('../lib/mt5ReservePortForConnect');
 const { fetchVpsActiveLoginLoadMap } = require('../lib/vpsLoginLoad');
-const { setAdminAllocationStatus, parsePortNumber, resolveSystemVpsId, reconcilePortIdleWhenAgentFree } = require('../lib/adminVpsBridge');
-const {
-  buildStopMt5ReleasePayload,
-  systemPortNosForPackageSlot,
-  primarySystemPortForPackageSlot
-} = require('../lib/mt5PortCleanup');
+const { setAdminAllocationStatus, parsePortNumber, resolveSystemVpsId } = require('../lib/adminVpsBridge');
+const { clearFolderPortBinding } = require('../lib/mt5PortCleanup');
 
 async function reserveMt5Port(userId) {
   const adminReserve = await reserveAdminPortForLogin(userId);
@@ -2473,7 +2469,7 @@ router.post('/mt5/account/:id/edit', async (req, res) => {
   return res.redirect('/app/mt5');
 });
 
-/** หยุด BOT + ปิด MT5 ทันทีเมื่อผู้ใช้ลบ/ยกเลิก PORT (ไม่ต้องกด Stop ก่อน) */
+/** หยุด BOT + ปิด MT5 + เคลียร์ FolderPort เมื่อผู้ใช้ลบ/ยกเลิก PORT */
 async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_delete_port') {
   const accStop = await query(
     `
@@ -2488,46 +2484,18 @@ async function queueStopBotsAndMt5ForAccount(userId, accountId, reason = 'user_d
   ).catch(() => ({ rows: [] }));
   const accRow = accStop.rows?.[0];
   if (accRow) {
-    const stopNodeId = num(accRow.vps_id);
-    const stopPortNo = primarySystemPortForPackageSlot(
-      accRow.port_slot,
-      accRow.assigned_port_no,
-      accRow.windows_port_no
-    );
-    const folderPath = accRow.folder_path || null;
-    if (stopNodeId && stopPortNo) {
-      await query(
-        `
-        INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, port_id, command_type, payload, status, created_at, updated_at)
-        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW(), NOW())
-      `,
-        [
-          stopNodeId,
-          accRow.port_id || null,
-          JSON.stringify(
-            buildStopMt5ReleasePayload({
-              portNo: stopPortNo,
-              portSlot: accRow.port_slot,
-              assignedPortNo: accRow.assigned_port_no,
-              windowsPortNo: accRow.windows_port_no,
-              folderPath,
-              accountId,
-              mt5Login: accRow.mt5_login,
-              reason
-            })
-          )
-        ]
-      ).catch((e) => console.error('[PORT] stop_mt5 on delete/cancel:', e.message || e));
-
-      if (stopNodeId && stopPortNo) {
-        await query(`
-          UPDATE vps_system.vps_port_health
-          SET running=FALSE, mt5_login=NULL, balance=NULL, equity=NULL, updated_at=NOW()
-          WHERE node_id=$1 AND port_number=$2
-        `, [stopNodeId, stopPortNo]).catch(() => {});
-      }
-    }
+    await clearFolderPortBinding({
+      userId,
+      accountId,
+      vpsId: accRow.vps_id,
+      portId: accRow.port_id,
+      portSlot: accRow.port_slot,
+      assignedPortNo: accRow.assigned_port_no,
+      windowsPortNo: accRow.windows_port_no,
+      folderPath: accRow.folder_path,
+      mt5Login: accRow.mt5_login,
+      reason
+    }).catch((e) => console.error('[PORT] clearFolderPortBinding:', e.message || e));
   }
 
   const bots = await query(
@@ -2639,13 +2607,6 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
 
     const oldPort = old.rows[0];
     const stopNodeId = num(oldPort.vps_id);
-    const systemPortNos = systemPortNosForPackageSlot(
-      oldPort.port_slot,
-      oldPort.assigned_port_no,
-      oldPort.windows_port_no
-    );
-    const stopPortNo = systemPortNos[0] || 0;
-    const folderPath = oldPort.folder_path || null;
 
     await abortConnectForRemovedAccount(id, {
       vpsId: stopNodeId || null,
@@ -2653,43 +2614,7 @@ router.post('/mt5/account/:id/cancel', async (req, res) => {
       message: 'ยกเลิกเพราะผู้ใช้ยกเลิก PORT'
     }).catch((e) => console.error('[CANCEL] abort connect error:', e.message || e));
 
-    // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน
-    if (stopNodeId && stopPortNo) {
-      await query(`
-        INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, port_id, command_type, payload, status, created_at)
-        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
-      `, [
-        stopNodeId,
-        oldPort.port_id || null,
-        JSON.stringify(
-          buildStopMt5ReleasePayload({
-            portNo: stopPortNo,
-            portSlot: oldPort.port_slot,
-            assignedPortNo: oldPort.assigned_port_no,
-            windowsPortNo: oldPort.windows_port_no,
-            folderPath,
-            accountId: id,
-            reason: 'user_cancel_port_before_clear'
-          })
-        )
-      ]);
-      if (oldPort.port_id) {
-        await query(`
-          UPDATE vps_system.vps_ports
-          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
-          WHERE id=$1
-        `, [oldPort.port_id]).catch(() => {});
-      }
-      const { adminNodeId } = await resolveSystemVpsId(stopNodeId).catch(() => ({}));
-      await reconcilePortIdleWhenAgentFree(adminNodeId || stopNodeId, stopPortNo, folderPath, {
-        accountId: id,
-        userId,
-        portSlot: oldPort.port_slot
-      }).catch(() => {});
-    }
-
-    // STEP 3: ค่อยล้างค่าใน DB
+    // STEP 2: ล้างค่าใน DB
     await query(`
       UPDATE vps_system.mt5_accounts
       SET status='cancelled',
@@ -2743,13 +2668,6 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
 
     const oldPort = old.rows[0];
     const stopNodeId = num(oldPort.vps_id);
-    const slotNo = num(oldPort.port_slot);
-    const systemPortNos = systemPortNosForPackageSlot(
-      slotNo,
-      oldPort.assigned_port_no,
-      oldPort.windows_port_no
-    );
-    const folderPath = oldPort.folder_path || null;
 
     await abortConnectForRemovedAccount(id, {
       vpsId: stopNodeId || null,
@@ -2776,58 +2694,7 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
       [userId, id]
     ).catch(() => {});
 
-    // STEP 2: ส่งคำสั่งให้ Agent ปิด terminal64 ก่อน + release pool
-    if (stopNodeId && systemPortNos.length) {
-      for (const stopPortNo of systemPortNos) {
-        await query(`
-        INSERT INTO vps_system.vps_agent_commands
-        (vps_id, node_id, port_id, command_type, payload, status, created_at)
-        VALUES ($1, $1, $2, 'stop_mt5', $3::jsonb, 'pending', NOW())
-      `, [
-          stopNodeId,
-          oldPort.port_id || null,
-          JSON.stringify(
-            buildStopMt5ReleasePayload({
-              portNo: stopPortNo,
-              portSlot: oldPort.port_slot,
-              assignedPortNo: oldPort.assigned_port_no,
-              windowsPortNo: oldPort.windows_port_no,
-              folderPath,
-              accountId: id,
-              reason: 'user_delete_port'
-            })
-          )
-        ]).catch((e) => console.error('[DELETE] cmd insert error:', e.message || e));
-      }
-      if (oldPort.port_id) {
-        await query(`
-          UPDATE vps_system.vps_ports
-          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
-          WHERE id=$1
-        `, [oldPort.port_id]).catch((err) =>
-          console.error('[DELETE] release vps_ports by id error:', err.message || err)
-        );
-      }
-      if (stopNodeId && systemPortNos.length) {
-        await query(`
-          UPDATE vps_system.vps_ports
-          SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
-          WHERE vps_id=$1 AND port_no = ANY($2::int[])
-        `, [stopNodeId, systemPortNos]).catch((err) =>
-          console.error('[DELETE] release vps_ports error:', err.message || err)
-        );
-      }
-      await query(`
-        UPDATE vps_system.vps_ports
-        SET status='available', locked_by_user_id=NULL, locked_until=NULL, updated_at=NOW()
-        WHERE locked_by_user_id=$1
-          AND ($2::bigint <= 0 OR vps_id=$2)
-      `, [userId, stopNodeId]).catch((err) =>
-        console.error('[DELETE] release user port locks error:', err.message || err)
-      );
-    }
-
-    // STEP 3: ค่อยล้างค่าใน DB (port_slot ต้อง NULL — ไม่งั้น repair จะฟื้นบัญชีกลับ)
+    // STEP 2: ล้างค่าใน DB (port_slot ต้อง NULL — ไม่งั้น repair จะฟื้นบัญชีกลับ)
     await query(`
       UPDATE vps_system.mt5_accounts
       SET status='deleted',
