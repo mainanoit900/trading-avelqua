@@ -653,32 +653,8 @@ async function findRetryPortForLogin(userId, mt5Login, serverName) {
 
 /** ปล่อยแถว mt5_accounts ที่ค้างบน vps+port เดียวกัน (กัน uq_mt5_running_vps_port ตอน INSERT) */
 async function releaseStaleVpsPortAccounts(vpsId, portNo, keepAccountId = null) {
-  if (!vpsId || !portNo) return;
-  const params = [vpsId, portNo];
-  let sql = `
-    UPDATE vps_system.mt5_accounts
-    SET status='expired',
-        assigned_port_no=NULL,
-        windows_port_no=NULL,
-        vps_id=NULL,
-        port_id=NULL,
-        last_login_message='ถูกแทนที่ด้วยการเชื่อมต่อใหม่',
-        updated_at=NOW()
-    WHERE vps_id=$1
-      AND assigned_port_no=$2
-      AND LOWER(COALESCE(status, '')) IN ('connecting', 'checking', 'starting', 'connected', 'ready')
-      AND NOT EXISTS (
-        SELECT 1 FROM vps_system.bot_instances bi
-        WHERE bi.mt5_account_id = vps_system.mt5_accounts.id
-          AND bi.stopped_at IS NULL
-          AND LOWER(TRIM(COALESCE(bi.status, ''))) IN ('running', 'pending', 'restarting', 'starting', 'connecting')
-      )
-  `;
-  if (keepAccountId) {
-    params.push(keepAccountId);
-    sql += ` AND id <> $${params.length}`;
-  }
-  await query(sql, params).catch(() => {});
+  const { clearVpsPortPromotionBlockers } = require('../lib/mt5PortSlotGuard');
+  await clearVpsPortPromotionBlockers(vpsId, portNo, keepAccountId).catch(() => 0);
 }
 
 async function releasePort(portId, message = '') {
