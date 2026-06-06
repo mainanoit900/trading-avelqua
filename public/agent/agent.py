@@ -93,7 +93,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-journal-auth-gate-v134"
+AGENT_BUILD_ID = "2026-06-06-bot-run-ini-login-v135"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4641,6 +4641,9 @@ def automate_mt5_login_server_form(
         .replace("~", "{~}")
         .replace("(", "{(}")
         .replace(")", "{)}")
+        .replace("*", "{*}")
+        .replace("[", "{[}")
+        .replace("]", "{]}")
         .replace("{", "{{")
         .replace("}", "}}")
     )
@@ -4917,6 +4920,16 @@ def _journal_server_auth_failed(text: str, since_ts: float, server: str = LOCKED
         if "authorization on" in low and "failed" in low:
             return True
     return False
+
+
+def _payload_login_already_verified(payload: Optional[Dict[str, Any]]) -> bool:
+    """Phase 1 login ผ่าน Journal แล้ว — bot run ใช้ startup.ini ไม่พิมพ์รหัสซ้ำผ่าน SendKeys"""
+    if not payload:
+        return False
+    flag = payload_get(payload, "loginVerified", "login_verified")
+    if str(flag).lower() in ("1", "true", "yes"):
+        return True
+    return str(payload_get(payload, "purposeType", "purpose_type") or "").strip().lower() == "bot_run"
 
 
 def _title_fallback_denied_by_journal(
@@ -6534,34 +6547,41 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     except Exception as dedupe_err:
         log(f"RUN BOT DEDUPE ERROR port={port}: {dedupe_err}")
     journal_since = time.time()
-    log(f"RUN BOT LAUNCH port={port} login={login} expert={startup_expert or '-'} period={period}")
-    token = acquire_login_ui_lock(port, timeout_sec=45)
-    try:
-        time.sleep(0.5)
-        automate_mt5_login_server_form(
-            login,
-            password,
-            server,
-            port_dir=port_dir,
-            process_id=proc_pid,
-        )
-    finally:
-        release_login_ui_lock(port, token)
-
-    try:
-        ensure_single_portable_mt5_for_port(
-            port_dir,
-            keep_pid=(int(proc_pid) if proc_pid else None),
-            login=login,
-            reason="run_bot_post_login_form",
-        )
-    except Exception as dedupe_err:
-        log(f"RUN BOT POST LOGIN DEDUPE ERROR port={port}: {dedupe_err}")
-
+    login_verified_phase1 = _payload_login_already_verified(payload)
+    log(
+        f"RUN BOT LAUNCH port={port} login={login} expert={startup_expert or '-'} "
+        f"period={period} verified_phase1={int(login_verified_phase1)}"
+    )
     journal_timeout = int(
         payload_get(payload, "journalTimeoutSec", "journal_timeout_sec")
         or os.getenv("AVELQUA_JOURNAL_TIMEOUT_SEC", "45")
     )
+    if login_verified_phase1:
+        # Login ผ่าน Journal แล้ว — ใช้ startup.ini auto-login เท่านั้น (SendKeys ทำลายรหัสที่มี * ฯลฯ)
+        time.sleep(float(os.getenv("AVELQUA_RUN_BOT_INI_LOGIN_SEC", "2.0")))
+    else:
+        token = acquire_login_ui_lock(port, timeout_sec=45)
+        try:
+            time.sleep(0.5)
+            automate_mt5_login_server_form(
+                login,
+                password,
+                server,
+                port_dir=port_dir,
+                process_id=proc_pid,
+            )
+        finally:
+            release_login_ui_lock(port, token)
+        try:
+            ensure_single_portable_mt5_for_port(
+                port_dir,
+                keep_pid=(int(proc_pid) if proc_pid else None),
+                login=login,
+                reason="run_bot_post_login_form",
+            )
+        except Exception as dedupe_err:
+            log(f"RUN BOT POST LOGIN DEDUPE ERROR port={port}: {dedupe_err}")
+
     login_ok, login_msg, journal_chunk = wait_mt5_login_hybrid(
         port, payload, port_dir, login, journal_since, proc_pid, journal_timeout
     )

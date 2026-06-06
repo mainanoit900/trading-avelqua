@@ -3261,6 +3261,9 @@ router.post('/mt5/run', async (req, res) => {
       portSlot: account.port_slot || 1,
       keepMt5Open: true,
       stopTradingOnly: false,
+      loginVerified: !!account.login_verified,
+      login_verified: !!account.login_verified,
+      purposeType: 'bot_run',
       currencyScale,
       currencyUnit,
       queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
