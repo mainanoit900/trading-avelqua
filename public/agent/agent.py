@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-agent-fast-restart-v127"
+AGENT_BUILD_ID = "2026-06-06-service-restart-fix-v128"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -3990,15 +3990,14 @@ def mt5_api_global_file_lock(timeout_sec: float = 45.0):
     try:
         yield acquired
     finally:
-        if not acquired:
-            return
-        try:
-            if lock_file.exists():
-                current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
-                if current == token or current.startswith(f"{os.getpid()}:"):
-                    lock_file.unlink(missing_ok=True)
-        except Exception:
-            pass
+        if acquired:
+            try:
+                if lock_file.exists():
+                    current = lock_file.read_text(encoding="utf-8", errors="ignore").strip()
+                    if current == token or current.startswith(f"{os.getpid()}:"):
+                        lock_file.unlink(missing_ok=True)
+            except Exception:
+                pass
 
 
 def count_running_mt5_terminals() -> int:
@@ -6631,12 +6630,28 @@ def restart_service_later(service_name: str, exit_process: bool = True) -> None:
     _LAST_DEPLOY_RESTART_AT = time.time()
     sleep_sec = float(os.getenv("AVELQUA_SERVICE_RESTART_DELAY_SEC", "0.5"))
     exit_delay = float(os.getenv("AVELQUA_SERVICE_EXIT_DELAY_SEC", "1"))
+    restart_log = str(AGENT_DIR / "logs" / "service-restart.log")
     ps = (
+        f"$svc='{service_name}'; $log='{restart_log}'; "
+        f"function W($m){{Add-Content -Path $log -Value ((Get-Date -Format 'yyyy-MM-dd HH:mm:ss')+' '+$m)}}; "
         f"Start-Sleep -Seconds {sleep_sec}; "
-        f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue; "
-        f"if (-not (Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue | "
-        f"Where-Object {{ $_.Status -eq 'Running' }}) ) {{ "
-        f"net stop {service_name}; net start {service_name} }}"
+        f"try {{ "
+        f"  $s=Get-Service -Name $svc -ErrorAction Stop; "
+        f"  if ($s.StartType -eq 'Disabled') {{ "
+        f"    Set-Service -Name $svc -StartupType Automatic; W 'enabled service (was Disabled)' "
+        f"  }} "
+        f"}} catch {{ W ('get-service: '+$_.Exception.Message) }}; "
+        f"$nssm=Get-Command nssm -ErrorAction SilentlyContinue; "
+        f"if ($nssm) {{ & nssm restart $svc 2>&1 | ForEach-Object {{ W $_ }}; Start-Sleep -Seconds 1 }}; "
+        f"Restart-Service -Name $svc -Force -ErrorAction SilentlyContinue; "
+        f"Start-Sleep -Seconds 1; "
+        f"$r=Get-Service -Name $svc -ErrorAction SilentlyContinue; "
+        f"if (-not $r -or $r.Status -ne 'Running') {{ "
+        f"  sc.exe config $svc start= auto; "
+        f"net stop $svc 2>$null; net start $svc 2>&1 | ForEach-Object {{ W $_ }} "
+        f"}}; "
+        f"$f=Get-Service -Name $svc -ErrorAction SilentlyContinue; "
+        f"W ('final status='+(if($f){{$f.Status}}else{{'missing'}})+' startType='+(if($f){{$f.StartType}}else{{'?'}}))"
     )
     subprocess.Popen(
         ["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", ps],
@@ -6835,7 +6850,10 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype in ("restart_agent", "restart_service"):
             skip_sec = float(os.getenv("AVELQUA_RESTART_AGENT_SKIP_SEC", "90"))
-            if time.time() - _LAST_DEPLOY_RESTART_AT < skip_sec:
+            force_restart = payload_get(payload, "force", "forceRestart", default=False) in (
+                True, 1, "1", "true", "yes"
+            )
+            if not force_restart and time.time() - _LAST_DEPLOY_RESTART_AT < skip_sec:
                 log(
                     f"RESTART_AGENT SKIPPED recent_deploy_restart "
                     f"age_sec={time.time() - _LAST_DEPLOY_RESTART_AT:.1f}"
