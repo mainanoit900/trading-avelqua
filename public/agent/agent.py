@@ -83,7 +83,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-desktop-task-restart-v129"
+AGENT_BUILD_ID = "2026-06-06-bot-dedupe-fix-v130"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -675,6 +675,41 @@ def mt5_processes_for_port_dir(port_dir: Path) -> List[Any]:
     return out
 
 
+def _reserved_login_for_port_dir(port_dir: Path) -> str:
+    try:
+        text = port_folder_reservation_path(port_dir).read_text(encoding="utf-8", errors="ignore")
+        m = re.search(r"login=(\d+)", text)
+        return str(m.group(1) if m else "").strip()
+    except Exception:
+        return ""
+
+
+def _mt5_proc_keep_score(proc: Any, port_dir: Path, keep_pid: Optional[int] = None) -> float:
+    """เลือก process ที่ควรเก็บ — หน้าต่างมี login ถูกต้อง สำคัญกว่า create_time อย่างเดียว."""
+    try:
+        pid = int(getattr(proc, "pid", 0) or 0)
+    except Exception:
+        return 0.0
+    if keep_pid and pid == int(keep_pid):
+        return 10_000_000_000.0
+    score = 0.0
+    if read_avelqua_trading_gate(port_dir):
+        score += 50_000_000.0
+    hwnd, title = _mt5_main_hwnd_from_ps(pid)
+    if hwnd:
+        score += 100_000_000.0
+    if title:
+        score += 10_000_000.0
+        expected_login = _reserved_login_for_port_dir(port_dir)
+        if expected_login and expected_login in title:
+            score += 500_000_000.0
+    try:
+        score += float(proc.create_time() or 0.0)
+    except Exception:
+        pass
+    return score
+
+
 def enforce_single_mt5_process_for_port_dir(
     port_dir: Path,
     keep_pid: Optional[int] = None,
@@ -684,23 +719,7 @@ def enforce_single_mt5_process_for_port_dir(
     if len(procs) <= 1:
         return {"ok": True, "killed": [], "kept": [int(getattr(p, "pid", 0) or 0) for p in procs]}
 
-    def _score(proc: Any) -> float:
-        try:
-            return float(proc.create_time() or 0.0)
-        except Exception:
-            return 0.0
-
-    keep_proc = None
-    if keep_pid:
-        for proc in procs:
-            try:
-                if int(getattr(proc, "pid", 0) or 0) == int(keep_pid):
-                    keep_proc = proc
-                    break
-            except Exception:
-                pass
-    if keep_proc is None:
-        keep_proc = sorted(procs, key=_score, reverse=True)[0]
+    keep_proc = max(procs, key=lambda p: _mt5_proc_keep_score(p, port_dir, keep_pid))
 
     keep_id = int(getattr(keep_proc, "pid", 0) or 0)
     killed: List[int] = []
@@ -825,11 +844,13 @@ def send_port_health():
             now - _PORT_HEALTH_DEDUPE_LAST_AT >= dedupe_interval
             and now - AGENT_STARTED_AT >= startup_grace
         )
-        if run_heavy_dedupe:
+        if run_heavy_dedupe and not any_priority_connect_worker_running():
             _PORT_HEALTH_DEDUPE_LAST_AT = now
             for folder in sorted(mt5_root.glob("*PORT*")):
                 try:
                     if not folder.is_dir():
+                        continue
+                    if read_avelqua_trading_gate(folder):
                         continue
                     if port_folder_reserved_idle(folder) and mt5_processes_for_port_dir(folder):
                         port_no = extract_port_no(str(folder))
@@ -840,7 +861,7 @@ def send_port_health():
                             reason="port_health_reserved_idle",
                             max_wait_sec=2.0,
                         )
-                    else:
+                    elif not read_avelqua_trading_gate(folder):
                         enforce_single_mt5_process_for_port_dir(folder, reason="port_health_sweep")
                 except Exception as dedupe_err:
                     log(f"PORT HEALTH DEDUPE ERROR folder={folder}: {dedupe_err}")
@@ -6262,17 +6283,15 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if login and password:
         try:
             if mt5_processes_for_port_dir(port_dir):
-                stop_mt5_port_only(port, payload)
-                # Wait until all MT5 processes are actually dead before clearing files
-                # (accounts.dat file lock released only after process fully terminates)
+                kill_all_mt5_for_port_dir(
+                    port,
+                    port_dir,
+                    payload,
+                    reason="run_bot_prelaunch",
+                    max_wait_sec=8.0,
+                )
                 _kill_deadline = time.time() + 4.0
-                while time.time() < _kill_deadline:
-                    remaining = mt5_processes_for_port_dir(port_dir)
-                    if not remaining:
-                        break
-                    for _p in remaining:
-                        with contextlib.suppress(Exception):
-                            _p.kill()
+                while time.time() < _kill_deadline and mt5_processes_for_port_dir(port_dir):
                     time.sleep(0.3)
             clear_mt5_port_session(port_dir)
             clear_mt5_login_cache(port_dir)
