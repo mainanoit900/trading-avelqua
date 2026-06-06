@@ -806,10 +806,29 @@ async function handleMt5ConnectProduction(req, res) {
 
     const inFlight = await findInFlightLoginCommand({ userId, mt5Login, serverName });
     if (inFlight?.id) {
+      const inFlightAccountId = Number(inFlight.account_id || 0) || null;
+      if (inFlightAccountId) {
+        await query(
+          `
+          UPDATE vps_system.mt5_accounts
+          SET status = CASE
+                WHEN LOWER(COALESCE(status, '')) = 'ready' THEN 'connecting'
+                ELSE status
+              END,
+              last_login_message = COALESCE(NULLIF(last_login_message, ''), 'กำลังเปิด MT5 และ Login...'),
+              connect_started_at = COALESCE(connect_started_at, NOW()),
+              updated_at = NOW()
+          WHERE id = $1
+            AND user_id = $2
+            AND LOWER(COALESCE(status, '')) IN ('ready', 'connecting', 'checking', 'starting')
+        `,
+          [inFlightAccountId, userId]
+        ).catch(() => {});
+      }
       return res.json({
         ok: true,
         status: 'queued',
-        accountId: Number(inFlight.account_id || 0) || null,
+        accountId: inFlightAccountId,
         attemptId: String(inFlight.attempt_id || '').trim() || null,
         commandId: Number(inFlight.id || 0) || null,
         vpsId: Number(inFlight.vps_id || 0) || null,

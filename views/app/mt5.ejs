@@ -1907,6 +1907,13 @@
         return;
       }
       if (stWait === 'connecting' || stWait === 'checking' || stWait === 'starting' || data.pending || data.checking) {
+        if (typeof window.refreshMt5PortCards === 'function') {
+          const now = Date.now();
+          if (!window.__mt5PortRefreshDuringConnect || now - window.__mt5PortRefreshDuringConnect > 2000) {
+            window.__mt5PortRefreshDuringConnect = now;
+            window.refreshMt5PortCards();
+          }
+        }
         const btn = document.getElementById('mt5ConnectBtn');
         const previewBox = document.getElementById('mt5LoginPreview');
         const previewImg = document.getElementById('mt5PreviewImg');

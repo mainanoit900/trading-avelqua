@@ -1787,6 +1787,7 @@ router.get('/mt5/ports-state', requireLogin, async (req, res) => {
     if (!isPoll) {
       await repairUserMt5PortBindings(userId).catch(() => {});
     }
+    await repairUserMt5AccountStatuses(userId).catch(() => {});
     const summary = await getPortSummaryReadOnly(userId);
     const accounts = await safeQuery(
       `
