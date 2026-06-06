@@ -872,7 +872,14 @@ async function handleMt5ConnectProduction(req, res) {
     });
 
     const accountId = Number(acc.id || 0);
-    if (!accountId) throw new Error('ไม่สามารถบันทึกบัญชี MT5 สำหรับ PORT นี้ได้');
+    if (!accountId) {
+      const detail = String(acc.mode || '').trim();
+      throw new Error(
+        detail
+          ? `ไม่สามารถบันทึกบัญชี MT5 สำหรับ PORT นี้ได้ (${detail})`
+          : 'ไม่สามารถบันทึกบัญชี MT5 สำหรับ PORT นี้ได้'
+      );
+    }
     await releaseStaleVpsPortAccounts(reservedPort.vps_id, allocPortNo, accountId);
     await clearOtherAccountsOnPortSlot(query, userId, portSlot, accountId);
 
