@@ -83,7 +83,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-bot-mohicans-dedupe-v131"
+AGENT_BUILD_ID = "2026-06-06-connect-fail-notify-v132"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4838,6 +4838,36 @@ def check_mt5_journal_login_result(
     return False, JOURNAL_TIMEOUT_MSG, ""
 
 
+def _journal_server_auth_failed(text: str, since_ts: float, server: str = LOCKED_MT5_SERVER) -> bool:
+    """authorization failed บน Server นี้ — ไม่จำกัดเลข login ตรงกับที่ส่งมา"""
+    server_s = str(server or LOCKED_MT5_SERVER).strip()
+    if not text or not server_s:
+        return False
+    server_esc = re.escape(server_s)
+    fail_rx = re.compile(rf"authorization on\s+{server_esc}\s+failed\b", re.I)
+    for line in text.splitlines():
+        low = line.lower()
+        if server_s.lower() not in low:
+            continue
+        if since_ts:
+            m = re.match(r"^(\d{4})\.(\d{2})\.(\d{2})\s+(\d{2}):(\d{2}):(\d{2})", line.strip())
+            if m:
+                try:
+                    line_ts = datetime(
+                        int(m.group(1)), int(m.group(2)), int(m.group(3)),
+                        int(m.group(4)), int(m.group(5)), int(m.group(6)),
+                    ).timestamp()
+                    if line_ts < float(since_ts) - 5.0:
+                        continue
+                except Exception:
+                    pass
+        if fail_rx.search(line):
+            return True
+        if "authorization on" in low and "failed" in low:
+            return True
+    return False
+
+
 def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[Optional[bool], str]:
     """อ่าน journal ครั้งเดียว — True/False/None(ยังไม่รู้)"""
     login = str(login).strip()
@@ -4887,6 +4917,9 @@ def _quick_journal_probe(port_dir: Path, login: str, since_ts: float) -> Tuple[O
         return None, ""
     uniq.sort(key=lambda p: p.stat().st_mtime, reverse=True)
     chunk = _read_log_tail(uniq[0])
+    if _journal_server_auth_failed(chunk, since_ts, LOCKED_MT5_SERVER):
+        log(f"MT5 JOURNAL SERVER AUTH FAIL login={login} server={LOCKED_MT5_SERVER}")
+        return False, chunk
     outcome = _journal_outcome_for_login(chunk, login, failed_words, LOCKED_MT5_SERVER)
     if outcome is True:
         return True, chunk
