@@ -791,7 +791,13 @@ async function handleMt5ConnectProduction(req, res) {
       throw new Error(`PORT ตามแพ็กเกจเต็มแล้ว (${usedPorts}/${totalPorts})`);
     }
 
-    // ชั้นที่ 2: FolderPort บน VPS (101–120) — ทรัพยากรร่วมของ VPS สำหรับเปิด MT5 ชั่วคราว
+    lockKey = userLockKey(userId, portSlot);
+    const locked = await redis.set(lockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
+    if (!locked) {
+      throw new Error(`PORT ${portSlot} กำลังเชื่อมต่ออยู่ กรุณารอสักครู่`);
+    }
+
+    // ชั้นที่ 2: FolderPort บน VPS (101–120) — จองคนละพอร์ตเมื่อ login พร้อมกัน
     const reserve = await reserveBestPort(userId);
     if (!reserve.ok) throw new Error(reserve.message);
     reservedPort = reserve.port;
@@ -802,12 +808,6 @@ async function handleMt5ConnectProduction(req, res) {
         accountId: retryAccount.account_id,
         mt5Login
       });
-    }
-
-    lockKey = userLockKey(userId, 0);
-    const locked = await redis.set(lockKey, '1', 'NX', 'EX', USER_LOCK_TTL);
-    if (!locked) {
-      throw new Error('กำลังเชื่อมต่อ MT5 อยู่ กรุณารอสักครู่');
     }
 
     const allocPortNo = resolveConnectAllocPortNo(reservedPort, portSlot);
