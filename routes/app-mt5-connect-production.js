@@ -40,11 +40,6 @@ const {
   countActiveLoginsOnVps
 } = require('../lib/mt5MultiPortLogin');
 const { startBotRunPhase2 } = require('../lib/mt5BotRunPhase2');
-const {
-  tryCachedEquityFastConnect,
-  fastConnectErrorMessage
-} = require('../lib/mt5CachedEquityLogin');
-
 const PUBLIC_CALLBACK_BASE = (process.env.AVELQUA_PUBLIC_URL || 'https://trading.avelqua.com').replace(/\/$/, '');
 
 const router = express.Router();
@@ -746,9 +741,8 @@ async function handleMt5ConnectProduction(req, res) {
     }
 
     const retryAccountEarly = await findRetryAccountForLogin(userId, mt5Login, serverName);
-    let portSlotForFast = Number(retryAccountEarly?.port_slot || 0) || (await getNextUserSlot(userId, totalPorts));
 
-    // กัน login_mt5 ผีค้างคิวจากรอบก่อน (เคส fast-login แล้ว Agent มาเปิด MT5 ซ้อน)
+    // กัน login_mt5 ผีค้างคิวจากรอบก่อน
     await cancelPendingLoginCommands({ mt5Login });
 
     const inFlight = await findInFlightLoginCommand({ userId, mt5Login, serverName });
@@ -784,40 +778,6 @@ async function handleMt5ConnectProduction(req, res) {
         portSlot: Number(inFlight.port_slot || 0) || null,
         message: 'ระบบกำลังเปิด MT5 อยู่ กรุณารอสักครู่...'
       });
-    }
-
-    if (portSlotForFast) {
-      const fastEarly = await tryCachedEquityFastConnect({
-        userId,
-        mt5Login,
-        mt5Password,
-        serverName,
-        portSlot: portSlotForFast
-      });
-      if (fastEarly.ok) {
-        await cancelPendingLoginCommands({
-          portId: fastEarly.portId || null,
-          accountId: fastEarly.accountId || null,
-          mt5Login
-        });
-        return res.json({
-          ok: true,
-          status: 'connected',
-          connected: true,
-          fastPath: true,
-          metricsReady: true,
-          accountId: fastEarly.accountId,
-          portSlot: fastEarly.portSlot || portSlotForFast,
-          vpsId: fastEarly.vpsId || null,
-          portId: fastEarly.portId || null,
-          portNo: fastEarly.portNo || null,
-          balance: fastEarly.balance,
-          equity: fastEarly.equity,
-          message: fastEarly.message
-        });
-      }
-      const fastEarlyErr = fastConnectErrorMessage(fastEarly.reason, mt5Login);
-      if (fastEarlyErr) throw new Error(fastEarlyErr);
     }
 
     // ชั้นที่ 1: PORT แพ็กเกจ (port_slot 1–N) — ของ user คนนี้ ถ้าช่องว่างเลือกอัตโนมัติ
