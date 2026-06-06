@@ -82,7 +82,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-06-login-exit-kill-all-v126"
+AGENT_BUILD_ID = "2026-06-06-agent-fast-restart-v127"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -226,6 +226,10 @@ _NET_IO_SAMPLE: Dict[str, float] = {"ts": 0.0, "bytes_sent": 0.0, "bytes_recv": 
 ACTIVE_CONNECT_WORKERS: Dict[str, subprocess.Popen] = {}
 ACTIVE_CONNECT_WORKER_CTYPES: Dict[str, str] = {}
 ACTIVE_CONNECT_WORKERS_LOCK = threading.Lock()
+AGENT_STARTED_AT = time.time()
+_LAST_DEPLOY_RESTART_AT = 0.0
+_PORT_HEALTH_LAST_AT = 0.0
+_PORT_HEALTH_DEDUPE_LAST_AT = 0.0
 MT5_API_LOCK = threading.Lock()  # legacy fallback when port unknown
 MT5_API_FILE_LOCK = AGENT_DIR / "mt5-api-global.lock"
 _MT5_API_LOCKS: Dict[int, threading.Lock] = {}
@@ -800,6 +804,13 @@ def close_all_positions_mt5_api(port: Any, payload: Optional[Dict[str, Any]] = N
 
 
 def send_port_health():
+    global _PORT_HEALTH_LAST_AT, _PORT_HEALTH_DEDUPE_LAST_AT
+    now = time.time()
+    health_interval = float(os.getenv("AVELQUA_PORT_HEALTH_INTERVAL_SEC", "25"))
+    if now - _PORT_HEALTH_LAST_AT < health_interval:
+        return
+    _PORT_HEALTH_LAST_AT = now
+
     ports = []
 
     try:
@@ -807,22 +818,31 @@ def send_port_health():
 
         running_map = {}
 
-        for folder in sorted(mt5_root.glob("*PORT*")):
-            try:
-                if not folder.is_dir():
-                    continue
-                if port_folder_reserved_idle(folder) and mt5_processes_for_port_dir(folder):
-                    port_no = extract_port_no(str(folder))
-                    kill_all_mt5_for_port_dir(
-                        port_no,
-                        folder,
-                        {"vpsFolderPath": str(folder), "folder_path": str(folder)},
-                        reason="port_health_reserved_idle",
-                    )
-                else:
-                    enforce_single_mt5_process_for_port_dir(folder, reason="port_health_sweep")
-            except Exception as dedupe_err:
-                log(f"PORT HEALTH DEDUPE ERROR folder={folder}: {dedupe_err}")
+        dedupe_interval = float(os.getenv("AVELQUA_PORT_HEALTH_DEDUPE_INTERVAL_SEC", "120"))
+        startup_grace = float(os.getenv("AVELQUA_AGENT_STARTUP_GRACE_SEC", "45"))
+        run_heavy_dedupe = (
+            now - _PORT_HEALTH_DEDUPE_LAST_AT >= dedupe_interval
+            and now - AGENT_STARTED_AT >= startup_grace
+        )
+        if run_heavy_dedupe:
+            _PORT_HEALTH_DEDUPE_LAST_AT = now
+            for folder in sorted(mt5_root.glob("*PORT*")):
+                try:
+                    if not folder.is_dir():
+                        continue
+                    if port_folder_reserved_idle(folder) and mt5_processes_for_port_dir(folder):
+                        port_no = extract_port_no(str(folder))
+                        kill_all_mt5_for_port_dir(
+                            port_no,
+                            folder,
+                            {"vpsFolderPath": str(folder), "folder_path": str(folder)},
+                            reason="port_health_reserved_idle",
+                            max_wait_sec=2.0,
+                        )
+                    else:
+                        enforce_single_mt5_process_for_port_dir(folder, reason="port_health_sweep")
+                except Exception as dedupe_err:
+                    log(f"PORT HEALTH DEDUPE ERROR folder={folder}: {dedupe_err}")
 
         for p in psutil.process_iter(["pid", "name", "exe", "cmdline"]):
             try:
@@ -1160,6 +1180,7 @@ def kill_all_mt5_for_port_dir(
     payload: Optional[Dict[str, Any]] = None,
     *,
     reason: str = "kill_all",
+    max_wait_sec: Optional[float] = None,
 ) -> Dict[str, Any]:
     """ปิด terminal64 ทุกตัวของ PORT นี้ (รวม cross-session) จนไม่เหลือค้าง."""
     kill_payload = dict(payload or {})
@@ -1172,7 +1193,8 @@ def kill_all_mt5_for_port_dir(
     stopped: List[int] = []
     taskkill: List[Dict[str, Any]] = []
     root_esc = port_dir_path_prefix(port_dir).replace("'", "''").lower()
-    deadline = time.time() + float(os.getenv("AVELQUA_KILL_ALL_MT5_TIMEOUT_SEC", "8"))
+    wait_budget = max_wait_sec if max_wait_sec is not None else float(os.getenv("AVELQUA_KILL_ALL_MT5_TIMEOUT_SEC", "8"))
+    deadline = time.time() + max(1.0, float(wait_budget))
 
     while time.time() < deadline:
         if os.name == "nt" and root_esc:
@@ -6602,11 +6624,15 @@ def poll_running_mt5_list() -> None:
 
 def restart_service_later(service_name: str, exit_process: bool = True) -> None:
     """รีสตาร์ท Windows Service แล้วออกจาก process ปัจจุบันให้ SCM โหลด agent.py ใหม่"""
+    global _LAST_DEPLOY_RESTART_AT
     if os.name != "nt":
         log("SERVICE RESTART SKIPPED: not Windows")
         return
+    _LAST_DEPLOY_RESTART_AT = time.time()
+    sleep_sec = float(os.getenv("AVELQUA_SERVICE_RESTART_DELAY_SEC", "0.5"))
+    exit_delay = float(os.getenv("AVELQUA_SERVICE_EXIT_DELAY_SEC", "1"))
     ps = (
-        f"Start-Sleep -Seconds 2; "
+        f"Start-Sleep -Seconds {sleep_sec}; "
         f"Restart-Service -Name '{service_name}' -Force -ErrorAction SilentlyContinue; "
         f"if (-not (Get-Service -Name '{service_name}' -ErrorAction SilentlyContinue | "
         f"Where-Object {{ $_.Status -eq 'Running' }}) ) {{ "
@@ -6620,7 +6646,7 @@ def restart_service_later(service_name: str, exit_process: bool = True) -> None:
 
     if exit_process:
         def _exit_after_delay() -> None:
-            time.sleep(4)
+            time.sleep(max(0.5, exit_delay))
             log("AGENT EXIT after deploy/restart — loading new agent.py on service start")
             os._exit(0)
 
@@ -6720,7 +6746,11 @@ def update_agent_script(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     log(f"PYTHON AGENT UPDATED path={agent_path} backup={backup} build={build_id}")
 
-    restart_service_later(service_name)
+    restart_flag = str(
+        payload_get(payload, "restartService", "restart_service", default="true") or "true"
+    ).lower() in ("1", "true", "yes")
+    if restart_flag:
+        restart_service_later(service_name)
 
     return {
         "action": "update_agent_script",
@@ -6804,6 +6834,18 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             command_result(cmd_id, True, update_agent_script(payload))
 
         elif ctype in ("restart_agent", "restart_service"):
+            skip_sec = float(os.getenv("AVELQUA_RESTART_AGENT_SKIP_SEC", "90"))
+            if time.time() - _LAST_DEPLOY_RESTART_AT < skip_sec:
+                log(
+                    f"RESTART_AGENT SKIPPED recent_deploy_restart "
+                    f"age_sec={time.time() - _LAST_DEPLOY_RESTART_AT:.1f}"
+                )
+                command_result(cmd_id, True, {
+                    "action": "restart_agent",
+                    "service_name": SERVICE_NAME,
+                    "restart": "skipped_recent_deploy",
+                })
+                return
             command_result(cmd_id, True, {
                 "action": "restart_agent",
                 "service_name": SERVICE_NAME,
@@ -7292,6 +7334,8 @@ def run_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> int:
         log(f"CONNECT WORKER STOP port={port} cmd_id={cmd_id} pid={os.getpid()}")
 
 def main() -> None:
+    global AGENT_STARTED_AT
+    AGENT_STARTED_AT = time.time()
     log(f"PYTHON AGENT START Service={SERVICE_NAME} Computer={platform.node()} Server={SERVER_URL}")
 
     if AGENT_TOKEN == "PUT_YOUR_AGENT_TOKEN_HERE":

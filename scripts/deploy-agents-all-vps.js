@@ -40,7 +40,7 @@ async function main() {
   }
 
   console.log(
-    `DONE: ${out.count} node(s) — Agent จะอัปเดต + Reset (หยุด MT5 ค้าง) + Restart-Service บน Windows ภายใน 1–3 นาที`
+    `DONE: ${out.count} node(s) — Agent จะอัปเดต + Restart-Service บน Windows ภายใน ~30–60 วินาที`
   );
 }
 
