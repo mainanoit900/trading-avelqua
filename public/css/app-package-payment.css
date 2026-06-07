@@ -173,18 +173,21 @@
 }
 
 .pp-icon-scoin {
-  width: 72px;
-  height: 72px;
-  border-radius: 20px;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  overflow: visible;
   background: rgba(15, 23, 42, 0.55);
   border: 1px solid rgba(167, 139, 250, 0.28);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
 }
 
 .pp-icon-scoin img {
-  width: 58px;
-  height: 58px;
+  width: 56px;
+  height: 56px;
   object-fit: contain;
+  transform: scale(1.65);
+  transform-origin: center;
 }
 
 .pp-icon-promptpay {
@@ -305,25 +308,28 @@
 }
 
 .pay-scoin-btn.pp-pay-btn {
-  padding: 20px 22px 20px 98px !important;
+  padding: 20px 22px 20px 88px !important;
   min-height: 118px !important;
   border: 1px solid rgba(196, 181, 253, 0.42) !important;
 }
 
 .pay-scoin-btn .pp-pay-icon {
-  left: 16px;
-  width: 68px;
-  height: 68px;
-  border-radius: 18px;
+  left: 18px;
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  overflow: visible;
   background: rgba(15, 23, 42, 0.45);
   border: 1px solid rgba(167, 139, 250, 0.28);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
 }
 
 .pay-scoin-btn .pp-pay-icon img {
-  width: 56px;
-  height: 56px;
+  width: 52px;
+  height: 52px;
   object-fit: contain;
+  transform: scale(1.7);
+  transform-origin: center;
 }
 
 .pay-scoin-btn i {
@@ -374,9 +380,9 @@
 }
 
 .pp-coupon {
-  margin: 0 0 14px !important;
-  padding: 14px 16px !important;
-  border-radius: 18px !important;
+  margin: 0 0 12px !important;
+  padding: 12px 14px !important;
+  border-radius: 16px !important;
   border: 1px solid rgba(251, 191, 36, 0.22) !important;
   background:
     radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.1), transparent 38%),
@@ -386,70 +392,80 @@
 .pp-coupon-head {
   display: flex;
   align-items: center;
-  gap: 10px;
-  margin-bottom: 10px;
+  gap: 8px;
+  margin-bottom: 8px;
 }
 
 .pp-coupon-head .pp-method-icon {
-  width: 42px;
-  height: 42px;
-  border-radius: 14px;
+  width: 36px;
+  height: 36px;
+  border-radius: 12px;
 }
 
 .pp-coupon-head .pp-method-icon svg {
-  width: 24px;
-  height: 24px;
+  width: 20px;
+  height: 20px;
 }
 
 .pp-coupon-head label {
   margin: 0 !important;
-  font-size: 14px !important;
+  font-size: 13px !important;
   color: #fde68a !important;
 }
 
 .pp-coupon-row {
   align-items: center;
+  gap: 8px !important;
 }
 
+.pp-premium .pp-coupon .package-coupon-row input,
 .pp-coupon-row input {
-  min-height: 44px;
-  border: 1px solid rgba(251, 191, 36, 0.22) !important;
+  flex: 1;
+  box-sizing: border-box;
+  min-height: 0 !important;
+  height: 36px !important;
+  border: 1px solid rgba(251, 191, 36, 0.2) !important;
   background: rgba(15, 23, 42, 0.72) !important;
-  border-radius: 12px !important;
-  padding: 10px 14px !important;
-  font-size: 14px !important;
+  border-radius: 10px !important;
+  padding: 0 12px !important;
+  font-size: 13px !important;
   font-weight: 700 !important;
+  line-height: 36px !important;
 }
 
 .pp-coupon-row input::placeholder {
-  color: rgba(191, 219, 254, 0.55);
+  color: rgba(191, 219, 254, 0.5);
   font-weight: 600;
 }
 
+.pp-premium .pp-coupon .package-coupon-row button,
 .pp-coupon-row button {
   display: inline-flex;
   flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 6px;
-  min-width: 96px;
-  min-height: 44px;
-  padding: 10px 14px !important;
-  border-radius: 12px !important;
-  font-size: 14px !important;
+  gap: 5px;
+  min-width: 88px;
+  width: auto;
+  min-height: 0 !important;
+  height: 36px !important;
+  padding: 0 12px !important;
+  border-radius: 10px !important;
+  font-size: 13px !important;
+  line-height: 1 !important;
   background: linear-gradient(135deg, #f59e0b, #ea580c 55%, #7c3aed) !important;
-  box-shadow: 0 10px 24px rgba(245, 158, 11, 0.14);
+  box-shadow: 0 8px 20px rgba(245, 158, 11, 0.12);
 }
 
 .pp-coupon-row button svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
   flex: 0 0 auto;
 }
 
 .pp-coupon-box p {
-  margin: 8px 0 0 !important;
-  font-size: 13px !important;
+  margin: 6px 0 0 !important;
+  font-size: 12px !important;
 }
 
 .pp-back-link {
