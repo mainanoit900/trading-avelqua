@@ -1,6 +1,6 @@
 <% pageCss = '/css/app-packages.css'; %>
 <%- include('../partials/app-shell') %>
-<link rel="stylesheet" href="/public/css/app-package-payment.css?v=2026060703">
+<link rel="stylesheet" href="/public/css/app-package-payment.css?v=2026060704">
 
 <% if (error || success) { %>
   <div class="scoin-confirm-modal show" id="packageFlashModal" aria-hidden="false">
@@ -177,7 +177,7 @@
         <div class="package-scoin-pay-box pp-scoin-panel">
           <div class="pp-method-head">
             <div class="pp-method-icon pp-icon-scoin" aria-hidden="true">
-              <img src="/public/images/payments/scoin-icon.svg" alt="" width="36" height="36">
+              <img src="/public/images/Scoin.png" alt="" width="36" height="36">
             </div>
             <div>
               <strong>จ่ายด้วย Scoin</strong>
@@ -212,7 +212,7 @@
               data-package="<%= payment.package_name_snapshot || '-' %>"
             >
               <span class="pp-pay-icon" aria-hidden="true">
-                <img src="/public/images/payments/scoin-icon.svg" alt="" width="30" height="30">
+                <img src="/public/images/Scoin.png" alt="" width="30" height="30">
               </span>
               <i class="fa-solid fa-coins"></i>
               <span>จ่ายด้วย Scoin ทันที</span>
@@ -233,7 +233,7 @@
           <input type="hidden" name="payment_method" value="promptpay_qr">
           <button type="submit" class="pay-method-btn pp-pay-btn pp-pay-promptpay" <%= stripeReady ? '' : 'disabled' %>>
             <span class="pp-pay-icon" aria-hidden="true">
-              <img src="/public/images/payments/promptpay-icon.svg" alt="" width="30" height="30">
+              <img src="/public/images/qr-code.png" alt="" width="30" height="30">
             </span>
             <i class="fa-solid fa-qrcode"></i>
             <span>PromptPay QR</span>
