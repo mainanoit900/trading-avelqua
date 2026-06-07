@@ -629,6 +629,15 @@
       }
 
       const bullet = trimmed.match(/^(\d+[.)]|[-•*])\s+(.+)$/u);
+      const mdImg = trimmed.match(/^!\[([^\]]*)\]\(([^)]+)\)$/);
+      if (mdImg) {
+        parts.push(
+          '<img src="' + escapeHtml(mdImg[2]) + '" alt="' + escapeHtml(mdImg[1] || 'image') +
+          '" class="ta-ai-msg-image" />'
+        );
+        continue;
+      }
+
       if (bullet) {
         parts.push(
           '<div class="ta-ai-msg-line ta-ai-msg-bullet">' +

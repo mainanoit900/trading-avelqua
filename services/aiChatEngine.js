@@ -7,6 +7,7 @@ const {
   getPageGuide,
   getPageGuideByPath,
   fullUrl,
+  getCompanyInfo,
   PAGE_GUIDES,
   PUBLIC_GUEST_PAGE_KEYS,
   isGuestAllowedPageKey
@@ -98,6 +99,23 @@ const SUPPORT_TOOLS = [
   {
     type: 'function',
     function: {
+      name: 'get_company_info',
+      description:
+        'ข้อมูลบริษัท คิวอาร์ เมดิคัล / TRADING AVELQUA ที่อยู่ แผนที่ ช่องทางติดต่อ — ใช้เมื่อถามเรื่องบริษัท/ที่ตั้ง/ติดต่อเรา',
+      parameters: {
+        type: 'object',
+        properties: {
+          include_line_qr: {
+            type: 'boolean',
+            description: 'true เมื่อถามติดต่อ LINE / ขอ QR / สแกนเพิ่มเพื่อน LINE'
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
       name: 'recommend_bot',
       description: 'แนะนำบอทที่เหมาะกับลูกค้าจากทุนและประสบการณ์ (ไม่ใช่คำแนะนำการลงทุน)',
       parameters: {
@@ -119,7 +137,13 @@ const SUPPORT_TOOLS = [
   }
 ];
 
-const GUEST_TOOL_NAMES = new Set(['get_page_link', 'get_bot_info', 'recommend_bot', 'get_market_news']);
+const GUEST_TOOL_NAMES = new Set([
+  'get_page_link',
+  'get_bot_info',
+  'recommend_bot',
+  'get_market_news',
+  'get_company_info'
+]);
 
 function getToolsForRequest(loggedIn) {
   if (loggedIn) return SUPPORT_TOOLS;
@@ -251,6 +275,10 @@ function buildSystemPrompt(settings, req, body = {}) {
     '- ลิงก์ส่งเป็น URL เต็ม https://trading.avelqua.com/...',
     '- ตอบกระชับ เป็นมิตร สุภาพ ลงท้าย "ค่ะ"',
     '',
+    '=== ข้อมูลบริษัท ===',
+    '- ถ้าถามบริษัท/ที่อยู่/ติดต่อ → เรียก get_company_info',
+    '- ถ้าถาม LINE / ขอ QR → get_company_info include_line_qr=true แล้วใส่ lineQrMarkdown ในคำตอบให้ลูกค้าสแกน',
+    '',
     loggedIn ? buildKnowledgePrompt() : buildGuestKnowledgePrompt(),
     '',
     loggedIn ? buildBotKnowledgePrompt() : buildGuestBotKnowledgePrompt()
@@ -348,6 +376,10 @@ async function executeTool(name, args, req) {
         userContext: userCtx,
         guestMode: !loggedIn
       });
+    }
+
+    case 'get_company_info': {
+      return getCompanyInfo(!!(args.include_line_qr ?? args.includeLineQr));
     }
 
     case 'recommend_bot': {

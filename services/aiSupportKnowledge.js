@@ -71,7 +71,8 @@ const PAGE_GUIDES = {
     path: '/contact',
     title: 'ติดต่อเรา',
     menu: 'เมนูด้านบน → Contact',
-    usage: 'ช่องทางอีเมล Facebook LINE TikTok และแผนที่ สำหรับปัญหาเร่งด่วนใช้แชท AI หรือ LINE Official'
+    usage:
+      'ข้อมูลบริษัท คิวอาร์ เมดิคัล จำกัด (QR MEDICAL CO., LTD.) ที่อยู่ แผนที่ Google Maps อีเมล Facebook LINE TikTok — สแกน QR LINE เพื่อเพิ่มเพื่อน Official Account'
   },
   app_dashboard: {
     path: '/app',
@@ -189,13 +190,59 @@ const LINE_GUIDE = {
   summary: 'แจ้งเตือนผ่าน LINE Official Account ของ TRADING AVELQUA',
   steps: [
     '1) สมัครและยืนยันอีเมลที่เว็บ trading.avelqua.com',
-    '2) เพิ่มเพื่อน LINE Official จากหน้า /contact',
+    '2) เพิ่มเพื่อน LINE Official จากหน้า /contact หรือสแกน QR Code LINE',
     '3) ในแชท LINE พิมพ์ "ลงทะเบียน" แล้วส่งอีเมลที่ใช้สมัคร',
     '4) พิมพ์ "แจ้งสรุปผล" เพื่อเปิดรับสรุป PnL อัตโนมัติ 07:00 น. จ-พฤ และเสาร์',
     '5) คำสั่งอื่น: "เช็คพอร์ต" "เช็คแพ็กเกจปัจจุบัน" "แจ้งปัญหาใช้งาน" "ช่วยเหลือ"'
   ],
-  contactPage: `${BASE_URL}/contact`
+  contactPage: `${BASE_URL}/contact`,
+  qrImagePath: '/public/images/QR-CORD-LINE.jpg',
+  qrImageUrl: `${BASE_URL}/public/images/QR-CORD-LINE.jpg`
 };
+
+const COMPANY_INFO = {
+  nameTh: 'บริษัท คิวอาร์ เมดิคัล จำกัด',
+  nameEn: 'QR MEDICAL CO., LTD.',
+  brand: 'TRADING AVELQUA',
+  address:
+    '244/4 ซอย วิภาวดี รังสิต 43 ถนนวิภาวดี แขวงสนามบิน เขตดอนเมือง กรุงเทพมหานคร 10210',
+  mapUrl: 'https://maps.app.goo.gl/ESYQD4CDz5WCYu8w8',
+  contactPage: `${BASE_URL}/contact`,
+  lineQrUrl: `${BASE_URL}/public/images/QR-CORD-LINE.jpg`
+};
+
+function getCompanyInfo(includeLineQr = false) {
+  const base = {
+    ok: true,
+    nameTh: COMPANY_INFO.nameTh,
+    nameEn: COMPANY_INFO.nameEn,
+    brand: COMPANY_INFO.brand,
+    address: COMPANY_INFO.address,
+    mapUrl: COMPANY_INFO.mapUrl,
+    contactPage: COMPANY_INFO.contactPage,
+    summary: `${COMPANY_INFO.nameTh} (${COMPANY_INFO.nameEn}) — ผู้ให้บริการแพลตฟอร์ม ${COMPANY_INFO.brand}`
+  };
+  if (includeLineQr) {
+    base.lineQrUrl = COMPANY_INFO.lineQrUrl;
+    base.lineQrMarkdown = `![LINE QR Code — สแกนเพิ่มเพื่อน](${COMPANY_INFO.lineQrUrl})`;
+    base.lineHint = 'ส่ง QR ในแชทด้วย markdown รูปข้างต้น';
+  }
+  return base;
+}
+
+function buildCompanyKnowledgePrompt() {
+  return [
+    '=== ข้อมูลบริษัท ===',
+    `ชื่อ: ${COMPANY_INFO.nameTh} (${COMPANY_INFO.nameEn})`,
+    `แพลตฟอร์ม: ${COMPANY_INFO.brand}`,
+    `ที่อยู่: ${COMPANY_INFO.address}`,
+    `แผนที่ Google Maps: ${COMPANY_INFO.mapUrl}`,
+    `หน้าติดต่อ: ${COMPANY_INFO.contactPage}`,
+    `LINE QR สแกนเพิ่มเพื่อน: ${COMPANY_INFO.lineQrUrl}`,
+    '- ถ้าถามเรื่องบริษัท/ที่อยู่/ติดต่อ → ใช้ get_company_info',
+    '- ถ้าถามติดต่อ LINE / ขอ QR LINE → ใช้ get_company_info include_line_qr=true แล้วใส่ lineQrMarkdown ในคำตอบ'
+  ].join('\n');
+}
 
 const MARKET_GUIDE = {
   disclaimer:
@@ -267,8 +314,9 @@ function buildGuestKnowledgePrompt() {
     LINE_GUIDE.summary,
     ...LINE_GUIDE.steps,
     `ลิงก์เพิ่มเพื่อน LINE: ${LINE_GUIDE.contactPage}`,
+    `QR LINE สแกนเพิ่มเพื่อน: ${LINE_GUIDE.qrImageUrl}`,
     '',
-    '=== ตลาด / ข่าว (หน้าสาธารณะ) ===',
+    buildCompanyKnowledgePrompt(),
     MARKET_GUIDE.disclaimer,
     `หน้าตลาด: ${fullUrl('/market')} | หน้าข่าว: ${fullUrl('/news')}`,
     '',
@@ -296,6 +344,9 @@ function buildKnowledgePrompt() {
     LINE_GUIDE.summary,
     ...LINE_GUIDE.steps,
     `ลิงก์ติดต่อ LINE: ${LINE_GUIDE.contactPage}`,
+    `QR LINE: ${LINE_GUIDE.qrImageUrl}`,
+    '',
+    buildCompanyKnowledgePrompt(),
     '',
     '=== แก้ปัญหา MT5 / Bot ===',
     mt5,
@@ -313,6 +364,9 @@ module.exports = {
   MT5_TROUBLESHOOTING,
   LINE_GUIDE,
   MARKET_GUIDE,
+  COMPANY_INFO,
+  getCompanyInfo,
+  buildCompanyKnowledgePrompt,
   fullUrl,
   getPageGuide,
   getPageGuideByPath,
