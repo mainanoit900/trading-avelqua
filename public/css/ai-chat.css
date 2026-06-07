@@ -12,6 +12,8 @@
   }
 
   .ta-ai-chat-toggle {
+    position: relative !important;
+    z-index: 2 !important;
     width: 200px !important;
     height: 200px !important;
     border: 0 !important;
@@ -40,8 +42,7 @@
 
   .ta-ai-chat-box {
     position: absolute !important;
-    right: 0 !important;
-    bottom: 78px !important;
+    z-index: 1 !important;
     width: 360px !important;
     max-width: calc(100vw - 32px) !important;
     height: 520px !important;

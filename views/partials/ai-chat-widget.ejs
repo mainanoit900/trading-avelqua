@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606072">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606073">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -16,6 +16,8 @@
   }
 
   .ta-ai-chat-toggle {
+    position: relative;
+    z-index: 2;
     width: 200px;
     height: 200px;
     border: none;
@@ -52,6 +54,7 @@
     color: #0f172a !important;
     border-radius: 18px;
     position: absolute;
+    z-index: 1;
     bottom: calc(100% + 12px);
     right: 0;
     left: auto;
@@ -461,6 +464,7 @@
 
   const pos = load();
   if (pos) setPos(pos.r, pos.b);
+  else layoutChatBox();
 
   window.addEventListener('resize', function () {
     const s = getComputedStyle(root);
