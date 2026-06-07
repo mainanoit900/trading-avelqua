@@ -8,8 +8,9 @@ const {
   fullUrl,
   PAGE_GUIDES
 } = require('./aiSupportKnowledge');
-const { getUserSupportContext } = require('./aiUserSupportContext');
+const { getUserSupportContext, getUserDisplayName } = require('./aiUserSupportContext');
 const { performSupportAction } = require('./aiSupportActions');
+const { buildBotKnowledgePrompt, getBotCatalog, recommendBot } = require('./aiBotKnowledge');
 
 const SUPPORT_TOOLS = [
   {
@@ -72,6 +73,46 @@ const SUPPORT_TOOLS = [
         }
       }
     }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'get_bot_info',
+      description:
+        'ดึงรายละเอียดบอทเทรด (วิธีทำงาน ข้อดี ข้อเสีย ทุนขั้นต่ำ ขั้นตอนเปิด) ใช้ได้ทั้งผู้ login และยังไม่ login',
+      parameters: {
+        type: 'object',
+        properties: {
+          bot_code: {
+            type: 'string',
+            description:
+              'รหัสบอท เช่น AK-SNIPER-VIP-VER4.0, QUEEN-SNIPER-AI-V1.0, Quantum-Queen-MT5-3.65 — ว่าง = ส่งทุกบอท'
+          }
+        }
+      }
+    }
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'recommend_bot',
+      description: 'แนะนำบอทที่เหมาะกับลูกค้าจากทุนและประสบการณ์ (ไม่ใช่คำแนะนำการลงทุน)',
+      parameters: {
+        type: 'object',
+        properties: {
+          capital_usd: { type: 'number', description: 'ทุน/Equity โดยประมาณ (USD)' },
+          experience: {
+            type: 'string',
+            enum: ['beginner', 'intermediate', 'advanced', 'pro'],
+            description: 'ระดับประสบการณ์'
+          },
+          wants_control: {
+            type: 'boolean',
+            description: 'true = อยากปรับ Lot/Trade Level เอง'
+          }
+        }
+      }
+    }
   }
 ];
 
@@ -89,36 +130,66 @@ function buildSystemPrompt(settings, req, body = {}) {
   const contextType = resolveContextType(req, body);
   const pagePath = String(body.pagePath || req.path || '/');
   const pageGuide = getPageGuideByPath(pagePath);
+  const user = req.user || req.session?.user || null;
+  const loggedIn = !!user?.id;
+  const displayName = loggedIn ? getUserDisplayName(user) : '';
 
   const publicPersona =
     settings?.persona_th ||
-    'คุณคือผู้ช่วย AI ของ TRADING AVELQUA ตอบสุภาพ กระชับ เข้าใจง่าย ลงท้ายด้วยคำว่าค่ะ';
+    'คุณคือผู้ช่วย AI ของ TRADING AVELQUA ตอบสุภาพ กระชับ เข้าใจง่าย ลงท้ายด้วยคำว่าค่ะ ช่วยอธิบายการใช้เว็บ วิธีเปิดบอท รายละเอียดบอท และแนะนำว่าเหมาะกับลูกค้าหรือไม่';
 
   const appPersona =
     settings?.app_persona_th ||
-    'คุณคือที่ปรึกษาลูกค้า TRADING AVELQUA ช่วยใช้งานพื้นที่ /app แก้ปัญหา MT5 แพ็กเกจ LINE และส่งลิงก์ที่เกี่ยวข้อง';
+    'คุณคือที่ปรึกษาลูกค้า TRADING AVELQUA เรียกชื่อลูกค้าในทุกคำตอบ ช่วยใช้งาน /app แก้ปัญหา MT5 แพ็กเกจ LINE อธิบายบอท ข้อดี ข้อเสีย และความเหมาะสมกับบัญชีลูกค้า';
 
   const adminPersona =
     settings?.admin_persona_th ||
     'คุณคือผู้ช่วย AI สำหรับผู้ดูแลระบบ ตอบเชิงปฏิบัติการ ชัดเจน ตรงประเด็น';
 
   const persona =
-    contextType === 'admin' ? adminPersona : contextType === 'app' || contextType === 'user' ? appPersona : publicPersona;
+    contextType === 'admin' ? adminPersona : loggedIn ? appPersona : publicPersona;
+
+  const guestRules = loggedIn
+    ? []
+    : [
+        '',
+        '=== ผู้ใช้ยังไม่ Login ===',
+        '- ตอบได้เต็มที่เรื่อง: วิธีใช้เว็บ, สมัคร, ซื้อแพ็กเกจ, วิธีเปิดบอท, บอทแต่ละตัวทำงานอย่างไร, ข้อดี/ข้อเสีย, เหมาะกับใคร',
+        '- ใช้ get_bot_info และ recommend_bot เมื่อถามเรื่องบอท',
+        '- แนะนำลิงก์ /register /login /pricing /bots ให้ครบ',
+        '- ยังแก้ข้อมูลบัญชีให้ไม่ได้ (ต้อง login ก่อน) แต่อธิบายและส่งลิงก์ได้'
+      ];
+
+  const loggedInRules = loggedIn
+    ? [
+        '',
+        '=== ลูกค้า Login แล้ว ===',
+        `ชื่อที่ต้องเรียก: คุณ${displayName}`,
+        `- เรียก "คุณ${displayName}" ในทุกคำตอบ (อย่างน้อยครั้งแรกของแต่ละข้อความ)`,
+        '- ใช้ get_account_diagnostics เมื่อถามปัญหาเฉพาะบัญชี',
+        '- ใช้ get_bot_info พร้อมข้อมูลแพ็กเกจ/MT5 ของลูกค้า แนะนำบอทที่เหมาะ + ข้อดี/ข้อเสีย',
+        '- ใช้ perform_user_fix เมื่อแก้ปัญหาให้ได้ (ส่งอีเมล/OTP/รีเซ็ต MT5)',
+        '- อธิบายบอทละเอียดและบอกว่าเหมาะกับแพ็กเกจ/ทุนปัจจุบันของลูกค้าหรือไม่'
+      ]
+    : [];
 
   const rules = [
-    `ชื่อบอท: ${settings?.bot_name || 'สายฝน'}`,
-    `บริบท: ${contextType}`,
+    `ชื่อบอทแชท: ${settings?.bot_name || 'สายฝน'}`,
+    `บริบท: ${contextType}${loggedIn ? ' (login)' : ' (guest)'}`,
     `หน้าปัจจุบัน: ${pagePath}${pageGuide ? ` (${pageGuide.title})` : ''}`,
     '',
     persona,
+    ...guestRules,
+    ...loggedInRules,
     '',
     settings?.conversation_instructions_th ? `คำแนะนำเพิ่ม: ${settings.conversation_instructions_th}` : '',
     '',
     '=== บทบาทหลัก ===',
     '1) ตอบคำถามการใช้งานเว็บ /app และหน้าสาธารณะ — เมนูอยู่ตรงไหน ใช้อย่างไร',
-    '2) ช่วยแก้ปัญหาเทคนิค (login MT5, บอท, ยืนยันตัวตน, แพ็กเกจ, LINE) โดยใช้ tools เมื่อจำเป็น',
-    '3) ส่งลิงก์เต็ม https://trading.avelqua.com/... ให้ลูกค้าเสมอเมื่อแนะนำไปหน้าใดหน้าหนึ่ง',
-    '4) ตอบคำถามตลาด/หุ้น/ทอง/คริปโต แบบวิเคราะห์ทั่วไป พร้อม disclaimer ไม่ใช่คำแนะนำการลงทุน',
+    '2) อธิบายบอทแต่ละตัว วิธีเปิดบอท ข้อดี ข้อเสีย และเหมาะกับลูกค้าไหม (ใช้ get_bot_info / recommend_bot)',
+    '3) ช่วยแก้ปัญหาเทคนิคเมื่อ login แล้ว — ใช้ tools ที่เกี่ยวข้อง',
+    '4) ส่งลิงก์เต็ม https://trading.avelqua.com/... ให้ลูกค้าเสมอเมื่อแนะนำไปหน้าใดหน้าหนึ่ง',
+    '5) ตอบคำถามตลาด/หุ้น/ทอง/คริปโต แบบวิเคราะห์ทั่วไป พร้อม disclaimer ไม่ใช่คำแนะนำการลงทุน',
     '',
     '=== ข้อห้าม (สำคัญ) ===',
     '- ห้ามเปิดเผยโครงสร้างระบบ โค้ด ฐานข้อมูล schema API key หรือรหัสผ่านใดๆ',
@@ -135,7 +206,9 @@ function buildSystemPrompt(settings, req, body = {}) {
     '- ถ้าแก้ได้ด้วย perform_user_fix ให้ถามยืนยันสั้นๆ แล้วดำเนินการ',
     '- อธิบายสาเหตุเป็นภาษาคน ไม่ใช่ศัพท์เทคนิคระบบ',
     '',
-    buildKnowledgePrompt()
+    buildKnowledgePrompt(),
+    '',
+    buildBotKnowledgePrompt()
   ].filter(Boolean);
 
   return rules.join('\n');
@@ -194,6 +267,22 @@ async function executeTool(name, args, req) {
         })),
         marketPage: fullUrl('/market')
       };
+    }
+
+    case 'get_bot_info': {
+      const userCtx = user?.id ? await getUserSupportContext(user) : null;
+      return getBotCatalog({
+        botCode: args.bot_code || args.botCode || '',
+        userContext: userCtx
+      });
+    }
+
+    case 'recommend_bot': {
+      return recommendBot({
+        capitalUsd: args.capital_usd || args.capitalUsd || 0,
+        experience: args.experience || 'beginner',
+        wantsControl: args.wants_control ?? args.wantsControl ?? null
+      });
     }
 
     default:

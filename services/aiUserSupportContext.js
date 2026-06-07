@@ -10,6 +10,17 @@ function maskEmail(email) {
   return `${e.slice(0, 2)}***${e.slice(at)}`;
 }
 
+function getUserDisplayName(user) {
+  if (!user) return '';
+  const raw = String(
+    user.full_name || user.fullName || user.first_name || user.firstName || user.name || ''
+  ).trim();
+  if (raw) return raw.split(/\s+/)[0];
+  const email = String(user.email || '').trim();
+  if (email && email.includes('@')) return email.split('@')[0];
+  return 'ลูกค้า';
+}
+
 async function getCurrentSubscription(userId) {
   const result = await query(
     `SELECT s.*, p.name_th, p.name_en, p.group_name
@@ -129,7 +140,8 @@ async function getUserSupportContext(user) {
   return {
     loggedIn: true,
     userId: user.id,
-    displayName: user.full_name || user.first_name || user.name || maskEmail(user.email),
+    displayName: getUserDisplayName(user),
+    fullName: user.full_name || user.name || '',
     email: maskEmail(user.email),
     emailVerified,
     identityVerified,
@@ -140,6 +152,7 @@ async function getUserSupportContext(user) {
     package: subscription
       ? {
           name: subscription.name_th || subscription.name_en || subscription.package_name,
+          group: subscription.group_name || '',
           status: subscription.status,
           endAt: subscription.end_at,
           expired: !!pkgExpired
@@ -175,5 +188,6 @@ async function getUserSupportContext(user) {
 
 module.exports = {
   getUserSupportContext,
+  getUserDisplayName,
   maskEmail
 };
