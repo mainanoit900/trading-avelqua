@@ -43,16 +43,29 @@
   .ta-ai-chat-box {
     width: 360px;
     height: 500px;
+    max-height: calc(100vh - 120px);
     background: #fff;
     border-radius: 18px;
     position: absolute;
-    bottom: 160px;
+    bottom: calc(100% + 12px);
     right: 0;
+    left: auto;
+    top: auto;
     display: none;
     flex-direction: column;
     box-shadow: 0 22px 60px rgba(0,0,0,0.25);
     overflow: hidden;
     border: 1px solid #dbe4f0;
+  }
+
+  .ta-ai-chat-box.is-below {
+    bottom: auto;
+    top: calc(100% + 12px);
+  }
+
+  .ta-ai-chat-box.is-align-left {
+    right: auto;
+    left: 0;
   }
 
   .ta-ai-chat-box.open {
@@ -104,9 +117,10 @@
     margin-left: auto;
   }
 
-  .ta-ai-msg-bot {
-    background: #e5e7eb;
-    color: #111827;
+  .ta-ai-msg-bot a {
+    color: #1d4ed8;
+    text-decoration: underline;
+    word-break: break-all;
   }
 
   .ta-ai-chat-form {
@@ -203,8 +217,7 @@
     .ta-ai-chat-box {
       width: calc(100vw - 24px);
       max-width: 360px;
-      height: 68vh;
-      bottom: 120px;
+      height: min(68vh, calc(100vh - 120px));
     }
   }
 </style>
@@ -289,7 +302,52 @@
     root.style.bottom = p.b + 'px';
     root.style.left = 'auto';
     root.style.top = 'auto';
+    layoutChatBox();
     return p;
+  }
+
+  function layoutChatBox() {
+    const gap = 12;
+    const margin = 10;
+    const toggleW = toggle.offsetWidth || 170;
+    const toggleH = toggle.offsetHeight || 170;
+    const boxW = box.offsetWidth || 360;
+    const boxH = box.offsetHeight || 500;
+
+    box.classList.remove('is-below', 'is-align-left');
+    box.style.left = '';
+    box.style.right = '';
+    box.style.top = '';
+    box.style.bottom = '';
+
+    if (!box.classList.contains('open')) {
+      box.style.bottom = 'calc(100% + 12px)';
+      box.style.right = '0';
+      return;
+    }
+
+    const rootRect = root.getBoundingClientRect();
+    const spaceAbove = rootRect.top - margin;
+    const spaceBelow = window.innerHeight - rootRect.bottom - margin;
+
+    if (spaceAbove >= boxH + gap || spaceAbove >= spaceBelow) {
+      box.style.bottom = (toggleH + gap) + 'px';
+    } else {
+      box.classList.add('is-below');
+    }
+
+    const onLeftHalf = (rootRect.left + toggleW / 2) < (window.innerWidth / 2);
+    let leftRelative = onLeftHalf ? 0 : (toggleW - boxW);
+
+    if (rootRect.left + leftRelative < margin) {
+      leftRelative = margin - rootRect.left;
+    }
+    if (rootRect.left + leftRelative + boxW > window.innerWidth - margin) {
+      leftRelative = (window.innerWidth - margin - boxW) - rootRect.left;
+    }
+
+    box.style.right = 'auto';
+    box.style.left = leftRelative + 'px';
   }
 
   const pos = load();
@@ -298,14 +356,30 @@
   window.addEventListener('resize', function () {
     const s = getComputedStyle(root);
     setPos(parseInt(s.right, 10), parseInt(s.bottom, 10));
+    layoutChatBox();
   });
 
   let drag = false, moved = false, sx = 0, sy = 0, sr = 20, sb = 20;
 
+  function linkify(text) {
+    const escaped = String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;');
+    return escaped.replace(
+      /(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+  }
+
   function add(t, role) {
     const el = document.createElement('div');
     el.className = 'ta-ai-msg ' + (role === 'user' ? 'ta-ai-msg-user' : 'ta-ai-msg-bot');
-    el.textContent = t;
+    if (role === 'user') {
+      el.textContent = t;
+    } else {
+      el.innerHTML = linkify(t);
+    }
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;
     return el;
@@ -323,6 +397,7 @@
   toggle.onclick = () => {
     if (moved) { moved = false; return; }
     box.classList.toggle('open');
+    layoutChatBox();
   };
 
   closeBtn.onclick = () => box.classList.remove('open');
@@ -349,6 +424,7 @@
     if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
 
     setPos(sr - dx, sb - dy);
+    if (box.classList.contains('open')) layoutChatBox();
   };
 
   toggle.onpointerup = e => {
@@ -392,6 +468,7 @@
           message: text,
           sessionKey,
           pageCode,
+          pagePath,
           pageTitle: document.title || pageCode
         })
       });

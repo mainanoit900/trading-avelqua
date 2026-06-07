@@ -1,6 +1,7 @@
 const express = require('express');
 const router = express.Router();
 const { query } = require('../config/database');
+const { runAiChat, buildSystemPrompt: buildEnhancedSystemPrompt } = require('../services/aiChatEngine');
 
 function getContextType(req) {
   if (req.user?.role === 'admin') return 'admin';
@@ -52,70 +53,8 @@ async function saveChatMessage(sessionKey, role, content) {
   ).catch(() => {});
 }
 
-function buildSystemPrompt(settings, req) {
-  const isAdmin = req.user?.role === 'admin';
-
-  const publicPersona =
-    settings.persona_th ||
-    'คุณคือผู้ช่วย AI ของเว็บไซต์ ตอบอย่างสุภาพ กระชับ เข้าใจง่าย และลงท้ายด้วยคำว่าค่ะ';
-
-  const adminPersona =
-    settings.admin_persona_th ||
-    'คุณคือผู้ช่วย AI สำหรับผู้ดูแลระบบ ตอบเชิงวิเคราะห์ ชัดเจน ตรงประเด็น ช่วยตรวจปัญหา และเสนอวิธีแก้แบบใช้งานจริง';
-
-  return [
-    `ชื่อบอท: ${settings.bot_name || 'สายฝน'}`,
-    `บริบท: ${isAdmin ? 'admin' : 'public'}`,
-    `บุคลิก: ${isAdmin ? adminPersona : publicPersona}`,
-    `ข้อห้าม: ${settings.forbidden_topics_th || '-'}`,
-    settings.hide_system_structure ? 'ห้ามเปิดเผยโครงสร้างระบบ โค้ดภายใน secret key schema หรือข้อมูลที่อ่อนไหว' : ''
-  ].filter(Boolean).join('\n');
-}
-
-async function callOpenAI(apiKey, model, messages) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: model || 'gpt-5.4-mini',
-      temperature: 0.4,
-      messages
-    })
-  });
-
-  const data = await res.json().catch(() => ({}));
-
-  if (!res.ok) {
-    throw new Error(data?.error?.message || 'OpenAI request failed');
-  }
-
-  return data?.choices?.[0]?.message?.content || '';
-}
-
-async function createOpenAIStream(apiKey, model, messages) {
-  const res = await fetch('https://api.openai.com/v1/chat/completions', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      Authorization: `Bearer ${apiKey}`
-    },
-    body: JSON.stringify({
-      model: model || 'gpt-5.4-mini',
-      temperature: 0.4,
-      stream: true,
-      messages
-    })
-  });
-
-  if (!res.ok || !res.body) {
-    const text = await res.text().catch(() => '');
-    throw new Error(text || 'OpenAI stream failed');
-  }
-
-  return res.body;
+function buildSystemPrompt(settings, req, body = {}) {
+  return buildEnhancedSystemPrompt(settings, req, body);
 }
 
 router.post('/ai-chat', async (req, res) => {
@@ -146,17 +85,13 @@ router.post('/ai-chat', async (req, res) => {
       ? await getChatHistory(sessionKey, 10)
       : [];
 
-    const systemPrompt = buildSystemPrompt(settings, req);
-
-    const reply = await callOpenAI(
-      settings.openai_api_key,
-      settings.model_name || 'gpt-5.4-mini',
-      [
-        { role: 'system', content: systemPrompt },
-        ...history,
-        { role: 'user', content: message }
-      ]
-    );
+    const reply = await runAiChat({
+      settings,
+      req,
+      message,
+      history,
+      body: req.body || {}
+    });
 
     if (settings.save_chat_history) {
       await saveChatMessage(sessionKey, 'user', message);
@@ -201,64 +136,27 @@ router.post('/ai-chat/stream', async (req, res) => {
       ? await getChatHistory(sessionKey, 10)
       : [];
 
-    const systemPrompt = buildSystemPrompt(settings, req);
-
     if (settings.save_chat_history) {
       await saveChatMessage(sessionKey, 'user', message);
     }
+
+    const fullReply = await runAiChat({
+      settings,
+      req,
+      message,
+      history,
+      body: req.body || {}
+    });
 
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-cache, no-transform');
     res.setHeader('Connection', 'keep-alive');
     res.flushHeaders?.();
 
-    const stream = await createOpenAIStream(
-      settings.openai_api_key,
-      settings.model_name || 'gpt-5.4-mini',
-      [
-        { role: 'system', content: systemPrompt },
-        ...history,
-        { role: 'user', content: message }
-      ]
-    );
-
-    const reader = stream.getReader();
-    const decoder = new TextDecoder();
-    let buffer = '';
-    let fullReply = '';
-
-    while (true) {
-      const { value, done } = await reader.read();
-      if (done) break;
-
-      buffer += decoder.decode(value, { stream: true });
-      const parts = buffer.split('\n');
-      buffer = parts.pop() || '';
-
-      for (const part of parts) {
-        const line = part.trim();
-        if (!line.startsWith('data:')) continue;
-
-        const payload = line.slice(5).trim();
-
-        if (payload === '[DONE]') {
-          if (settings.save_chat_history && fullReply.trim()) {
-            await saveChatMessage(sessionKey, 'assistant', fullReply);
-          }
-
-          res.write(`event: done\ndata: ${JSON.stringify({ ok: true })}\n\n`);
-          return res.end();
-        }
-
-        try {
-          const json = JSON.parse(payload);
-          const token = json?.choices?.[0]?.delta?.content || '';
-          if (token) {
-            fullReply += token;
-            res.write(`event: token\ndata: ${JSON.stringify({ token })}\n\n`);
-          }
-        } catch (_) {}
-      }
+    const chunkSize = 24;
+    for (let i = 0; i < fullReply.length; i += chunkSize) {
+      const token = fullReply.slice(i, i + chunkSize);
+      res.write(`event: token\ndata: ${JSON.stringify({ token })}\n\n`);
     }
 
     if (settings.save_chat_history && fullReply.trim()) {
