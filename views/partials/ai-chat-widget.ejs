@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606073">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606074">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -22,19 +22,11 @@
     height: 200px;
     border: none;
     background: transparent;
-    cursor: grab;
+    cursor: pointer;
     padding: 0;
     box-shadow: none;
     border-radius: 0;
     animation: taAiBounce 2.2s ease-in-out infinite;
-  }
-
-  .ta-ai-chat-toggle:active {
-    cursor: grabbing;
-  }
-
-  .ta-ai-chat-toggle.dragging {
-    animation: none;
   }
 
   .ta-ai-chat-icon {
@@ -48,8 +40,10 @@
 
   .ta-ai-chat-box {
     width: 360px;
-    height: 500px;
-    max-height: calc(100vh - 120px);
+    max-width: calc(100vw - 24px);
+    height: auto;
+    max-height: min(500px, calc(100vh - 24px));
+    min-height: 280px;
     background: #fff !important;
     color: #0f172a !important;
     border-radius: 18px;
@@ -104,7 +98,8 @@
   }
 
   .ta-ai-chat-messages {
-    flex: 1;
+    flex: 1 1 auto;
+    min-height: 0;
     overflow-y: auto;
     padding: 12px;
     background: #f8fafc !important;
@@ -303,7 +298,7 @@
     .ta-ai-chat-box {
       width: calc(100vw - 24px);
       max-width: 360px;
-      height: min(68vh, calc(100vh - 120px));
+      max-height: calc(100vh - 24px);
     }
   }
 </style>
@@ -386,16 +381,7 @@
     loginForImage: 'กรุณาเข้าสู่ระบบก่อนแนบรูป'
   };
 
-  const KEY = 'chat_pos_v_lang_v1';
-
-  function save(r, b) {
-    localStorage.setItem(KEY, JSON.stringify({ r, b }));
-  }
-
-  function load() {
-    try { return JSON.parse(localStorage.getItem(KEY)); }
-    catch { return null; }
-  }
+  const DEFAULT_POS = { r: 20, b: 20 };
 
   function clampPos(r, b) {
     const w = toggle.offsetWidth || 200;
@@ -403,8 +389,8 @@
     const maxR = Math.max(8, window.innerWidth - w - 8);
     const maxB = Math.max(8, window.innerHeight - h - 8);
     return {
-      r: Math.min(Math.max(8, Number(r) || 20), maxR),
-      b: Math.min(Math.max(8, Number(b) || 20), maxB)
+      r: Math.min(Math.max(8, Number(r) || DEFAULT_POS.r), maxR),
+      b: Math.min(Math.max(8, Number(b) || DEFAULT_POS.b), maxB)
     };
   }
 
@@ -423,14 +409,17 @@
     const margin = 10;
     const toggleW = toggle.offsetWidth || 200;
     const toggleH = toggle.offsetHeight || 200;
-    const boxW = box.offsetWidth || 360;
-    const boxH = box.offsetHeight || 500;
+    const maxBoxW = Math.min(360, window.innerWidth - margin * 2);
+    const desiredBoxH = 500;
 
     box.classList.remove('is-below', 'is-align-left');
     box.style.left = '';
     box.style.right = '';
     box.style.top = '';
     box.style.bottom = '';
+    box.style.width = maxBoxW + 'px';
+    box.style.maxHeight = '';
+    box.style.height = '';
 
     if (!box.classList.contains('open')) {
       box.style.bottom = 'calc(100% + 12px)';
@@ -439,15 +428,30 @@
     }
 
     const rootRect = root.getBoundingClientRect();
-    const spaceAbove = rootRect.top - margin;
-    const spaceBelow = window.innerHeight - rootRect.bottom - margin;
+    const spaceAbove = Math.max(0, rootRect.top - margin);
+    const spaceBelow = Math.max(0, window.innerHeight - rootRect.bottom - margin);
+    const minUsable = 280;
 
-    if (spaceAbove >= boxH + gap || spaceAbove >= spaceBelow) {
+    let availableH;
+    if (spaceAbove >= spaceBelow && spaceAbove >= minUsable + gap) {
+      availableH = spaceAbove - gap;
+      box.style.bottom = (toggleH + gap) + 'px';
+    } else if (spaceBelow >= minUsable + gap) {
+      availableH = spaceBelow - gap;
+      box.classList.add('is-below');
+    } else if (spaceAbove >= spaceBelow) {
+      availableH = Math.max(minUsable, spaceAbove - gap);
       box.style.bottom = (toggleH + gap) + 'px';
     } else {
+      availableH = Math.max(minUsable, spaceBelow - gap);
       box.classList.add('is-below');
     }
 
+    const boxH = Math.min(desiredBoxH, availableH, window.innerHeight - margin * 2);
+    box.style.maxHeight = boxH + 'px';
+    box.style.height = boxH + 'px';
+
+    const boxW = Math.min(maxBoxW, box.offsetWidth || maxBoxW);
     const onLeftHalf = (rootRect.left + toggleW / 2) < (window.innerWidth / 2);
     let leftRelative = onLeftHalf ? 0 : (toggleW - boxW);
 
@@ -462,17 +466,13 @@
     box.style.left = leftRelative + 'px';
   }
 
-  const pos = load();
-  if (pos) setPos(pos.r, pos.b);
-  else layoutChatBox();
+  setPos(DEFAULT_POS.r, DEFAULT_POS.b);
+  try { localStorage.removeItem('chat_pos_v_lang_v1'); } catch (_) {}
 
   window.addEventListener('resize', function () {
     const s = getComputedStyle(root);
-    setPos(parseInt(s.right, 10), parseInt(s.bottom, 10));
-    layoutChatBox();
+    setPos(parseInt(s.right, 10) || DEFAULT_POS.r, parseInt(s.bottom, 10) || DEFAULT_POS.b);
   });
-
-  let drag = false, moved = false, sx = 0, sy = 0, sr = 20, sb = 20;
 
   function linkify(text) {
     const escaped = String(text || '')
@@ -562,45 +562,13 @@
   }
 
   toggle.onclick = () => {
-    if (moved) { moved = false; return; }
     box.classList.toggle('open');
     layoutChatBox();
   };
 
-  closeBtn.onclick = () => box.classList.remove('open');
-
-  toggle.onpointerdown = e => {
-    drag = true;
-    moved = false;
-    toggle.classList.add('dragging');
-    sx = e.clientX;
-    sy = e.clientY;
-
-    const s = getComputedStyle(root);
-    sr = parseInt(s.right) || 20;
-    sb = parseInt(s.bottom) || 20;
-
-    try { toggle.setPointerCapture(e.pointerId); } catch (_) {}
-  };
-
-  toggle.onpointermove = e => {
-    if (!drag) return;
-    const dx = e.clientX - sx;
-    const dy = e.clientY - sy;
-
-    if (Math.abs(dx) > 4 || Math.abs(dy) > 4) moved = true;
-
-    setPos(sr - dx, sb - dy);
-    if (box.classList.contains('open')) layoutChatBox();
-  };
-
-  toggle.onpointerup = e => {
-    drag = false;
-    toggle.classList.remove('dragging');
-    const s = getComputedStyle(root);
-    const p = setPos(parseInt(s.right, 10), parseInt(s.bottom, 10));
-    save(p.r, p.b);
-    try { toggle.releasePointerCapture(e.pointerId); } catch (_) {}
+  closeBtn.onclick = () => {
+    box.classList.remove('open');
+    layoutChatBox();
   };
 
   form.onsubmit = async e => {

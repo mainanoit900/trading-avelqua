@@ -18,17 +18,13 @@
     height: 200px !important;
     border: 0 !important;
     border-radius: 0 !important;
-    cursor: grab !important;
+    cursor: pointer !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
     background: transparent !important;
     padding: 0 !important;
     box-shadow: none !important;
-  }
-
-  .ta-ai-chat-toggle:active {
-    cursor: grabbing !important;
   }
 
   .ta-ai-chat-icon {
@@ -44,9 +40,10 @@
     position: absolute !important;
     z-index: 1 !important;
     width: 360px !important;
-    max-width: calc(100vw - 32px) !important;
-    height: 520px !important;
-    max-height: 75vh !important;
+    max-width: calc(100vw - 24px) !important;
+    height: auto !important;
+    max-height: min(520px, calc(100vh - 24px)) !important;
+    min-height: 280px !important;
     background: #ffffff !important;
     border: 1px solid #dbe4f0 !important;
     border-radius: 20px !important;
@@ -98,7 +95,8 @@
   }
 
   .ta-ai-chat-messages {
-    flex: 1 !important;
+    flex: 1 1 auto !important;
+    min-height: 0 !important;
     overflow-y: auto !important;
     padding: 16px !important;
     background: #f8fafc !important;
@@ -181,6 +179,6 @@
 
     .ta-ai-chat-box {
       width: calc(100vw - 24px) !important;
-      height: 65vh !important;
+      max-height: calc(100vh - 24px) !important;
     }
   }
