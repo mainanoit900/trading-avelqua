@@ -19,6 +19,7 @@
     border: 0 !important;
     border-radius: 0 !important;
     cursor: pointer !important;
+    touch-action: none !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
@@ -34,6 +35,11 @@
     display: block !important;
     pointer-events: none !important;
     user-select: none !important;
+  }
+
+  .ta-ai-chat-toggle.dragging {
+    animation: none !important;
+    cursor: grabbing !important;
   }
 
   .ta-ai-chat-box {

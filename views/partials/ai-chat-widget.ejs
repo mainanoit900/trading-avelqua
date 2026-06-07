@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606074">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606075">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -27,6 +27,12 @@
     box-shadow: none;
     border-radius: 0;
     animation: taAiBounce 2.2s ease-in-out infinite;
+    touch-action: none;
+  }
+
+  .ta-ai-chat-toggle.dragging {
+    animation: none;
+    cursor: grabbing;
   }
 
   .ta-ai-chat-icon {
@@ -382,6 +388,22 @@
   };
 
   const DEFAULT_POS = { r: 20, b: 20 };
+  const POS_KEY = 'chat_pos_v_lang_v1';
+  const LONG_PRESS_MS = 400;
+
+  function loadPos() {
+    try {
+      const p = JSON.parse(localStorage.getItem(POS_KEY));
+      if (p && Number.isFinite(Number(p.r)) && Number.isFinite(Number(p.b))) {
+        return { r: Number(p.r), b: Number(p.b) };
+      }
+    } catch (_) {}
+    return DEFAULT_POS;
+  }
+
+  function savePos(r, b) {
+    try { localStorage.setItem(POS_KEY, JSON.stringify({ r, b })); } catch (_) {}
+  }
 
   function clampPos(r, b) {
     const w = toggle.offsetWidth || 200;
@@ -466,13 +488,36 @@
     box.style.left = leftRelative + 'px';
   }
 
-  setPos(DEFAULT_POS.r, DEFAULT_POS.b);
-  try { localStorage.removeItem('chat_pos_v_lang_v1'); } catch (_) {}
+  const savedPos = loadPos();
+  setPos(savedPos.r, savedPos.b);
 
   window.addEventListener('resize', function () {
     const s = getComputedStyle(root);
     setPos(parseInt(s.right, 10) || DEFAULT_POS.r, parseInt(s.bottom, 10) || DEFAULT_POS.b);
   });
+
+  let pointerActive = false;
+  let dragEnabled = false;
+  let suppressClick = false;
+  let longPressTimer = null;
+  let sx = 0;
+  let sy = 0;
+  let sr = DEFAULT_POS.r;
+  let sb = DEFAULT_POS.b;
+
+  function clearLongPress() {
+    if (longPressTimer) {
+      clearTimeout(longPressTimer);
+      longPressTimer = null;
+    }
+  }
+
+  function finishPointer(e) {
+    clearLongPress();
+    pointerActive = false;
+    toggle.classList.remove('dragging');
+    try { toggle.releasePointerCapture(e.pointerId); } catch (_) {}
+  }
 
   function linkify(text) {
     const escaped = String(text || '')
@@ -562,6 +607,10 @@
   }
 
   toggle.onclick = () => {
+    if (suppressClick) {
+      suppressClick = false;
+      return;
+    }
     box.classList.toggle('open');
     layoutChatBox();
   };
@@ -569,6 +618,63 @@
   closeBtn.onclick = () => {
     box.classList.remove('open');
     layoutChatBox();
+  };
+
+  toggle.onpointerdown = e => {
+    if (e.pointerType === 'mouse' && e.button !== 0) return;
+
+    pointerActive = true;
+    dragEnabled = false;
+    suppressClick = false;
+    sx = e.clientX;
+    sy = e.clientY;
+
+    const s = getComputedStyle(root);
+    sr = parseInt(s.right, 10) || DEFAULT_POS.r;
+    sb = parseInt(s.bottom, 10) || DEFAULT_POS.b;
+
+    clearLongPress();
+    longPressTimer = setTimeout(() => {
+      if (!pointerActive) return;
+      dragEnabled = true;
+      suppressClick = true;
+      toggle.classList.add('dragging');
+    }, LONG_PRESS_MS);
+
+    try { toggle.setPointerCapture(e.pointerId); } catch (_) {}
+  };
+
+  toggle.onpointermove = e => {
+    if (!pointerActive) return;
+
+    const dx = e.clientX - sx;
+    const dy = e.clientY - sy;
+
+    if (!dragEnabled) {
+      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) clearLongPress();
+      return;
+    }
+
+    setPos(sr - dx, sb - dy);
+  };
+
+  toggle.onpointerup = e => {
+    if (!pointerActive) return;
+
+    if (dragEnabled) {
+      const p = setPos(parseInt(getComputedStyle(root).right, 10), parseInt(getComputedStyle(root).bottom, 10));
+      savePos(p.r, p.b);
+      dragEnabled = false;
+      finishPointer(e);
+      return;
+    }
+
+    finishPointer(e);
+  };
+
+  toggle.onpointercancel = e => {
+    dragEnabled = false;
+    finishPointer(e);
   };
 
   form.onsubmit = async e => {
