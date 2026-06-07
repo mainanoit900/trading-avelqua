@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606080">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606081">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -47,8 +47,8 @@
   .ta-ai-chat-box {
     width: 360px;
     max-width: calc(100vw - 24px);
-    height: 672px;
-    max-height: min(672px, calc(100vh - 220px));
+    height: 860px;
+    max-height: min(860px, calc(100vh - 240px));
     background: #fff !important;
     color: #0f172a !important;
     border-radius: 18px;
@@ -77,8 +77,8 @@
 
   .ta-ai-chat-box.open {
     display: grid;
-    height: 672px;
-    max-height: min(672px, calc(100vh - 220px));
+    height: 860px;
+    max-height: min(860px, calc(100vh - 240px));
   }
 
   .ta-ai-chat-header {
@@ -353,8 +353,8 @@
     .ta-ai-chat-box.open {
       width: calc(100vw - 24px);
       max-width: 360px;
-      height: min(588px, calc(100vh - 180px));
-      max-height: min(588px, calc(100vh - 180px));
+      height: min(720px, calc(100vh - 200px));
+      max-height: min(720px, calc(100vh - 200px));
     }
   }
 </style>
@@ -486,6 +486,8 @@
     const toggleW = toggle.offsetWidth || 200;
     const toggleH = toggle.offsetHeight || 200;
     const maxBoxW = Math.min(360, window.innerWidth - margin * 2);
+    const preferredH = window.innerWidth <= 640 ? 720 : 860;
+    const maxH = Math.min(preferredH, window.innerHeight - 240);
 
     box.classList.remove('is-below', 'is-align-left');
     box.style.left = '';
@@ -497,23 +499,28 @@
     if (!box.classList.contains('open')) {
       box.style.bottom = 'calc(100% + 12px)';
       box.style.right = '0';
+      box.style.height = '';
+      box.style.maxHeight = '';
       return;
     }
 
     const rootRect = root.getBoundingClientRect();
     const spaceAbove = Math.max(0, rootRect.top - margin);
     const spaceBelow = Math.max(0, window.innerHeight - rootRect.bottom - margin);
-    const isBelow = spaceAbove < spaceBelow && spaceBelow >= 320;
-    if (isBelow) {
-      box.classList.add('is-below');
-    } else {
+    let boxH = maxH;
+
+    if (spaceAbove >= boxH + gap) {
       box.style.bottom = (toggleH + gap) + 'px';
+    } else if (spaceBelow >= boxH + gap) {
+      box.classList.add('is-below');
+    } else if (spaceAbove >= spaceBelow) {
+      boxH = Math.max(320, Math.min(maxH, spaceAbove - gap));
+      box.style.bottom = (toggleH + gap) + 'px';
+    } else {
+      boxH = Math.max(320, Math.min(maxH, spaceBelow - gap));
+      box.classList.add('is-below');
     }
 
-    const availableH = isBelow
-      ? Math.max(280, spaceBelow - gap)
-      : Math.max(280, spaceAbove - toggleH - gap);
-    const boxH = Math.min(672, availableH, window.innerHeight - margin * 2);
     box.style.setProperty('height', boxH + 'px', 'important');
     box.style.setProperty('max-height', boxH + 'px', 'important');
 
