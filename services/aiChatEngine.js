@@ -381,16 +381,32 @@ async function callOpenAIWithTools(apiKey, model, messages, tools) {
   return data?.choices?.[0]?.message || { role: 'assistant', content: '' };
 }
 
-async function runAiChat({ settings, req, message, history = [], body = {} }) {
+async function runAiChat({ settings, req, message, history = [], body = {}, imageDataUrls = [] }) {
   const systemPrompt = buildSystemPrompt(settings, req, body);
   const contextType = resolveContextType(req, body);
   const loggedIn = !!(req.user || req.session?.user)?.id;
   const tools = contextType === 'admin' ? [] : getToolsForRequest(loggedIn);
 
+  const images = Array.isArray(imageDataUrls) ? imageDataUrls.filter(Boolean).slice(0, 3) : [];
+  const text = String(message || '').trim();
+  const userContent =
+    images.length > 0
+      ? [
+          {
+            type: 'text',
+            text: text || 'ลูกค้าแนบรูปมาให้ช่วยดูปัญหา กรุณาวิเคราะห์จากรูปและตอบเป็นภาษาไทย'
+          },
+          ...images.map((url) => ({
+            type: 'image_url',
+            image_url: { url, detail: 'auto' }
+          }))
+        ]
+      : text;
+
   const messages = [
     { role: 'system', content: systemPrompt },
     ...history,
-    { role: 'user', content: message }
+    { role: 'user', content: userContent }
   ];
 
   let reply = '';

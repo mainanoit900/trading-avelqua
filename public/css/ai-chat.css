@@ -106,15 +106,22 @@
 
   .ta-ai-msg-bot {
     align-self: flex-start !important;
-    background: #fff !important;
-    color: #0f172a !important;
-    border: 1px solid #e2e8f0 !important;
+    background: #e5e7eb !important;
+    color: #111827 !important;
+    -webkit-text-fill-color: #111827 !important;
+    border: 1px solid #d1d5db !important;
+  }
+
+  .ta-ai-msg-bot a {
+    color: #1d4ed8 !important;
+    -webkit-text-fill-color: #1d4ed8 !important;
   }
 
   .ta-ai-msg-user {
     align-self: flex-end !important;
     background: #2563eb !important;
     color: #fff !important;
+    -webkit-text-fill-color: #fff !important;
   }
 
   .ta-ai-chat-form {

@@ -69,6 +69,24 @@ if (MT5_EXPIRY_ENFORCER_ENABLED) {
   setInterval(runMt5ExpiryEnforcerSafe, MT5_EXPIRY_ENFORCER_INTERVAL_MS);
 }
 
+const { expireStaleLockedPorts } = require('./lib/adminVpsBridge');
+const PORT_LOCK_SWEEP_MS = Math.max(30 * 1000, Number(process.env.MT5_PORT_LOCK_SWEEP_MS || 60 * 1000));
+let portLockSweepRunning = false;
+async function sweepStaleLockedPortsSafe() {
+  if (portLockSweepRunning) return;
+  portLockSweepRunning = true;
+  try {
+    const cleared = await expireStaleLockedPorts();
+    if (cleared > 0) console.log('[port-lock-sweep] cleared', cleared);
+  } catch (e) {
+    console.error('port lock sweep error:', e);
+  } finally {
+    portLockSweepRunning = false;
+  }
+}
+sweepStaleLockedPortsSafe();
+setInterval(sweepStaleLockedPortsSafe, PORT_LOCK_SWEEP_MS);
+
 app.set('trust proxy', 1);
 app.set('view engine', 'ejs');
 app.set('views', path.join(__dirname, 'views'));
@@ -103,6 +121,7 @@ app.use(cookieParser());
 app.use('/public', express.static(path.join(__dirname, 'public')));
 app.use('/downloads', express.static(path.join(__dirname, 'public/downloads')));
 app.use('/mt5-previews', express.static(path.join(__dirname, 'public/mt5-previews')));
+app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
 
 app.use(
   session({
@@ -675,6 +694,41 @@ await query(`
 `);
 
 await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS payout_status TEXT NOT NULL DEFAULT 'pending'
+`);
+
+await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS payout_amount_thb NUMERIC(18,2)
+`);
+
+await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS payout_paid_at TIMESTAMPTZ
+`);
+
+await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS payout_ref TEXT
+`);
+
+await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS payout_note TEXT
+`);
+
+await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS payout_by_user_id BIGINT REFERENCES users(id) ON DELETE SET NULL
+`);
+
+await query(`
+  ALTER TABLE scoin_market_orders
+  ADD COLUMN IF NOT EXISTS host_transfer_slip_url TEXT
+`);
+
+await query(`
   CREATE TABLE IF NOT EXISTS system_wallets (
     id BIGSERIAL PRIMARY KEY,
     wallet_type TEXT NOT NULL UNIQUE,
@@ -737,6 +791,11 @@ ensureOptionalTables()
       require('./services/stripePendingPaymentReconcileScheduler').startStripePendingPaymentReconcileScheduler();
     } catch (e) {
       console.error('[StripePendingReconcile] start error:', e.message);
+    }
+    try {
+      require('./services/aiChatImageService').startAiChatImageCleanupScheduler();
+    } catch (e) {
+      console.error('[AiChatImage] start error:', e.message);
     }
     app.listen(PORT, () => {
       console.log(`TRADING AVELQUA V3 running on port ${PORT}`);
