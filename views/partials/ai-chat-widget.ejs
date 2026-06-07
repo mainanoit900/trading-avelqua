@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606076">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606077">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -141,6 +141,38 @@
     -webkit-text-fill-color: #1d4ed8 !important;
     text-decoration: underline;
     word-break: break-all;
+  }
+
+  .ta-ai-msg-bot .ta-ai-msg-line {
+    margin: 0 0 6px;
+    line-height: 1.55;
+  }
+
+  .ta-ai-msg-bot .ta-ai-msg-line:last-child {
+    margin-bottom: 0;
+  }
+
+  .ta-ai-msg-gap {
+    height: 8px;
+  }
+
+  .ta-ai-msg-bullet {
+    display: flex;
+    gap: 8px;
+    align-items: flex-start;
+  }
+
+  .ta-ai-msg-bullet-mark {
+    flex: 0 0 auto;
+    min-width: 1.1em;
+    font-weight: 700;
+  }
+
+  .ta-ai-msg-heading {
+    font-weight: 700;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    margin-top: 2px;
   }
 
   .ta-ai-msg-image {
@@ -311,7 +343,7 @@
 
 <%
   const chatTitle = typeof t === 'function' ? t('ai.title', 'Support Chat 24h.') : 'Support Chat 24h.';
-  const chatWelcome = typeof t === 'function' ? t('ai.welcome', 'สวัสดีค่ะ มีอะไรให้ช่วยได้บ้างคะ') : 'สวัสดีค่ะ มีอะไรให้ช่วยได้บ้างคะ';
+  const chatWelcome = typeof t === 'function' ? t('ai.welcome', '👋 สวัสดีค่ะ มีอะไรให้ช่วยได้บ้างคะ') : '👋 สวัสดีค่ะ มีอะไรให้ช่วยได้บ้างคะ';
   const chatPlaceholder = typeof t === 'function' ? t('ai.placeholder', 'พิมพ์ข้อความ...') : 'พิมพ์ข้อความ...';
   const chatSend = typeof t === 'function' ? t('ai.send', 'ส่ง') : 'ส่ง';
   const chatTypingText = typeof t === 'function' ? t('ai.typing_status', 'กำลังพิมพ์...') : 'กำลังพิมพ์...';
@@ -524,15 +556,52 @@
     try { toggle.releasePointerCapture(e.pointerId); } catch (_) {}
   }
 
-  function linkify(text) {
-    const escaped = String(text || '')
+  function escapeHtml(text) {
+    return String(text || '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
-    return escaped.replace(
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  }
+
+  function linkifyInline(text) {
+    return escapeHtml(text).replace(
       /(https?:\/\/[^\s<]+)/g,
       '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
     );
+  }
+
+  function formatBotMessage(text) {
+    const lines = String(text || '').split('\n');
+    const parts = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const trimmed = lines[i].trim();
+
+      if (!trimmed) {
+        parts.push('<div class="ta-ai-msg-gap"></div>');
+        continue;
+      }
+
+      const bullet = trimmed.match(/^(\d+[.)]|[-•*])\s+(.+)$/u);
+      if (bullet) {
+        parts.push(
+          '<div class="ta-ai-msg-line ta-ai-msg-bullet">' +
+          '<span class="ta-ai-msg-bullet-mark">' + bullet[1] + '</span>' +
+          '<span>' + linkifyInline(bullet[2]) + '</span></div>'
+        );
+        continue;
+      }
+
+      if (/[:：]\s*$/.test(trimmed) && trimmed.length <= 48) {
+        parts.push('<div class="ta-ai-msg-line ta-ai-msg-heading">' + linkifyInline(trimmed) + '</div>');
+        continue;
+      }
+
+      parts.push('<div class="ta-ai-msg-line">' + linkifyInline(trimmed) + '</div>');
+    }
+
+    return parts.join('');
   }
 
   function add(t, role, imageUrl) {
@@ -552,7 +621,7 @@
         el.appendChild(img);
       }
     } else {
-      el.innerHTML = linkify(t);
+      el.innerHTML = formatBotMessage(t);
     }
     messages.appendChild(el);
     messages.scrollTop = messages.scrollHeight;

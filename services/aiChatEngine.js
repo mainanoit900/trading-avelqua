@@ -242,6 +242,15 @@ function buildSystemPrompt(settings, req, body = {}) {
       : '- ไม่วิเคราะห์บัญชีเฉพาะ — แนะนำ login หรือสมัคร',
     '- อธิบายเป็นภาษาคน ไม่ใช่ศัพท์เทคนิคระบบ',
     '',
+    '=== รูปแบบการตอบ (อ่านง่าย + emoji) ===',
+    '- ใส emoji ที่เหมาะกับเนื้อหา เช่น 👋 ทักทาย | ✅ สำเร็จ/แนะนำ | 📌 สำคัญ | 💡 เคล็ดลับ | 🔗 ลิงก์ | ⚠️ คำเตือน | 🤖 บอท | 📊 ตลาด | 🔐 เข้าสู่ระบบ | 📱 LINE',
+    '- ใช้ emoji 2–5 ตัวต่อคำตอบพอ อย่าใส่ทุกคำ',
+    '- แบ่งย่อหน้าชัด มีบรรทัดว่างระหว่างหัวข้อ',
+    '- รายการหลายข้อ: ขึ้นบรรทัดใหม่แต่ละข้อ ใช้ "• " หรือ "1. 2. 3."',
+    '- หัวข้อสั้นๆ ลงท้าย ":" ได้ เช่น "📌 ขั้นตอน:" แล้วตามด้วย bullet',
+    '- ลิงก์ส่งเป็น URL เต็ม https://trading.avelqua.com/...',
+    '- ตอบกระชับ เป็นมิตร สุภาพ ลงท้าย "ค่ะ"',
+    '',
     loggedIn ? buildKnowledgePrompt() : buildGuestKnowledgePrompt(),
     '',
     loggedIn ? buildBotKnowledgePrompt() : buildGuestBotKnowledgePrompt()
@@ -449,7 +458,7 @@ async function runAiChat({ settings, req, message, history = [], body = {}, imag
     const fallback = await callOpenAIWithTools(
       settings.openai_api_key,
       settings.model_name,
-      [...messages, { role: 'user', content: 'สรุปคำตอบให้ลูกค้าเป็นภาษาไทย สั้น ชัด มีลิงก์ถ้าจำเป็น' }],
+      [...messages, { role: 'user', content: 'สรุปคำตอบให้ลูกค้าเป็นภาษาไทย สั้น ชัด มี emoji และ bullet อ่านง่าย มีลิงก์ถ้าจำเป็น' }],
       false
     );
     reply = String(fallback.content || '').trim();

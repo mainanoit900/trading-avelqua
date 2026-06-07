@@ -130,6 +130,40 @@
   .ta-ai-msg-bot a {
     color: #1d4ed8 !important;
     -webkit-text-fill-color: #1d4ed8 !important;
+    text-decoration: underline;
+    word-break: break-all;
+  }
+
+  .ta-ai-msg-bot .ta-ai-msg-line {
+    margin: 0 0 6px !important;
+    line-height: 1.55 !important;
+  }
+
+  .ta-ai-msg-bot .ta-ai-msg-line:last-child {
+    margin-bottom: 0 !important;
+  }
+
+  .ta-ai-msg-gap {
+    height: 8px !important;
+  }
+
+  .ta-ai-msg-bullet {
+    display: flex !important;
+    gap: 8px !important;
+    align-items: flex-start !important;
+  }
+
+  .ta-ai-msg-bullet-mark {
+    flex: 0 0 auto !important;
+    min-width: 1.1em !important;
+    font-weight: 700 !important;
+  }
+
+  .ta-ai-msg-heading {
+    font-weight: 700 !important;
+    color: #0f172a !important;
+    -webkit-text-fill-color: #0f172a !important;
+    margin-top: 2px !important;
   }
 
   .ta-ai-msg-user {
