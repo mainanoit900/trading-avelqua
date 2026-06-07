@@ -1,10 +1,10 @@
 'use strict';
 
 const { query } = require('../config/database');
-const { purgeAllChatImages } = require('./aiChatImageService');
+const { purgeChatImagesBeforeTodayBangkok } = require('./aiChatImageService');
 
 const TZ = 'Asia/Bangkok';
-let lastNoonPurgeKey = '';
+let lastDailyPurgeKey = '';
 
 function getBangkokParts(date = new Date()) {
   const fmt = new Intl.DateTimeFormat('en-US', {
@@ -23,8 +23,14 @@ function getBangkokParts(date = new Date()) {
   return parts;
 }
 
-function isAfterNoonBangkok(date = new Date()) {
-  return Number(getBangkokParts(date).hour || 0) >= 12;
+function getBangkokDayKey(date = new Date()) {
+  const { year, month, day } = getBangkokParts(date);
+  return `${year}-${month}-${day}`;
+}
+
+function getBangkokTodayStartIso() {
+  const { year, month, day } = getBangkokParts();
+  return `${year}-${month}-${day}T00:00:00+07:00`;
 }
 
 function getLoggedInUserId(req) {
@@ -33,7 +39,10 @@ function getLoggedInUserId(req) {
 
 function buildSessionKey(req) {
   const userId = getLoggedInUserId(req);
-  if (userId) return `user:${userId}`;
+  if (userId) {
+    const sid = req.sessionID || req.session?.id || 'no-session';
+    return `user:${userId}:${sid}`;
+  }
   const baseSession = req.sessionID || 'no-session';
   return `guest:${baseSession}`;
 }
@@ -80,40 +89,44 @@ async function saveChatMessage(sessionKey, role, content) {
   ).catch(() => {});
 }
 
-async function purgeLoggedInChatHistory() {
+async function purgeChatHistoryBeforeTodayBangkok() {
+  const dayStart = getBangkokTodayStartIso();
+
   await query(
     `DELETE FROM ai_chat_messages
-     WHERE session_key LIKE 'user:%'`
+     WHERE session_key LIKE 'user:%'
+       AND created_at < $1::timestamptz`,
+    [dayStart]
   ).catch(() => {});
 
   await query(
-    `DELETE FROM ai_chat_sessions
-     WHERE session_key LIKE 'user:%'`
+    `DELETE FROM ai_chat_sessions s
+     WHERE s.session_key LIKE 'user:%'
+       AND NOT EXISTS (
+         SELECT 1 FROM ai_chat_messages m WHERE m.session_key = s.session_key
+       )`
   ).catch(() => {});
 
-  await purgeAllChatImages().catch(() => {});
+  await purgeChatImagesBeforeTodayBangkok(dayStart).catch(() => {});
 }
 
-async function ensureNoonPurgeIfNeeded() {
-  if (!isAfterNoonBangkok()) return false;
+async function ensureDailyPurgeIfNeeded() {
+  const todayKey = getBangkokDayKey();
+  if (lastDailyPurgeKey === todayKey) return false;
 
-  const { year, month, day } = getBangkokParts();
-  const key = `${year}-${month}-${day}`;
-  if (lastNoonPurgeKey === key) return false;
-
-  await purgeLoggedInChatHistory();
-  lastNoonPurgeKey = key;
+  await purgeChatHistoryBeforeTodayBangkok();
+  lastDailyPurgeKey = todayKey;
   return true;
 }
 
 function startAiChatHistoryScheduler() {
-  ensureNoonPurgeIfNeeded().catch((e) => {
-    console.error('[ai-chat-history] noon purge error:', e.message);
+  ensureDailyPurgeIfNeeded().catch((e) => {
+    console.error('[ai-chat-history] daily purge error:', e.message);
   });
 
   setInterval(() => {
-    ensureNoonPurgeIfNeeded().catch((e) => {
-      console.error('[ai-chat-history] noon purge error:', e.message);
+    ensureDailyPurgeIfNeeded().catch((e) => {
+      console.error('[ai-chat-history] daily purge error:', e.message);
     });
   }, 60 * 1000);
 }
@@ -124,8 +137,7 @@ module.exports = {
   ensureChatSession,
   getChatHistory,
   saveChatMessage,
-  ensureNoonPurgeIfNeeded,
-  purgeLoggedInChatHistory,
-  isAfterNoonBangkok,
+  ensureDailyPurgeIfNeeded,
+  purgeChatHistoryBeforeTodayBangkok,
   startAiChatHistoryScheduler
 };

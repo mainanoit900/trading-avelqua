@@ -19,7 +19,7 @@ const {
   ensureChatSession,
   getChatHistory,
   saveChatMessage,
-  ensureNoonPurgeIfNeeded
+  ensureDailyPurgeIfNeeded
 } = require('../services/aiChatHistoryService');
 
 const chatImageUpload = multer({
@@ -35,7 +35,7 @@ function buildSystemPrompt(settings, req, body = {}) {
 
 router.get('/ai-chat/history', requireLogin, async (req, res) => {
   try {
-    await ensureNoonPurgeIfNeeded();
+    await ensureDailyPurgeIfNeeded();
     const sessionKey = buildSessionKey(req);
     const messages = await getChatHistory(sessionKey, 30);
     return res.json({ ok: true, messages });
@@ -68,7 +68,7 @@ router.get('/ai-chat/image/:id', requireLogin, async (req, res) => {
     const user = req.user || req.session?.user;
     const row = await getChatImageRow(req.params.id, user?.id);
     if (!row) {
-      return res.status(404).json({ ok: false, message: 'ไม่พบรูปหรือถูกลบแล้ว (ลบหลัง 12:00 น.)' });
+      return res.status(404).json({ ok: false, message: 'ไม่พบรูปหรือถูกลบแล้ว (ลบหลังเที่ยงคืน)' });
     }
     const absPath = path.join(UPLOAD_DIR, row.stored_name);
     if (!fs.existsSync(absPath)) {
@@ -106,7 +106,7 @@ router.post('/ai-chat', async (req, res) => {
       return res.json({ ok: true, reply: 'ยังไม่ได้ตั้งค่า OPENAI_API_KEY ค่ะ' });
     }
 
-    await ensureNoonPurgeIfNeeded();
+    await ensureDailyPurgeIfNeeded();
 
     const sessionKey = buildSessionKey(req);
     const saveHistory = shouldSaveChatHistory(req);
@@ -174,7 +174,7 @@ router.post('/ai-chat/stream', async (req, res) => {
       return res.status(200).json({ ok: false, error: 'ยังไม่ได้ตั้งค่า OPENAI_API_KEY ค่ะ' });
     }
 
-    await ensureNoonPurgeIfNeeded();
+    await ensureDailyPurgeIfNeeded();
 
     const sessionKey = buildSessionKey(req);
     const saveHistory = shouldSaveChatHistory(req);

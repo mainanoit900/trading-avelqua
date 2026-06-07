@@ -84,7 +84,7 @@ async function saveChatImage({ userId, sessionKey, file }) {
     url: `/api/ai-chat/image/${row.id}`,
     expiresAt: row.expires_at,
     ttlHours: 24,
-    note: 'รูปแนบจะถูกลบหลัง 12:00 น. พร้อมประวัติแชท'
+    note: 'รูปแนบจะถูกลบหลังเที่ยงคืน พร้อมประวัติแชทเก่า'
   };
 }
 
@@ -144,6 +144,42 @@ async function purgeAllChatImages() {
   return (all.rows || []).length;
 }
 
+async function purgeChatImagesBeforeTodayBangkok(dayStartIso) {
+  const dayStart = dayStartIso || (() => {
+    const fmt = new Intl.DateTimeFormat('en-US', {
+      timeZone: 'Asia/Bangkok',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit'
+    });
+    const parts = Object.fromEntries(
+      fmt.formatToParts(new Date()).filter((p) => p.type !== 'literal').map((p) => [p.type, p.value])
+    );
+    return `${parts.year}-${parts.month}-${parts.day}T00:00:00+07:00`;
+  })();
+
+  const old = await query(
+    `SELECT id, stored_name
+     FROM ai_chat_uploads
+     WHERE created_at < $1::timestamptz
+     LIMIT 2000`,
+    [dayStart]
+  ).catch(() => ({ rows: [] }));
+
+  for (const row of old.rows || []) {
+    const absPath = path.join(UPLOAD_DIR, String(row.stored_name || ''));
+    try {
+      if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
+    } catch (_) {}
+  }
+
+  if ((old.rows || []).length) {
+    await query(`DELETE FROM ai_chat_uploads WHERE created_at < $1::timestamptz`, [dayStart]).catch(() => {});
+  }
+
+  return (old.rows || []).length;
+}
+
 async function purgeExpiredChatImages() {
   const expired = await query(
     `SELECT id, stored_name
@@ -184,5 +220,6 @@ module.exports = {
   getImageDataUrlsForUser,
   purgeExpiredChatImages,
   purgeAllChatImages,
+  purgeChatImagesBeforeTodayBangkok,
   startAiChatImageCleanupScheduler
 };
