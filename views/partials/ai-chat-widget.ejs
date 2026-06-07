@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606078">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606079">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -59,7 +59,7 @@
     left: auto;
     top: auto;
     display: none;
-    flex-direction: column;
+    grid-template-rows: auto minmax(0, 1fr) auto;
     box-shadow: 0 22px 60px rgba(0,0,0,0.25);
     overflow: hidden;
     border: 1px solid #dbe4f0;
@@ -76,12 +76,13 @@
   }
 
   .ta-ai-chat-box.open {
-    display: flex;
+    display: grid;
     height: 480px;
     max-height: min(480px, calc(100vh - 220px));
   }
 
   .ta-ai-chat-header {
+    grid-row: 1;
     flex: 0 0 auto;
     background: linear-gradient(135deg, #2563eb, #1d4ed8);
     color: #fff;
@@ -105,15 +106,31 @@
     cursor: pointer;
   }
 
-  .ta-ai-chat-messages {
-    flex: 1 1 0;
+  .ta-ai-chat-body {
+    grid-row: 2;
     min-height: 0;
+    overflow: hidden;
+    position: relative;
+    background: #f8fafc;
+  }
+
+  .ta-ai-chat-messages {
+    height: 100%;
+    max-height: 100%;
     overflow-x: hidden;
     overflow-y: auto;
+    overscroll-behavior: contain;
     -webkit-overflow-scrolling: touch;
     padding: 12px;
     background: #f8fafc !important;
     color: #0f172a !important;
+  }
+
+  .ta-ai-chat-footer {
+    grid-row: 3;
+    flex: 0 0 auto;
+    background: #fff !important;
+    border-top: 1px solid #e5e7eb;
   }
 
   .ta-ai-msg {
@@ -191,13 +208,11 @@
   }
 
   .ta-ai-chat-toolbar {
-    flex: 0 0 auto;
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 8px 12px 0;
     background: #fff !important;
-    border-top: 1px solid #e5e7eb;
   }
 
   .ta-ai-chat-attach {
@@ -219,7 +234,6 @@
   }
 
   .ta-ai-chat-pending {
-    flex: 0 0 auto;
     display: none;
     align-items: center;
     gap: 8px;
@@ -250,7 +264,6 @@
   }
 
   .ta-ai-chat-form {
-    flex: 0 0 auto;
     display: flex;
     align-items: stretch;
     border-top: 1px solid #ddd;
@@ -373,25 +386,29 @@
       <button id="taAiChatClose" type="button">×</button>
     </div>
 
-    <div class="ta-ai-chat-messages" id="taAiChatMessages">
-      <div class="ta-ai-msg ta-ai-msg-bot"><%= chatWelcome %></div>
+    <div class="ta-ai-chat-body">
+      <div class="ta-ai-chat-messages" id="taAiChatMessages">
+        <div class="ta-ai-msg ta-ai-msg-bot"><%= chatWelcome %></div>
+      </div>
     </div>
 
-    <div class="ta-ai-chat-pending" id="taAiChatPending">
-      <img id="taAiChatPendingImg" alt="" />
-      <span id="taAiChatPendingText">รูปพร้อมส่ง (เก็บ 24 ชม.)</span>
-      <button type="button" id="taAiChatPendingClear" aria-label="ลบรูป">×</button>
-    </div>
+    <div class="ta-ai-chat-footer">
+      <div class="ta-ai-chat-pending" id="taAiChatPending">
+        <img id="taAiChatPendingImg" alt="" />
+        <span id="taAiChatPendingText">รูปพร้อมส่ง (เก็บ 24 ชม.)</span>
+        <button type="button" id="taAiChatPendingClear" aria-label="ลบรูป">×</button>
+      </div>
 
-    <div class="ta-ai-chat-toolbar" id="taAiChatToolbar" style="<%= chatLoggedIn ? '' : 'display:none' %>">
-      <button type="button" class="ta-ai-chat-attach" id="taAiChatAttach" title="<%= chatAttachLabel %>" aria-label="<%= chatAttachLabel %>">📷</button>
-      <input type="file" id="taAiChatFile" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
-    </div>
+      <div class="ta-ai-chat-toolbar" id="taAiChatToolbar" style="<%= chatLoggedIn ? '' : 'display:none' %>">
+        <button type="button" class="ta-ai-chat-attach" id="taAiChatAttach" title="<%= chatAttachLabel %>" aria-label="<%= chatAttachLabel %>">📷</button>
+        <input type="file" id="taAiChatFile" accept="image/jpeg,image/png,image/webp,image/gif" hidden>
+      </div>
 
-    <form class="ta-ai-chat-form" id="taAiChatForm">
-      <input id="taAiChatInput" type="text" placeholder="<%= chatPlaceholder %>" autocomplete="off">
-      <button type="submit"><%= chatSend %></button>
-    </form>
+      <form class="ta-ai-chat-form" id="taAiChatForm">
+        <input id="taAiChatInput" type="text" placeholder="<%= chatPlaceholder %>" autocomplete="off">
+        <button type="submit"><%= chatSend %></button>
+      </form>
+    </div>
   </div>
 </div>
 
@@ -486,13 +503,19 @@
     const rootRect = root.getBoundingClientRect();
     const spaceAbove = Math.max(0, rootRect.top - margin);
     const spaceBelow = Math.max(0, window.innerHeight - rootRect.bottom - margin);
-    const boxH = box.offsetHeight || 480;
-
-    if (spaceAbove >= boxH + gap || spaceAbove >= spaceBelow) {
-      box.style.bottom = (toggleH + gap) + 'px';
-    } else {
+    const isBelow = spaceAbove < spaceBelow && spaceBelow >= 320;
+    if (isBelow) {
       box.classList.add('is-below');
+    } else {
+      box.style.bottom = (toggleH + gap) + 'px';
     }
+
+    const availableH = isBelow
+      ? Math.max(280, spaceBelow - gap)
+      : Math.max(280, spaceAbove - toggleH - gap);
+    const boxH = Math.min(480, availableH, window.innerHeight - margin * 2);
+    box.style.setProperty('height', boxH + 'px', 'important');
+    box.style.setProperty('max-height', boxH + 'px', 'important');
 
     const boxW = Math.min(maxBoxW, box.offsetWidth || maxBoxW);
     const onLeftHalf = (rootRect.left + toggleW / 2) < (window.innerWidth / 2);
@@ -507,6 +530,13 @@
 
     box.style.right = 'auto';
     box.style.left = leftRelative + 'px';
+    scrollMessagesToBottom();
+  }
+
+  function scrollMessagesToBottom() {
+    requestAnimationFrame(() => {
+      messages.scrollTop = messages.scrollHeight;
+    });
   }
 
   const savedPos = loadPos();
@@ -613,7 +643,7 @@
       el.innerHTML = formatBotMessage(t);
     }
     messages.appendChild(el);
-    messages.scrollTop = messages.scrollHeight;
+    scrollMessagesToBottom();
     return el;
   }
 
@@ -665,7 +695,7 @@
     el.className = 'ta-ai-msg ta-ai-msg-bot';
     el.innerHTML = '<span class="ta-ai-typing"><span></span><span></span><span></span></span>';
     messages.appendChild(el);
-    messages.scrollTop = messages.scrollHeight;
+    scrollMessagesToBottom();
     return el;
   }
 
