@@ -5,6 +5,7 @@ const fs = require('fs');
 const router = express.Router();
 const { query } = require('../config/database');
 const { requireLogin } = require('../middleware/requireAuth');
+const { markSessionActive } = require('../middleware/sessionIdleTimeout');
 const { runAiChat, buildSystemPrompt: buildEnhancedSystemPrompt } = require('../services/aiChatEngine');
 const {
   saveChatImage,
@@ -28,6 +29,16 @@ const chatImageUpload = multer({
 });
 
 ensureAiChatImageTable().catch(() => {});
+
+router.post('/session/activity', requireLogin, (req, res) => {
+  markSessionActive(req);
+  req.session.save((err) => {
+    if (err) {
+      return res.status(500).json({ ok: false, message: 'ไม่สามารถอัปเดต session ได้' });
+    }
+    return res.json({ ok: true });
+  });
+});
 
 function buildSystemPrompt(settings, req, body = {}) {
   return buildEnhancedSystemPrompt(settings, req, body);

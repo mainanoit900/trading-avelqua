@@ -6,6 +6,7 @@ const { randomUUID } = require('crypto');
 const passport = require('passport');
 const { query } = require('../config/database');
 const { requireGuest, requireLogin } = require('../middleware/requireAuth');
+const { markSessionActive } = require('../middleware/sessionIdleTimeout');
 const { sendMailSafe } = require('../services/mailService');
 const {
   ensureUserReferralCode
@@ -252,6 +253,13 @@ async function sendResetPasswordEmail({ email, token }) {
 router.get('/login', requireGuest, (req, res) => {
   const view = baseView(req);
   clearFlash(req);
+  if (String(req.query.reason || '') === 'idle') {
+    view.error = authT(
+      req,
+      'login.error.idle_logout',
+      'ออกจากระบบอัตโนมัติเนื่องจากไม่มีการใช้งาน 2 ชั่วโมง เพื่อความปลอดภัย'
+    );
+  }
   return res.render('login', view);
 });
 
@@ -293,6 +301,7 @@ router.post('/login', requireGuest, async (req, res) => {
         return renderLogin(req, res, { error: authT(req, 'login.error.login_failed', 'เข้าสู่ระบบไม่สำเร็จ') });
       }
       req.session.user = user;
+      markSessionActive(req);
       return res.redirect(String(user.role || 'user') === 'admin' ? '/admin' : '/app');
     });
   } catch (error) {
@@ -569,10 +578,12 @@ router.get('/auth/google/callback', requireGuest, (req, res, next) => {
 
     clearReferralCode(req, res);
     req.session.user = req.user;
+    markSessionActive(req);
     return res.redirect(String(req.user?.role || 'user') === 'admin' ? '/admin' : '/app');
   } catch (error) {
     console.error('GOOGLE referral attach error:', error);
     req.session.user = req.user;
+    markSessionActive(req);
     return res.redirect(String(req.user?.role || 'user') === 'admin' ? '/admin' : '/app');
   }
 });
@@ -703,6 +714,7 @@ router.get('/auth/line/callback', requireGuest, async (req, res) => {
 
       clearReferralCode(req, res);
       req.session.user = user;
+      markSessionActive(req);
       return res.redirect('/app');
     });
 

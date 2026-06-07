@@ -11,6 +11,7 @@ const rateLimit = require('express-rate-limit');
 const helmet = require('helmet');
 
 const { injectUser } = require('./middleware/requireAuth');
+const { enforceSessionIdle } = require('./middleware/sessionIdleTimeout');
 const { appUserLocals } = require('./middleware/appUserLocals');
 const { languageMiddleware, normalizeLocale, localeCache, reloadLocaleCache } = require('./services/i18n');
 const { query, pool, repairVpsAgentCommandSequences } = require('./config/database');
@@ -192,6 +193,7 @@ if (process.env.GOOGLE_CLIENT_ID && process.env.GOOGLE_CLIENT_SECRET && process.
 
 app.use(passport.initialize());
 app.use(passport.session());
+app.use(enforceSessionIdle);
 app.use(languageMiddleware);
 app.use(injectUser);
 
@@ -245,15 +247,18 @@ app.use((req, res, next) => {
 });
 
 function handleLogout(req, res) {
+  const reason = String(req.query.reason || '');
+  const redirectTo = reason === 'idle' ? '/login?reason=idle' : '/';
+
   const finish = () => {
     if (req.session) {
       return req.session.destroy(() => {
         res.clearCookie('connect.sid');
-        return res.redirect('/');
+        return res.redirect(redirectTo);
       });
     }
     res.clearCookie('connect.sid');
-    return res.redirect('/');
+    return res.redirect(redirectTo);
   };
 
   if (typeof req.logout === 'function') {

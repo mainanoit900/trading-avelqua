@@ -1,0 +1,19 @@
+<%
+  const idleGuardUser = (typeof user !== 'undefined' && user)
+    ? user
+    : ((typeof currentUser !== 'undefined' && currentUser) ? currentUser : null);
+  const idleSessionStamp = (typeof request !== 'undefined' && request && request.sessionID)
+    ? request.sessionID
+    : '';
+%>
+<% if (idleGuardUser) { %>
+  <script>
+    window.__AVELQUA_SESSION_IDLE__ = {
+      enabled: true,
+      idleMs: <%= 2 * 60 * 60 * 1000 %>,
+      logoutUrl: '/logout?reason=idle',
+      sessionStamp: <%- JSON.stringify(idleSessionStamp) %>
+    };
+  </script>
+  <script src="/public/js/session-idle-logout.js?v=2026060701"></script>
+<% } %>
