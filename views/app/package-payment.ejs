@@ -288,12 +288,7 @@
               placeholder="กรอกโค้ดคูปอง"
               value="<%= payment.coupon_code_snapshot || '' %>"
             >
-            <button type="submit">
-              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
-                <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
-              </svg>
-              ใช้โค้ด
-            </button>
+            <button type="submit">กดใช้</button>
           </div>
 
           <% if (Number(payment.discount_amount || 0) > 0) { %>
