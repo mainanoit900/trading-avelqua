@@ -45,9 +45,8 @@
     z-index: 1 !important;
     width: 360px !important;
     max-width: calc(100vw - 24px) !important;
-    height: auto !important;
-    max-height: min(520px, calc(100vh - 24px)) !important;
-    min-height: 280px !important;
+    height: 480px !important;
+    max-height: min(480px, calc(100vh - 220px)) !important;
     background: #ffffff !important;
     border: 1px solid #dbe4f0 !important;
     border-radius: 20px !important;
@@ -59,9 +58,12 @@
 
   .ta-ai-chat-box.open {
     display: flex !important;
+    height: 480px !important;
+    max-height: min(480px, calc(100vh - 220px)) !important;
   }
 
   .ta-ai-chat-header {
+    flex: 0 0 auto !important;
     display: flex !important;
     align-items: center !important;
     justify-content: space-between !important;
@@ -99,14 +101,14 @@
   }
 
   .ta-ai-chat-messages {
-    flex: 1 1 auto !important;
+    flex: 1 1 0 !important;
     min-height: 0 !important;
+    overflow-x: hidden !important;
     overflow-y: auto !important;
+    -webkit-overflow-scrolling: touch !important;
     padding: 16px !important;
     background: #f8fafc !important;
-    display: flex !important;
-    flex-direction: column !important;
-    gap: 10px !important;
+    display: block !important;
   }
 
   .ta-ai-msg {
@@ -115,8 +117,12 @@
     border-radius: 14px !important;
     font-size: 14px !important;
     line-height: 1.5 !important;
-    white-space: pre-wrap !important;
     word-break: break-word !important;
+    margin-bottom: 10px !important;
+  }
+
+  .ta-ai-msg:last-child {
+    margin-bottom: 0 !important;
   }
 
   .ta-ai-msg-bot {
@@ -125,6 +131,7 @@
     color: #111827 !important;
     -webkit-text-fill-color: #111827 !important;
     border: 1px solid #d1d5db !important;
+    max-width: 92% !important;
   }
 
   .ta-ai-msg-bot a {
@@ -167,13 +174,14 @@
   }
 
   .ta-ai-msg-user {
-    align-self: flex-end !important;
+    margin-left: auto !important;
     background: #2563eb !important;
     color: #fff !important;
     -webkit-text-fill-color: #fff !important;
   }
 
   .ta-ai-chat-form {
+    flex: 0 0 auto !important;
     display: flex !important;
     gap: 10px !important;
     padding: 12px !important;
@@ -210,8 +218,10 @@
       height: 140px !important;
     }
 
-    .ta-ai-chat-box {
+    .ta-ai-chat-box,
+    .ta-ai-chat-box.open {
       width: calc(100vw - 24px) !important;
-      max-height: calc(100vh - 24px) !important;
+      height: min(420px, calc(100vh - 180px)) !important;
+      max-height: min(420px, calc(100vh - 180px)) !important;
     }
   }
