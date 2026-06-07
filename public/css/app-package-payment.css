@@ -173,14 +173,17 @@
 }
 
 .pp-icon-scoin {
+  width: 72px;
+  height: 72px;
+  border-radius: 20px;
   background: rgba(15, 23, 42, 0.55);
   border: 1px solid rgba(167, 139, 250, 0.28);
   box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
 }
 
 .pp-icon-scoin img {
-  width: 40px;
-  height: 40px;
+  width: 58px;
+  height: 58px;
   object-fit: contain;
 }
 
@@ -302,20 +305,24 @@
 }
 
 .pay-scoin-btn.pp-pay-btn {
-  padding: 20px 22px 20px 88px !important;
+  padding: 20px 22px 20px 98px !important;
   min-height: 118px !important;
   border: 1px solid rgba(196, 181, 253, 0.42) !important;
 }
 
 .pay-scoin-btn .pp-pay-icon {
+  left: 16px;
+  width: 68px;
+  height: 68px;
+  border-radius: 18px;
   background: rgba(15, 23, 42, 0.45);
   border: 1px solid rgba(167, 139, 250, 0.28);
   box-shadow: 0 8px 22px rgba(0, 0, 0, 0.18);
 }
 
 .pay-scoin-btn .pp-pay-icon img {
-  width: 100%;
-  height: 100%;
+  width: 56px;
+  height: 56px;
   object-fit: contain;
 }
 
@@ -367,54 +374,82 @@
 }
 
 .pp-coupon {
-  margin: 0 0 18px !important;
-  padding: 20px !important;
-  border-radius: 24px !important;
+  margin: 0 0 14px !important;
+  padding: 14px 16px !important;
+  border-radius: 18px !important;
   border: 1px solid rgba(251, 191, 36, 0.22) !important;
   background:
-    radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.12), transparent 38%),
-    rgba(255, 255, 255, 0.05) !important;
+    radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.1), transparent 38%),
+    rgba(255, 255, 255, 0.04) !important;
 }
 
 .pp-coupon-head {
   display: flex;
   align-items: center;
-  gap: 12px;
-  margin-bottom: 14px;
+  gap: 10px;
+  margin-bottom: 10px;
+}
+
+.pp-coupon-head .pp-method-icon {
+  width: 42px;
+  height: 42px;
+  border-radius: 14px;
+}
+
+.pp-coupon-head .pp-method-icon svg {
+  width: 24px;
+  height: 24px;
 }
 
 .pp-coupon-head label {
   margin: 0 !important;
-  font-size: 16px !important;
+  font-size: 14px !important;
   color: #fde68a !important;
 }
 
+.pp-coupon-row {
+  align-items: center;
+}
+
 .pp-coupon-row input {
-  border: 1px solid rgba(251, 191, 36, 0.24) !important;
+  min-height: 44px;
+  border: 1px solid rgba(251, 191, 36, 0.22) !important;
   background: rgba(15, 23, 42, 0.72) !important;
-  border-radius: 16px !important;
-  padding: 14px 16px !important;
-  font-weight: 800 !important;
+  border-radius: 12px !important;
+  padding: 10px 14px !important;
+  font-size: 14px !important;
+  font-weight: 700 !important;
 }
 
 .pp-coupon-row input::placeholder {
   color: rgba(191, 219, 254, 0.55);
+  font-weight: 600;
 }
 
 .pp-coupon-row button {
   display: inline-flex;
+  flex-direction: row;
   align-items: center;
   justify-content: center;
-  gap: 8px;
-  min-width: 118px;
-  border-radius: 16px !important;
+  gap: 6px;
+  min-width: 96px;
+  min-height: 44px;
+  padding: 10px 14px !important;
+  border-radius: 12px !important;
+  font-size: 14px !important;
   background: linear-gradient(135deg, #f59e0b, #ea580c 55%, #7c3aed) !important;
-  box-shadow: 0 14px 32px rgba(245, 158, 11, 0.18);
+  box-shadow: 0 10px 24px rgba(245, 158, 11, 0.14);
 }
 
 .pp-coupon-row button svg {
-  width: 18px;
-  height: 18px;
+  width: 16px;
+  height: 16px;
+  flex: 0 0 auto;
+}
+
+.pp-coupon-box p {
+  margin: 8px 0 0 !important;
+  font-size: 13px !important;
 }
 
 .pp-back-link {

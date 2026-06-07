@@ -1,6 +1,6 @@
 <% pageCss = '/css/app-packages.css'; %>
 <%- include('../partials/app-shell') %>
-<link rel="stylesheet" href="/public/css/app-package-payment.css?v=2026060704">
+<link rel="stylesheet" href="/public/css/app-package-payment.css?v=2026060705">
 
 <% if (error || success) { %>
   <div class="scoin-confirm-modal show" id="packageFlashModal" aria-hidden="false">
@@ -177,7 +177,7 @@
         <div class="package-scoin-pay-box pp-scoin-panel">
           <div class="pp-method-head">
             <div class="pp-method-icon pp-icon-scoin" aria-hidden="true">
-              <img src="/public/images/Scoin.png" alt="" width="36" height="36">
+              <img src="/public/images/Scoin.png" alt="" width="58" height="58">
             </div>
             <div>
               <strong>จ่ายด้วย Scoin</strong>
@@ -212,7 +212,7 @@
               data-package="<%= payment.package_name_snapshot || '-' %>"
             >
               <span class="pp-pay-icon" aria-hidden="true">
-                <img src="/public/images/Scoin.png" alt="" width="30" height="30">
+                <img src="/public/images/Scoin.png" alt="" width="56" height="56">
               </span>
               <i class="fa-solid fa-coins"></i>
               <span>จ่ายด้วย Scoin ทันที</span>
