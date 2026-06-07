@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606079">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606080">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -47,8 +47,8 @@
   .ta-ai-chat-box {
     width: 360px;
     max-width: calc(100vw - 24px);
-    height: 480px;
-    max-height: min(480px, calc(100vh - 220px));
+    height: 672px;
+    max-height: min(672px, calc(100vh - 220px));
     background: #fff !important;
     color: #0f172a !important;
     border-radius: 18px;
@@ -77,8 +77,8 @@
 
   .ta-ai-chat-box.open {
     display: grid;
-    height: 480px;
-    max-height: min(480px, calc(100vh - 220px));
+    height: 672px;
+    max-height: min(672px, calc(100vh - 220px));
   }
 
   .ta-ai-chat-header {
@@ -353,8 +353,8 @@
     .ta-ai-chat-box.open {
       width: calc(100vw - 24px);
       max-width: 360px;
-      height: min(420px, calc(100vh - 180px));
-      max-height: min(420px, calc(100vh - 180px));
+      height: min(588px, calc(100vh - 180px));
+      max-height: min(588px, calc(100vh - 180px));
     }
   }
 </style>
@@ -395,7 +395,7 @@
     <div class="ta-ai-chat-footer">
       <div class="ta-ai-chat-pending" id="taAiChatPending">
         <img id="taAiChatPendingImg" alt="" />
-        <span id="taAiChatPendingText">รูปพร้อมส่ง (เก็บ 24 ชม.)</span>
+        <span id="taAiChatPendingText">รูปพร้อมส่ง (ลบหลัง 12:00 น.)</span>
         <button type="button" id="taAiChatPendingClear" aria-label="ลบรูป">×</button>
       </div>
 
@@ -513,7 +513,7 @@
     const availableH = isBelow
       ? Math.max(280, spaceBelow - gap)
       : Math.max(280, spaceAbove - toggleH - gap);
-    const boxH = Math.min(480, availableH, window.innerHeight - margin * 2);
+    const boxH = Math.min(672, availableH, window.innerHeight - margin * 2);
     box.style.setProperty('height', boxH + 'px', 'important');
     box.style.setProperty('max-height', boxH + 'px', 'important');
 
@@ -541,6 +541,25 @@
 
   const savedPos = loadPos();
   setPos(savedPos.r, savedPos.b);
+
+  async function loadSavedHistory() {
+    if (!LOGGED_IN) return;
+    try {
+      const res = await fetch('/api/ai-chat/history', { credentials: 'same-origin' });
+      const data = await res.json();
+      if (!data.ok || !Array.isArray(data.messages) || !data.messages.length) return;
+      messages.innerHTML = '';
+      for (const item of data.messages) {
+        const role = item.role === 'user' ? 'user' : 'bot';
+        const text = String(item.content || '').trim();
+        if (!text) continue;
+        if (role === 'user') add(text, 'user');
+        else add(text, 'bot');
+      }
+    } catch (_) {}
+  }
+
+  loadSavedHistory();
 
   window.addEventListener('resize', function () {
     const s = getComputedStyle(root);

@@ -13,6 +13,14 @@ const {
   ensureAiChatImageTable,
   UPLOAD_DIR
 } = require('../services/aiChatImageService');
+const {
+  buildSessionKey,
+  shouldSaveChatHistory,
+  ensureChatSession,
+  getChatHistory,
+  saveChatMessage,
+  ensureNoonPurgeIfNeeded
+} = require('../services/aiChatHistoryService');
 
 const chatImageUpload = multer({
   storage: multer.memoryStorage(),
@@ -21,59 +29,21 @@ const chatImageUpload = multer({
 
 ensureAiChatImageTable().catch(() => {});
 
-function getContextType(req) {
-  if (req.user?.role === 'admin') return 'admin';
-  if (req.user) return 'user';
-  return 'public';
-}
-
-function buildSessionKey(req) {
-  const contextType = getContextType(req);
-  const userId = req.user?.id || req.session?.user?.id || 'guest';
-  const baseSession = req.sessionID || 'no-session';
-  return `${contextType}:${userId}:${baseSession}`;
-}
-
-async function ensureChatSession(sessionKey, req) {
-  const contextType = getContextType(req);
-  const userId = req.user?.id || req.session?.user?.id || null;
-
-  await query(
-    `INSERT INTO ai_chat_sessions (session_key, user_id, context_type, created_at, updated_at)
-     VALUES ($1, $2, $3, NOW(), NOW())
-     ON CONFLICT (session_key)
-     DO UPDATE SET updated_at = NOW(), context_type = EXCLUDED.context_type`,
-    [sessionKey, userId, contextType]
-  ).catch(() => {});
-}
-
-async function getChatHistory(sessionKey, limit = 10) {
-  const result = await query(
-    `SELECT role, content
-     FROM ai_chat_messages
-     WHERE session_key = $1
-     ORDER BY created_at DESC
-     LIMIT $2`,
-    [sessionKey, limit]
-  ).catch(() => ({ rows: [] }));
-
-  return result.rows.reverse().map((row) => ({
-    role: row.role === 'assistant' ? 'assistant' : 'user',
-    content: row.content
-  }));
-}
-
-async function saveChatMessage(sessionKey, role, content) {
-  await query(
-    `INSERT INTO ai_chat_messages (session_key, role, content, created_at)
-     VALUES ($1, $2, $3, NOW())`,
-    [sessionKey, role, content]
-  ).catch(() => {});
-}
-
 function buildSystemPrompt(settings, req, body = {}) {
   return buildEnhancedSystemPrompt(settings, req, body);
 }
+
+router.get('/ai-chat/history', requireLogin, async (req, res) => {
+  try {
+    await ensureNoonPurgeIfNeeded();
+    const sessionKey = buildSessionKey(req);
+    const messages = await getChatHistory(sessionKey, 30);
+    return res.json({ ok: true, messages });
+  } catch (error) {
+    console.error('AI CHAT HISTORY GET ERROR:', error);
+    return res.status(500).json({ ok: false, messages: [] });
+  }
+});
 
 router.post('/ai-chat/upload', requireLogin, chatImageUpload.single('image'), async (req, res) => {
   try {
@@ -98,7 +68,7 @@ router.get('/ai-chat/image/:id', requireLogin, async (req, res) => {
     const user = req.user || req.session?.user;
     const row = await getChatImageRow(req.params.id, user?.id);
     if (!row) {
-      return res.status(404).json({ ok: false, message: 'ไม่พบรูปหรือหมดอายุแล้ว (เก็บ 24 ชม.)' });
+      return res.status(404).json({ ok: false, message: 'ไม่พบรูปหรือถูกลบแล้ว (ลบหลัง 12:00 น.)' });
     }
     const absPath = path.join(UPLOAD_DIR, row.stored_name);
     if (!fs.existsSync(absPath)) {
@@ -136,15 +106,16 @@ router.post('/ai-chat', async (req, res) => {
       return res.json({ ok: true, reply: 'ยังไม่ได้ตั้งค่า OPENAI_API_KEY ค่ะ' });
     }
 
-    const sessionKey = buildSessionKey(req);
+    await ensureNoonPurgeIfNeeded();
 
-    if (settings.save_chat_history) {
+    const sessionKey = buildSessionKey(req);
+    const saveHistory = shouldSaveChatHistory(req);
+
+    if (saveHistory) {
       await ensureChatSession(sessionKey, req);
     }
 
-    const history = settings.save_chat_history
-      ? await getChatHistory(sessionKey, 10)
-      : [];
+    const history = saveHistory ? await getChatHistory(sessionKey, 12) : [];
 
     const user = req.user || req.session?.user || null;
     let imageDataUrls = [];
@@ -161,7 +132,7 @@ router.post('/ai-chat', async (req, res) => {
       imageDataUrls
     });
 
-    if (settings.save_chat_history) {
+    if (saveHistory) {
       const savedUserText = [message, imageIds.length ? `[แนบรูป ${imageIds.length} ไฟล์]` : '']
         .filter(Boolean)
         .join(' ');
@@ -203,17 +174,18 @@ router.post('/ai-chat/stream', async (req, res) => {
       return res.status(200).json({ ok: false, error: 'ยังไม่ได้ตั้งค่า OPENAI_API_KEY ค่ะ' });
     }
 
-    const sessionKey = buildSessionKey(req);
+    await ensureNoonPurgeIfNeeded();
 
-    if (settings.save_chat_history) {
+    const sessionKey = buildSessionKey(req);
+    const saveHistory = shouldSaveChatHistory(req);
+
+    if (saveHistory) {
       await ensureChatSession(sessionKey, req);
     }
 
-    const history = settings.save_chat_history
-      ? await getChatHistory(sessionKey, 10)
-      : [];
+    const history = saveHistory ? await getChatHistory(sessionKey, 12) : [];
 
-    if (settings.save_chat_history) {
+    if (saveHistory) {
       const savedUserText = [message, imageIds.length ? `[แนบรูป ${imageIds.length} ไฟล์]` : '']
         .filter(Boolean)
         .join(' ');
@@ -246,7 +218,7 @@ router.post('/ai-chat/stream', async (req, res) => {
       res.write(`event: token\ndata: ${JSON.stringify({ token })}\n\n`);
     }
 
-    if (settings.save_chat_history && fullReply.trim()) {
+    if (saveHistory && fullReply.trim()) {
       await saveChatMessage(sessionKey, 'assistant', fullReply);
     }
 

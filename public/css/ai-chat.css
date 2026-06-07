@@ -45,8 +45,8 @@
     z-index: 1 !important;
     width: 360px !important;
     max-width: calc(100vw - 24px) !important;
-    height: 480px !important;
-    max-height: min(480px, calc(100vh - 220px)) !important;
+    height: 672px !important;
+    max-height: min(672px, calc(100vh - 220px)) !important;
     background: #ffffff !important;
     border: 1px solid #dbe4f0 !important;
     border-radius: 20px !important;
@@ -58,8 +58,8 @@
 
   .ta-ai-chat-box.open {
     display: grid !important;
-    height: 480px !important;
-    max-height: min(480px, calc(100vh - 220px)) !important;
+    height: 672px !important;
+    max-height: min(672px, calc(100vh - 220px)) !important;
   }
 
   .ta-ai-chat-header {
@@ -235,7 +235,7 @@
     .ta-ai-chat-box,
     .ta-ai-chat-box.open {
       width: calc(100vw - 24px) !important;
-      height: min(420px, calc(100vh - 180px)) !important;
-      max-height: min(420px, calc(100vh - 180px)) !important;
+      height: min(588px, calc(100vh - 180px)) !important;
+      max-height: min(588px, calc(100vh - 180px)) !important;
     }
   }

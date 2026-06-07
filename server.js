@@ -794,6 +794,7 @@ ensureOptionalTables()
     }
     try {
       require('./services/aiChatImageService').startAiChatImageCleanupScheduler();
+      require('./services/aiChatHistoryService').startAiChatHistoryScheduler();
     } catch (e) {
       console.error('[AiChatImage] start error:', e.message);
     }

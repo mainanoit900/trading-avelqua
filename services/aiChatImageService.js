@@ -83,7 +83,8 @@ async function saveChatImage({ userId, sessionKey, file }) {
     id: row.id,
     url: `/api/ai-chat/image/${row.id}`,
     expiresAt: row.expires_at,
-    ttlHours: 24
+    ttlHours: 24,
+    note: 'รูปแนบจะถูกลบหลัง 12:00 น. พร้อมประวัติแชท'
   };
 }
 
@@ -127,6 +128,22 @@ async function getImageDataUrlsForUser(imageIds, userId) {
   return urls;
 }
 
+async function purgeAllChatImages() {
+  const all = await query(
+    `SELECT id, stored_name FROM ai_chat_uploads LIMIT 2000`
+  ).catch(() => ({ rows: [] }));
+
+  for (const row of all.rows || []) {
+    const absPath = path.join(UPLOAD_DIR, String(row.stored_name || ''));
+    try {
+      if (fs.existsSync(absPath)) fs.unlinkSync(absPath);
+    } catch (_) {}
+  }
+
+  await query(`DELETE FROM ai_chat_uploads`).catch(() => {});
+  return (all.rows || []).length;
+}
+
 async function purgeExpiredChatImages() {
   const expired = await query(
     `SELECT id, stored_name
@@ -166,5 +183,6 @@ module.exports = {
   getChatImageRow,
   getImageDataUrlsForUser,
   purgeExpiredChatImages,
+  purgeAllChatImages,
   startAiChatImageCleanupScheduler
 };

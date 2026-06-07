@@ -10,6 +10,16 @@ function maskEmail(email) {
   return `${e.slice(0, 2)}***${e.slice(at)}`;
 }
 
+function isTruthyFlag(value) {
+  return value === true || value === 't' || value === 1 || value === '1';
+}
+
+async function getFreshUserById(userId) {
+  if (!userId) return null;
+  const result = await query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [userId]).catch(() => ({ rows: [] }));
+  return result.rows[0] || null;
+}
+
 function getUserDisplayName(user) {
   if (!user) return '';
   const raw = String(
@@ -99,26 +109,31 @@ async function getUserSupportContext(user) {
     };
   }
 
+  const freshUser = await getFreshUserById(user.id);
+  const u = freshUser || user;
+
   const [subscription, mt5Accounts, lineStatus, pendingPayments, identityRes] = await Promise.all([
-    getCurrentSubscription(user.id),
-    getMt5Accounts(user.id),
-    getLineStatus(user.id),
-    getPendingPayment(user.id),
+    getCurrentSubscription(u.id),
+    getMt5Accounts(u.id),
+    getLineStatus(u.id),
+    getPendingPayment(u.id),
     query(
       `SELECT status, otp_expires_at, verified_at
        FROM user_identity_verifications
        WHERE user_id = $1
        LIMIT 1`,
-      [user.id]
+      [u.id]
     ).catch(() => ({ rows: [] }))
   ]);
 
   const identity = identityRes.rows[0] || null;
-  const emailVerified = !!(user.email_verified === true || user.email_verified === 't' || user.email_verified === 1);
+  const identityStatus = String(identity?.status || '').toLowerCase();
+  const emailVerified = isTruthyFlag(u.email_verified) || isTruthyFlag(u.emailVerified);
   const identityVerified = !!(
-    user.identity_verified === true ||
-    user.identity_verified === 't' ||
-    user.identity_verified === 1
+    isTruthyFlag(u.identity_verified) ||
+    isTruthyFlag(u.identityVerified) ||
+    identityStatus === 'verified' ||
+    identity?.verified_at
   );
 
   const pkgActive =
@@ -139,16 +154,16 @@ async function getUserSupportContext(user) {
 
   return {
     loggedIn: true,
-    userId: user.id,
-    displayName: getUserDisplayName(user),
-    fullName: user.full_name || user.name || '',
-    email: maskEmail(user.email),
+    userId: u.id,
+    displayName: getUserDisplayName(u),
+    fullName: u.full_name || u.name || '',
+    email: maskEmail(u.email),
     emailVerified,
     identityVerified,
-    identityStatus: identity?.status || (identityVerified ? 'verified' : 'none'),
+    identityStatus: identityVerified ? 'verified' : identityStatus || 'none',
     otpExpired: identity?.otp_expires_at ? new Date(identity.otp_expires_at).getTime() < Date.now() : null,
-    provider: user.provider || 'local',
-    scoinBalance: Number(user.scoin_balance || 0),
+    provider: u.provider || 'local',
+    scoinBalance: Number(u.scoin_balance || 0),
     package: subscription
       ? {
           name: subscription.name_th || subscription.name_en || subscription.package_name,
@@ -175,7 +190,7 @@ async function getUserSupportContext(user) {
       contact: fullUrl('/contact')
     },
     summary: [
-      `เข้าสู่ระบบ: ${maskEmail(user.email)}`,
+      `เข้าสู่ระบบ: ${maskEmail(u.email)}`,
       emailVerified ? 'อีเมลยืนยันแล้ว' : 'อีเมลยังไม่ยืนยัน',
       identityVerified ? 'ยืนยันตัวตนแล้ว' : 'ยังไม่ยืนยันตัวตน',
       subscription ? `แพ็กเกจ: ${subscription.name_th || subscription.status}` : 'ไม่มีแพ็กเกจ',
