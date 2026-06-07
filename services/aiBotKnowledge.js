@@ -118,13 +118,12 @@ const BOT_PROFILES = {
 };
 
 const OPEN_BOT_STEPS_GUEST = [
-  '1) สมัครสมาชิก → ' + fullUrl('/register'),
-  '2) ยืนยันอีเมล → เข้าสู่ระบบ → ' + fullUrl('/login'),
-  '3) ยืนยันตัวตน → ' + fullUrl('/app/identity'),
-  '4) ซื้อแพ็กเกจ → ' + fullUrl('/pricing') + ' หรือ ' + fullUrl('/app/packages'),
-  '5) เชื่อม MT5 → ' + fullUrl('/app/mt5') + ' (Login/Password/Server Exness-MT5Real)',
-  '6) เลือก PORT ว่าง → เลือกบอท → ตั้งทุน/Lot → กด Run',
-  'ดูรายละเอียดบอทเพิ่ม → ' + fullUrl('/bots')
+  '1) ดูรายละเอียดบอททั้งหมด → ' + fullUrl('/bots'),
+  '2) เปรียบเทียบแพ็กเกจ → ' + fullUrl('/pricing'),
+  '3) สมัครสมาชิก → ' + fullUrl('/register'),
+  '4) ยืนยันอีเมลแล้วเข้าสู่ระบบ → ' + fullUrl('/login'),
+  '5) หลัง login ซื้อแพ็กเกจและเชื่อมบอทในพื้นที่สมาชิก (ถามรายละเอียดได้หลัง login)',
+  '6) ตั้งค่าแจ้งเตือน LINE → ' + fullUrl('/contact') + ' แล้วลงทะเบียนใน LINE Official'
 ];
 
 function normalizeBotCode(code) {
@@ -143,6 +142,37 @@ function getBotProfile(botCode) {
 
 function listBotProfiles() {
   return Object.values(BOT_PROFILES);
+}
+
+function buildGuestBotKnowledgePrompt() {
+  const blocks = listBotProfiles().map((b) => {
+    return [
+      `### ${b.name}`,
+      `สัญลักษณ์: ${b.symbol} | TF: ${b.timeframe} | ทุนขั้นต่ำโดยประมาณ: ${b.minCapitalUsd} USD`,
+      `วิธีทำงาน: ${b.strategy}`,
+      `ข้อดี: ${b.pros.join('; ')}`,
+      `ข้อเสีย: ${b.cons.join('; ')}`,
+      `เหมาะกับ: ${b.suitableFor.join('; ')}`,
+      `ไม่เหมาะ: ${b.notSuitableFor.join('; ')}`
+    ].join('\n');
+  });
+  return [
+    '=== การใช้งานบอท (ผู้เยี่ยมชม — อธิบายแนวคิดและเปรียบเทียบบอท) ===',
+    ...blocks,
+    '',
+    '=== ขั้นตอนเริ่มต้น (เฉพาะหน้าสาธารณะ) ===',
+    ...OPEN_BOT_STEPS_GUEST,
+    '',
+    '=== เปรียบเทียบบอท ===',
+    'AK-SNIPER = ปรับ Lot/Trade Level เอง ทุนต่ำ | QUEEN = Lot จาก Equity อัตโนมัติ | Quantum = EA จัดการเอง ทุนขั้นต่ำ ~500 USD',
+    '',
+    '=== แพ็กเกจ vs Lot (ดูรายละเอียดที่ ' + fullUrl('/pricing') + ') ===',
+    `BASIC: Lot ${PACKAGE_LOT.BASIC.lotMin}-${PACKAGE_LOT.BASIC.lotMax}`,
+    `PRO: Lot ${PACKAGE_LOT.PRO.lotMin}-${PACKAGE_LOT.PRO.lotMax}`,
+    `ADVANCED: Lot ${PACKAGE_LOT.ADVANCED.lotMin}-${PACKAGE_LOT.ADVANCED.lotMax}`,
+    '',
+    'ห้ามอธิบายการตั้งค่า MT5/PORT ในพื้นที่สมาชิก — ให้แนะนำ login ก่อน'
+  ].join('\n');
 }
 
 function buildBotKnowledgePrompt() {
@@ -182,26 +212,42 @@ async function fetchActiveBotsFromDb() {
   return result.rows || [];
 }
 
-async function getBotCatalog({ botCode = '', userContext = null } = {}) {
+async function getBotCatalog({ botCode = '', userContext = null, guestMode = false } = {}) {
   const dbBots = await fetchActiveBotsFromDb();
   const profiles = listBotProfiles();
+  const openSteps = guestMode ? OPEN_BOT_STEPS_GUEST : OPEN_BOT_STEPS_GUEST;
 
   const merged = profiles.map((profile) => {
     const db = dbBots.find(
       (r) => String(r.bot_code || '').toUpperCase() === profile.code.toUpperCase()
     );
     const item = {
-      ...profile,
+      code: profile.code,
+      name: profile.name,
+      symbol: profile.symbol,
+      timeframe: profile.timeframe,
+      minCapitalUsd: profile.minCapitalUsd,
+      strategy: profile.strategy,
+      pros: profile.pros,
+      cons: profile.cons,
+      suitableFor: profile.suitableFor,
+      notSuitableFor: profile.notSuitableFor,
       active: !!db || true,
       defaultLot: db?.default_lot,
       maxLot: db?.max_lot,
       requiredPorts: db?.required_ports || 1,
       botsPage: fullUrl('/bots'),
-      mt5Page: fullUrl('/app/mt5'),
-      pricingPage: fullUrl('/pricing')
+      pricingPage: fullUrl('/pricing'),
+      registerPage: fullUrl('/register'),
+      loginPage: fullUrl('/login')
     };
 
-    if (userContext?.loggedIn) {
+    if (!guestMode) {
+      item.howItWorks = profile.howItWorks;
+      item.mt5Page = fullUrl('/app/mt5');
+    }
+
+    if (userContext?.loggedIn && !guestMode) {
       const pkgGroup = String(userContext.package?.group || userContext.package?.name || '').toUpperCase();
       const lotPolicy = PACKAGE_LOT[pkgGroup.includes('PRO') ? 'PRO' : pkgGroup.includes('ADV') ? 'ADVANCED' : 'BASIC'];
       const minOk = !userContext.mt5Accounts?.length
@@ -225,15 +271,23 @@ async function getBotCatalog({ botCode = '', userContext = null } = {}) {
 
   if (botCode) {
     const one = merged.find((b) => normalizeBotCode(botCode) === b.code) || null;
-    return { ok: !!one, bot: one, openSteps: OPEN_BOT_STEPS_GUEST };
+    return {
+      ok: !!one,
+      bot: one,
+      openSteps,
+      guestMode,
+      note: guestMode ? 'รายละเอียดการเชื่อมบอทจริงอยู่ในพื้นที่สมาชิก — กรุณา login ก่อน' : undefined
+    };
   }
 
   return {
     ok: true,
     bots: merged,
-    openSteps: OPEN_BOT_STEPS_GUEST,
+    openSteps,
+    guestMode,
     compareHint:
-      'AK = ปรับ Lot/Trade Level เอง | QUEEN = Lot จาก Equity อัตโนมัติ | Quantum = EA จัดการเอง ทุนขั้นต่ำสูง'
+      'AK = ปรับ Lot/Trade Level เอง | QUEEN = Lot จาก Equity อัตโนมัติ | Quantum = EA จัดการเอง ทุนขั้นต่ำสูง',
+    note: guestMode ? 'อธิบายได้เฉพาะหน้า /bots /pricing และขั้นตอนสมัคร/login' : undefined
   };
 }
 
@@ -271,6 +325,7 @@ module.exports = {
   OPEN_BOT_STEPS_GUEST,
   getBotProfile,
   listBotProfiles,
+  buildGuestBotKnowledgePrompt,
   buildBotKnowledgePrompt,
   getBotCatalog,
   recommendBot,

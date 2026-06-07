@@ -2,6 +2,19 @@
 
 const BASE_URL = process.env.APP_BASE_URL || process.env.BASE_URL || 'https://trading.avelqua.com';
 
+/** หน้าที่ AI อธิบายได้เมื่อผู้ใช้ยังไม่ login */
+const PUBLIC_GUEST_PAGE_KEYS = [
+  'home',
+  'bots',
+  'market',
+  'pricing',
+  'news',
+  'contact',
+  'login',
+  'register',
+  'forgot_password'
+];
+
 const PAGE_GUIDES = {
   home: {
     path: '/',
@@ -213,6 +226,59 @@ function getPageGuideByPath(pathname) {
   return null;
 }
 
+function isGuestAllowedPageKey(pageKey) {
+  return PUBLIC_GUEST_PAGE_KEYS.includes(String(pageKey || '').trim());
+}
+
+function isGuestAllowedPath(pathname) {
+  const path = String(pathname || '/').split('?')[0];
+  if (path === '/') return true;
+  const allowedPaths = PUBLIC_GUEST_PAGE_KEYS.map((k) => PAGE_GUIDES[k]?.path).filter(Boolean);
+  return allowedPaths.includes(path);
+}
+
+const GUEST_PAGE_USAGE_OVERRIDES = {
+  register:
+    '1) กรอกชื่อ อีเมล รหัสผ่าน 2) กดสมัคร 3) เปิดอีเมลยืนยัน (ตรวจ Spam) 4) กดลิงก์ยืนยัน 5) เข้าสู่ระบบที่ /login — หลัง login จึงซื้อแพ็กเกจและใช้บอทในพื้นที่สมาชิก',
+  bots:
+    'ดูรายละเอียดบอทเทรด จุดเด่น และขั้นตอนเริ่มต้น — การเชื่อมบอทจริงทำหลังสมัครและ login แล้ว',
+  pricing:
+    'เปรียบเทียบแพ็กเกจ BASIC / PRO / ADVANCED ดู Lot และจำนวนพอร์ต — กดซื้อได้หลังสมัครและ login',
+  market:
+    'ดูภาพรวมตลาดและข้อมูลประกอบการเทรด ไม่ใช่คำแนะนำการลงทุน',
+  news: 'อ่านข่าวตลาดล่าสุดพร้อมสรุป (ถ้าเปิดใช้งาน)',
+  contact:
+    'ช่องทางอีเมล Facebook LINE TikTok — เพิ่มเพื่อน LINE Official จากหน้านี้เพื่อรับแจ้งเตือน'
+};
+
+function buildGuestKnowledgePrompt() {
+  const pages = PUBLIC_GUEST_PAGE_KEYS.map((key) => {
+    const g = PAGE_GUIDES[key];
+    if (!g) return '';
+    const usage = GUEST_PAGE_USAGE_OVERRIDES[key] || g.usage;
+    return `- [${key}] ${g.title}: ${fullUrl(g.path)} | เมนู: ${g.menu} | วิธีใช้: ${usage}`;
+  }).join('\n');
+
+  return [
+    '=== ขอบเขตผู้เยี่ยมชม (ยังไม่ login) — อธิบายได้เฉพาะหน้าเหล่านี้ ===',
+    pages,
+    '',
+    '=== แจ้งเตือน LINE ===',
+    LINE_GUIDE.summary,
+    ...LINE_GUIDE.steps,
+    `ลิงก์เพิ่มเพื่อน LINE: ${LINE_GUIDE.contactPage}`,
+    '',
+    '=== ตลาด / ข่าว (หน้าสาธารณะ) ===',
+    MARKET_GUIDE.disclaimer,
+    `หน้าตลาด: ${fullUrl('/market')} | หน้าข่าว: ${fullUrl('/news')}`,
+    '',
+    '=== ข้อห้ามสำหรับผู้เยี่ยมชม ===',
+    '- ห้ามอธิบายรายละเอียบหน้า /app/* (พื้นที่สมาชิก)',
+    '- ห้ามแก้ปัญหา MT5/บัญชีเฉพาะราย — ให้แนะนำ login ก่อน',
+    '- ถ้าถามเรื่องพื้นที่สมาชิก ตอบสั้นๆ ว่าต้อง login ที่ ' + fullUrl('/login')
+  ].join('\n');
+}
+
 function buildKnowledgePrompt() {
   const pages = Object.entries(PAGE_GUIDES)
     .map(([key, g]) => `- [${key}] ${g.title}: ${fullUrl(g.path)} | เมนู: ${g.menu} | วิธีใช้: ${g.usage}`)
@@ -242,6 +308,7 @@ function buildKnowledgePrompt() {
 
 module.exports = {
   BASE_URL,
+  PUBLIC_GUEST_PAGE_KEYS,
   PAGE_GUIDES,
   MT5_TROUBLESHOOTING,
   LINE_GUIDE,
@@ -249,5 +316,8 @@ module.exports = {
   fullUrl,
   getPageGuide,
   getPageGuideByPath,
+  isGuestAllowedPageKey,
+  isGuestAllowedPath,
+  buildGuestKnowledgePrompt,
   buildKnowledgePrompt
 };

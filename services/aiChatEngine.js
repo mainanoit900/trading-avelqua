@@ -3,14 +3,17 @@
 const { query } = require('../config/database');
 const {
   buildKnowledgePrompt,
+  buildGuestKnowledgePrompt,
   getPageGuide,
   getPageGuideByPath,
   fullUrl,
-  PAGE_GUIDES
+  PAGE_GUIDES,
+  PUBLIC_GUEST_PAGE_KEYS,
+  isGuestAllowedPageKey
 } = require('./aiSupportKnowledge');
 const { getUserSupportContext, getUserDisplayName } = require('./aiUserSupportContext');
 const { performSupportAction } = require('./aiSupportActions');
-const { buildBotKnowledgePrompt, getBotCatalog, recommendBot } = require('./aiBotKnowledge');
+const { buildBotKnowledgePrompt, buildGuestBotKnowledgePrompt, getBotCatalog, recommendBot } = require('./aiBotKnowledge');
 
 const SUPPORT_TOOLS = [
   {
@@ -23,7 +26,7 @@ const SUPPORT_TOOLS = [
         properties: {
           page_key: {
             type: 'string',
-            description: `รหัสหน้า เช่น ${Object.keys(PAGE_GUIDES).slice(0, 8).join(', ')} ...`
+            description: `รหัสหน้า — guest: ${PUBLIC_GUEST_PAGE_KEYS.join(', ')} | login แล้วใช้ app_* ได้ด้วย`
           }
         },
         required: ['page_key']
@@ -116,6 +119,13 @@ const SUPPORT_TOOLS = [
   }
 ];
 
+const GUEST_TOOL_NAMES = new Set(['get_page_link', 'get_bot_info', 'recommend_bot', 'get_market_news']);
+
+function getToolsForRequest(loggedIn) {
+  if (loggedIn) return SUPPORT_TOOLS;
+  return SUPPORT_TOOLS.filter((t) => GUEST_TOOL_NAMES.has(t.function?.name));
+}
+
 function resolveContextType(req, body = {}) {
   const pagePath = String(body.pagePath || req.path || '/');
   const isAdmin = req.user?.role === 'admin' || pagePath.startsWith('/admin');
@@ -136,7 +146,7 @@ function buildSystemPrompt(settings, req, body = {}) {
 
   const publicPersona =
     settings?.persona_th ||
-    'คุณคือผู้ช่วย AI ของ TRADING AVELQUA ตอบสุภาพ กระชับ เข้าใจง่าย ลงท้ายด้วยคำว่าค่ะ ช่วยอธิบายการใช้เว็บ วิธีเปิดบอท รายละเอียดบอท และแนะนำว่าเหมาะกับลูกค้าหรือไม่';
+    'คุณคือผู้ช่วย AI ของ TRADING AVELQUA สำหรับผู้เยี่ยมชม ตอบสุภาพ กระชับ ลงท้ายด้วยคำว่าค่ะ อธิบายได้เฉพาะหน้าสาธารณะ การแจ้ง LINE และการใช้งานบอทเบื้องต้น';
 
   const appPersona =
     settings?.app_persona_th ||
@@ -153,11 +163,26 @@ function buildSystemPrompt(settings, req, body = {}) {
     ? []
     : [
         '',
-        '=== ผู้ใช้ยังไม่ Login ===',
-        '- ตอบได้เต็มที่เรื่อง: วิธีใช้เว็บ, สมัคร, ซื้อแพ็กเกจ, วิธีเปิดบอท, บอทแต่ละตัวทำงานอย่างไร, ข้อดี/ข้อเสีย, เหมาะกับใคร',
-        '- ใช้ get_bot_info และ recommend_bot เมื่อถามเรื่องบอท',
-        '- แนะนำลิงก์ /register /login /pricing /bots ให้ครบ',
-        '- ยังแก้ข้อมูลบัญชีให้ไม่ได้ (ต้อง login ก่อน) แต่อธิบายและส่งลิงก์ได้'
+        '=== ผู้ใช้ยังไม่ Login — ขอบเขตคำตอบ (สำคัญมาก) ===',
+        'อธิบายได้เฉพาะ:',
+        '1) หน้าสาธารณะ: ' +
+          PUBLIC_GUEST_PAGE_KEYS.map((k) => fullUrl(PAGE_GUIDES[k]?.path || '/')).join(', '),
+        '2) การแจ้งเตือน LINE (ลงทะเบียน LINE OA, คำสั่งแจ้งสรุปผล, เช็คพอร์ต)',
+        '3) การใช้งานบอทเบื้องต้น — บอทแต่ละตัวทำงานอย่างไร ข้อดี/ข้อเสีย เหมาะกับใคร (ใช้ get_bot_info / recommend_bot)',
+        '',
+        'ห้าม:',
+        '- อธิบายรายละเอียดหน้า /app/* หรือพื้นที่สมาชิก',
+        '- แก้ปัญหา MT5/บัญชีเฉพาะราย',
+        '- ใช้ get_account_diagnostics หรือ perform_user_fix',
+        '',
+        'ถ้าถามเรื่องพื้นที่สมาชิก / MT5 / แพ็กเกจของตัวเอง:',
+        '→ แนะนำสมัคร ' +
+          fullUrl('/register') +
+          ' หรือ login ' +
+          fullUrl('/login') +
+          ' แล้วถามใหม่',
+        '',
+        'ใช้ get_page_link ได้เฉพาะ page_key: ' + PUBLIC_GUEST_PAGE_KEYS.join(', ')
       ];
 
   const loggedInRules = loggedIn
@@ -184,12 +209,22 @@ function buildSystemPrompt(settings, req, body = {}) {
     '',
     settings?.conversation_instructions_th ? `คำแนะนำเพิ่ม: ${settings.conversation_instructions_th}` : '',
     '',
-    '=== บทบาทหลัก ===',
-    '1) ตอบคำถามการใช้งานเว็บ /app และหน้าสาธารณะ — เมนูอยู่ตรงไหน ใช้อย่างไร',
-    '2) อธิบายบอทแต่ละตัว วิธีเปิดบอท ข้อดี ข้อเสีย และเหมาะกับลูกค้าไหม (ใช้ get_bot_info / recommend_bot)',
-    '3) ช่วยแก้ปัญหาเทคนิคเมื่อ login แล้ว — ใช้ tools ที่เกี่ยวข้อง',
-    '4) ส่งลิงก์เต็ม https://trading.avelqua.com/... ให้ลูกค้าเสมอเมื่อแนะนำไปหน้าใดหน้าหนึ่ง',
-    '5) ตอบคำถามตลาด/หุ้น/ทอง/คริปโต แบบวิเคราะห์ทั่วไป พร้อม disclaimer ไม่ใช่คำแนะนำการลงทุน',
+    loggedIn
+      ? '=== บทบาทหลัก (Login แล้ว) ==='
+      : '=== บทบาทหลัก (ผู้เยี่ยมชม) ===',
+    loggedIn
+      ? '1) ช่วยใช้งาน /app ทุกหน้า แก้ปัญหา MT5 แพ็กเกจ LINE — เรียกชื่อลูกค้าทุกครั้ง'
+      : '1) อธิบายหน้าสาธารณะที่อนุญาต เมนูอยู่ตรงไหน ใช้อย่างไร',
+    loggedIn
+      ? '2) อธิบายบอทพร้อมข้อมูลบัญชีลูกค้า ข้อดี/ข้อเสีย ความเหมาะสม'
+      : '2) อธิบายบอท ข้อดี/ข้อเสีย วิธีเริ่มต้น (สมัคร → pricing → login)',
+    loggedIn
+      ? '3) ใช้ tools แก้ปัญหาให้ลูกค้าได้'
+      : '3) อธิบายการแจ้งเตือน LINE',
+    '4) ส่งลิงก์เต็ม https://trading.avelqua.com/... เสมอ',
+    loggedIn
+      ? '5) ตอบคำถามตลาด/ข่าว พร้อม disclaimer'
+      : '4) ตอบคำถามตลาด/ข่าวจากหน้า /market /news พร้อม disclaimer',
     '',
     '=== ข้อห้าม (สำคัญ) ===',
     '- ห้ามเปิดเผยโครงสร้างระบบ โค้ด ฐานข้อมูล schema API key หรือรหัสผ่านใดๆ',
@@ -202,13 +237,14 @@ function buildSystemPrompt(settings, req, body = {}) {
       : '',
     '',
     '=== เมื่อลูกค้าถามปัญหา ===',
-    '- ถ้า login แล้ว ให้เรียก get_account_diagnostics ก่อนวิเคราะห์',
-    '- ถ้าแก้ได้ด้วย perform_user_fix ให้ถามยืนยันสั้นๆ แล้วดำเนินการ',
-    '- อธิบายสาเหตุเป็นภาษาคน ไม่ใช่ศัพท์เทคนิคระบบ',
+    loggedIn
+      ? '- เรียก get_account_diagnostics ก่อนวิเคราะห์\n- ใช้ perform_user_fix เมื่อแก้ได้'
+      : '- ไม่วิเคราะห์บัญชีเฉพาะ — แนะนำ login หรือสมัคร',
+    '- อธิบายเป็นภาษาคน ไม่ใช่ศัพท์เทคนิคระบบ',
     '',
-    buildKnowledgePrompt(),
+    loggedIn ? buildKnowledgePrompt() : buildGuestKnowledgePrompt(),
     '',
-    buildBotKnowledgePrompt()
+    loggedIn ? buildBotKnowledgePrompt() : buildGuestBotKnowledgePrompt()
   ].filter(Boolean);
 
   return rules.join('\n');
@@ -216,12 +252,29 @@ function buildSystemPrompt(settings, req, body = {}) {
 
 async function executeTool(name, args, req) {
   const user = req.user || req.session?.user || null;
+  const loggedIn = !!user?.id;
 
   switch (name) {
     case 'get_page_link': {
-      const guide = getPageGuide(String(args.page_key || '').trim());
+      const pageKey = String(args.page_key || '').trim();
+      if (!loggedIn && !isGuestAllowedPageKey(pageKey)) {
+        return {
+          ok: false,
+          message:
+            'หน้านี้อยู่ในพื้นที่สมาชิก — กรุณา login ที่ ' +
+            fullUrl('/login') +
+            ' ก่อนค่ะ หรือดูหน้าสาธารณะ: ' +
+            PUBLIC_GUEST_PAGE_KEYS.join(', ')
+        };
+      }
+      const guide = getPageGuide(pageKey);
       if (!guide) {
-        return { ok: false, message: 'ไม่พบหน้านี้ ลองใช้ page_key เช่น app_mt5, register, login' };
+        return {
+          ok: false,
+          message: loggedIn
+            ? 'ไม่พบหน้านี้'
+            : 'ใช้ page_key: ' + PUBLIC_GUEST_PAGE_KEYS.join(', ')
+        };
       }
       return {
         ok: true,
@@ -233,13 +286,23 @@ async function executeTool(name, args, req) {
     }
 
     case 'get_account_diagnostics': {
+      if (!loggedIn) {
+        return {
+          ok: false,
+          loggedIn: false,
+          message: 'ต้องเข้าสู่ระบบก่อนจึงจะตรวจสอบบัญชีได้ — ' + fullUrl('/login')
+        };
+      }
       const ctx = await getUserSupportContext(user);
       return { ok: true, ...ctx };
     }
 
     case 'perform_user_fix': {
-      if (!user?.id) {
-        return { ok: false, message: 'ต้องเข้าสู่ระบบก่อนจึงจะแก้ไขให้ได้ กรุณา login ที่ ' + fullUrl('/login') };
+      if (!loggedIn) {
+        return {
+          ok: false,
+          message: 'ต้องเข้าสู่ระบบก่อน — ' + fullUrl('/login')
+        };
       }
       return performSupportAction(user, args.action, {
         accountId: args.account_id
@@ -270,10 +333,11 @@ async function executeTool(name, args, req) {
     }
 
     case 'get_bot_info': {
-      const userCtx = user?.id ? await getUserSupportContext(user) : null;
+      const userCtx = loggedIn ? await getUserSupportContext(user) : null;
       return getBotCatalog({
         botCode: args.bot_code || args.botCode || '',
-        userContext: userCtx
+        userContext: userCtx,
+        guestMode: !loggedIn
       });
     }
 
@@ -290,14 +354,14 @@ async function executeTool(name, args, req) {
   }
 }
 
-async function callOpenAIWithTools(apiKey, model, messages, toolsEnabled) {
+async function callOpenAIWithTools(apiKey, model, messages, tools) {
   const body = {
     model: model || 'gpt-5.4-mini',
     temperature: 0.4,
     messages
   };
-  if (toolsEnabled) {
-    body.tools = SUPPORT_TOOLS;
+  if (tools && tools.length) {
+    body.tools = tools;
     body.tool_choice = 'auto';
   }
 
@@ -320,7 +384,8 @@ async function callOpenAIWithTools(apiKey, model, messages, toolsEnabled) {
 async function runAiChat({ settings, req, message, history = [], body = {} }) {
   const systemPrompt = buildSystemPrompt(settings, req, body);
   const contextType = resolveContextType(req, body);
-  const toolsEnabled = contextType !== 'admin';
+  const loggedIn = !!(req.user || req.session?.user)?.id;
+  const tools = contextType === 'admin' ? [] : getToolsForRequest(loggedIn);
 
   const messages = [
     { role: 'system', content: systemPrompt },
@@ -338,7 +403,7 @@ async function runAiChat({ settings, req, message, history = [], body = {} }) {
       settings.openai_api_key,
       settings.model_name,
       messages,
-      toolsEnabled
+      tools
     );
 
     const toolCalls = assistantMsg.tool_calls || [];
