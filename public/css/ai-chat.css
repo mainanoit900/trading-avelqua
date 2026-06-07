@@ -1,8 +1,6 @@
 
   .ta-ai-chat {
     position: fixed !important;
-    right: 24px !important;
-    bottom: 24px !important;
     z-index: 99999 !important;
     font-family: inherit !important;
   }
@@ -173,11 +171,6 @@
   }
 
   @media (max-width: 640px) {
-    .ta-ai-chat {
-      right: 12px !important;
-      bottom: 12px !important;
-    }
-
     .ta-ai-chat-toggle {
       width: 140px !important;
       height: 140px !important;

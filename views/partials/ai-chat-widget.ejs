@@ -1,4 +1,4 @@
-<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606075">
+<link rel="stylesheet" href="/public/css/ai-chat.css?v=202606076">
 
 <style>
   /* ai-chat-widget scoped styles */
@@ -389,7 +389,7 @@
 
   const DEFAULT_POS = { r: 20, b: 20 };
   const POS_KEY = 'chat_pos_v_lang_v1';
-  const LONG_PRESS_MS = 400;
+  const LONG_PRESS_MS = 350;
 
   function loadPos() {
     try {
@@ -418,10 +418,10 @@
 
   function setPos(r, b) {
     const p = clampPos(r, b);
-    root.style.right = p.r + 'px';
-    root.style.bottom = p.b + 'px';
-    root.style.left = 'auto';
-    root.style.top = 'auto';
+    root.style.setProperty('right', p.r + 'px', 'important');
+    root.style.setProperty('bottom', p.b + 'px', 'important');
+    root.style.setProperty('left', 'auto', 'important');
+    root.style.setProperty('top', 'auto', 'important');
     layoutChatBox();
     return p;
   }
@@ -500,8 +500,11 @@
   let dragEnabled = false;
   let suppressClick = false;
   let longPressTimer = null;
+  let activePointerId = null;
   let sx = 0;
   let sy = 0;
+  let lastX = 0;
+  let lastY = 0;
   let sr = DEFAULT_POS.r;
   let sb = DEFAULT_POS.b;
 
@@ -515,6 +518,8 @@
   function finishPointer(e) {
     clearLongPress();
     pointerActive = false;
+    dragEnabled = false;
+    activePointerId = null;
     toggle.classList.remove('dragging');
     try { toggle.releasePointerCapture(e.pointerId); } catch (_) {}
   }
@@ -626,8 +631,11 @@
     pointerActive = true;
     dragEnabled = false;
     suppressClick = false;
+    activePointerId = e.pointerId;
     sx = e.clientX;
     sy = e.clientY;
+    lastX = sx;
+    lastY = sy;
 
     const s = getComputedStyle(root);
     sr = parseInt(s.right, 10) || DEFAULT_POS.r;
@@ -635,31 +643,35 @@
 
     clearLongPress();
     longPressTimer = setTimeout(() => {
-      if (!pointerActive) return;
+      if (!pointerActive || activePointerId !== e.pointerId) return;
       dragEnabled = true;
       suppressClick = true;
       toggle.classList.add('dragging');
+      sx = lastX;
+      sy = lastY;
+      const cur = getComputedStyle(root);
+      sr = parseInt(cur.right, 10) || DEFAULT_POS.r;
+      sb = parseInt(cur.bottom, 10) || DEFAULT_POS.b;
     }, LONG_PRESS_MS);
 
     try { toggle.setPointerCapture(e.pointerId); } catch (_) {}
   };
 
   toggle.onpointermove = e => {
-    if (!pointerActive) return;
+    if (!pointerActive || e.pointerId !== activePointerId) return;
+
+    lastX = e.clientX;
+    lastY = e.clientY;
+
+    if (!dragEnabled) return;
 
     const dx = e.clientX - sx;
     const dy = e.clientY - sy;
-
-    if (!dragEnabled) {
-      if (Math.abs(dx) > 6 || Math.abs(dy) > 6) clearLongPress();
-      return;
-    }
-
     setPos(sr - dx, sb - dy);
   };
 
   toggle.onpointerup = e => {
-    if (!pointerActive) return;
+    if (!pointerActive || e.pointerId !== activePointerId) return;
 
     if (dragEnabled) {
       const p = setPos(parseInt(getComputedStyle(root).right, 10), parseInt(getComputedStyle(root).bottom, 10));
@@ -669,10 +681,12 @@
       return;
     }
 
+    clearLongPress();
     finishPointer(e);
   };
 
   toggle.onpointercancel = e => {
+    if (e.pointerId !== activePointerId) return;
     dragEnabled = false;
     finishPointer(e);
   };
