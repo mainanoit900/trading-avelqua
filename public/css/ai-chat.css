@@ -12,18 +12,30 @@
   }
 
   .ta-ai-chat-toggle {
-    width: 64px !important;
-    height: 64px !important;
+    width: 200px !important;
+    height: 200px !important;
     border: 0 !important;
-    border-radius: 999px !important;
-    cursor: pointer !important;
+    border-radius: 0 !important;
+    cursor: grab !important;
     display: flex !important;
     align-items: center !important;
     justify-content: center !important;
-    background: linear-gradient(135deg, #2563eb, #1d4ed8) !important;
-    color: #fff !important;
-    font-size: 28px !important;
-    box-shadow: 0 18px 40px rgba(37, 99, 235, 0.28) !important;
+    background: transparent !important;
+    padding: 0 !important;
+    box-shadow: none !important;
+  }
+
+  .ta-ai-chat-toggle:active {
+    cursor: grabbing !important;
+  }
+
+  .ta-ai-chat-icon {
+    width: 100% !important;
+    height: 100% !important;
+    object-fit: contain !important;
+    display: block !important;
+    pointer-events: none !important;
+    user-select: none !important;
   }
 
   .ta-ai-chat-box {
@@ -159,6 +171,11 @@
     .ta-ai-chat {
       right: 12px !important;
       bottom: 12px !important;
+    }
+
+    .ta-ai-chat-toggle {
+      width: 140px !important;
+      height: 140px !important;
     }
 
     .ta-ai-chat-box {
