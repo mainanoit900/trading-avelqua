@@ -173,16 +173,18 @@
 }
 
 .pp-icon-scoin {
-  background: linear-gradient(135deg, #fde68a, #f59e0b);
-  border: 1px solid rgba(254, 240, 138, 0.5);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.95), rgba(8, 145, 178, 0.92));
+  border: 1px solid rgba(165, 243, 252, 0.42);
+  box-shadow: 0 12px 30px rgba(14, 165, 233, 0.22);
 }
 
 .pp-icon-promptpay {
-  background: linear-gradient(135deg, #0ea5e9, #0369a1);
-  border: 1px solid rgba(125, 211, 252, 0.45);
+  background: linear-gradient(135deg, #0284c7, #0369a1);
+  border: 1px solid rgba(186, 230, 253, 0.45);
 }
 
-.pp-icon-promptpay img {
+.pp-icon-promptpay img,
+.pp-icon-promptpay svg {
   width: 34px;
   height: 34px;
   border-radius: 8px;
@@ -269,8 +271,18 @@
 }
 
 .pp-pay-promptpay .pp-pay-icon {
-  background: rgba(255, 255, 255, 0.16);
-  border: 1px solid rgba(186, 230, 253, 0.35);
+  background: #fff;
+  border: 1px solid rgba(186, 230, 253, 0.85);
+  padding: 8px;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.65);
+}
+
+.pp-pay-promptpay .pp-pay-icon img,
+.pp-pay-promptpay .pp-pay-icon svg {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  border-radius: 6px;
 }
 
 .pp-pay-card-btn {
@@ -290,8 +302,9 @@
 }
 
 .pay-scoin-btn .pp-pay-icon {
-  background: linear-gradient(135deg, #fde68a, #f59e0b);
-  border: 1px solid rgba(254, 240, 138, 0.55);
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.95), rgba(8, 145, 178, 0.92));
+  border: 1px solid rgba(165, 243, 252, 0.42);
+  box-shadow: 0 8px 22px rgba(14, 165, 233, 0.18);
 }
 
 .pay-scoin-btn i {
