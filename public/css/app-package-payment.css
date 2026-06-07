@@ -1,0 +1,451 @@
+/* Premium package payment page */
+.pp-premium .package-pay-card {
+  max-width: 860px;
+  padding: 34px;
+  border-radius: 32px;
+  border: 1px solid rgba(167, 139, 250, 0.22);
+  background:
+    radial-gradient(circle at 12% 0%, rgba(168, 85, 247, 0.28), transparent 38%),
+    radial-gradient(circle at 88% 8%, rgba(56, 189, 248, 0.22), transparent 34%),
+    radial-gradient(circle at 50% 100%, rgba(245, 158, 11, 0.08), transparent 42%),
+    linear-gradient(155deg, rgba(15, 23, 42, 0.98), rgba(2, 6, 23, 0.99));
+  box-shadow:
+    0 32px 100px rgba(0, 0, 0, 0.48),
+    inset 0 1px 0 rgba(255, 255, 255, 0.08);
+}
+
+.pp-head {
+  display: flex;
+  gap: 18px;
+  align-items: flex-start;
+  margin-bottom: 8px;
+}
+
+.pp-head-badge {
+  flex: 0 0 auto;
+  width: 72px;
+  height: 72px;
+  border-radius: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: linear-gradient(135deg, rgba(124, 58, 237, 0.35), rgba(14, 165, 233, 0.28));
+  border: 1px solid rgba(167, 139, 250, 0.35);
+  box-shadow: 0 16px 40px rgba(79, 70, 229, 0.22);
+}
+
+.pp-head-badge svg {
+  width: 38px;
+  height: 38px;
+}
+
+.pp-head-copy h2 {
+  margin: 10px 0 8px;
+  font-size: clamp(28px, 4vw, 36px);
+  letter-spacing: -0.02em;
+}
+
+.pp-head-copy p {
+  margin: 0;
+  max-width: 640px;
+  line-height: 1.75;
+  color: rgba(191, 219, 254, 0.92);
+}
+
+.pp-summary {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 14px;
+  margin: 26px 0 28px;
+}
+
+.pp-summary-item {
+  position: relative;
+  overflow: hidden;
+  padding: 18px 18px 18px 62px !important;
+  border-radius: 22px !important;
+  background: linear-gradient(180deg, rgba(255, 255, 255, 0.07), rgba(255, 255, 255, 0.03)) !important;
+  border: 1px solid rgba(148, 163, 184, 0.16) !important;
+}
+
+.pp-summary-item::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.08), transparent 42%);
+  pointer-events: none;
+}
+
+.pp-summary-icon {
+  position: absolute;
+  left: 16px;
+  top: 18px;
+  width: 34px;
+  height: 34px;
+  border-radius: 12px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(124, 58, 237, 0.18);
+  border: 1px solid rgba(167, 139, 250, 0.28);
+  color: #c4b5fd;
+  font-size: 15px;
+  font-weight: 900;
+}
+
+.pp-summary-item:nth-child(3) .pp-summary-icon {
+  background: rgba(245, 158, 11, 0.16);
+  border-color: rgba(251, 191, 36, 0.32);
+  color: #fde68a;
+}
+
+.pp-summary-item span {
+  color: rgba(147, 197, 253, 0.88) !important;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  font-size: 11px !important;
+}
+
+.pp-summary-item strong {
+  font-size: 17px !important;
+}
+
+.pp-summary-item .pay-amount {
+  font-size: clamp(22px, 3vw, 28px) !important;
+  color: #fef3c7 !important;
+  text-shadow: 0 0 24px rgba(251, 191, 36, 0.18);
+}
+
+.pp-section {
+  margin-top: 8px;
+}
+
+.pp-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 0 0 16px;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 950;
+}
+
+.pp-section-title svg {
+  width: 22px;
+  height: 22px;
+  color: #a5b4fc;
+}
+
+.pp-scoin-panel {
+  margin: 0 0 18px !important;
+  padding: 20px !important;
+  border-radius: 26px !important;
+  border: 1px solid rgba(167, 139, 250, 0.34) !important;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(251, 191, 36, 0.12), transparent 36%),
+    linear-gradient(135deg, rgba(37, 68, 255, 0.18), rgba(126, 71, 255, 0.16)) !important;
+}
+
+.pp-method-head {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  margin-bottom: 16px;
+  padding-bottom: 14px;
+  border-bottom: 1px solid rgba(167, 139, 250, 0.18);
+}
+
+.pp-method-icon {
+  flex: 0 0 auto;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.22);
+}
+
+.pp-method-icon img,
+.pp-method-icon svg {
+  width: 36px;
+  height: 36px;
+  object-fit: contain;
+}
+
+.pp-icon-scoin {
+  background: linear-gradient(135deg, #fde68a, #f59e0b);
+  border: 1px solid rgba(254, 240, 138, 0.5);
+}
+
+.pp-icon-promptpay {
+  background: linear-gradient(135deg, #0ea5e9, #0369a1);
+  border: 1px solid rgba(125, 211, 252, 0.45);
+}
+
+.pp-icon-promptpay img {
+  width: 34px;
+  height: 34px;
+  border-radius: 8px;
+}
+
+.pp-icon-card {
+  background: linear-gradient(135deg, #6366f1, #4338ca);
+  border: 1px solid rgba(165, 180, 252, 0.45);
+}
+
+.pp-icon-coupon {
+  background: linear-gradient(135deg, #fbbf24, #ea580c);
+  border: 1px solid rgba(253, 224, 71, 0.45);
+}
+
+.pp-method-head strong {
+  display: block;
+  color: #fff;
+  font-size: 18px;
+  font-weight: 950;
+  margin-bottom: 4px;
+}
+
+.pp-method-head span {
+  display: block;
+  color: rgba(191, 219, 254, 0.82);
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.5;
+}
+
+.package-scoin-pay-top > div {
+  position: relative;
+  padding-left: 14px !important;
+}
+
+.pp-methods {
+  gap: 14px !important;
+  margin: 0 0 18px !important;
+}
+
+.pp-pay-btn {
+  position: relative;
+  overflow: hidden;
+  min-height: 132px !important;
+  padding: 20px 20px 20px 88px !important;
+  border-radius: 24px !important;
+  border: 1px solid rgba(255, 255, 255, 0.12) !important;
+  text-align: left !important;
+}
+
+.pp-pay-btn::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(135deg, rgba(255, 255, 255, 0.12), transparent 48%);
+  pointer-events: none;
+}
+
+.pp-pay-btn .pp-pay-icon {
+  position: absolute;
+  left: 18px;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 52px;
+  height: 52px;
+  border-radius: 16px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 10px 24px rgba(0, 0, 0, 0.24);
+}
+
+.pp-pay-btn .pp-pay-icon img,
+.pp-pay-btn .pp-pay-icon svg {
+  width: 30px;
+  height: 30px;
+  object-fit: contain;
+}
+
+.pp-pay-promptpay {
+  background: linear-gradient(135deg, #0284c7 0%, #0369a1 52%, #0ea5e9 100%) !important;
+  box-shadow: 0 18px 42px rgba(14, 165, 233, 0.28) !important;
+}
+
+.pp-pay-promptpay .pp-pay-icon {
+  background: rgba(255, 255, 255, 0.16);
+  border: 1px solid rgba(186, 230, 253, 0.35);
+}
+
+.pp-pay-card-btn {
+  background: linear-gradient(135deg, #4f46e5 0%, #4338ca 52%, #7c3aed 100%) !important;
+  box-shadow: 0 18px 42px rgba(79, 70, 229, 0.28) !important;
+}
+
+.pp-pay-card-btn .pp-pay-icon {
+  background: rgba(255, 255, 255, 0.14);
+  border: 1px solid rgba(199, 210, 254, 0.35);
+}
+
+.pay-scoin-btn.pp-pay-btn {
+  padding: 20px 22px 20px 88px !important;
+  min-height: 118px !important;
+  border: 1px solid rgba(196, 181, 253, 0.42) !important;
+}
+
+.pay-scoin-btn .pp-pay-icon {
+  background: linear-gradient(135deg, #fde68a, #f59e0b);
+  border: 1px solid rgba(254, 240, 138, 0.55);
+}
+
+.pay-scoin-btn i {
+  display: none !important;
+}
+
+.pay-method-btn[disabled] {
+  opacity: 0.55;
+  cursor: not-allowed;
+  transform: none !important;
+  filter: grayscale(0.15);
+}
+
+.pp-pay-btn span {
+  position: relative;
+  z-index: 1;
+}
+
+.pp-pay-btn small {
+  position: relative;
+  z-index: 1;
+  display: block;
+  margin-top: 4px;
+  line-height: 1.45;
+  opacity: 0.92;
+}
+
+.pp-pay-btn i {
+  display: none !important;
+}
+
+.pp-stripe-link {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin: 0 0 18px !important;
+  padding: 16px 20px !important;
+  border-radius: 20px !important;
+  font-size: 16px !important;
+  letter-spacing: 0.01em;
+}
+
+.pp-stripe-link svg {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 auto;
+}
+
+.pp-coupon {
+  margin: 0 0 18px !important;
+  padding: 20px !important;
+  border-radius: 24px !important;
+  border: 1px solid rgba(251, 191, 36, 0.22) !important;
+  background:
+    radial-gradient(circle at 100% 0%, rgba(245, 158, 11, 0.12), transparent 38%),
+    rgba(255, 255, 255, 0.05) !important;
+}
+
+.pp-coupon-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.pp-coupon-head label {
+  margin: 0 !important;
+  font-size: 16px !important;
+  color: #fde68a !important;
+}
+
+.pp-coupon-row input {
+  border: 1px solid rgba(251, 191, 36, 0.24) !important;
+  background: rgba(15, 23, 42, 0.72) !important;
+  border-radius: 16px !important;
+  padding: 14px 16px !important;
+  font-weight: 800 !important;
+}
+
+.pp-coupon-row input::placeholder {
+  color: rgba(191, 219, 254, 0.55);
+}
+
+.pp-coupon-row button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-width: 118px;
+  border-radius: 16px !important;
+  background: linear-gradient(135deg, #f59e0b, #ea580c 55%, #7c3aed) !important;
+  box-shadow: 0 14px 32px rgba(245, 158, 11, 0.18);
+}
+
+.pp-coupon-row button svg {
+  width: 18px;
+  height: 18px;
+}
+
+.pp-back-link {
+  margin-top: 22px !important;
+  text-align: center;
+}
+
+.pp-back-link a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: #bfdbfe !important;
+  text-decoration: none !important;
+  font-weight: 800;
+  padding: 10px 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.18);
+  background: rgba(255, 255, 255, 0.04);
+  transition: 0.18s ease;
+}
+
+.pp-back-link a:hover {
+  background: rgba(255, 255, 255, 0.07);
+  transform: translateY(-1px);
+}
+
+.pp-status-box {
+  margin-bottom: 18px;
+}
+
+@media (max-width: 760px) {
+  .pp-premium .package-pay-card {
+    padding: 22px 18px;
+    border-radius: 24px;
+  }
+
+  .pp-head {
+    flex-direction: column;
+    gap: 12px;
+  }
+
+  .pp-summary,
+  .pp-methods {
+    grid-template-columns: 1fr !important;
+  }
+
+  .pp-pay-btn {
+    min-height: 118px !important;
+    padding-left: 82px !important;
+  }
+
+  .pp-coupon-row {
+    flex-direction: column;
+  }
+
+  .pp-coupon-row button {
+    width: 100%;
+  }
+}

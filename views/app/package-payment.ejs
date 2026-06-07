@@ -1,5 +1,6 @@
 <% pageCss = '/css/app-packages.css'; %>
 <%- include('../partials/app-shell') %>
+<link rel="stylesheet" href="/public/css/app-package-payment.css?v=2026060702">
 
 <% if (error || success) { %>
   <div class="scoin-confirm-modal show" id="packageFlashModal" aria-hidden="false">
@@ -60,26 +61,39 @@
   </script>
 <% } %>
 
-<section class="package-pay-wrap">
-  <div class="package-pay-card">
-    <div class="package-pay-head">
-      <span class="package-chip">PACKAGE PAYMENT</span>
-      <h2>ชำระเงินแพ็กเกจ</h2>
-      <p>เลือกชำระผ่าน PromptPay QR หรือบัตรเครดิตผ่าน Stripe และยังจ่ายด้วย Scoin ได้ทันที หากจ่ายด้วย Scoin ระบบจะเปิดใช้งานแพ็กเกจทันที แต่จะไม่ได้รับ Scoin คืน 30% และไม่แจกโบนัสสายงาน/แนะนำตรง</p>
+<section class="package-pay-wrap pp-premium">
+  <div class="package-pay-card pp-card">
+    <div class="package-pay-head pp-head">
+      <div class="pp-head-badge" aria-hidden="true">
+        <svg viewBox="0 0 64 64" fill="none">
+          <rect x="8" y="14" width="48" height="36" rx="10" stroke="#c4b5fd" stroke-width="2.5"/>
+          <path d="M8 26h48" stroke="#c4b5fd" stroke-width="2.5"/>
+          <circle cx="22" cy="38" r="4" fill="#67e8f9"/>
+          <path d="M30 38h18" stroke="#a5b4fc" stroke-width="2.5" stroke-linecap="round"/>
+        </svg>
+      </div>
+      <div class="pp-head-copy">
+        <span class="package-chip">PACKAGE PAYMENT</span>
+        <h2>ชำระเงินแพ็กเกจ</h2>
+        <p>เลือกชำระผ่าน PromptPay QR หรือบัตรเครดิตผ่าน Stripe และยังจ่ายด้วย Scoin ได้ทันที หากจ่ายด้วย Scoin ระบบจะเปิดใช้งานแพ็กเกจทันที แต่จะไม่ได้รับ Scoin คืน 30% และไม่แจกโบนัสสายงาน/แนะนำตรง</p>
+      </div>
     </div>
 
-    <div class="package-pay-summary">
-      <div>
+    <div class="package-pay-summary pp-summary">
+      <div class="pp-summary-item">
+        <div class="pp-summary-icon">#</div>
         <span>เลขรายการ</span>
         <strong><%= payment.display_id || ('PM' + String(payment.id).padStart(6, '0')) %></strong>
       </div>
 
-      <div>
+      <div class="pp-summary-item">
+        <div class="pp-summary-icon">📦</div>
         <span>แพ็กเกจ</span>
         <strong><%= payment.package_name_snapshot || '-' %></strong>
       </div>
 
-      <div>
+      <div class="pp-summary-item">
+        <div class="pp-summary-icon">฿</div>
         <span>ยอดชำระ</span>
         <strong class="pay-amount">
           <% const displayFinalAmount = Number(payment.final_amount ?? payment.amount ?? 0); %>
@@ -98,7 +112,7 @@
     </div>
 
     <% if (String(payment.payment_status || '').toLowerCase() === 'paid') { %>
-      <div class="package-scoin-box">
+      <div class="package-scoin-box pp-status-box">
         <div class="package-scoin-main">
           <span>สถานะ</span>
           <strong>ชำระเงินสำเร็จแล้ว</strong>
@@ -106,7 +120,7 @@
         <p>ระบบได้รับยอดชำระแล้ว แพ็กเกจจะถูกเปิดใช้งานตามเงื่อนไข</p>
       </div>
     <% } else if (String(payment.payment_status || '').toLowerCase() === 'cancelled') { %>
-      <div class="package-scoin-box">
+      <div class="package-scoin-box pp-status-box">
         <div class="package-scoin-main">
           <span>สถานะ</span>
           <strong>รายการถูกยกเลิก</strong>
@@ -128,13 +142,60 @@
       <% } %>
 
       <% if (stripePayment && stripePayment.payment_url) { %>
-        <a class="pay-kbank-link" href="<%= stripePayment.payment_url %>">
-          <%= paymentMethodNorm === 'stripe_promptpay' ? 'ไปหน้าสแกน PromptPay (Stripe)' : 'ไปหน้าชำระบัตร (Stripe)' %>
+        <a class="pay-kbank-link pp-stripe-link" href="<%= stripePayment.payment_url %>">
+          <% if (paymentMethodNorm === 'stripe_promptpay') { %>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="3" y="3" width="7" height="7" rx="1.5" fill="currentColor"/>
+              <rect x="14" y="3" width="7" height="7" rx="1.5" fill="currentColor" opacity=".75"/>
+              <rect x="3" y="14" width="7" height="7" rx="1.5" fill="currentColor" opacity=".75"/>
+              <rect x="14" y="14" width="3" height="3" rx=".8" fill="currentColor"/>
+              <rect x="18" y="14" width="3" height="3" rx=".8" fill="currentColor"/>
+              <rect x="14" y="18" width="3" height="3" rx=".8" fill="currentColor"/>
+              <rect x="18" y="18" width="3" height="3" rx=".8" fill="currentColor"/>
+            </svg>
+            ไปหน้าสแกน PromptPay (Stripe)
+          <% } else { %>
+            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+              <rect x="2" y="5" width="20" height="14" rx="3" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M2 10h20" stroke="currentColor" stroke-width="1.8"/>
+              <path d="M6 15h5" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+            </svg>
+            ไปหน้าชำระบัตร (Stripe)
+          <% } %>
         </a>
       <% } %>
 
+      <div class="pp-section">
+        <h3 class="pp-section-title">
+          <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+            <path d="M12 2l2.2 6.8H21l-5.5 4 2.1 6.8L12 15.6 6.4 19.6l2.1-6.8L3 8.8h6.8L12 2z" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+          </svg>
+          เลือกช่องทางชำระ
+        </h3>
+
       <% if (packageScoinPayment && packageScoinPayment.enabled) { %>
-        <div class="package-scoin-pay-box">
+        <div class="package-scoin-pay-box pp-scoin-panel">
+          <div class="pp-method-head">
+            <div class="pp-method-icon pp-icon-scoin" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none">
+                <circle cx="32" cy="32" r="24" fill="#78350f" opacity=".18"/>
+                <circle cx="32" cy="32" r="22" fill="url(#ppScoinGrad)" stroke="#fde68a" stroke-width="2"/>
+                <path d="M32 18c-6 0-10 3.2-10 7.5S26 33 32 33s10 3.2 10 7.5S38 48 32 48" stroke="#78350f" stroke-width="3" stroke-linecap="round"/>
+                <path d="M32 18v30" stroke="#78350f" stroke-width="3" stroke-linecap="round"/>
+                <defs>
+                  <linearGradient id="ppScoinGrad" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+                    <stop stop-color="#fde68a"/>
+                    <stop offset="1" stop-color="#f59e0b"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+            <div>
+              <strong>จ่ายด้วย Scoin</strong>
+              <span>ตัด Scoin ทันที เปิดใช้งานแพ็กเกจได้เลย ไม่ต้องรอแอดมินอนุมัติ</span>
+            </div>
+          </div>
+
           <div class="package-scoin-pay-top">
             <div>
               <span>จ่ายด้วย Scoin</span>
@@ -154,13 +215,26 @@
             <button
               type="button"
               id="openScoinPayModal"
-              class="pay-method-btn pay-scoin-btn"
+              class="pay-method-btn pay-scoin-btn pp-pay-btn"
               <%= packageScoinPayment.enough ? '' : 'disabled' %>
               data-required="<%= Number(packageScoinPayment.required || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %>"
               data-price="<%= Number(packageScoinPayment.priceThb || 0).toLocaleString('th-TH', { minimumFractionDigits: 4 }) %>"
               data-amount="<%= Number(payment.final_amount ?? payment.amount ?? 0).toLocaleString('th-TH', { minimumFractionDigits: 2 }) %>"
               data-package="<%= payment.package_name_snapshot || '-' %>"
             >
+              <span class="pp-pay-icon" aria-hidden="true">
+                <svg viewBox="0 0 64 64" fill="none">
+                  <circle cx="32" cy="32" r="22" fill="url(#ppScoinBtnGrad)" stroke="#78350f" stroke-width="1.5"/>
+                  <path d="M32 18c-6 0-10 3.2-10 7.5S26 33 32 33s10 3.2 10 7.5S38 48 32 48" stroke="#78350f" stroke-width="2.6" stroke-linecap="round"/>
+                  <path d="M32 18v30" stroke="#78350f" stroke-width="2.6" stroke-linecap="round"/>
+                  <defs>
+                    <linearGradient id="ppScoinBtnGrad" x1="10" y1="10" x2="54" y2="54" gradientUnits="userSpaceOnUse">
+                      <stop stop-color="#fde68a"/>
+                      <stop offset="1" stop-color="#f59e0b"/>
+                    </linearGradient>
+                  </defs>
+                </svg>
+              </span>
               <i class="fa-solid fa-coins"></i>
               <span>จ่ายด้วย Scoin ทันที</span>
               <small>
@@ -175,10 +249,13 @@
         </div>
       <% } %>
 
-      <div class="package-pay-methods">
+      <div class="package-pay-methods pp-methods">
         <form method="POST" action="/app/package-payment/<%= payment.id %>/pay">
           <input type="hidden" name="payment_method" value="promptpay_qr">
-          <button type="submit" class="pay-method-btn" <%= stripeReady ? '' : 'disabled' %>>
+          <button type="submit" class="pay-method-btn pp-pay-btn pp-pay-promptpay" <%= stripeReady ? '' : 'disabled' %>>
+            <span class="pp-pay-icon" aria-hidden="true">
+              <img src="/public/images/payments/qr-main.png" alt="" width="30" height="30">
+            </span>
             <i class="fa-solid fa-qrcode"></i>
             <span>PromptPay QR</span>
             <small><%= stripeReady ? 'สแกนจ่ายผ่าน Stripe PromptPay' : 'ยังไม่เปิดใช้งาน Stripe ในระบบ' %></small>
@@ -187,7 +264,15 @@
 
         <form method="POST" action="/app/package-payment/<%= payment.id %>/pay">
           <input type="hidden" name="payment_method" value="credit_card">
-          <button type="submit" class="pay-method-btn" <%= stripeReady ? '' : 'disabled' %>>
+          <button type="submit" class="pay-method-btn pp-pay-btn pp-pay-card-btn" <%= stripeReady ? '' : 'disabled' %>>
+            <span class="pp-pay-icon" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none">
+                <rect x="6" y="14" width="52" height="36" rx="8" fill="#fff" fill-opacity=".92" stroke="#c7d2fe" stroke-width="2"/>
+                <rect x="6" y="24" width="52" height="8" fill="#4338ca"/>
+                <rect x="12" y="38" width="16" height="4" rx="2" fill="#6366f1"/>
+                <rect x="32" y="38" width="12" height="4" rx="2" fill="#a5b4fc"/>
+              </svg>
+            </span>
             <i class="fa-solid fa-credit-card"></i>
             <span>บัตรเครดิต / เดบิต</span>
             <small>
@@ -196,18 +281,40 @@
           </button>
         </form>
       </div>
+      </div>
 
       <% if (String(payment.payment_status || '').toLowerCase() === 'pending') { %>
-        <form method="POST" action="/app/package-payment/<%= payment.id %>/apply-coupon" class="package-coupon-box">
-          <label>ใส่โค้ดคูปอง</label>
+        <form method="POST" action="/app/package-payment/<%= payment.id %>/apply-coupon" class="package-coupon-box pp-coupon">
+          <div class="pp-coupon-head">
+            <div class="pp-method-icon pp-icon-coupon" aria-hidden="true">
+              <svg viewBox="0 0 64 64" fill="none">
+                <path d="M10 18h44a4 4 0 0 1 4 4v8a6 6 0 1 0 0 12v8a4 4 0 0 1-4 4H10a4 4 0 0 1-4-4V22a4 4 0 0 1 4-4z" fill="url(#ppCouponGrad)" stroke="#fde68a" stroke-width="2"/>
+                <path d="M24 18v28" stroke="#78350f" stroke-width="2" stroke-dasharray="4 4"/>
+                <path d="M38 26h10M38 34h10" stroke="#78350f" stroke-width="2.5" stroke-linecap="round"/>
+                <defs>
+                  <linearGradient id="ppCouponGrad" x1="8" y1="12" x2="56" y2="52" gradientUnits="userSpaceOnUse">
+                    <stop stop-color="#fde68a"/>
+                    <stop offset="1" stop-color="#fb923c"/>
+                  </linearGradient>
+                </defs>
+              </svg>
+            </div>
+            <label for="packageCouponCode">ใส่โค้ดคูปอง</label>
+          </div>
           <div class="package-coupon-row">
             <input
+              id="packageCouponCode"
               type="text"
               name="coupon_code"
               placeholder="กรอกโค้ดคูปอง"
               value="<%= payment.coupon_code_snapshot || '' %>"
             >
-            <button type="submit">ใช้โค้ด</button>
+            <button type="submit">
+              <svg viewBox="0 0 24 24" fill="none" aria-hidden="true">
+                <path d="M20 6L9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+              </svg>
+              ใช้โค้ด
+            </button>
           </div>
 
           <% if (Number(payment.discount_amount || 0) > 0) { %>
@@ -338,8 +445,8 @@
       </form>
     <% } %>
 
-    <div style="margin-top:18px;text-align:center;">
-      <a href="/app/packages" style="color:#bfdbfe;text-decoration:none;font-weight:800;">
+    <div class="pp-back-link">
+      <a href="/app/packages">
         ← กลับไปหน้าแพ็กเกจ
       </a>
     </div>
