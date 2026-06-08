@@ -6,7 +6,7 @@ const { randomUUID } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { query } = require('../config/database');
-const { parseThaiIdAddress } = require('../lib/thaiAddressParser');
+const { parseThaiIdAddress, buildFullAddressText, hasThaiAdminMarker } = require('../lib/thaiAddressParser');
 const { lookupPostalCode } = require('../lib/thaiPostalLookup');
 
 const execFileAsync = promisify(execFile);
@@ -156,8 +156,12 @@ function buildVisionPrompt(expectedDocumentType) {
     '- ถ้าเห็นบัตรจริงและอ่านเลข 13 หลักได้ ให้ is_authentic_document=true',
     '- เลขบัตรอยู่บรรทัด Identification Number รูปแบบ X XXXX XXXXX XX X',
     '- แปลงวันเกิด/วันหมดอายุเป็น YYYY-MM-DD (เช่น 14 Aug. 1988 -> 1988-08-14)',
-    '- address_line ใส่เฉพาะบ้านเลขที่ หมู่ที่ และถนน/ซอย ไม่ใส่แขวง/เขต/จังหวัด',
-    '- subdistrict/district/province แยกจากที่อยู่ postal_code ให้ว่างไว้ ระบบจะเติมอัตโนมัติ',
+    '- full_address: ที่อยู่เต็มตามบัตรทุกส่วน (บังคับ)',
+    '- address_line: เฉพาะบ้านเลขที่ หมู่ที่ ถนน/ซอย',
+    '- subdistrict: ตำบลหรือแขวง (บังคับ)',
+    '- district: อำเภอหรือเขต (บังคับ)',
+    '- province: จังหวัด (บังคับ)',
+    '- postal_code ให้ว่าง ระบบจะเติมอัตโนมัติ',
     '- confidence คือความมั่นใจในการอ่านตัวอักษร ไม่ใช่การตัดสินความถูกต้องของบัตร',
     'ตอบ JSON เท่านั้น:',
     '{',
@@ -168,10 +172,11 @@ function buildVisionPrompt(expectedDocumentType) {
     '  "passport_number": "",',
     '  "full_name": "ชื่อ-นามสกุล",',
     '  "date_of_birth": "YYYY-MM-DD",',
+    '  "full_address": "ที่อยู่เต็มตามบัตร",',
     '  "address_line": "บ้านเลขที่ / หมู่ที่ / ถนน",',
-    '  "subdistrict": "",',
-    '  "district": "",',
-    '  "province": "",',
+    '  "subdistrict": "ตำบล/แขวง",',
+    '  "district": "อำเภอ/เขต",',
+    '  "province": "จังหวัด",',
     '  "postal_code": "",',
     '  "expiry_date": "YYYY-MM-DD",',
     '  "rejection_reason": ""',
@@ -287,18 +292,25 @@ async function checkDuplicateDocument({ nationalId, passportNumber, userId }) {
 function enrichIdentityAddress(data) {
   if (!data || data.document_type === 'passport') return data;
 
-  const sourceAddress = [
-    data.address_line,
-    data.subdistrict ? `แขวง${data.subdistrict}` : '',
-    data.district ? `เขต${data.district}` : '',
-    data.province || ''
-  ].filter(Boolean).join(' ');
-
-  const parsed = parseThaiIdAddress(sourceAddress || data.address_line, {
-    subdistrict: data.subdistrict,
-    district: data.district,
-    province: data.province
+  const scanJson = data.scan_json || {};
+  const fullAddress = buildFullAddressText({
+    full_address: scanJson.full_address || scanJson.address_full || data.full_address,
+    address_line: data.address_line,
+    subdistrict: data.subdistrict || scanJson.subdistrict,
+    district: data.district || scanJson.district,
+    province: data.province || scanJson.province
   });
+
+  const parsed = parseThaiIdAddress(fullAddress, {
+    subdistrict: data.subdistrict || scanJson.subdistrict,
+    district: data.district || scanJson.district,
+    province: data.province || scanJson.province
+  });
+
+  const houseStreet = normalizeDocText(data.address_line);
+  const addressLine = houseStreet && !hasThaiAdminMarker(houseStreet)
+    ? houseStreet
+    : (parsed.address_line || houseStreet);
 
   const postalCode = normalizeDigits(data.postal_code).slice(0, 5)
     || lookupPostalCode({
@@ -309,10 +321,10 @@ function enrichIdentityAddress(data) {
 
   return {
     ...data,
-    address_line: parsed.address_line || data.address_line,
-    subdistrict: parsed.subdistrict || data.subdistrict,
-    district: parsed.district || data.district,
-    province: parsed.province || data.province,
+    address_line: addressLine,
+    subdistrict: parsed.subdistrict || data.subdistrict || scanJson.subdistrict || '',
+    district: parsed.district || data.district || scanJson.district || '',
+    province: parsed.province || data.province || scanJson.province || '',
     postal_code: postalCode
   };
 }
