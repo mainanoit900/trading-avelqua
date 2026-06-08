@@ -140,10 +140,64 @@ const PAGE_GUIDES = {
   app_identity: {
     path: '/app/identity',
     title: 'ยืนยันตัวตน',
-    menu: 'เมนูซ้าย → รอยืนยันตัวตน / ยืนยันสำเร็จ (🛂)',
+    menu: 'เมนูซ้าย → ยืนยันตัวตน (🛂)',
     usage:
-      'กรอกข้อมูลส่วนตัวที่อยู่ เบอร์โทร → ขอรหัส OTP → กรอก OTP จากอีเมล หลังยืนยันแล้วจึงใช้ MT5, Scoin และเมนูที่มี 🔒 ได้'
+      '1) เลือกประเภทเอกสาร: บัตรประชาชน หรือ พาสปอร์ต 2) เลือกรูป/ถ่ายภาพบัตรให้ชัด 3) กดปุ่ม "ตรวจสอบ" ระบบอ่านข้อมูลจากเอกสาร (OpenAI + OCR สำรอง) 4) ตรวจสอบข้อมูลที่ระบบกรอก (ชื่อ เลขบัตร/พาสปอร์ต วันเกิด วันหมดอายุ ที่อยู่) 5) กรอกรหัสไปรษณีย์ 5 หลักเอง (บัตรประชาชนไม่มีรหัสบนบัตร) 6) กรอกเบอร์โทรและอีเมลรับ OTP 7) กดขอรหัส OTP → กรอก OTP จากอีเมล 8) ยืนยันสำเร็จแล้วใช้ MT5 / Scoin / เมนูที่ล็อกได้'
   }
+};
+
+const IDENTITY_VERIFICATION_GUIDE = {
+  url: `${BASE_URL}/app/identity`,
+  requiredFor: [
+    'เชื่อม MT5 และรันบอท',
+    'ซื้อแพ็กเกจ / ชำระเงิน',
+    'ใช้กระเป๋า Scoin',
+    'เมนูที่มีไอคอน 🔒 ในพอร์ทัลลูกค้า'
+  ],
+  documentTypes: {
+    thai_id: 'บัตรประชาชนไทย — ระบบตรวจ checksum เลข 13 หลัก และกันบัตรซ้ำในระบบ',
+    passport: 'พาสปอร์ต — ตรวจรูปแบบเลขหนังสือเดินทางและวันหมดอายุ'
+  },
+  steps: [
+    '1) ไปที่ ' + `${BASE_URL}/app/identity`,
+    '2) เลือกประเภทเอกสาร: บัตรประชาชน หรือ พาสปอร์ต',
+    '3) กด "เลือกรูป / ถ่ายภาพ" — ถ่ายให้เห็นเลขและชื่อชัด ไม่เอียง แสงพอ',
+    '4) กดปุ่ม "ตรวจสอบ" — ระบบอ่านข้อมูลจากรูปอัตโนมัติ',
+    '5) ตรวจข้อมูลที่กรอกให้ (ชื่อ เลขบัตร/พาสปอร์ต วันเกิด วันหมดอายุ ที่อยู่)',
+    '6) กรอกรหัสไปรษณีย์ 5 หลักเอง (บัตรประชาชนไม่มีรหัสบนบัตร — ระบบอาจเติมให้ถ้าอ่านที่อยู่ได้)',
+    '7) กรอกเบอร์โทรและอีเมลรับ OTP',
+    '8) กดขอรหัส OTP → เปิดอีเมล → กรอก OTP → ยืนยันสำเร็จ',
+    '9) หลังยืนยันแล้ว รูปเอกสารจะถูกบันทึก และสามารถใช้ MT5 / Scoin ได้'
+  ],
+  tips: [
+    'ถ่ายบัตรตรงๆ ไม่ใช่ screenshot หน้าจอ — อ่านได้แม่นขึ้น',
+    'เลขบัตรต้องครบ 13 หลักและผ่าน checksum',
+    'เอกสารหมดอายุแล้วใช้ไม่ได้',
+    'เลขบัตร/พาสปอร์ตที่เคยยืนยันแล้วในระบบจะใช้ซ้ำไม่ได้',
+    'OTP หมดอายุใน 10 นาที — ขอใหม่ได้ที่หน้านี้หรือให้ AI ช่วย resend_identity_otp'
+  ],
+  troubleshooting: [
+    {
+      issue: 'กดตรวจสอบแล้วอ่านข้อมูลไม่ได้',
+      fixes: [
+        'ถ่ายใหม่ให้เห็นเลข 13 หลักและชื่อชัด',
+        'ลองเปลี่ยนมุม/แสง หรือใช้รูปความละเอียดสูง',
+        'ตรวจว่าเลือกประเภทเอกสารถูก (บัตร vs พาสปอร์ต)'
+      ]
+    },
+    {
+      issue: 'ขอ OTP ไม่ได้ / กดขอรหัสไม่ได้',
+      fixes: [
+        'ต้องกด "ตรวจสอบ" เอกสารสำเร็จก่อน',
+        'กรอกรหัสไปรษณีย์ 5 หลัก (บัตรประชาชน)',
+        'ตรวจอีเมลรับ OTP ให้ถูก'
+      ]
+    },
+    {
+      issue: 'OTP หมดอายุ',
+      fixes: ['กดขอ OTP ใหม่ หรือให้ AI ใช้ perform_user_fix action=resend_identity_otp']
+    }
+  ]
 };
 
 const MT5_TROUBLESHOOTING = [
@@ -182,7 +236,21 @@ const MT5_TROUBLESHOOTING = [
   {
     issue: 'เมนูกดไม่ได้ / ถูก redirect ไป identity',
     causes: ['ยังไม่ยืนยันตัวตนที่ /app/identity'],
-    fixes: ['ไป /app/identity กรอกข้อมูลและยืนยัน OTP']
+    fixes: [
+      'ไป ' + fullUrl('/app/identity') + ' → เลือกบัตร/พาสปอร์ต → ถ่ายรูป → กด "ตรวจสอบ" → กรอกรหัสไปรษณีย์ → ขอ OTP → ยืนยัน'
+    ]
+  },
+  {
+    issue: 'ยืนยันตัวตน / สแกนบัตรไม่ผ่าน',
+    causes: [
+      'รูปไม่ชัด อ่านเลขบัตร/ชื่อไม่ได้',
+      'เลขบัตรไม่ถูกต้อง (checksum ไม่ผ่าน)',
+      'บัตรหมดอายุ',
+      'เลขบัตร/พาสปอร์ตถูกใช้ยืนยันโดยบัญชีอื่นแล้ว',
+      'ยังไม่กด "ตรวจสอบ" เอกสารก่อนขอ OTP',
+      'รหัสไปรษณีย์ไม่ครบ 5 หลัก (บัตรประชาชน)'
+    ],
+    fixes: IDENTITY_VERIFICATION_GUIDE.troubleshooting.flatMap((t) => t.fixes)
   }
 ];
 
@@ -317,6 +385,8 @@ function buildGuestKnowledgePrompt() {
     `QR LINE สแกนเพิ่มเพื่อน: ${LINE_GUIDE.qrImageUrl}`,
     '',
     buildCompanyKnowledgePrompt(),
+    '',
+    buildIdentityKnowledgePrompt({ guest: true }),
     MARKET_GUIDE.disclaimer,
     `หน้าตลาด: ${fullUrl('/market')} | หน้าข่าว: ${fullUrl('/news')}`,
     '',
@@ -325,6 +395,49 @@ function buildGuestKnowledgePrompt() {
     '- ห้ามแก้ปัญหา MT5/บัญชีเฉพาะราย — ให้แนะนำ login ก่อน',
     '- ถ้าถามเรื่องพื้นที่สมาชิก ตอบสั้นๆ ว่าต้อง login ที่ ' + fullUrl('/login')
   ].join('\n');
+}
+
+function buildIdentityKnowledgePrompt({ guest = false } = {}) {
+  const identityUrl = `${BASE_URL}/app/identity`;
+  const lines = [
+    '=== ยืนยันตัวตน (KYC) ===',
+    `หน้ายืนยันตัวตน: ${identityUrl}`,
+    'จำเป็นสำหรับ: ' + IDENTITY_VERIFICATION_GUIDE.requiredFor.join('; '),
+    '',
+    '=== ประเภทเอกสาร ===',
+    `- บัตรประชาชน: ${IDENTITY_VERIFICATION_GUIDE.documentTypes.thai_id}`,
+    `- พาสปอร์ต: ${IDENTITY_VERIFICATION_GUIDE.documentTypes.passport}`,
+    '',
+    '=== ขั้นตอนยืนยันตัวตน ===',
+    ...IDENTITY_VERIFICATION_GUIDE.steps,
+    '',
+    '=== เคล็ดลับ ===',
+    ...IDENTITY_VERIFICATION_GUIDE.tips.map((t) => `- ${t}`),
+    '',
+    '=== แก้ปัญหายืนยันตัวตน ===',
+    ...IDENTITY_VERIFICATION_GUIDE.troubleshooting.map(
+      (t) => `ปัญหา: ${t.issue}\nแนวทาง: ${t.fixes.join('; ')}`
+    )
+  ];
+
+  if (guest) {
+    lines.push(
+      '',
+      '=== สำหรับผู้เยี่ยมชม ===',
+      `- หลังสมัครและ login แล้ว ต้องยืนยันตัวตนที่ ${identityUrl} ก่อนใช้บอท/Scoin`,
+      '- อธิบายขั้นตอนภาพรวมได้ — รายละเอียดการกรอกฟอร์มอยู่ในพื้นที่สมาชิกหลัง login'
+    );
+  } else {
+    lines.push(
+      '',
+      '=== เมื่อลูกค้าถามเรื่องยืนยันตัวตน ===',
+      '- อธิบายขั้นตอนครบตามด้านบน เน้นปุ่ม "ตรวจสอบ" (ไม่ใช่สแกน)',
+      '- ถ้า OTP หมดอายุ → perform_user_fix action=resend_identity_otp',
+      '- ใช้ get_account_diagnostics ตรวจสถานะ identityVerified ก่อนบอกว่ายังไม่ยืนยัน'
+    );
+  }
+
+  return lines.join('\n');
 }
 
 function buildKnowledgePrompt() {
@@ -347,6 +460,8 @@ function buildKnowledgePrompt() {
     `QR LINE: ${LINE_GUIDE.qrImageUrl}`,
     '',
     buildCompanyKnowledgePrompt(),
+    '',
+    buildIdentityKnowledgePrompt(),
     '',
     '=== แก้ปัญหา MT5 / Bot ===',
     mt5,
@@ -373,5 +488,7 @@ module.exports = {
   isGuestAllowedPageKey,
   isGuestAllowedPath,
   buildGuestKnowledgePrompt,
-  buildKnowledgePrompt
+  buildKnowledgePrompt,
+  buildIdentityKnowledgePrompt,
+  IDENTITY_VERIFICATION_GUIDE
 };

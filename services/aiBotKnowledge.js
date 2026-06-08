@@ -148,8 +148,10 @@ function buildGuestBotKnowledgePrompt() {
   const blocks = listBotProfiles().map((b) => {
     return [
       `### ${b.name}`,
-      `สัญลักษณ์: ${b.symbol} | TF: ${b.timeframe} | ทุนขั้นต่ำโดยประมาณ: ${b.minCapitalUsd} USD`,
-      `วิธีทำงาน: ${b.strategy}`,
+      `สัญลักษณ์: ${b.symbol} | Timeframe: ${b.timeframe} | ทุนขั้นต่ำโดยประมาณ: ${b.minCapitalUsd} USD`,
+      `แนวคิด: ${b.strategy}`,
+      `การทำงาน:`,
+      ...b.howItWorks.map((step, i) => `  ${i + 1}. ${step}`),
       `ข้อดี: ${b.pros.join('; ')}`,
       `ข้อเสีย: ${b.cons.join('; ')}`,
       `เหมาะกับ: ${b.suitableFor.join('; ')}`,
@@ -157,21 +159,29 @@ function buildGuestBotKnowledgePrompt() {
     ].join('\n');
   });
   return [
-    '=== การใช้งานบอท (ผู้เยี่ยมชม — อธิบายแนวคิดและเปรียบเทียบบอท) ===',
+    '=== บอทเทรดในระบบ TRADING AVELQUA (3 ตัว) ===',
+    'บอททั้ง 3 ตัวเทรดทองคำ XAUUSD บน VPS ผ่าน MT5 Timeframe M15 — ลูกค้าต้องสมัคร login ยืนยันตัวตน ซื้อแพ็กเกจ แล้วเชื่อม MT5 ที่ /app/mt5',
+    '',
     ...blocks,
+    '',
+    '=== เปรียบเทียบบอท 3 ตัว (สรุป) ===',
+    '| บอท | ควบคุม Lot | ทุนขั้นต่ำ | เหมาะกับ |',
+    '| AK-SNIPER-VIP-VER4.0 | ปรับ Lot + Trade Level เอง | ~100 USD | คนที่อยากคุมความเสี่ยงเอง |',
+    '| QUEEN-SNIPER-AI-V1.0 | Lot คำนวณจาก Equity อัตโนมัติ | ~100 USD | มือใหม่ ไม่อยากตั้ง Lot |',
+    '| Quantum-Queen-MT5-3.65 | EA จัดการ Lot/พารามิเตอร์เอง | ~500 USD | มีทุนมากขึ้น อยากใช้ EA เต็มรูปแบบ |',
     '',
     '=== ขั้นตอนเริ่มต้น (เฉพาะหน้าสาธารณะ) ===',
     ...OPEN_BOT_STEPS_GUEST,
     '',
-    '=== เปรียบเทียบบอท ===',
-    'AK-SNIPER = ปรับ Lot/Trade Level เอง ทุนต่ำ | QUEEN = Lot จาก Equity อัตโนมัติ | Quantum = EA จัดการเอง ทุนขั้นต่ำ ~500 USD',
-    '',
     '=== แพ็กเกจ vs Lot (ดูรายละเอียดที่ ' + fullUrl('/pricing') + ') ===',
-    `BASIC: Lot ${PACKAGE_LOT.BASIC.lotMin}-${PACKAGE_LOT.BASIC.lotMax}`,
-    `PRO: Lot ${PACKAGE_LOT.PRO.lotMin}-${PACKAGE_LOT.PRO.lotMax}`,
-    `ADVANCED: Lot ${PACKAGE_LOT.ADVANCED.lotMin}-${PACKAGE_LOT.ADVANCED.lotMax}`,
+    `BASIC: Lot ${PACKAGE_LOT.BASIC.lotMin}-${PACKAGE_LOT.BASIC.lotMax} (${PACKAGE_LOT.BASIC.label})`,
+    `PRO: Lot ${PACKAGE_LOT.PRO.lotMin}-${PACKAGE_LOT.PRO.lotMax} (${PACKAGE_LOT.PRO.label})`,
+    `ADVANCED: Lot ${PACKAGE_LOT.ADVANCED.lotMin}-${PACKAGE_LOT.ADVANCED.lotMax} (${PACKAGE_LOT.ADVANCED.label})`,
     '',
-    'ห้ามอธิบายการตั้งค่า MT5/PORT ในพื้นที่สมาชิก — ให้แนะนำ login ก่อน'
+    '=== เมื่อถามเรื่องบอท ===',
+    '- อธิบายการทำงานของแต่ละตัวละเอียด เปรียบเทียบ 3 ตัว บอกข้อดี/ข้อเสีย',
+    '- ใช้ get_bot_info หรือ recommend_bot ถ้าต้องการแนะนำตามทุน/ประสบการณ์',
+    '- ห้ามอธิบายการตั้งค่า MT5/PORT ในพื้นที่สมาชิก — ให้แนะนำ login ก่อน'
   ].join('\n');
 }
 
@@ -179,9 +189,10 @@ function buildBotKnowledgePrompt() {
   const blocks = listBotProfiles().map((b) => {
     return [
       `### ${b.name}`,
-      `สัญลักษณ์: ${b.symbol} | TF: ${b.timeframe} | ทุนขั้นต่ำ: ${b.minCapitalUsd} USD`,
-      `วิธีทำงาน: ${b.strategy}`,
-      `ขั้นตอนเปิด: ${b.howItWorks.join(' → ')}`,
+      `สัญลักษณ์: ${b.symbol} | Timeframe: ${b.timeframe} | ทุนขั้นต่ำ: ${b.minCapitalUsd} USD`,
+      `แนวคิด: ${b.strategy}`,
+      `การทำงาน (ขั้นตอน):`,
+      ...b.howItWorks.map((step, i) => `  ${i + 1}. ${step}`),
       `ข้อดี: ${b.pros.join('; ')}`,
       `ข้อเสีย: ${b.cons.join('; ')}`,
       `เหมาะกับ: ${b.suitableFor.join('; ')}`,
@@ -189,16 +200,33 @@ function buildBotKnowledgePrompt() {
     ].join('\n');
   });
   return [
-    '=== รายการบอทในระบบ ===',
+    '=== บอทเทรดในระบบ (3 ตัว) — อธิบายละเอียดเมื่อลูกค้าถาม ===',
+    'ทั้ง 3 ตัวเทรด XAUUSD (ทอง) บน VPS ผ่าน MT5 Timeframe M15',
+    'เงื่อนไขก่อนรันบอท: ยืนยันตัวตนแล้ว + แพ็กเกจ active + MT5 connected ที่ ' + fullUrl('/app/mt5'),
+    '',
     ...blocks,
     '',
-    '=== ขั้นตอนเปิดบอท (ผู้ยังไม่ login) ===',
-    ...OPEN_BOT_STEPS_GUEST,
+    '=== เปรียบเทียบบอท 3 ตัว ===',
+    '1) AK-SNIPER-VIP-VER4.0 — Sniper M15 ปรับ Lot และ Trade Level (ความเสี่ยง) เอง มี Trailing Stop ทุนต่ำ ~100 USD',
+    '2) QUEEN-SNIPER-AI-V1.0 — Sniper M15 ใช้ Equity คำนวณ Lot อัตโนมัติ (100 USD ≈ 0.01 Lot) ใช้ง่าย ไม่ต้องตั้ง Trade Level',
+    '3) Quantum-Queen-MT5-3.65 — EA ขั้นสูง จัดการ Lot/พารามิเตอร์เองเกือบทั้งหมด ทุนขั้นต่ำ ~500 USD',
+    '',
+    '=== ขั้นตอนเปิดบอท (ลูกค้า login แล้ว) ===',
+    '1) ยืนยันตัวตน → ' + fullUrl('/app/identity'),
+    '2) ซื้อ/ต่อแพ็กเกจ → ' + fullUrl('/app/packages'),
+    '3) เชื่อม MT5 ให้ connected → ' + fullUrl('/app/mt5'),
+    '4) เลือก PORT ว่าง → เลือกบอท → ตั้งค่า (ถ้าจำเป็น) → กด Run',
+    '5) ดูผลที่ปฏิทิน PnL → ' + fullUrl('/app/calendar'),
     '',
     '=== แพ็กเกจ vs Lot ===',
     `BASIC: Lot ${PACKAGE_LOT.BASIC.lotMin}-${PACKAGE_LOT.BASIC.lotMax} (${PACKAGE_LOT.BASIC.label})`,
     `PRO: Lot ${PACKAGE_LOT.PRO.lotMin}-${PACKAGE_LOT.PRO.lotMax} (${PACKAGE_LOT.PRO.label})`,
-    `ADVANCED: Lot ${PACKAGE_LOT.ADVANCED.lotMin}-${PACKAGE_LOT.ADVANCED.lotMax} (${PACKAGE_LOT.ADVANCED.label})`
+    `ADVANCED: Lot ${PACKAGE_LOT.ADVANCED.lotMin}-${PACKAGE_LOT.ADVANCED.lotMax} (${PACKAGE_LOT.ADVANCED.label})`,
+    '',
+    '=== เมื่อลูกค้าถามว่าควรใช้บอทไหน ===',
+    '- ใช้ get_bot_info พร้อมข้อมูลแพ็กเกจ/Equity ของลูกค้า',
+    '- ใช้ recommend_bot ถ้าถามคำแนะนำทั่วไป',
+    '- อธิบายการทำงาน + ข้อดี/ข้อเสีย + เปรียบเทียบ 3 ตัว ไม่สัญญากำไร'
   ].join('\n');
 }
 
