@@ -45,10 +45,10 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
       <% if (!isIdentityVerified) { %>
       <div class="identity-doc-type-row">
         <button type="button" class="identity-doc-type-btn <%= docType === 'thai_id' ? 'active' : '' %>" data-doc-type="thai_id">
-          <%= safeT('identity.doc_thai_id', 'คนไทย — บัตรประชาชน') %>
+          <%= safeT('identity.doc_thai_id', 'บัตรประชาชน') %>
         </button>
         <button type="button" class="identity-doc-type-btn <%= docType === 'passport' ? 'active' : '' %>" data-doc-type="passport">
-          <%= safeT('identity.doc_passport', 'ต่างชาติ — พาสปอร์ต') %>
+          <%= safeT('identity.doc_passport', 'พาสปอร์ต') %>
         </button>
       </div>
 
@@ -71,6 +71,11 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
         </div>
 
         <div class="identity-scan-status" id="identityScanStatus"></div>
+      </div>
+      <% } else if (identityData.document_image_path) { %>
+      <div class="identity-verified-doc">
+        <div class="identity-verified-doc-label"><%= safeT('identity.saved_document', 'บัตร/เอกสารที่บันทึกไว้') %></div>
+        <img src="/<%= identityData.document_image_path %>" alt="<%= safeT('identity.saved_document', 'บัตร/เอกสารที่บันทึกไว้') %>" class="identity-verified-doc-image">
       </div>
       <% } %>
 
@@ -107,8 +112,8 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
           </div>
 
           <div class="identity-field identity-col-2">
-            <label for="address_line"><%= safeT('identity.address_line', 'ที่อยู่') %></label>
-            <input type="text" id="address_line" name="address_line" value="<%= identityData.address_line || '' %>" placeholder="<%= safeT('identity.address_line_placeholder', 'จากเอกสาร') %>" readonly required>
+            <label for="address_line"><%= safeT('identity.address_house_street', 'บ้านเลขที่ / ถนน') %></label>
+            <input type="text" id="address_line" name="address_line" value="<%= identityData.address_line || '' %>" placeholder="<%= safeT('identity.address_house_street_placeholder', 'บ้านเลขที่ / หมู่ / ถนน / ซอย') %>" readonly required>
           </div>
 
           <div class="identity-field">

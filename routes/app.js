@@ -44,7 +44,9 @@ const {
   scanIdentityDocument,
   validateThaiNationalId,
   validatePassportNumber,
-  checkDuplicateDocument
+  checkDuplicateDocument,
+  enrichIdentityAddress,
+  finalizeVerifiedDocumentImage
 } = require('../services/identityDocumentService');
 const { fetchCalendarPerformance, fetchMt5LoginPortfolio } = require('../lib/mt5CalendarPerformance');
 const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
@@ -2215,6 +2217,15 @@ router.post('/identity/request-code', async (req, res) => {
       return res.redirect('/app/identity');
     }
 
+    const enriched = enrichIdentityAddress({
+      document_type: documentType,
+      address_line: addressLine,
+      subdistrict,
+      district,
+      province,
+      postal_code: postalCode
+    });
+
     const otpCode = generateOtpCode();
     const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
 
@@ -2271,11 +2282,11 @@ router.post('/identity/request-code', async (req, res) => {
       [
         user.id,
         fullName,
-        addressLine,
-        subdistrict,
-        district,
-        province,
-        postalCode,
+        enriched.address_line,
+        enriched.subdistrict,
+        enriched.district,
+        enriched.province,
+        enriched.postal_code,
         phone,
         verifyEmail,
         documentType,
@@ -2346,13 +2357,19 @@ router.post('/identity/verify', async (req, res) => {
       return res.redirect('/app/identity');
     }
 
+    const verifiedImagePath = finalizeVerifiedDocumentImage({
+      userId: user.id,
+      sourceRelativePath: row.document_image_path
+    });
+
     await query(
       `UPDATE user_identity_verifications
        SET verified_at = NOW(),
            status = 'verified',
+           document_image_path = COALESCE(NULLIF($2, ''), document_image_path),
            updated_at = NOW()
        WHERE user_id = $1`,
-      [user.id]
+      [user.id, verifiedImagePath]
     );
 
     const updatedUserRes = await query(

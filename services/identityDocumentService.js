@@ -6,6 +6,8 @@ const { randomUUID } = require('crypto');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const { query } = require('../config/database');
+const { parseThaiIdAddress } = require('../lib/thaiAddressParser');
+const { lookupPostalCode } = require('../lib/thaiPostalLookup');
 
 const execFileAsync = promisify(execFile);
 const UPLOAD_DIR = path.join(__dirname, '../uploads/identity-docs');
@@ -154,8 +156,8 @@ function buildVisionPrompt(expectedDocumentType) {
     '- ถ้าเห็นบัตรจริงและอ่านเลข 13 หลักได้ ให้ is_authentic_document=true',
     '- เลขบัตรอยู่บรรทัด Identification Number รูปแบบ X XXXX XXXXX XX X',
     '- แปลงวันเกิด/วันหมดอายุเป็น YYYY-MM-DD (เช่น 14 Aug. 1988 -> 1988-08-14)',
-    '- address_line ใส่ที่อยู่เต็ม subdistrict/district/province แยกถ้าอ่านได้ ไม่บังคับ',
-    '- อย่าปฏิเสธเพราะไม่มีรหัสไปรษณีย์',
+    '- address_line ใส่เฉพาะบ้านเลขที่ หมู่ที่ และถนน/ซอย ไม่ใส่แขวง/เขต/จังหวัด',
+    '- subdistrict/district/province แยกจากที่อยู่ postal_code ให้ว่างไว้ ระบบจะเติมอัตโนมัติ',
     '- confidence คือความมั่นใจในการอ่านตัวอักษร ไม่ใช่การตัดสินความถูกต้องของบัตร',
     'ตอบ JSON เท่านั้น:',
     '{',
@@ -166,7 +168,7 @@ function buildVisionPrompt(expectedDocumentType) {
     '  "passport_number": "",',
     '  "full_name": "ชื่อ-นามสกุล",',
     '  "date_of_birth": "YYYY-MM-DD",',
-    '  "address_line": "ที่อยู่ตามบัตร",',
+    '  "address_line": "บ้านเลขที่ / หมู่ที่ / ถนน",',
     '  "subdistrict": "",',
     '  "district": "",',
     '  "province": "",',
@@ -282,6 +284,55 @@ async function checkDuplicateDocument({ nationalId, passportNumber, userId }) {
   return { ok: true };
 }
 
+function enrichIdentityAddress(data) {
+  if (!data || data.document_type === 'passport') return data;
+
+  const sourceAddress = [
+    data.address_line,
+    data.subdistrict ? `แขวง${data.subdistrict}` : '',
+    data.district ? `เขต${data.district}` : '',
+    data.province || ''
+  ].filter(Boolean).join(' ');
+
+  const parsed = parseThaiIdAddress(sourceAddress || data.address_line, {
+    subdistrict: data.subdistrict,
+    district: data.district,
+    province: data.province
+  });
+
+  const postalCode = normalizeDigits(data.postal_code).slice(0, 5)
+    || lookupPostalCode({
+      subdistrict: parsed.subdistrict,
+      district: parsed.district,
+      province: parsed.province
+    });
+
+  return {
+    ...data,
+    address_line: parsed.address_line || data.address_line,
+    subdistrict: parsed.subdistrict || data.subdistrict,
+    district: parsed.district || data.district,
+    province: parsed.province || data.province,
+    postal_code: postalCode
+  };
+}
+
+function finalizeVerifiedDocumentImage({ userId, sourceRelativePath }) {
+  if (!sourceRelativePath) return '';
+
+  const srcAbs = path.join(__dirname, '..', sourceRelativePath);
+  if (!fs.existsSync(srcAbs)) return sourceRelativePath;
+
+  const verifiedDir = path.join(UPLOAD_DIR, 'verified');
+  fs.mkdirSync(verifiedDir, { recursive: true });
+  const ext = path.extname(srcAbs) || '.jpg';
+  const destName = `${userId}-verified${ext}`;
+  const destAbs = path.join(verifiedDir, destName);
+  fs.copyFileSync(srcAbs, destAbs);
+
+  return path.join('uploads/identity-docs/verified', destName).replace(/\\/g, '/');
+}
+
 function normalizeScanResult(parsed, expectedDocumentType) {
   const confidence = Number(parsed.confidence || 0);
   const documentType = String(parsed.document_type || expectedDocumentType || '').trim().toLowerCase();
@@ -362,7 +413,7 @@ function normalizeScanResult(parsed, expectedDocumentType) {
 
   return {
     ok: true,
-    data: {
+    data: enrichIdentityAddress({
       document_type: expectedDocumentType,
       national_id: nationalId,
       passport_number: passportNumber,
@@ -376,7 +427,7 @@ function normalizeScanResult(parsed, expectedDocumentType) {
       document_expiry_date: formatIsoDate(expiryDate),
       confidence: confidence || (hardVerified ? 0.85 : 0.5),
       scan_json: parsed
-    }
+    })
   };
 }
 
@@ -501,5 +552,7 @@ module.exports = {
   validateIdentityDocumentPayload,
   validateThaiNationalId,
   validatePassportNumber,
-  checkDuplicateDocument
+  checkDuplicateDocument,
+  enrichIdentityAddress,
+  finalizeVerifiedDocumentImage
 };
