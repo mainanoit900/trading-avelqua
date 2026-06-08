@@ -5861,6 +5861,8 @@ def _ea_file_candidates(bot_code: str) -> List[str]:
         ],
         "QUANTUM-QUEEN": ["Quantum-Queen-MT5-3.65.ex5", "QUANTUM-QUEEN-MT5-3.65.ex5"],
         "QUEEN-SNIPER-AI-V1.0": ["QUEEN-SNIPER-AI-V1.0.ex5", "Queen-Sniper-AI-V1.0.ex5"],
+        "SNIPER-AI-TRADING": ["SNIPER-AI-TRADING.ex5", "SNIPER_AI_TRADING.ex5"],
+        "SNIPER-AI": ["SNIPER-AI-TRADING.ex5"],
     }
     key = code.upper().replace(" ", "")
     for alt in aliases.get(key, []):
@@ -5943,9 +5945,11 @@ def _ea_set_str_line(name: str, value: str) -> str:
 
 def _bot_kind_from_payload(payload: Dict[str, Any]) -> str:
     kind = str(payload_get(payload, "botKind", "bot_kind") or "").strip().lower()
-    if kind in ("ak", "queen", "quantum", "legacy"):
+    if kind in ("ak", "queen", "quantum", "sniper_ai", "legacy"):
         return kind
     code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "").strip().upper()
+    if "SNIPER-AI-TRADING" in code:
+        return "sniper_ai"
     if "QUANTUM-QUEEN" in code:
         return "quantum"
     if "QUEEN-SNIPER" in code:
@@ -5967,7 +5971,7 @@ def _default_ea_set_payload(payload: Dict[str, Any]) -> Tuple[str, str, Dict[str
     trade_level = str(payload_get(payload, "tradeLevel", "trade_level") or "medium").strip().lower() or "medium"
     capital = int(round(_ea_num(payload_get(payload, "capitalUsed", "capital"), 0)))
 
-    if bot_kind == "quantum" or payload_get(payload, "eaSetSkip", "ea_set_skip") in (True, 1, "1", "true", "yes"):
+    if bot_kind in ("quantum", "sniper_ai") or payload_get(payload, "eaSetSkip", "ea_set_skip") in (True, 1, "1", "true", "yes"):
         return "", "", {"skipped": True, "botKind": bot_kind, "capitalUsed": capital}
 
     file_name = str(payload_get(payload, "eaSetFileName", "ea_set_file_name") or "").strip()
@@ -6224,6 +6228,131 @@ def _pick_launchable_ea_file(ea_info: Dict[str, Any]) -> Optional[Path]:
     return None
 
 
+SNIPER_AI_DIR = AGENT_DIR / "sniper-ai"
+_SNIPER_AI_PROC_LOCK = threading.Lock()
+_SNIPER_AI_PROC: Optional[subprocess.Popen] = None
+
+
+def _is_sniper_ai_bot(bot_code: str) -> bool:
+    return "SNIPER-AI-TRADING" in str(bot_code or "").upper().replace(" ", "")
+
+
+def _sync_sniper_ai_server(payload: Dict[str, Any]) -> Dict[str, Any]:
+    SNIPER_AI_DIR.mkdir(parents=True, exist_ok=True)
+    content = str(payload_get(payload, "aiServerContent", "ai_server_content") or "")
+    req_txt = str(payload_get(payload, "aiServerRequirements", "ai_server_requirements") or "")
+    out: Dict[str, Any] = {"dir": str(SNIPER_AI_DIR), "synced": False}
+    if content.strip():
+        (SNIPER_AI_DIR / "ai_server.py").write_text(content, encoding="utf-8")
+        out["synced"] = True
+    if req_txt.strip():
+        (SNIPER_AI_DIR / "requirements.txt").write_text(req_txt, encoding="utf-8")
+    models_dir = SNIPER_AI_DIR / "models"
+    models_dir.mkdir(parents=True, exist_ok=True)
+    return out
+
+
+def _sniper_ai_python() -> str:
+    venv_py = SNIPER_AI_DIR / "venv" / "Scripts" / "python.exe"
+    if venv_py.exists():
+        return str(venv_py)
+    return sys.executable
+
+
+def _ensure_sniper_ai_deps() -> Tuple[bool, str]:
+    req_file = SNIPER_AI_DIR / "requirements.txt"
+    stamp = SNIPER_AI_DIR / ".deps_ok"
+    if stamp.exists() and (SNIPER_AI_DIR / "ai_server.py").exists():
+        return True, "deps cached"
+    if not req_file.exists():
+        return False, "requirements.txt missing"
+    venv_dir = SNIPER_AI_DIR / "venv"
+    py = _sniper_ai_python()
+    try:
+        if not venv_dir.exists():
+            subprocess.run(
+                [sys.executable, "-m", "venv", str(venv_dir)],
+                cwd=str(SNIPER_AI_DIR),
+                check=True,
+                timeout=120,
+                creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            )
+            py = _sniper_ai_python()
+        subprocess.run(
+            [py, "-m", "pip", "install", "--upgrade", "pip"],
+            cwd=str(SNIPER_AI_DIR),
+            check=True,
+            timeout=300,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        subprocess.run(
+            [py, "-m", "pip", "install", "-r", str(req_file)],
+            cwd=str(SNIPER_AI_DIR),
+            check=True,
+            timeout=1800,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        stamp.write_text(datetime.now().isoformat(), encoding="utf-8")
+        return True, "deps installed"
+    except Exception as e:
+        return False, str(e)[:500]
+
+
+def _sniper_ai_running() -> bool:
+    global _SNIPER_AI_PROC
+    with _SNIPER_AI_PROC_LOCK:
+        proc = _SNIPER_AI_PROC
+        if proc is None:
+            return False
+        if proc.poll() is None:
+            return True
+        _SNIPER_AI_PROC = None
+        return False
+
+
+def start_sniper_ai_server(payload: Dict[str, Any]) -> Dict[str, Any]:
+    global _SNIPER_AI_PROC
+    if not _is_sniper_ai_bot(str(payload_get(payload, "botCode", "eaName", "bot_code") or "")):
+        return {"skipped": True}
+    if payload_get(payload, "aiServerAutoStart", "ai_server_auto_start") in (False, 0, "0", "false", "no"):
+        return {"skipped": True, "reason": "auto_start disabled"}
+
+    sync_info = _sync_sniper_ai_server(payload)
+    ok_deps, dep_msg = _ensure_sniper_ai_deps()
+    if not ok_deps:
+        raise RuntimeError(f"SNIPER-AI deps install failed: {dep_msg}")
+
+    with _SNIPER_AI_PROC_LOCK:
+        if _SNIPER_AI_PROC and _SNIPER_AI_PROC.poll() is None:
+            return {"status": "already_running", "pid": _SNIPER_AI_PROC.pid, **sync_info}
+
+        py = _sniper_ai_python()
+        log_file = SNIPER_AI_DIR / "ai_server.log"
+        log_handle = log_file.open("ab")
+        proc = subprocess.Popen(
+            [py, str(SNIPER_AI_DIR / "ai_server.py")],
+            cwd=str(SNIPER_AI_DIR),
+            stdin=subprocess.DEVNULL,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+            close_fds=False,
+        )
+        log_handle.close()
+        _SNIPER_AI_PROC = proc
+        time.sleep(1.5)
+        if proc.poll() is not None:
+            tail = ""
+            try:
+                tail = log_file.read_text(encoding="utf-8", errors="ignore")[-800:]
+            except Exception:
+                pass
+            _SNIPER_AI_PROC = None
+            raise RuntimeError(f"SNIPER-AI server exited early: {tail}")
+        log(f"SNIPER-AI SERVER STARTED pid={proc.pid} dir={SNIPER_AI_DIR}")
+        return {"status": "started", "pid": proc.pid, "deps": dep_msg, **sync_info}
+
+
 def _sync_ea_source_file(experts_dir: Path, payload: Dict[str, Any], bot_code: str) -> Dict[str, Any]:
     content = str(payload_get(payload, "eaSourceContent", "ea_source_content") or "")
     if not content.strip():
@@ -6436,6 +6565,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         raise RuntimeError(f"terminal64.exe not found: {terminal}")
 
     bot_code = str(payload_get(payload, "botCode", "eaName", "bot_code") or "").strip()
+    if _is_sniper_ai_bot(bot_code):
+        ai_info = start_sniper_ai_server(payload)
+        log(f"SNIPER-AI SERVER port={port} info={ai_info}")
     rel = str(
         payload_get(payload, "expertsRelative", "experts_relative", default=r"MQL5\Experts\Trading Bot")
         or r"MQL5\Experts\Trading Bot"

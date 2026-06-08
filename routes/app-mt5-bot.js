@@ -85,6 +85,11 @@ const { loadUserPortIsolationContext, attachPortIsolationFields } = require('../
 const { assertFolderPortFreeForUser } = require('../lib/mt5PortSlotGuard');
 const { systemPortNoFromReservedPort } = require('../lib/mt5ReservedPortNo');
 const { debitScoin } = require('../services/scoinService');
+const {
+  getMt5PortScoinPrices,
+  getMt5PortScoinPrice,
+  formatPortScoinLabel
+} = require('../lib/mt5PortScoinSettings');
 const { folderPathForPortNo, vpsPortNameForNo } = require('../lib/mt5AccountPort');
 
 const router = express.Router();
@@ -94,6 +99,7 @@ function readBotMq5Source(botCode) {
   if (!code) return {};
 
   const candidates = [
+    path.join(process.cwd(), 'BOT_MT5', code, `${code}.mq5`),
     path.join(process.cwd(), 'BOT_MT5', `${code}.mq5`),
     path.join(process.cwd(), 'BOT_MT5', `${code.replace(/-/g, '_')}.mq5`)
   ];
@@ -110,6 +116,21 @@ function readBotMq5Source(botCode) {
   }
 
   return {};
+}
+
+function readSniperAiServerBundle(botCode) {
+  const code = String(botCode || '').trim().toUpperCase();
+  if (!code.includes('SNIPER-AI-TRADING')) return {};
+  const base = path.join(process.cwd(), 'BOT_MT5', 'SNIPER-AI-TRADING');
+  try {
+    return {
+      aiServerAutoStart: true,
+      aiServerContent: fs.readFileSync(path.join(base, 'ai_server.py'), 'utf8'),
+      aiServerRequirements: fs.readFileSync(path.join(base, 'requirements.txt'), 'utf8')
+    };
+  } catch (_) {
+    return {};
+  }
 }
 
 router.post('/mt5/connect-result', async (req, res) => {
@@ -577,10 +598,23 @@ function flash(req, key, value) {
 }
 
 function pullFlash(req) {
-  const out = { success: req.session.success || '', error: req.session.error || '' };
+  const out = {
+    success: req.session.success || '',
+    error: req.session.error || '',
+    portError: req.session.portError || ''
+  };
   delete req.session.success;
   delete req.session.error;
+  delete req.session.portError;
   return out;
+}
+
+function formatPortAddError(err, price) {
+  const msg = String(err?.message || err || '');
+  if (/scoin balance is not enough/i.test(msg) || /locked scoin is not enough/i.test(msg)) {
+    return 'Scoin คุณไม่พอค่ะ';
+  }
+  return msg || 'เกิดข้อผิดพลาดระบบ';
 }
 
 async function safeQuery(sql, params = [], fallback = []) {
@@ -1454,7 +1488,8 @@ async function ensureBotCatalog() {
     VALUES
     ('AK-SNIPER-VIP-VER4.0','AK-SNIPER-VIP-VER4.0','AK-SNIPER-VIP-VER4.0','XAUUSD',1,0.01,50,FALSE,10,TRUE),
     ('QUEEN-SNIPER-AI-V1.0','QUEEN-SNIPER-AI-V1.0','QUEEN-SNIPER-AI-V1.0','XAUUSD',1,0.01,50,FALSE,20,TRUE),
-    ('Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','XAUUSD',1,0.01,50,FALSE,30,TRUE)
+    ('Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','XAUUSD',1,0.01,50,FALSE,30,TRUE),
+    ('SNIPER-AI-TRADING','SNIPER-AI-TRADING','SNIPER AI Trading (Auto)','XAUUSD',1,0.01,50,FALSE,25,TRUE)
     ON CONFLICT (bot_code) DO UPDATE SET
       bot_name=EXCLUDED.bot_name,
       display_name=EXCLUDED.display_name,
@@ -1473,7 +1508,8 @@ async function ensureBotCatalog() {
     WHERE UPPER(bot_code) NOT IN (
       'AK-SNIPER-VIP-VER4.0',
       'QUEEN-SNIPER-AI-V1.0',
-      'QUANTUM-QUEEN-MT5-3.65'
+      'QUANTUM-QUEEN-MT5-3.65',
+      'SNIPER-AI-TRADING'
     )
   `).catch(() => {});
 }
@@ -1926,6 +1962,10 @@ router.get('/mt5', async (req, res) => {
   await repairUserMt5PortBindings(userId).catch(() => {});
 
   const summary = await getPortSummaryReadOnly(userId);
+  const portScoinPrices = await getMt5PortScoinPrices().catch(() => ({
+    temporary: 1,
+    permanent: 10
+  }));
 
   const accounts = await safeQuery(`
     SELECT a.*, (
@@ -2058,6 +2098,11 @@ router.get('/mt5', async (req, res) => {
     user: req.user || req.session?.user || null,
     ...flashData,
     error: flashData.error || '',
+    portError: flashData.portError || '',
+    portScoinTemp: portScoinPrices.temporary,
+    portScoinPerm: portScoinPrices.permanent,
+    portScoinTempLabel: formatPortScoinLabel(portScoinPrices.temporary),
+    portScoinPermLabel: formatPortScoinLabel(portScoinPrices.permanent),
     fixedServer: FIXED_SERVER,
     fixedBroker: FIXED_BROKER,
     ...summary,
@@ -2746,11 +2791,12 @@ router.post('/mt5/account/:id/delete', async (req, res) => {
 
 router.post('/mt5/ports/add', async (req, res) => {
   const client = await getClient();
+  const portType = req.body.port_type === 'permanent' ? 'permanent' : 'temporary';
+  let price = 0;
 
   try {
     const userId = req.user.id;
-    const portType = req.body.port_type === 'permanent' ? 'permanent' : 'temporary';
-    const price = portType === 'permanent' ? 10 : 1;
+    price = await getMt5PortScoinPrice(portType, client);
 
     await ensureExtraPortsTable().catch(() => {});
 
@@ -2863,7 +2909,7 @@ router.post('/mt5/ports/add', async (req, res) => {
   } catch (e) {
     await client.query('ROLLBACK').catch(() => {});
     console.error('MT5 PORT ADD ERROR:', e);
-    flash(req, 'error', e.message || 'เกิดข้อผิดพลาดระบบ');
+    flash(req, 'portError', formatPortAddError(e, price));
   } finally {
     client.release();
   }
@@ -3094,7 +3140,7 @@ router.post('/mt5/run', async (req, res) => {
       throw new Error(`เงินทุนไม่พอใช้บอทตัวนี้ (ขั้นต่ำ ${minCap.toLocaleString()} ${currencyUnit})`);
     }
     let lot = num(calc.lot);
-    if (lot <= 0 && botKind(bot) === 'quantum') lot = 0.01;
+    if (lot <= 0 && (botKind(bot) === 'quantum' || botKind(bot) === 'sniper_ai')) lot = 0.01;
     const trade = calc.trade;
     const capitalUsed = num(calc.capitalUsed || calc.capital || capitalCheck.capital);
 
@@ -3214,8 +3260,8 @@ router.post('/mt5/run', async (req, res) => {
       botName: bot.display_name || bot.bot_name,
       eaName: bot.bot_code,
       symbol: 'XAUUSD',
-      period: calc.chartPeriod || 'H1',
-      chartPeriod: calc.chartPeriod || 'H1',
+      period: calc.chartPeriod || 'M15',
+      chartPeriod: calc.chartPeriod || 'M15',
       lot,
       lotPlus,
       capital: capitalUsed,
@@ -3257,6 +3303,7 @@ router.post('/mt5/run', async (req, res) => {
       expertsRelative: 'MQL5\\Experts\\Trading Bot',
       experts_relative: 'MQL5\\Experts\\Trading Bot',
       ...readBotMq5Source(bot.bot_code),
+      ...readSniperAiServerBundle(bot.bot_code),
       port: assignedPortNo,
       portSlot: account.port_slot || 1,
       keepMt5Open: true,
