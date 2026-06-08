@@ -1,0 +1,39 @@
+<%
+  const rowUser = typeof user !== 'undefined' ? user : {};
+  const rowDetailJson = typeof detailJson !== 'undefined' ? detailJson : '{}';
+  const menuLabel = typeof toggleLabel !== 'undefined' ? toggleLabel : 'จัดการ ▾';
+%>
+<div class="user-action-menu">
+  <button type="button" class="user-action-toggle"><%= menuLabel %></button>
+  <div class="user-action-dropdown">
+    <button type="button" class="user-action-item" onclick='openUserDetail(<%- rowDetailJson %>)'>ดูรายละเอียด</button>
+    <a class="user-action-item" href="/admin/users/<%= rowUser.id %>/edit">อัปเดตข้อมูล</a>
+
+    <% if (rowUser.subscription_id) { %>
+      <form
+        method="POST"
+        action="/admin/users/<%= rowUser.id %>/remove-package"
+        onsubmit="return confirm('ยืนยันยกเลิกแพ็กเกจของผู้ใช้นี้? ระบบจะลบเฉพาะแพ็กเกจล่าสุด ไม่ลบข้อมูลผู้ใช้และไม่ลบประวัติการชำระเงิน')"
+      >
+        <input type="hidden" name="subscription_id" value="<%= rowUser.subscription_id %>">
+        <button class="user-action-item warning" type="submit">ยกเลิกแพ็กเกจ</button>
+      </form>
+    <% } %>
+
+    <% if (rowUser.status === 'banned') { %>
+      <form method="POST" action="/admin/users/<%= rowUser.id %>/unban">
+        <button class="user-action-item success" type="submit">ปลดแบน</button>
+      </form>
+    <% } else { %>
+      <form method="POST" action="/admin/users/<%= rowUser.id %>/ban">
+        <button class="user-action-item warning" type="submit">แบน</button>
+      </form>
+    <% } %>
+
+    <div class="user-action-divider"></div>
+
+    <form method="POST" action="/admin/users/<%= rowUser.id %>/delete" onsubmit="return confirm('ยืนยันลบผู้ใช้?')">
+      <button class="user-action-item danger" type="submit">ลบ</button>
+    </form>
+  </div>
+</div>

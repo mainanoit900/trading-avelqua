@@ -5,7 +5,33 @@ const requireAdmin = require('../middleware/admin');
 const XLSX = require('xlsx');
 const multer = require('multer');
 const fs = require('fs');
+const path = require('path');
 const upload = multer({ dest: '/tmp' });
+const { getStripeReceiptUrlForPayment } = require('../services/stripeService');
+const { ensurePaymentReceiptSnapshotById } = require('../services/paymentReceiptSnapshot');
+const { buildPaymentReceiptView, buildPaymentReceiptViewById } = require('../lib/paymentReceiptView');
+const { buildScoinSellReceiptView } = require('../lib/scoinSellReceiptView');
+
+const hostSlipStorage = multer.diskStorage({
+  destination(req, file, cb) {
+    const dir = path.join(__dirname, '../uploads/host-slips');
+    fs.mkdirSync(dir, { recursive: true });
+    cb(null, dir);
+  },
+  filename(req, file, cb) {
+    const ext = path.extname(String(file.originalname || '')).toLowerCase() || '.jpg';
+    cb(null, `sell-${req.params.id}-${Date.now()}${ext}`);
+  }
+});
+
+const hostSlipUpload = multer({
+  storage: hostSlipStorage,
+  limits: { fileSize: 8 * 1024 * 1024 },
+  fileFilter(req, file, cb) {
+    const ok = /^(image\/(jpeg|png|webp|gif)|application\/pdf)$/i.test(String(file.mimetype || ''));
+    cb(ok ? null : new Error('รองรับเฉพาะรูปภาพหรือ PDF'), ok);
+  }
+});
 
 
 const backupService = require('../services/backupService');
@@ -25,7 +51,8 @@ const {
   isAgentMt5Running,
   reconcilePortIdleWhenAgentFree,
   queueForceStopMt5,
-  syncStaleAdminAllocations
+  syncStaleAdminAllocations,
+  expireStaleLockedPorts
 } = require('../lib/adminVpsBridge');
 const { clearFolderPortBinding } = require('../lib/mt5PortCleanup');
 
@@ -63,7 +90,18 @@ const {
   releaseSellLock
 } = require('../services/scoinService');
 const { postTransaction } = require('../lib/scoinLedger');
+const {
+  ensureScoinCirculationSchema,
+  applyMarketCirculation,
+  getCirculationSummary,
+  lockCentralWallet
+} = require('../lib/scoinCirculation');
+const { applyAutoPriceAfterTrade } = require('../lib/scoinAutoPrice');
 const { applyPaidPackageSubscription } = require('../lib/subscriptionPackage');
+const {
+  getMt5PortScoinPrices,
+  updateMt5PortScoinPrices
+} = require('../lib/mt5PortScoinSettings');
 
 const { syncNewsNow } = require('../services/newsSyncService');
 const {
@@ -148,6 +186,23 @@ async function scoinBuildExportQuery(type) {
     const select = scoinSelect(c, 'e', [['id'], ['display_id'], ['created_at'], ['user_id'], ['payment_id'], ['package_id'], ['package_price_thb'], ['user_receive_scoin'], ['company_profit_thb'], ['network_bonus_thb'], ['buyback_reserve_thb'], ['burn_liquidity_thb'], ['promotion_thb'], ['system_marketing_thb']]);
     const order = c.has('created_at') ? 'ORDER BY e.created_at DESC' : 'ORDER BY e.id DESC';
     return { sheet: 'Scoin Economy Logs', sql: `SELECT ${select} FROM scoin_economy_logs e ${order}` };
+  }
+  if (type === 'circulation') {
+    if (!(await scoinTableExists('scoin_circulation_logs'))) return null;
+    const c = await scoinColumns('scoin_circulation_logs');
+    const hasUsers = await scoinTableExists('users');
+    const joinUser = hasUsers && c.has('user_id') ? 'LEFT JOIN users u ON u.id = l.user_id' : '';
+    const userSelect = joinUser ? "u.email AS email, COALESCE(NULLIF(u.full_name,''), u.email) AS full_name" : 'NULL AS email, NULL AS full_name';
+    const select = scoinSelect(c, 'l', [
+      ['id'], ['market_order_id'], ['user_id'], ['flow_type'], ['scoin_amount'],
+      ['thb_gross'], ['thb_fee'], ['thb_net'],
+      ['central_scoin_before'], ['central_scoin_after'],
+      ['central_thb_before'], ['central_thb_after'],
+      ['market_supply_before'], ['market_supply_after'],
+      ['circulation_volume_total'], ['note'], ['created_at']
+    ]);
+    const order = c.has('created_at') ? 'ORDER BY l.created_at DESC' : 'ORDER BY l.id DESC';
+    return { sheet: 'Scoin Circulation', sql: `SELECT ${select}, ${userSelect} FROM scoin_circulation_logs l ${joinUser} ${order}` };
   }
   return null;
 }
@@ -240,12 +295,51 @@ async function getAdminSummary() {
   };
 }
 
+function fillDashboardDailySeries(rows = [], days = 14) {
+  const map = new Map(
+    (rows || []).map((row) => [String(row.label || ''), Number(row.total || 0)])
+  );
+  const result = [];
+  for (let offset = days - 1; offset >= 0; offset -= 1) {
+    const date = new Date();
+    date.setHours(0, 0, 0, 0);
+    date.setDate(date.getDate() - offset);
+    const label = date.toISOString().slice(0, 10);
+    result.push({
+      label,
+      total: map.get(label) || 0,
+      display: date.toLocaleDateString('th-TH', { day: 'numeric', month: 'short' })
+    });
+  }
+  return result;
+}
+
+function dashboardPaymentChannelLabel(method = '') {
+  const value = String(method || '').trim().toLowerCase();
+  if (['scoin', 'scoin_package'].includes(value)) return 'Scoin';
+  if (['stripe_card', 'credit_card', 'card'].includes(value)) return 'บัตรเครดิต';
+  if (['stripe_promptpay', 'promptpay_qr', 'kbank', 'promptpay'].includes(value)) return 'PromptPay';
+  if (value === 'free_coupon') return 'คูปอง';
+  return 'อื่นๆ';
+}
+
 router.get('/', async (req, res) => {
   try {
-    const [summary, recentPaymentsRes, expiringRes, deploymentsRes, revenueDaily] = await Promise.all([
+    const [
+      summary,
+      recentPaymentsRes,
+      expiringRes,
+      deploymentsRes,
+      revenueDailyRes,
+      paymentStatusRes,
+      periodStatsRes,
+      channelStatsRes,
+      subscriptionsRes
+    ] = await Promise.all([
       getAdminSummary(),
       query(`
         SELECT
+          id,
           payer_name,
           payer_email,
           package_name_snapshot,
@@ -254,6 +348,7 @@ router.get('/', async (req, res) => {
           payment_method,
           created_at
         FROM payments
+        WHERE package_id IS NOT NULL
         ORDER BY created_at DESC
         LIMIT 8
       `),
@@ -288,22 +383,103 @@ router.get('/', async (req, res) => {
       query(`
         SELECT
           TO_CHAR(COALESCE(paid_at, created_at), 'YYYY-MM-DD') AS label,
-          COALESCE(SUM(final_amount),0)::numeric AS total
+          COALESCE(SUM(final_amount), 0)::numeric AS total
         FROM payments
-        WHERE COALESCE(paid_at, created_at) >= NOW() - INTERVAL '14 day'
+        WHERE payment_status = 'paid'
+          AND package_id IS NOT NULL
+          AND COALESCE(paid_at, created_at) >= NOW() - INTERVAL '14 day'
         GROUP BY 1
         ORDER BY 1 ASC
-      `)
+      `),
+      query(`
+        SELECT
+          COALESCE(NULLIF(LOWER(payment_status), ''), 'unknown') AS status,
+          COUNT(*)::int AS count
+        FROM payments
+        WHERE package_id IS NOT NULL
+        GROUP BY 1
+        ORDER BY count DESC
+      `),
+      query(`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE payment_status = 'paid'
+              AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE
+          )::int AS today_count,
+          COALESCE(SUM(final_amount) FILTER (
+            WHERE payment_status = 'paid'
+              AND DATE(COALESCE(paid_at, created_at)) = CURRENT_DATE
+          ), 0)::numeric AS today_revenue,
+          COUNT(*) FILTER (
+            WHERE payment_status = 'paid'
+              AND DATE_TRUNC('month', COALESCE(paid_at, created_at)) = DATE_TRUNC('month', CURRENT_DATE)
+          )::int AS month_count,
+          COALESCE(SUM(final_amount) FILTER (
+            WHERE payment_status = 'paid'
+              AND DATE_TRUNC('month', COALESCE(paid_at, created_at)) = DATE_TRUNC('month', CURRENT_DATE)
+          ), 0)::numeric AS month_revenue
+        FROM payments
+        WHERE package_id IS NOT NULL
+      `),
+      query(`
+        SELECT
+          CASE
+            WHEN LOWER(COALESCE(payment_method, '')) IN ('scoin', 'scoin_package') THEN 'Scoin'
+            WHEN LOWER(COALESCE(payment_method, '')) IN ('stripe_card', 'credit_card', 'card') THEN 'บัตรเครดิต'
+            WHEN LOWER(COALESCE(payment_method, '')) IN ('stripe_promptpay', 'promptpay_qr', 'kbank', 'promptpay') THEN 'PromptPay'
+            WHEN LOWER(COALESCE(payment_method, '')) = 'free_coupon' THEN 'คูปอง'
+            ELSE 'อื่นๆ'
+          END AS channel,
+          COUNT(*) FILTER (WHERE payment_status = 'paid')::int AS count
+        FROM payments
+        WHERE package_id IS NOT NULL
+        GROUP BY 1
+        ORDER BY count DESC
+      `),
+      query(`
+        SELECT COUNT(*)::int AS active
+        FROM user_subscriptions
+        WHERE status = 'active'
+      `).catch(() => ({ rows: [{ active: 0 }] }))
     ]);
+
+    const periodStats = periodStatsRes.rows[0] || {};
+    const paymentStatusBreakdown = (paymentStatusRes.rows || []).map((row) => ({
+      status: row.status,
+      label: paymentStatusLabel(row.status),
+      count: Number(row.count || 0)
+    }));
+    const channelBreakdown = (channelStatsRes.rows || []).map((row) => ({
+      channel: row.channel,
+      count: Number(row.count || 0)
+    }));
+    const recentPayments = (recentPaymentsRes.rows || []).map((row) => ({
+      ...row,
+      status_label: paymentStatusLabel(row.payment_status),
+      channel_label: dashboardPaymentChannelLabel(row.payment_method)
+    }));
 
     return res.render('admin/dashboard', baseView(req, {
       pageTitle: 'Admin Dashboard',
+      pageCss: 'admin-dashboard.css',
       currentPath: '/admin',
       summary,
-      recentPayments: recentPaymentsRes.rows,
+      periodStats,
+      paymentStatusBreakdown,
+      channelBreakdown,
+      activeSubscriptions: Number(subscriptionsRes.rows[0]?.active || 0),
+      recentPayments,
       expiringSubscriptions: expiringRes.rows,
       recentDeployments: deploymentsRes.rows,
-      revenueDaily: revenueDaily.rows
+      revenueDaily: fillDashboardDailySeries(revenueDailyRes.rows, 14),
+      dashboardNow: new Date().toLocaleString('th-TH', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit'
+      })
     }));
   } catch (error) {
     console.error(error);
@@ -311,102 +487,130 @@ router.get('/', async (req, res) => {
   }
 });
 
+const USER_PAGE_SIZE = 15;
+
+function buildUsersWhere({ q = '', status = '', role = '', identity = '' }, params) {
+  const where = [];
+
+  const searchText = String(q || '').trim();
+  if (searchText) {
+    params.push(`%${searchText}%`);
+    const idx = params.length;
+    where.push(`(
+      CAST(u.id AS TEXT) ILIKE $${idx}
+      OR COALESCE(u.display_id,'') ILIKE $${idx}
+      OR COALESCE(u.email,'') ILIKE $${idx}
+      OR COALESCE(u.phone,'') ILIKE $${idx}
+      OR COALESCE(u.full_name,'') ILIKE $${idx}
+      OR COALESCE(u.first_name,'') ILIKE $${idx}
+      OR COALESCE(u.last_name,'') ILIKE $${idx}
+    )`);
+  }
+
+  const statusText = String(status || '').trim();
+  if (statusText) {
+    params.push(statusText);
+    where.push(`COALESCE(u.status,'active') = $${params.length}`);
+  }
+
+  const roleText = String(role || '').trim();
+  if (roleText) {
+    params.push(roleText);
+    where.push(`COALESCE(u.role,'user') = $${params.length}`);
+  }
+
+  const identityText = String(identity || '').trim();
+  if (identityText === 'verified') {
+    where.push(`COALESCE(u.identity_verified, FALSE) = TRUE`);
+  } else if (identityText === 'pending') {
+    where.push(`COALESCE(u.identity_verified, FALSE) = FALSE`);
+  }
+
+  return where.length ? `WHERE ${where.join(' AND ')}` : '';
+}
+
+const USERS_LIST_SQL = `
+  SELECT
+    u.id,
+    u.display_id,
+    u.full_name,
+    u.first_name,
+    u.last_name,
+    u.email,
+    u.phone,
+    u.role,
+    u.provider,
+    u.status,
+    u.email_verified,
+    COALESCE(u.identity_verified, FALSE) AS identity_verified,
+    u.identity_verified_at,
+    u.last_login_at,
+    u.created_at,
+    s.id AS subscription_id,
+    s.package_name_snapshot AS active_package_name,
+    s.end_at AS package_end_at,
+    s.source_channel,
+    iv.full_name AS identity_full_name,
+    iv.document_type,
+    iv.national_id,
+    iv.passport_number,
+    iv.date_of_birth,
+    iv.document_expiry_date,
+    iv.document_image_path,
+    iv.address_line,
+    iv.subdistrict,
+    iv.district,
+    iv.province,
+    iv.postal_code,
+    iv.phone AS identity_phone,
+    iv.verify_email,
+    iv.verified_at AS identity_row_verified_at,
+    ba.bank_name,
+    ba.account_name AS bank_account_name,
+    ba.account_number_masked,
+    ba.verify_email AS bank_verify_email,
+    ba.status AS bank_status,
+    COALESCE(ba.is_verified, FALSE) AS bank_is_verified,
+    ba.verified_at AS bank_verified_at,
+    ba.created_at AS bank_created_at,
+    ba.updated_at AS bank_updated_at
+  FROM users u
+  LEFT JOIN LATERAL (
+    SELECT id, package_name_snapshot, end_at, source_channel
+    FROM user_subscriptions us
+    WHERE us.user_id = u.id
+    ORDER BY COALESCE(us.end_at, us.created_at) DESC NULLS LAST, us.id DESC
+    LIMIT 1
+  ) s ON TRUE
+  LEFT JOIN user_identity_verifications iv ON iv.user_id = u.id
+  LEFT JOIN user_bank_accounts ba ON ba.user_id = u.id
+`;
+
 router.get('/users', async (req, res) => {
   try {
-    const q = String(req.query.q || '').trim();
-    const status = String(req.query.status || '').trim();
-    const role = String(req.query.role || '').trim();
-    const identity = String(req.query.identity || '').trim();
+    const filters = {
+      q: String(req.query.q || '').trim(),
+      status: String(req.query.status || '').trim(),
+      role: String(req.query.role || '').trim(),
+      identity: String(req.query.identity || '').trim()
+    };
+    const page = Math.max(parseInt(req.query.page || '1', 10) || 1, 1);
+    const listParams = [];
+    const whereClause = buildUsersWhere(filters, listParams);
+    const offset = (page - 1) * USER_PAGE_SIZE;
 
-    const params = [];
-    const where = [];
-
-    if (q) {
-      params.push(`%${q}%`);
-      const idx = params.length;
-      where.push(`(
-        CAST(u.id AS TEXT) ILIKE $${idx}
-        OR COALESCE(u.display_id,'') ILIKE $${idx}
-        OR COALESCE(u.email,'') ILIKE $${idx}
-        OR COALESCE(u.phone,'') ILIKE $${idx}
-        OR COALESCE(u.full_name,'') ILIKE $${idx}
-        OR COALESCE(u.first_name,'') ILIKE $${idx}
-        OR COALESCE(u.last_name,'') ILIKE $${idx}
-      )`);
-    }
-
-    if (status) {
-      params.push(status);
-      where.push(`COALESCE(u.status,'active') = $${params.length}`);
-    }
-
-    if (role) {
-      params.push(role);
-      where.push(`COALESCE(u.role,'user') = $${params.length}`);
-    }
-
-    if (identity === 'verified') {
-      where.push(`COALESCE(u.identity_verified, FALSE) = TRUE`);
-    } else if (identity === 'pending') {
-      where.push(`COALESCE(u.identity_verified, FALSE) = FALSE`);
-    }
-
-    const sql = `
-      SELECT
-        u.id,
-        u.display_id,
-        u.full_name,
-        u.first_name,
-        u.last_name,
-        u.email,
-        u.phone,
-        u.role,
-        u.provider,
-        u.status,
-        u.email_verified,
-        COALESCE(u.identity_verified, FALSE) AS identity_verified,
-        u.identity_verified_at,
-        u.last_login_at,
-        u.created_at,
-        s.id AS subscription_id,
-        s.package_name_snapshot AS active_package_name,
-        s.end_at AS package_end_at,
-        s.source_channel,
-        iv.full_name AS identity_full_name,
-        iv.address_line,
-        iv.subdistrict,
-        iv.district,
-        iv.province,
-        iv.postal_code,
-        iv.phone AS identity_phone,
-        iv.verify_email,
-        iv.verified_at AS identity_row_verified_at,
-        ba.bank_name,
-        ba.account_name AS bank_account_name,
-        ba.account_number_masked,
-        ba.verify_email AS bank_verify_email,
-        ba.status AS bank_status,
-        COALESCE(ba.is_verified, FALSE) AS bank_is_verified,
-        ba.verified_at AS bank_verified_at,
-        ba.created_at AS bank_created_at,
-        ba.updated_at AS bank_updated_at
-      FROM users u
-      LEFT JOIN LATERAL (
-        SELECT id, package_name_snapshot, end_at, source_channel
-        FROM user_subscriptions us
-        WHERE us.user_id = u.id
-        ORDER BY COALESCE(us.end_at, us.created_at) DESC NULLS LAST, us.id DESC
-        LIMIT 1
-      ) s ON TRUE
-      LEFT JOIN user_identity_verifications iv ON iv.user_id = u.id
-      LEFT JOIN user_bank_accounts ba ON ba.user_id = u.id
-      ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
-      ORDER BY u.created_at DESC
-      LIMIT 500
-    `;
-
-    const [result, counts] = await Promise.all([
-      query(sql, params),
+    const [result, countRes, counts] = await Promise.all([
+      query(
+        `${USERS_LIST_SQL}
+         ${whereClause}
+         ORDER BY u.created_at DESC
+         LIMIT ${USER_PAGE_SIZE} OFFSET ${offset}`,
+        listParams
+      ),
+      query(
+        `SELECT COUNT(*)::int AS total FROM users u ${whereClause}`,
+        listParams
+      ),
       query(`
         SELECT
           COUNT(*)::int AS total,
@@ -417,19 +621,29 @@ router.get('/users', async (req, res) => {
       `)
     ]);
 
+    const totalRows = Number(countRes.rows[0]?.total || 0);
+    const totalPages = Math.max(Math.ceil(totalRows / USER_PAGE_SIZE), 1);
+
     return res.render('admin/users', baseView(req, {
-  pageTitle: 'Users',
-  currentPath: '/admin/users',
-  users: result.rows,
-  bankAccounts: result.rows,
-  filters: { q, status, role, identity },
-  counts: counts.rows[0] || {
-    total: 0,
-    active: 0,
-    banned: 0,
-    identity_verified: 0
-  }
-}));
+      pageTitle: 'Users',
+      pageCss: 'admin-users.css',
+      currentPath: '/admin/users',
+      users: result.rows,
+      bankAccounts: result.rows,
+      filters,
+      counts: counts.rows[0] || {
+        total: 0,
+        active: 0,
+        banned: 0,
+        identity_verified: 0
+      },
+      pagination: {
+        currentPage: Math.min(page, totalPages),
+        totalPages,
+        totalRows,
+        pageSize: USER_PAGE_SIZE
+      }
+    }));
 
   } catch (error) {
     console.error(error);
@@ -721,7 +935,7 @@ router.get('/packages', async (req, res) => {
         psr.reward_type,
         psr.reward_scoin,
         COALESCE(psr.is_enabled, TRUE) AS scoin_reward_enabled,
-        COALESCE(psr.customer_reward_percent, 80) AS customer_reward_percent,
+        COALESCE(psr.customer_reward_percent, 40) AS customer_reward_percent,
         COALESCE(psr.first_referral_percent, 60) AS first_referral_percent,
         COALESCE(psr.level1_percent, 8) AS level1_percent,
         COALESCE(psr.level2_percent, 5) AS level2_percent,
@@ -734,7 +948,7 @@ router.get('/packages', async (req, res) => {
         COALESCE(psr.burn_liquidity_percent, 10) AS burn_liquidity_percent,
         COALESCE(psr.promotion_percent, 10) AS promotion_percent,
         COALESCE(psr.system_marketing_percent, 5) AS system_marketing_percent,
-        COALESCE(psr.reward_scoin, ROUND((COALESCE(p.price,0) * COALESCE(psr.customer_reward_percent,80) / 100)::numeric, 4)) AS customer_reward_scoin,
+        COALESCE(psr.reward_scoin, ROUND((COALESCE(p.price,0) * COALESCE(psr.customer_reward_percent,40) / 100)::numeric, 4)) AS customer_reward_scoin,
         ROUND((COALESCE(p.price,0) * COALESCE(psr.first_referral_percent,60) / 100)::numeric, 4) AS first_referral_bonus_scoin,
         ROUND((COALESCE(p.price,0) * COALESCE(psr.network_bonus_percent,20) / 100)::numeric, 4) AS network_bonus_pool_scoin,
         ROUND((COALESCE(p.price,0) * COALESCE(psr.company_profit_percent,35) / 100)::numeric, 2) AS company_profit_thb,
@@ -765,7 +979,7 @@ router.get('/packages', async (req, res) => {
 
 router.post('/packages/create', async (req, res) => {
   const price = Number(req.body.price || 0);
-  const customerPercent = Number(req.body.customer_reward_percent || 80);
+  const customerPercent = Number(req.body.customer_reward_percent || 40);
   const firstReferralPercent = Number(req.body.first_referral_percent || 60);
   const level1Percent = Number(req.body.level1_percent || 8);
   const level2Percent = Number(req.body.level2_percent || 5);
@@ -847,7 +1061,7 @@ router.post('/packages/create', async (req, res) => {
 
 router.post('/packages/:id/update', async (req, res) => {
   const price = Number(req.body.price || 0);
-  const customerPercent = Number(req.body.customer_reward_percent || 80);
+  const customerPercent = Number(req.body.customer_reward_percent || 40);
   const firstReferralPercent = Number(req.body.first_referral_percent || 60);
   const level1Percent = Number(req.body.level1_percent || 8);
   const level2Percent = Number(req.body.level2_percent || 5);
@@ -993,55 +1207,161 @@ async function autoCancelExpiredPayments() {
   }
 }
 
-router.get('/payments', async (req, res) => {
+const PAYMENTS_PAGE_SIZE = 10;
+
+function paymentDisplayId(row = {}) {
+  const raw = String(row.display_id || '').trim();
+  if (raw) return raw.replace(/^#+/, '');
+  if (row.id) return `PM${String(row.id).padStart(6, '0')}`;
+  return '-';
+}
+
+function paymentChannelLabel(method = '') {
+  const value = String(method || '').trim().toLowerCase();
+  if (['stripe_promptpay', 'promptpay_qr', 'kbank', 'promptpay'].includes(value)) return 'PromptPay';
+  if (['stripe_card', 'credit_card', 'card'].includes(value)) return 'บัตรเครดิต';
+  if (value === 'scoin' || value === 'scoin_package') return 'Scoin';
+  if (value === 'free_coupon') return 'คูปองฟรี';
+  return method || '-';
+}
+
+function paymentStatusLabel(status = '') {
+  const s = String(status || '').trim().toLowerCase();
+  if (!s || s === '-') return '-';
+  if (s === 'paid') return 'ชำระแล้ว';
+  if (s === 'pending') return 'รอตรวจสอบ';
+  if (['waiting', 'wait_payment', 'unpaid'].includes(s)) return 'รอชำระ';
+  if (s === 'cancelled' || s === 'canceled') return 'ยกเลิก';
+  if (s === 'failed') return 'ไม่สำเร็จ';
+  if (s === 'refunded') return 'คืนเงิน';
+  if (s === 'approved') return 'อนุมัติแล้ว';
+  if (s === 'rejected') return 'ปฏิเสธ';
+  if (s === 'completed' || s === 'success') return 'สำเร็จ';
+  return status || '-';
+}
+
+function formatPaymentUserAddress(row = {}) {
+  const parts = [
+    row.address_line,
+    row.subdistrict,
+    row.district,
+    row.province,
+    row.postal_code
+  ].map((part) => String(part || '').trim()).filter(Boolean);
+  return parts.join(' ') || '-';
+}
+
+function formatPaymentDateLabel(row = {}) {
+  const value = row.paid_at || row.created_at;
+  if (!value) return '-';
   try {
-await autoCancelExpiredPayments();
-    const q = String(req.query.q || '').trim();
-const page = Math.max(parseInt(req.query.page || '1', 10) || 1, 1);
-const limit = 10;
-const offset = (page - 1) * limit;
+    return new Date(value).toLocaleDateString('th-TH', {
+      year: 'numeric',
+      month: 'numeric',
+      day: 'numeric'
+    });
+  } catch (e) {
+    return '-';
+  }
+}
 
-const params = [];
-let where = '';
+const CASH_PAYMENT_SELECT_SQL = `
+  SELECT
+    p.*,
+    u.full_name,
+    u.email,
+    u.phone,
+    u.display_id AS user_display_id,
+    pk.name_th AS package_name_th,
+    pk.name_en AS package_name_en,
+    iv.full_name AS identity_full_name,
+    iv.address_line,
+    iv.subdistrict,
+    iv.district,
+    iv.province,
+    iv.postal_code,
+    iv.phone AS identity_phone,
+    iv.verify_email,
+    COALESCE(st.scoin_paid_amount, NULLIF(p.raw_payload->'scoin_payment'->>'scoin_amount', '')::numeric) AS scoin_paid_amount
+  FROM payments p
+  LEFT JOIN users u ON u.id = p.user_id
+  LEFT JOIN packages pk ON pk.id = p.package_id
+  LEFT JOIN user_identity_verifications iv ON iv.user_id = u.id
+  LEFT JOIN LATERAL (
+    SELECT ABS(stx.amount)::numeric AS scoin_paid_amount
+    FROM scoin_transactions stx
+    WHERE stx.ref_payment_id = p.id
+      AND stx.tx_type = 'package_purchase_scoin'
+    ORDER BY stx.created_at DESC, stx.id DESC
+    LIMIT 1
+  ) st ON TRUE
+`;
 
-    if (q) {
-      params.push(`%${q}%`);
-      where = `WHERE
-        COALESCE(p.payer_name,'') ILIKE $1
-        OR COALESCE(u.full_name,'') ILIKE $1
-        OR COALESCE(p.package_name_snapshot,'') ILIKE $1
-        OR CAST(p.final_amount AS TEXT) ILIKE $1
-        OR COALESCE(p.payment_status,'') ILIKE $1
-        OR COALESCE(p.payment_method,'') ILIKE $1
-        OR COALESCE(p.payer_email,'') ILIKE $1
-        OR COALESCE(p.display_id,'') ILIKE $1
-      `;
-    }
+async function buildCashPaymentAdminView(row = {}, options = {}) {
+  let receiptUrl = options.receiptUrl ?? null;
+  if (options.includeReceipt && receiptUrl === null) {
+    receiptUrl = await getStripeReceiptUrlForPayment(row).catch(() => null);
+  }
 
-    const [result, counts, scoinSellOrdersRes] = await Promise.all([
-      query(
-        `SELECT
-          p.*,
-          u.full_name,
-          u.email
-         FROM payments p
-         LEFT JOIN users u ON u.id = p.user_id
-         ${where}
-         ORDER BY COALESCE(p.paid_at, p.created_at) DESC
-         LIMIT ${limit} OFFSET ${offset}`,
-        params
-      ),
-      query(`
-        SELECT
-          COUNT(*)::int AS total,
-          COUNT(*) FILTER (WHERE payment_status = 'paid')::int AS paid,
-          COALESCE(SUM(final_amount) FILTER (WHERE payment_status = 'paid'),0)::numeric AS revenue
-        FROM payments
-      `),
-      query(`
+  const fullName = String(row.identity_full_name || row.full_name || row.payer_name || '').trim() || '-';
+  const email = String(row.payer_email || row.email || row.verify_email || '').trim() || '-';
+  const phone = String(row.identity_phone || row.phone || '').trim() || '-';
+  const amount = Number(row.final_amount ?? row.amount ?? 0);
+  const payload = row.raw_payload && typeof row.raw_payload === 'object' ? row.raw_payload : {};
+
+  return {
+    id: row.id,
+    display_id: paymentDisplayId(row),
+    date: formatPaymentDateLabel(row),
+    full_name: fullName,
+    address: formatPaymentUserAddress(row),
+    phone,
+    email,
+    type: 'แพ็กเกจ',
+    item: String(row.package_name_snapshot || row.package_name_th || row.package_name_en || '').trim() || '-',
+    amount,
+    amount_label: `฿${amount.toLocaleString('th-TH')}`,
+    channel: paymentChannelLabel(row.payment_method),
+    status: paymentStatusLabel(row.payment_status),
+    payment_ref: String(row.payment_ref || '').trim() || '-',
+    receipt_url: receiptUrl || null,
+    receipt_snapshot_url: String(payload.stripe_receipt_snapshot || '').trim() || null
+  };
+}
+
+async function fetchPaymentRowsBySection(section, filters, options = {}) {
+  const params = [];
+  const where = buildAdminPaymentWhere(section, filters, params);
+  const ids = Array.isArray(options.ids) ? options.ids.filter(Boolean) : [];
+  let extraWhere = '';
+  if (ids.length) {
+    params.push(ids);
+    extraWhere = ` AND p.id = ANY($${params.length}::bigint[])`;
+  }
+  const limit = Math.min(Math.max(Number(options.limit || 5000), 1), 5000);
+  const result = await query(
+    `${CASH_PAYMENT_SELECT_SQL}
+     ${where}${extraWhere}
+     ORDER BY COALESCE(p.paid_at, p.created_at) DESC, p.id DESC
+     LIMIT ${limit}`,
+    params
+  );
+  return result.rows;
+}
+
+async function fetchCashPaymentRows(filters, options = {}) {
+  return fetchPaymentRowsBySection('cash', filters, options);
+}
+
+async function fetchScoinPaymentRows(filters, options = {}) {
+  return fetchPaymentRowsBySection('scoin', filters, options);
+}
+
+const SCOIN_SELL_SELECT_SQL = `
   SELECT
     o.*,
     u.email,
+    u.phone,
     COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
     ba.bank_name,
     ba.account_name,
@@ -1049,27 +1369,567 @@ let where = '';
   FROM scoin_market_orders o
   LEFT JOIN users u ON u.id = o.user_id
   LEFT JOIN user_bank_accounts ba ON ba.id = o.bank_account_id
-  WHERE o.order_type = 'sell'
-  ORDER BY o.created_at DESC
-  LIMIT 10
-`).catch(() => ({ rows: [] }))
+`;
+
+function buildScoinSellWhere(filters, params, options = {}) {
+  const clauses = [`o.order_type = 'sell'`];
+  const search = String(filters.sell_q || '').trim();
+  if (search) {
+    params.push(`%${search}%`);
+    const idx = params.length;
+    clauses.push(`(
+      COALESCE(u.full_name, '') ILIKE $${idx}
+      OR COALESCE(u.email, '') ILIKE $${idx}
+      OR COALESCE(o.display_id, '') ILIKE $${idx}
+      OR CAST(o.id AS TEXT) ILIKE $${idx}
+      OR COALESCE(ba.bank_name, '') ILIKE $${idx}
+      OR COALESCE(ba.account_name, '') ILIKE $${idx}
+      OR COALESCE(ba.account_number_masked, '') ILIKE $${idx}
+      OR COALESCE(o.status, '') ILIKE $${idx}
+    )`);
+  }
+  if (options.paidOutOnly) {
+    params.push('paid');
+    clauses.push(`LOWER(COALESCE(o.payout_status, '')) = $${params.length}`);
+  }
+  return `WHERE ${clauses.join(' AND ')}`;
+}
+
+async function fetchScoinSellRows(filters, options = {}) {
+  const params = [];
+  const where = buildScoinSellWhere(filters, params, {
+    paidOutOnly: !!options.paidOutOnly
+  });
+  const ids = Array.isArray(options.ids) ? options.ids.filter(Boolean) : [];
+  let extraWhere = '';
+  if (ids.length) {
+    params.push(ids);
+    extraWhere = ` AND o.id = ANY($${params.length}::bigint[])`;
+  }
+  const limit = Math.min(Math.max(Number(options.limit || 5000), 1), 5000);
+  const result = await query(
+    `${SCOIN_SELL_SELECT_SQL}
+     ${where}${extraWhere}
+     ORDER BY o.created_at DESC, o.id DESC
+     LIMIT ${limit}`,
+    params
+  );
+  return result.rows;
+}
+
+async function fetchScoinSellSection(filters, page) {
+  const params = [];
+  const where = buildScoinSellWhere(filters, params);
+  const limit = PAYMENTS_PAGE_SIZE;
+  const offset = (page - 1) * limit;
+  const [rowsRes, countRes] = await Promise.all([
+    query(
+      `${SCOIN_SELL_SELECT_SQL}
+       ${where}
+       ORDER BY o.created_at DESC, o.id DESC
+       LIMIT ${limit} OFFSET ${offset}`,
+      params
+    ),
+    query(
+      `SELECT COUNT(*)::int AS total
+       FROM scoin_market_orders o
+       LEFT JOIN users u ON u.id = o.user_id
+       LEFT JOIN user_bank_accounts ba ON ba.id = o.bank_account_id
+       ${where}`,
+      params
+    )
+  ]);
+  const totalRows = Number(countRes.rows[0]?.total || 0);
+  return {
+    rows: rowsRes.rows,
+    totalRows,
+    totalPages: Math.max(Math.ceil(totalRows / limit), 1)
+  };
+}
+
+function buildScoinSellAdminView(row = {}) {
+  const displayId = String(row.display_id || (`SCSELL${String(row.id || '').padStart(6, '0')}`)).replace(/^#+/, '');
+  const account = [row.account_name, row.account_number_masked].filter(Boolean).join(' ');
+  return {
+    id: row.id,
+    display_id: displayId,
+    date: formatPaymentDateLabel(row),
+    full_name: String(row.full_name || '-').trim() || '-',
+    email: String(row.email || '-').trim() || '-',
+    scoin_amount: Number(row.scoin_amount || 0),
+    scoin_label: Number(row.scoin_amount || 0).toLocaleString('th-TH'),
+    net_amount: Number(row.net_amount_thb || 0),
+    net_label: `฿${Number(row.net_amount_thb || 0).toLocaleString('th-TH')}`,
+    gross_label: `฿${Number(row.gross_amount_thb || 0).toLocaleString('th-TH')}`,
+    fee_label: `฿${Number(row.fee_amount_thb || 0).toLocaleString('th-TH')}`,
+    bank: String(row.bank_name || '-').trim() || '-',
+    account: account || '-',
+    status: paymentStatusLabel(row.status),
+    payout_status: paymentStatusLabel(row.payout_status === 'paid' ? 'paid' : row.payout_status) === 'ชำระแล้ว'
+      ? 'โอนแล้ว'
+      : (String(row.payout_status || '').toLowerCase() === 'pending' ? 'รอโอน' : paymentStatusLabel(row.payout_status)),
+    slip_url: row.host_transfer_slip_url || null,
+    payout_ref: row.payout_ref || '-'
+  };
+}
+
+async function buildScoinPaymentAdminView(row = {}, options = {}) {
+  const view = await buildCashPaymentAdminView(row, options);
+  view.channel = 'Scoin';
+  view.scoin_amount = Number(row.scoin_paid_amount || 0);
+  view.scoin_label = Number(row.scoin_paid_amount || 0).toLocaleString('th-TH', {
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 4
+  });
+  return view;
+}
+
+function isScoinPackagePaymentRow(row = {}) {
+  const method = String(row.payment_method || '').trim().toLowerCase();
+  const ref = String(row.payment_ref || '').trim().toUpperCase();
+  return method === 'scoin'
+    || method === 'scoin_package'
+    || ref.startsWith('SCOIN-PKG-')
+    || !!(row.raw_payload && row.raw_payload.scoin_payment);
+}
+
+function buildAdminPaymentFilters(req) {
+  return {
+    q: String(req.query.q || '').trim(),
+    scoin_q: String(req.query.scoin_q || '').trim(),
+    sell_q: String(req.query.sell_q || '').trim(),
+    status: String(req.query.status || 'all').trim().toLowerCase(),
+    method: String(req.query.method || 'all').trim().toLowerCase(),
+    month: Number(req.query.month || 0) || null,
+    year: Number(req.query.year || 0) || null
+  };
+}
+
+function buildAdminPaymentWhere(section, filters, params) {
+  const clauses = ['p.package_id IS NOT NULL'];
+
+  if (section === 'cash') {
+    clauses.push(`LOWER(COALESCE(p.payment_method, '')) NOT IN ('scoin', 'scoin_package', 'free_coupon')`);
+    clauses.push(`UPPER(COALESCE(p.payment_ref, '')) NOT LIKE 'SCOIN-PKG-%'`);
+  } else {
+    clauses.push(`(
+      LOWER(COALESCE(p.payment_method, '')) IN ('scoin', 'scoin_package')
+      OR UPPER(COALESCE(p.payment_ref, '')) LIKE 'SCOIN-PKG-%'
+      OR COALESCE(p.raw_payload->'scoin_payment', 'null'::jsonb) <> 'null'::jsonb
+    )`);
+  }
+
+  const searchText = section === 'scoin'
+    ? String(filters.scoin_q || '').trim()
+    : String(filters.q || '').trim();
+
+  if (searchText) {
+    params.push(`%${searchText}%`);
+    const idx = params.length;
+    clauses.push(`(
+      COALESCE(p.payer_name, '') ILIKE $${idx}
+      OR COALESCE(u.full_name, '') ILIKE $${idx}
+      OR COALESCE(p.package_name_snapshot, '') ILIKE $${idx}
+      OR CAST(p.final_amount AS TEXT) ILIKE $${idx}
+      OR COALESCE(p.payment_status, '') ILIKE $${idx}
+      OR COALESCE(p.payment_method, '') ILIKE $${idx}
+      OR COALESCE(p.payer_email, '') ILIKE $${idx}
+      OR COALESCE(u.email, '') ILIKE $${idx}
+      OR COALESCE(p.display_id, '') ILIKE $${idx}
+      OR COALESCE(p.payment_ref, '') ILIKE $${idx}
+      OR CAST(p.id AS TEXT) ILIKE $${idx}
+    )`);
+  }
+
+  if (filters.status && filters.status !== 'all') {
+    params.push(filters.status);
+    clauses.push(`LOWER(COALESCE(p.payment_status, '')) = $${params.length}`);
+  }
+
+  if (section === 'cash') {
+    if (filters.method && filters.method !== 'all') {
+      if (filters.method === 'promptpay_qr') {
+        clauses.push(`LOWER(COALESCE(p.payment_method, '')) IN ('stripe_promptpay', 'promptpay_qr', 'kbank', 'promptpay')`);
+      } else if (filters.method === 'card') {
+        clauses.push(`LOWER(COALESCE(p.payment_method, '')) IN ('stripe_card', 'credit_card', 'card')`);
+      } else {
+        params.push(filters.method);
+        clauses.push(`LOWER(COALESCE(p.payment_method, '')) = $${params.length}`);
+      }
+    }
+
+    if (filters.month) {
+      params.push(filters.month);
+      clauses.push(`EXTRACT(MONTH FROM COALESCE(p.paid_at, p.created_at)) = $${params.length}`);
+    }
+
+    if (filters.year) {
+      params.push(filters.year);
+      clauses.push(`EXTRACT(YEAR FROM COALESCE(p.paid_at, p.created_at)) = $${params.length}`);
+    }
+  }
+
+  return `WHERE ${clauses.join(' AND ')}`;
+}
+
+async function fetchAdminPaymentSection(section, filters, page) {
+  const params = [];
+  const where = buildAdminPaymentWhere(section, filters, params);
+  const limit = PAYMENTS_PAGE_SIZE;
+  const offset = (page - 1) * limit;
+
+  const [rowsRes, countRes] = await Promise.all([
+    query(
+      `${CASH_PAYMENT_SELECT_SQL}
+       ${where}
+       ORDER BY COALESCE(p.paid_at, p.created_at) DESC, p.id DESC
+       LIMIT ${limit} OFFSET ${offset}`,
+      params
+    ),
+    query(
+      `SELECT COUNT(*)::int AS total
+       FROM payments p
+       LEFT JOIN users u ON u.id = p.user_id
+       ${where}`,
+      params
+    )
+  ]);
+
+  const totalRows = Number(countRes.rows[0]?.total || 0);
+  return {
+    rows: rowsRes.rows,
+    totalRows,
+    totalPages: Math.max(Math.ceil(totalRows / limit), 1)
+  };
+}
+
+router.get('/payments', async (req, res) => {
+  try {
+    await autoCancelExpiredPayments();
+
+    const filters = buildAdminPaymentFilters(req);
+    const page = Math.max(parseInt(req.query.page || '1', 10) || 1, 1);
+    const scoinPage = Math.max(parseInt(req.query.scoin_page || '1', 10) || 1, 1);
+    const sellPage = Math.max(parseInt(req.query.sell_page || '1', 10) || 1, 1);
+    const deleteLogPage = Math.max(parseInt(req.query.delete_log_page || '1', 10) || 1, 1);
+    const deleteLogLimit = 10;
+    const deleteLogOffset = (deleteLogPage - 1) * deleteLogLimit;
+
+    const [
+      cashSection,
+      scoinSection,
+      countsRes,
+      sellSection,
+      deleteLogsRes,
+      deleteLogCountRes
+    ] = await Promise.all([
+      fetchAdminPaymentSection('cash', filters, page),
+      fetchAdminPaymentSection('scoin', filters, scoinPage),
+      query(`
+        SELECT
+          COUNT(*) FILTER (
+            WHERE package_id IS NOT NULL
+              AND LOWER(COALESCE(payment_method, '')) NOT IN ('scoin', 'scoin_package', 'free_coupon')
+              AND UPPER(COALESCE(payment_ref, '')) NOT LIKE 'SCOIN-PKG-%'
+          )::int AS cash_total,
+          COUNT(*) FILTER (
+            WHERE package_id IS NOT NULL
+              AND LOWER(COALESCE(payment_method, '')) NOT IN ('scoin', 'scoin_package', 'free_coupon')
+              AND UPPER(COALESCE(payment_ref, '')) NOT LIKE 'SCOIN-PKG-%'
+              AND payment_status = 'paid'
+          )::int AS cash_paid,
+          COALESCE(SUM(final_amount) FILTER (
+            WHERE package_id IS NOT NULL
+              AND LOWER(COALESCE(payment_method, '')) NOT IN ('scoin', 'scoin_package', 'free_coupon')
+              AND UPPER(COALESCE(payment_ref, '')) NOT LIKE 'SCOIN-PKG-%'
+              AND payment_status = 'paid'
+          ), 0)::numeric AS cash_revenue,
+          COUNT(*) FILTER (
+            WHERE package_id IS NOT NULL
+              AND (
+                LOWER(COALESCE(payment_method, '')) IN ('scoin', 'scoin_package')
+                OR UPPER(COALESCE(payment_ref, '')) LIKE 'SCOIN-PKG-%'
+              )
+          )::int AS scoin_total
+        FROM payments
+      `),
+      fetchScoinSellSection(filters, sellPage),
+      query(`
+        SELECT
+          l.*,
+          COALESCE(l.payload_json->>'display_id', '') AS payment_display_id
+        FROM payment_delete_logs l
+        ORDER BY l.deleted_at DESC, l.id DESC
+        LIMIT ${deleteLogLimit} OFFSET ${deleteLogOffset}
+      `).catch(() => ({ rows: [] })),
+      query(`
+        SELECT COUNT(*)::int AS total
+        FROM payment_delete_logs
+      `).catch(() => ({ rows: [{ total: 0 }] }))
     ]);
+
+    const counts = countsRes.rows[0] || {};
+    const deleteLogTotalRows = Number(deleteLogCountRes.rows[0]?.total || 0);
+    const deleteLogTotalPages = Math.max(Math.ceil(deleteLogTotalRows / deleteLogLimit), 1);
 
     return res.render('admin/payments', baseView(req, {
       pageTitle: 'Payments',
       currentPath: '/admin/payments',
-      payments: result.rows,
-      filters: { q },
-      counts: counts.rows[0] || { total: 0, paid: 0, revenue: 0 },
-      scoinSellOrders: scoinSellOrdersRes?.rows || [],
-page,
-totalPages: Math.max(Math.ceil(Number(counts.rows[0]?.total || 0) / limit), 1),
-totalRows: Number(counts.rows[0]?.total || 0)
+      pageCss: 'admin-payments.css',
+      payments: cashSection.rows,
+      scoinPackagePayments: scoinSection.rows,
+      filters,
+      counts: {
+        total: Number(counts.cash_total || 0),
+        paid: Number(counts.cash_paid || 0),
+        revenue: Number(counts.cash_revenue || 0),
+        scoinTotal: Number(counts.scoin_total || 0)
+      },
+      scoinSellOrders: sellSection.rows,
+      deleteLogs: deleteLogsRes?.rows || [],
+      page,
+      scoinPage,
+      sellPage,
+      deleteLogPage,
+      deleteLogTotalPages,
+      deleteLogTotalRows,
+      totalPages: cashSection.totalPages,
+      totalRows: cashSection.totalRows,
+      scoinTotalPages: scoinSection.totalPages,
+      scoinTotalRows: scoinSection.totalRows,
+      sellTotalPages: sellSection.totalPages,
+      sellTotalRows: sellSection.totalRows,
+      paymentDisplayId,
+      paymentChannelLabel,
+      isScoinPackagePaymentRow
     }));
   } catch (error) {
     console.error('payments page error:', error);
     req.session.error = error.message || 'โหลดรายการชำระเงินไม่สำเร็จ';
     return res.redirect('/admin');
+  }
+});
+
+router.get('/payments/:id/detail.json', async (req, res) => {
+  try {
+    const paymentRes = await query(
+      `${CASH_PAYMENT_SELECT_SQL}
+       WHERE p.id = $1
+       LIMIT 1`,
+      [req.params.id]
+    );
+    const payment = paymentRes.rows[0];
+    if (!payment) {
+      return res.status(404).json({ ok: false, error: 'ไม่พบรายการชำระเงิน' });
+    }
+
+    const view = await buildCashPaymentAdminView(payment, { includeReceipt: true });
+    const snapshotUrl = await ensurePaymentReceiptSnapshotById(payment.id).catch(() => null);
+    if (snapshotUrl) {
+      view.receipt_snapshot_url = snapshotUrl;
+    }
+
+    return res.json({ ok: true, payment: view });
+  } catch (error) {
+    console.error('payment detail json error:', error);
+    return res.status(500).json({ ok: false, error: error.message || 'โหลดรายละเอียดไม่สำเร็จ' });
+  }
+});
+
+router.get('/payments/:id/receipt.json', async (req, res) => {
+  try {
+    const paymentRes = await query(
+      `${CASH_PAYMENT_SELECT_SQL}
+       WHERE p.id = $1
+       LIMIT 1`,
+      [req.params.id]
+    );
+    const payment = paymentRes.rows[0];
+    if (!payment) {
+      return res.status(404).json({ ok: false, error: 'ไม่พบรายการชำระเงิน' });
+    }
+
+    const view = await buildCashPaymentAdminView(payment, { includeReceipt: true });
+    const snapshotUrl = await ensurePaymentReceiptSnapshotById(payment.id).catch(() => null);
+    if (snapshotUrl) {
+      view.receipt_snapshot_url = snapshotUrl;
+    }
+
+    return res.json({
+      ok: true,
+      receipt_url: view.receipt_url,
+      receipt_page_url: `/admin/payments/${payment.id}/receipt`,
+      receipt_snapshot_url: view.receipt_snapshot_url || snapshotUrl || null,
+      payment: view
+    });
+  } catch (error) {
+    console.error('payment receipt json error:', error);
+    return res.status(500).json({ ok: false, error: error.message || 'โหลดสลิปไม่สำเร็จ' });
+  }
+});
+
+router.get('/payments/sell/receipts/bulk', async (req, res) => {
+  try {
+    const filters = buildAdminPaymentFilters(req);
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter(Boolean);
+    const rows = await fetchScoinSellRows(filters, {
+      ids: ids.length ? ids : null,
+      limit: ids.length ? ids.length : 5000,
+      paidOutOnly: !ids.length
+    });
+
+    const receipts = rows.map((row) => buildScoinSellReceiptView(row));
+    if (!receipts.length) {
+      return res.status(404).send('ไม่พบใบเสร็จที่พิมพ์ได้');
+    }
+
+    const embed = String(req.query.embed || '').trim() === '1';
+    return res.render('admin/scoin-sell-receipt-bulk', { receipts, embed });
+  } catch (error) {
+    console.error('scoin sell bulk receipt error:', error);
+    return res.status(500).send('โหลดใบเสร็จไม่สำเร็จ');
+  }
+});
+
+router.get('/payments/sell/:id/receipt', async (req, res) => {
+  try {
+    const id = Number(req.params.id || 0);
+    if (!id) {
+      return res.status(404).send('ไม่พบรายการ');
+    }
+    const rows = await fetchScoinSellRows({}, { ids: [id], limit: 1 });
+    const row = rows[0];
+    if (!row) {
+      return res.status(404).send('ไม่พบรายการขาย Scoin');
+    }
+    const receipt = buildScoinSellReceiptView(row);
+    const embed = String(req.query.embed || '').trim() === '1';
+    const autoPrint = String(req.query.print || '').trim() === '1';
+    return res.render('admin/scoin-sell-receipt', { receipt, embed, autoPrint });
+  } catch (error) {
+    console.error('scoin sell receipt page error:', error);
+    return res.status(500).send('โหลดใบเสร็จไม่สำเร็จ');
+  }
+});
+
+router.get('/payments/receipts/bulk', async (req, res) => {
+  try {
+    const section = String(req.query.section || 'cash').trim().toLowerCase();
+    const filters = buildAdminPaymentFilters(req);
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter(Boolean);
+
+    if (!ids.length && section === 'cash') {
+      filters.status = 'paid';
+    }
+
+    if (!ids.length && section === 'scoin') {
+      filters.status = 'paid';
+    }
+
+    const fetchRows = section === 'scoin' ? fetchScoinPaymentRows : fetchCashPaymentRows;
+    const rows = await fetchRows(filters, {
+      ids: ids.length ? ids : null,
+      limit: ids.length ? ids.length : 5000
+    });
+
+    const receipts = [];
+    for (const row of rows) {
+      if (String(row.payment_status || '').toLowerCase() !== 'paid') continue;
+      receipts.push(await buildPaymentReceiptView(row));
+    }
+
+    if (!receipts.length) {
+      return res.status(404).send('ไม่พบใบเสร็จที่พิมพ์ได้');
+    }
+
+    const embed = String(req.query.embed || '').trim() === '1';
+    const autoPrint = String(req.query.print || '').trim() === '1';
+    return res.render('admin/payment-receipt-bulk', { receipts, embed, autoPrint });
+  } catch (error) {
+    console.error('payment bulk receipt error:', error);
+    return res.status(500).send('โหลดใบเสร็จไม่สำเร็จ');
+  }
+});
+
+router.get('/payments/:id/receipt', async (req, res) => {
+  try {
+    const receipt = await buildPaymentReceiptViewById(req.params.id);
+    if (!receipt) {
+      return res.status(404).send('ไม่พบใบเสร็จหรือรายการยังไม่ชำระเงิน');
+    }
+    const embed = String(req.query.embed || '').trim() === '1';
+    const autoPrint = String(req.query.print || '').trim() === '1';
+    return res.render('admin/payment-receipt', { receipt, embed, autoPrint });
+  } catch (error) {
+    console.error('payment receipt page error:', error);
+    return res.status(500).send('โหลดใบเสร็จไม่สำเร็จ');
+  }
+});
+
+router.get('/payments/cash/bulk.json', async (req, res) => {
+  try {
+    const filters = buildAdminPaymentFilters(req);
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter(Boolean);
+    const rows = await fetchCashPaymentRows(filters, {
+      ids: ids.length ? ids : null,
+      limit: ids.length ? ids.length : 5000
+    });
+    const items = await Promise.all(
+      rows.map((row) => buildCashPaymentAdminView(row, { includeReceipt: true }))
+    );
+    return res.json({ ok: true, items, total: items.length });
+  } catch (error) {
+    console.error('cash bulk json error:', error);
+    return res.status(500).json({ ok: false, error: error.message || 'โหลดรายการไม่สำเร็จ' });
+  }
+});
+
+router.get('/payments/scoin/bulk.json', async (req, res) => {
+  try {
+    const filters = buildAdminPaymentFilters(req);
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter(Boolean);
+    const rows = await fetchScoinPaymentRows(filters, {
+      ids: ids.length ? ids : null,
+      limit: ids.length ? ids.length : 5000
+    });
+    const items = await Promise.all(
+      rows.map((row) => buildScoinPaymentAdminView(row, { includeReceipt: false }))
+    );
+    return res.json({ ok: true, items, total: items.length });
+  } catch (error) {
+    console.error('scoin bulk json error:', error);
+    return res.status(500).json({ ok: false, error: error.message || 'โหลดรายการไม่สำเร็จ' });
+  }
+});
+
+router.get('/payments/sell/bulk.json', async (req, res) => {
+  try {
+    const filters = buildAdminPaymentFilters(req);
+    const ids = String(req.query.ids || '')
+      .split(',')
+      .map((value) => Number(value))
+      .filter(Boolean);
+    const rows = await fetchScoinSellRows(filters, {
+      ids: ids.length ? ids : null,
+      limit: ids.length ? ids.length : 5000
+    });
+    const items = rows.map((row) => buildScoinSellAdminView(row));
+    return res.json({ ok: true, items, total: items.length });
+  } catch (error) {
+    console.error('sell bulk json error:', error);
+    return res.status(500).json({ ok: false, error: error.message || 'โหลดรายการไม่สำเร็จ' });
   }
 });
 
@@ -1196,14 +2056,32 @@ router.post('/payments/:id/approve', async (req, res) => {
     });
 
     req.session.success = 'อนุมัติการชำระเงินสำเร็จแล้ว';
-    return res.redirect('/admin/payments');
+    return res.redirect(req.body.return_to || '/admin/payments');
   } catch (error) {
     await client.query('ROLLBACK');
     console.error('approve payment error:', error);
     req.session.error = error.message || 'อนุมัติการชำระเงินไม่สำเร็จ';
-    return res.redirect('/admin/payments');
+    return res.redirect(req.body.return_to || '/admin/payments');
   } finally {
     client.release();
+  }
+});
+
+router.post('/payments/:id/cancel', async (req, res) => {
+  try {
+    await query(
+      `UPDATE payments
+       SET payment_status = 'cancelled',
+           updated_at = NOW()
+       WHERE id = $1`,
+      [req.params.id]
+    );
+    req.session.success = 'ยกเลิกรายการชำระเงินแล้ว';
+    return res.redirect(req.body.return_to || '/admin/payments');
+  } catch (error) {
+    console.error('cancel payment error:', error);
+    req.session.error = error.message || 'ยกเลิกรายการไม่สำเร็จ';
+    return res.redirect(req.body.return_to || '/admin/payments');
   }
 });
 
@@ -1270,6 +2148,51 @@ router.post('/news-sync', async (req, res) => {
   }
 });
 
+router.get('/mt5-port-scoin', async (req, res) => {
+  try {
+    const settings = await getMt5PortScoinPrices();
+    const statsRes = await query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(port_type, ''))) = 'temporary')::int AS temporary,
+        COUNT(*) FILTER (WHERE LOWER(TRIM(COALESCE(port_type, ''))) = 'permanent')::int AS permanent,
+        COALESCE(SUM(price_scoin), 0) AS total_scoin
+      FROM vps_system.mt5_extra_ports
+      WHERE COALESCE(is_active, TRUE) = TRUE
+    `).catch(() => ({ rows: [{}] }));
+
+    return res.render('admin/mt5-port-scoin', baseView(req, {
+      pageTitle: 'ตั้งค่าราคา Port Scoin',
+      currentPath: '/admin/mt5-port-scoin',
+      settings,
+      stats: statsRes.rows[0] || {},
+      fmtDate: formatThaiDateTime
+    }));
+  } catch (error) {
+    console.error('mt5 port scoin settings page error:', error);
+    req.session.error = 'โหลดหน้าตั้งค่าราคา Port Scoin ไม่สำเร็จ';
+    return res.redirect('/admin');
+  }
+});
+
+router.post('/mt5-port-scoin', async (req, res) => {
+  try {
+    const temporary = Number(req.body.temporary_scoin);
+    const permanent = Number(req.body.permanent_scoin);
+    if (!Number.isFinite(temporary) || temporary < 0 || !Number.isFinite(permanent) || permanent < 0) {
+      req.session.error = 'กรุณากรอกราคา Scoin เป็นตัวเลข 0 ขึ้นไป';
+      return res.redirect('/admin/mt5-port-scoin');
+    }
+    await updateMt5PortScoinPrices({ temporary, permanent });
+    req.session.success = 'บันทึกราคาซื้อ Port Scoin แล้ว';
+    return res.redirect('/admin/mt5-port-scoin');
+  } catch (error) {
+    console.error('save mt5 port scoin settings error:', error);
+    req.session.error = 'บันทึกราคา Port Scoin ไม่สำเร็จ';
+    return res.redirect('/admin/mt5-port-scoin');
+  }
+});
+
 router.get('/ai-settings', async (req, res) => {
   const result = await query(`SELECT * FROM ai_settings WHERE id = 1 LIMIT 1`);
   return res.render('admin/ai-settings', baseView(req, {
@@ -1321,45 +2244,221 @@ router.post('/ai-settings', async (req, res) => {
   }
 });
 
+const COUPON_PAGE_SIZE = 10;
+
+function buildCouponListWhere({ used = false, search = '', type = 'all' }, params) {
+  const clauses = [];
+  if (used) {
+    clauses.push('EXISTS (SELECT 1 FROM coupon_usages cu WHERE cu.coupon_id = c.id)');
+  } else {
+    clauses.push('NOT EXISTS (SELECT 1 FROM coupon_usages cu WHERE cu.coupon_id = c.id)');
+  }
+
+  const searchText = String(search || '').trim();
+  if (searchText) {
+    params.push(`%${searchText}%`);
+    const idx = params.length;
+    clauses.push(`(
+      COALESCE(c.coupon_code, '') ILIKE $${idx}
+      OR COALESCE(c.coupon_name, '') ILIKE $${idx}
+      OR COALESCE(c.coupon_type, '') ILIKE $${idx}
+      OR COALESCE(c.print_note, '') ILIKE $${idx}
+      OR COALESCE(c.note, '') ILIKE $${idx}
+      OR COALESCE(c.description, '') ILIKE $${idx}
+      OR CAST(c.id AS TEXT) ILIKE $${idx}
+      OR COALESCE(c.display_id, '') ILIKE $${idx}
+    )`);
+  }
+
+  const couponType = String(type || 'all').trim().toLowerCase();
+  if (couponType && couponType !== 'all') {
+    params.push(couponType);
+    clauses.push(`LOWER(COALESCE(c.coupon_type, '')) = $${params.length}`);
+  }
+
+  return `WHERE ${clauses.join(' AND ')}`;
+}
+
+async function fetchCouponSection({ used = false, search = '', type = 'all', page = 1 }) {
+  const params = [];
+  const where = buildCouponListWhere({ used, search, type }, params);
+  const limit = COUPON_PAGE_SIZE;
+  const safePage = Math.max(Number(page || 1), 1);
+  const offset = (safePage - 1) * limit;
+
+  const [rowsRes, countRes] = await Promise.all([
+    query(
+      `SELECT c.*
+       FROM coupons c
+       ${where}
+       ORDER BY c.created_at DESC, c.id DESC
+       LIMIT ${limit} OFFSET ${offset}`,
+      params
+    ),
+    query(
+      `SELECT COUNT(*)::int AS total
+       FROM coupons c
+       ${where}`,
+      params
+    )
+  ]);
+
+  const totalRows = Number(countRes.rows[0]?.total || 0);
+  return {
+    rows: rowsRes.rows,
+    totalRows,
+    currentPage: safePage,
+    totalPages: Math.max(Math.ceil(totalRows / limit), 1)
+  };
+}
+
 router.get('/coupons', async (req, res) => {
-  const [couponsRes, usageRes, latestCouponUsagesRes] = await Promise.all([
-    query(`SELECT * FROM coupons ORDER BY created_at DESC LIMIT 300`),
-    query(`
-      SELECT
-        cu.*,
-        c.coupon_code,
-        c.coupon_name,
-        u.full_name
-      FROM coupon_usages cu
-      LEFT JOIN coupons c ON c.id = cu.coupon_id
-      LEFT JOIN users u ON u.id = cu.user_id
-      ORDER BY cu.used_at DESC
-      LIMIT 100
-    `),
+  const filterValues = {
+    q: String(req.query.q || '').trim(),
+    type: String(req.query.type || 'all').trim().toLowerCase(),
+    used_q: String(req.query.used_q || req.query.used_coupon || '').trim()
+  };
+  const unusedPage = Math.max(parseInt(req.query.unused_page || '1', 10) || 1, 1);
+  const usedPage = Math.max(parseInt(req.query.used_page || '1', 10) || 1, 1);
+  const usagePage = Math.max(parseInt(req.query.usage_page || '1', 10) || 1, 1);
+
+  const [
+    unusedSection,
+    usedSection,
+    usageRes,
+    usageHistorySection,
+    couponStatsRes
+  ] = await Promise.all([
+    fetchCouponSection({
+      used: false,
+      search: filterValues.q,
+      type: filterValues.type,
+      page: unusedPage
+    }),
+    fetchCouponSection({
+      used: true,
+      search: filterValues.used_q,
+      type: 'all',
+      page: usedPage
+    }),
     query(`
       SELECT
         cu.id,
-        cu.used_at AS created_at,
+        cu.used_at,
         cu.note,
         c.coupon_code,
-        COALESCE(NULLIF(TRIM(u.full_name), ''), u.email, '-') AS username,
+        c.coupon_name,
+        c.coupon_type,
+        u.full_name,
+        u.email,
         COALESCE(NULLIF(TRIM(p.display_id), ''), NULLIF(TRIM(p.order_no), ''), p.id::text) AS payment_code
       FROM coupon_usages cu
       LEFT JOIN coupons c ON c.id = cu.coupon_id
       LEFT JOIN users u ON u.id = cu.user_id
       LEFT JOIN payments p ON p.id = cu.payment_id
       ORDER BY cu.used_at DESC
-      LIMIT 30
-    `).catch(() => ({ rows: [] }))
+      LIMIT 8
+    `),
+    (async () => {
+      const params = [];
+      const whereParts = [];
+      if (filterValues.used_q) {
+        params.push(`%${filterValues.used_q}%`);
+        const idx = params.length;
+        whereParts.push(`(
+          COALESCE(c.coupon_code, '') ILIKE $${idx}
+          OR COALESCE(NULLIF(TRIM(u.full_name), ''), u.email, '') ILIKE $${idx}
+          OR COALESCE(NULLIF(TRIM(p.display_id), ''), NULLIF(TRIM(p.order_no), ''), p.id::text, '') ILIKE $${idx}
+        )`);
+      }
+      const where = whereParts.length ? `WHERE ${whereParts.join(' AND ')}` : '';
+      const limit = COUPON_PAGE_SIZE;
+      const offset = (usagePage - 1) * limit;
+      const [rowsRes, countRes] = await Promise.all([
+        query(
+          `SELECT
+            cu.id,
+            cu.used_at AS created_at,
+            cu.note,
+            c.coupon_code,
+            COALESCE(NULLIF(TRIM(u.full_name), ''), u.email, '-') AS username,
+            COALESCE(NULLIF(TRIM(p.display_id), ''), NULLIF(TRIM(p.order_no), ''), p.id::text) AS payment_code
+          FROM coupon_usages cu
+          LEFT JOIN coupons c ON c.id = cu.coupon_id
+          LEFT JOIN users u ON u.id = cu.user_id
+          LEFT JOIN payments p ON p.id = cu.payment_id
+          ${where}
+          ORDER BY cu.used_at DESC
+          LIMIT ${limit} OFFSET ${offset}`,
+          params
+        ),
+        query(
+          `SELECT COUNT(*)::int AS total
+           FROM coupon_usages cu
+           LEFT JOIN coupons c ON c.id = cu.coupon_id
+           LEFT JOIN users u ON u.id = cu.user_id
+           LEFT JOIN payments p ON p.id = cu.payment_id
+           ${where}`,
+          params
+        )
+      ]);
+      const totalRows = Number(countRes.rows[0]?.total || 0);
+      return {
+        rows: rowsRes.rows,
+        totalRows,
+        currentPage: usagePage,
+        totalPages: Math.max(Math.ceil(totalRows / limit), 1)
+      };
+    })(),
+    query(`
+      SELECT
+        COUNT(*)::int AS total,
+        COUNT(*) FILTER (
+          WHERE NOT EXISTS (SELECT 1 FROM coupon_usages cu WHERE cu.coupon_id = coupons.id)
+        )::int AS unused,
+        COUNT(*) FILTER (
+          WHERE EXISTS (SELECT 1 FROM coupon_usages cu WHERE cu.coupon_id = coupons.id)
+        )::int AS used,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(coupon_type, '')) = 'free')::int AS free_count,
+        COUNT(*) FILTER (WHERE LOWER(COALESCE(coupon_type, '')) = 'discount')::int AS discount_count
+      FROM coupons
+    `)
   ]);
+
+  const stats = couponStatsRes.rows[0] || {};
 
   return res.render('admin/coupons', baseView(req, {
     pageTitle: 'Coupons',
+    pageCss: 'admin-coupons.css',
     currentPath: '/admin/coupons',
-    coupons: couponsRes.rows,
+    coupons: unusedSection.rows,
+    usedCouponsList: usedSection.rows,
     usages: usageRes.rows,
-    latestCouponUsages: latestCouponUsagesRes.rows,
-    usedCouponQuery: String(req.query.used_coupon || '').trim()
+    latestCouponUsages: usageHistorySection.rows,
+    filterValues,
+    usedCouponQuery: filterValues.used_q,
+    unusedPagination: {
+      currentPage: unusedSection.currentPage,
+      totalPages: unusedSection.totalPages,
+      totalRows: unusedSection.totalRows
+    },
+    usedPagination: {
+      currentPage: usedSection.currentPage,
+      totalPages: usedSection.totalPages,
+      totalRows: usedSection.totalRows
+    },
+    usagePagination: {
+      currentPage: usageHistorySection.currentPage,
+      totalPages: usageHistorySection.totalPages,
+      totalRows: usageHistorySection.totalRows
+    },
+    couponStats: {
+      total: Number(stats.total || 0),
+      unused: Number(stats.unused || 0),
+      used: Number(stats.used || 0),
+      free: Number(stats.free_count || 0),
+      discount: Number(stats.discount_count || 0)
+    }
   }));
 });
 
@@ -1469,6 +2568,7 @@ router.get('/coupons/print/latest', async (req, res) => {
 
   return res.render('admin/coupons-print', baseView(req, {
     pageTitle: 'Print Coupons',
+    pageCss: 'admin-coupons.css',
     currentPath: '/admin/coupons',
     printData: latest
   }));
@@ -1754,12 +2854,20 @@ router.get('/vps/:id/edit', async (req, res) => {
       agentTemplate = require('fs').readFileSync('/root/trading-avelqua/storage/vps-agent/agent-current.ps1', 'utf8');
     } catch (_) {}
 
+    let queryNotice = null;
+    if (req.query.saved === '1') queryNotice = { type: 'success', text: 'บันทึก VPS เรียบร้อยแล้ว' };
+    else if (req.query.token === 'updated') queryNotice = { type: 'info', text: 'สร้าง Agent TOKEN ใหม่เรียบร้อยแล้ว' };
+    else if (req.query.updated_powershell === '1') queryNotice = { type: 'info', text: 'อัปเดต agent.ps1 เรียบร้อยแล้ว' };
+    else if (req.query.agent_update === 'sent') queryNotice = { type: 'info', text: 'ส่งคำสั่งอัปเดต Agent แล้ว' };
+
     return res.render('admin/vps-node-form', baseView(req, {
       pageTitle: 'แก้ไข Windows VPS',
+      pageCss: 'admin-vps-edit.css',
       currentPath: '/admin/vps',
       mode: 'edit',
       node: nodeRes.rows[0],
       agentTemplate,
+      queryNotice,
       publicBaseUrl: process.env.PUBLIC_BASE_URL || process.env.APP_BASE_URL || 'https://trading.avelqua.com'
     }));
   } catch (err) {
@@ -1885,6 +2993,9 @@ router.get('/ai-history/:sessionKey', async (req, res) => {
 
 router.get('/scoin-market', async (req, res) => {
   try {
+    await ensureScoinCirculationSchema();
+    const circulationSummary = await getCirculationSummary();
+
     const [
   settingsRes,
   realtimeChartRes,
@@ -1892,6 +3003,7 @@ router.get('/scoin-market', async (req, res) => {
   economySettingsRes,
   treasuryRes,
   economyLogsRes,
+  circulationLogsRes,
   ordersRes,
   transactionsRes,
   walletsRes,
@@ -1968,6 +3080,17 @@ query(`
 
       query(`
         SELECT
+          l.*,
+          u.email,
+          COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name
+        FROM scoin_circulation_logs l
+        LEFT JOIN users u ON u.id = l.user_id
+        ORDER BY l.created_at DESC
+        LIMIT 200
+      `).catch(() => ({ rows: [] })),
+
+      query(`
+        SELECT
           o.*,
           u.email,
           COALESCE(NULLIF(u.full_name, ''), u.email) AS full_name,
@@ -2019,6 +3142,8 @@ query(`
       economySettings: economySettingsRes.rows[0] || null,
       treasuryWallets: treasuryRes.rows || [],
       economyLogs: economyLogsRes.rows || [],
+      circulationLogs: circulationLogsRes.rows || [],
+      circulationSummary,
       orders: ordersRes.rows,
       transactions: transactionsRes.rows,
       wallets: walletsRes.rows,
@@ -2037,6 +3162,7 @@ query(`
 router.get('/scoin-market/export/:type', async (req, res) => {
   try {
     await ensureScoinMarketAdminColumns();
+    await ensureScoinCirculationSchema();
     const type = String(req.params.type || '').toLowerCase();
     const cfg = await scoinBuildExportQuery(type);
     if (!cfg) return res.status(404).send('Export type not found or table not found');
@@ -2066,6 +3192,7 @@ router.post('/scoin-market/settings', async (req, res) => {
   const client = await getClient();
 
   try {
+    await ensureScoinCirculationSchema(client);
     await client.query('BEGIN');
 
     const currentSettingsRes = await client.query(`SELECT * FROM scoin_settings WHERE id = 1 LIMIT 1`);
@@ -2095,6 +3222,9 @@ router.post('/scoin-market/settings', async (req, res) => {
       market_supply: req.body.market_supply !== undefined && req.body.market_supply !== ''
         ? Number(req.body.market_supply)
         : Number(currentSettings.market_supply || 0),
+      price_change_rate: req.body.price_change_rate !== undefined && req.body.price_change_rate !== ''
+        ? Number(req.body.price_change_rate) / 100
+        : Number(currentSettings.price_change_rate || 0.03),
       auto_price_enabled: Object.prototype.hasOwnProperty.call(req.body, 'auto_price_enabled')
         ? !!req.body.auto_price_enabled
         : !!currentSettings.auto_price_enabled
@@ -2157,6 +3287,7 @@ router.post('/scoin-market/settings', async (req, res) => {
          sell_fee_percent = $4,
          market_supply = $5,
          auto_price_enabled = $6,
+         price_change_rate = $7,
          updated_at = NOW()
        WHERE id = 1`,
       [
@@ -2165,9 +3296,20 @@ router.post('/scoin-market/settings', async (req, res) => {
         mergedMarket.buy_fee_percent,
         mergedMarket.sell_fee_percent,
         mergedMarket.market_supply,
-        mergedMarket.auto_price_enabled
+        mergedMarket.auto_price_enabled,
+        mergedMarket.price_change_rate
       ]
     );
+
+    if (Object.prototype.hasOwnProperty.call(req.body, 'sync_central_pool') && req.body.sync_central_pool) {
+      await lockCentralWallet(client);
+      await client.query(`
+        UPDATE system_wallets
+        SET balance = $2,
+            updated_at = NOW()
+        WHERE wallet_type = 'host_scoin'
+      `, [mergedMarket.market_supply]);
+    }
 
     if (currentEconomy.id) {
       await client.query(
@@ -2299,6 +3441,7 @@ router.post('/scoin-market/:id/approve', async (req, res) => {
   const client = await getClient();
 
   try {
+    await ensureScoinCirculationSchema(client);
     await client.query('BEGIN');
 
     const orderRes = await client.query(
@@ -2328,6 +3471,7 @@ router.post('/scoin-market/:id/approve', async (req, res) => {
     if (!user) throw new Error('ไม่พบผู้ใช้งาน');
 
     const scoinAmount = Number(order.scoin_amount || 0);
+    let circ = null;
 
     if (String(order.order_type) === 'buy') {
       await postTransaction(client, {
@@ -2344,6 +3488,8 @@ router.post('/scoin-market/:id/approve', async (req, res) => {
           net_amount_thb: order.net_amount_thb
         }
       });
+
+      circ = await applyMarketCirculation(client, order);
     } else if (String(order.order_type) === 'sell') {
       await finalizeSellLock(client, {
         userId: user.id,
@@ -2356,28 +3502,7 @@ router.post('/scoin-market/:id/approve', async (req, res) => {
         }
       });
 
-      await client.query(
-        `INSERT INTO system_wallets (wallet_type, wallet_code, balance)
-         VALUES ('host_scoin', 'HOST-SCOIN-WALLET', 0)
-         ON CONFLICT (wallet_type)
-         DO UPDATE SET updated_at = NOW()`
-      );
-
-      await client.query(
-        `UPDATE system_wallets
-         SET balance = COALESCE(balance,0) + $1,
-             updated_at = NOW()
-         WHERE wallet_type = 'host_scoin'`,
-        [scoinAmount]
-      );
-
-await client.query(
-  `UPDATE system_wallets
-   SET thb_balance = COALESCE(thb_balance,0) + $1,
-       updated_at = NOW()
-   WHERE wallet_type = 'host_scoin'`,
-  [Number(order.fee_amount_thb || 0)]
-);
+      circ = await applyMarketCirculation(client, order);
 
       await client.query(
         `INSERT INTO fiat_ledger (
@@ -2403,6 +3528,17 @@ await client.query(
       [order.id]
     );
 
+    if (circ && !circ.duplicate) {
+      const settingsRes = await client.query(`SELECT * FROM scoin_settings WHERE id = 1 LIMIT 1`);
+      await applyAutoPriceAfterTrade(client, {
+        order,
+        flowType: String(order.order_type || '').toLowerCase(),
+        scoinAmount,
+        marketSupplyBefore: circ.marketSupplyBefore,
+        settings: settingsRes.rows[0] || {}
+      });
+    }
+
     await client.query('COMMIT');
     req.session.success = 'อนุมัติคำสั่งตลาด Scoin สำเร็จ';
     return res.redirect('/admin/scoin-market');
@@ -2425,6 +3561,9 @@ router.post('/scoin-market/:id/confirm-transfer', async (req, res) => {
        SET transfer_confirmed_at = NOW(),
            transfer_confirmed_by = $2,
            transfer_note = $3,
+           payout_status = COALESCE(NULLIF(payout_status, ''), 'paid'),
+           payout_paid_at = COALESCE(payout_paid_at, NOW()),
+           payout_by_user_id = COALESCE(payout_by_user_id, $2),
            updated_at = NOW()
        WHERE id = $1
          AND order_type = 'sell'
@@ -2437,11 +3576,42 @@ router.post('/scoin-market/:id/confirm-transfer', async (req, res) => {
     );
 
     req.session.success = 'ยืนยันการโอนเงินบาทแล้ว';
-    return res.redirect('/admin/scoin-market');
+    return res.redirect('/admin/payments');
   } catch (error) {
     console.error('confirm transfer error:', error);
     req.session.error = 'ยืนยันการโอนไม่สำเร็จ';
-    return res.redirect('/admin/scoin-market');
+    return res.redirect('/admin/payments');
+  }
+});
+
+router.post('/scoin-market/:id/host-slip', hostSlipUpload.single('host_slip'), async (req, res) => {
+  try {
+    if (!req.file) {
+      req.session.error = 'กรุณาเลือกไฟล์สลิปการโอน';
+      return res.redirect('/admin/payments');
+    }
+
+    const slipUrl = `/uploads/host-slips/${req.file.filename}`;
+    await query(
+      `UPDATE scoin_market_orders
+       SET host_transfer_slip_url = $2,
+           payout_ref = COALESCE(NULLIF(payout_ref, ''), $3),
+           updated_at = NOW()
+       WHERE id = $1
+         AND order_type = 'sell'`,
+      [
+        req.params.id,
+        slipUrl,
+        String(req.body.payout_ref || req.file.originalname || '').trim()
+      ]
+    );
+
+    req.session.success = 'แนบสลิปการโอนของโฮสเรียบร้อยแล้ว';
+    return res.redirect('/admin/payments');
+  } catch (error) {
+    console.error('host slip upload error:', error);
+    req.session.error = error.message || 'แนบสลิปไม่สำเร็จ';
+    return res.redirect('/admin/payments');
   }
 });
 
@@ -2880,6 +4050,7 @@ router.get('/vps/:id/ports/api/list', requireAdmin, async (req, res) => {
   try {
     await ensureVpsAllocationsAdminColumns();
     const nodeId = Number(req.params.id);
+    await expireStaleLockedPorts(nodeId).catch(() => 0);
     await syncStaleAdminAllocations(nodeId).catch(() => 0);
 
     let ports = await query(`

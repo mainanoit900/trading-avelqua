@@ -3,20 +3,104 @@ const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || ke
 const safeUsers = Array.isArray(users) ? users : [];
 const safeCounts = counts || { total: 0, active: 0, banned: 0, identity_verified: 0 };
 const safeFilters = filters || { q: '', status: '', role: '', identity: '' };
+const userPg = typeof pagination !== 'undefined' ? pagination : { currentPage: 1, totalPages: 1, totalRows: 0, pageSize: 15 };
+const localeTag = (typeof lang !== 'undefined' && lang === 'en') ? 'en-GB' : 'th-TH';
+
+function userDisplayName(u) {
+  return u.identity_full_name || u.full_name || [u.first_name || '', u.last_name || ''].join(' ').trim() || '-';
+}
+
+function formatUserDate(value) {
+  if (!value) return '-';
+  try { return new Date(value).toLocaleDateString(localeTag); }
+  catch (e) { return String(value); }
+}
+
+function formatUserDateTime(value) {
+  if (!value) return '-';
+  try { return new Date(value).toLocaleString(localeTag); }
+  catch (e) { return String(value); }
+}
+
+function usersKeepParams(overrides) {
+  const params = new URLSearchParams();
+  params.set('q', safeFilters.q || '');
+  params.set('status', safeFilters.status || '');
+  params.set('role', safeFilters.role || '');
+  params.set('identity', safeFilters.identity || '');
+  params.set('page', String(userPg.currentPage || 1));
+  Object.keys(overrides || {}).forEach(function (key) {
+    if (overrides[key] === null || overrides[key] === undefined || overrides[key] === '') {
+      params.delete(key);
+    } else {
+      params.set(key, String(overrides[key]));
+    }
+  });
+  return '/admin/users?' + params.toString();
+}
+
+function formatThaiId(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 13) return value || '-';
+  return `${digits[0]} ${digits.slice(1, 5)} ${digits.slice(5, 10)} ${digits.slice(10, 12)} ${digits[12]}`;
+}
+
+function documentTypeLabel(value) {
+  if (value === 'passport') return 'พาสปอร์ต';
+  if (value === 'thai_id') return 'บัตรประชาชน';
+  return value || '-';
+}
+
+function userDetailPayload(u) {
+  return {
+    id: u.display_id || u.id,
+    name: userDisplayName(u),
+    email: u.email || '-',
+    phone: u.identity_phone || u.phone || '-',
+    address_line: u.address_line || '-',
+    subdistrict: u.subdistrict || '-',
+    district: u.district || '-',
+    province: u.province || '-',
+    postal_code: u.postal_code || '-',
+    verify_email: u.verify_email || '-',
+    document_type: documentTypeLabel(u.document_type),
+    national_id: formatThaiId(u.national_id),
+    passport_number: u.passport_number || '-',
+    date_of_birth: u.date_of_birth ? formatUserDate(u.date_of_birth) : '-',
+    document_expiry_date: u.document_expiry_date ? formatUserDate(u.document_expiry_date) : '-',
+    document_image_path: u.document_image_path || '',
+    identity_verified: !!u.identity_verified,
+    identity_verified_at: u.identity_verified_at ? formatUserDateTime(u.identity_verified_at) : '-',
+    package_name: u.active_package_name || '-',
+    source_channel: u.source_channel || '-',
+    package_end_at: u.package_end_at ? formatUserDateTime(u.package_end_at) : '-',
+    role: u.role || 'user',
+    provider: u.provider || '-',
+    status: u.status || 'active',
+    created_at: u.created_at ? formatUserDateTime(u.created_at) : '-',
+    last_login_at: u.last_login_at ? formatUserDateTime(u.last_login_at) : '-',
+    bank_name: u.bank_name || '-',
+    bank_account_name: u.bank_account_name || '-',
+    bank_account_number_masked: u.account_number_masked || '-',
+    bank_verify_email: u.bank_verify_email || '-',
+    bank_status: u.bank_status || 'ยังไม่มีข้อมูล',
+    bank_is_verified: !!u.bank_is_verified,
+    bank_verified_at: u.bank_verified_at ? formatUserDateTime(u.bank_verified_at) : '-',
+    bank_updated_at: u.bank_updated_at ? formatUserDateTime(u.bank_updated_at) : '-',
+    edit_url: '/admin/users/' + (u.id || '') + '/edit'
+  };
+}
 %>
 
 <%- include('../partials/admin-shell') %>
 
-<link rel="stylesheet" href="/public/css/admin-users.css">
-
-<section class="admin-page-section">
+<section class="admin-page-section admin-users-page">
   <div class="admin-page-hero">
     <div>
       <div class="admin-page-chip"><%= safeT('admin.users.badge', 'USER MANAGEMENT') %></div>
       <h1><%= safeT('admin.users.title', 'จัดการผู้ใช้งาน') %></h1>
       <p><%= safeT('admin.users.desc', 'ดูข้อมูลผู้ใช้ ค้นหา แก้ไข แบน ลบ และส่งออก Excel ได้จากหน้าเดียว') %></p>
     </div>
-    <div class="admin-page-hero-glow"></div>
   </div>
 
   <div class="admin-users-kpis">
@@ -40,36 +124,51 @@ const safeFilters = filters || { q: '', status: '', role: '', identity: '' };
 
   <section class="admin-users-card">
     <div class="admin-users-toolbar">
-      <form method="GET" action="/admin/users" class="admin-users-filter">
-        <input
-          type="text"
-          name="q"
-          value="<%= safeFilters.q || '' %>"
-          placeholder="<%= safeT('admin.users.search_placeholder', 'ค้นหา ID / ชื่อ / อีเมล / เบอร์โทร') %>"
-        >
+      <form method="GET" action="/admin/users" class="admin-users-filter" id="usersFilterForm">
+        <input type="hidden" name="page" value="1">
+        <label class="admin-users-filter-field admin-users-filter-search">
+          <span><%= safeT('common.search', 'ค้นหา') %></span>
+          <input
+            type="search"
+            name="q"
+            value="<%= safeFilters.q || '' %>"
+            placeholder="<%= safeT('admin.users.search_placeholder', 'ค้นหา ID / ชื่อ / อีเมล / เบอร์โทร') %>"
+          >
+        </label>
 
-        <select name="status">
-          <option value=""><%= safeT('admin.users.all_status', 'ทุกสถานะ') %></option>
-          <option value="active" <%= safeFilters.status === 'active' ? 'selected' : '' %>>active</option>
-          <option value="banned" <%= safeFilters.status === 'banned' ? 'selected' : '' %>>banned</option>
-          <option value="disabled" <%= safeFilters.status === 'disabled' ? 'selected' : '' %>>disabled</option>
-          <option value="pending_verification" <%= safeFilters.status === 'pending_verification' ? 'selected' : '' %>>pending_verification</option>
-        </select>
+        <label class="admin-users-filter-field">
+          <span><%= safeT('admin.users.status', 'สถานะ') %></span>
+          <select name="status">
+            <option value=""><%= safeT('admin.users.all_status', 'ทุกสถานะ') %></option>
+            <option value="active" <%= safeFilters.status === 'active' ? 'selected' : '' %>>active</option>
+            <option value="banned" <%= safeFilters.status === 'banned' ? 'selected' : '' %>>banned</option>
+            <option value="disabled" <%= safeFilters.status === 'disabled' ? 'selected' : '' %>>disabled</option>
+            <option value="pending_verification" <%= safeFilters.status === 'pending_verification' ? 'selected' : '' %>>pending_verification</option>
+          </select>
+        </label>
 
-        <select name="role">
-          <option value=""><%= safeT('admin.users.all_roles', 'ทุกสิทธิ์') %></option>
-          <option value="user" <%= safeFilters.role === 'user' ? 'selected' : '' %>>user</option>
-          <option value="admin" <%= safeFilters.role === 'admin' ? 'selected' : '' %>>admin</option>
-        </select>
+        <label class="admin-users-filter-field">
+          <span>Role</span>
+          <select name="role">
+            <option value=""><%= safeT('admin.users.all_roles', 'ทุกสิทธิ์') %></option>
+            <option value="user" <%= safeFilters.role === 'user' ? 'selected' : '' %>>user</option>
+            <option value="admin" <%= safeFilters.role === 'admin' ? 'selected' : '' %>>admin</option>
+          </select>
+        </label>
 
-        <select name="identity">
-          <option value=""><%= safeT('admin.users.all_identity', 'ยืนยันตัวตนทั้งหมด') %></option>
-          <option value="verified" <%= safeFilters.identity === 'verified' ? 'selected' : '' %>><%= safeT('admin.users.identity_done', 'ยืนยันแล้ว') %></option>
-          <option value="pending" <%= safeFilters.identity === 'pending' ? 'selected' : '' %>><%= safeT('admin.users.identity_pending', 'ยังไม่ยืนยัน') %></option>
-        </select>
+        <label class="admin-users-filter-field">
+          <span><%= safeT('admin.users.identity', 'ยืนยันตัวตน') %></span>
+          <select name="identity">
+            <option value=""><%= safeT('admin.users.all_identity', 'ยืนยันตัวตนทั้งหมด') %></option>
+            <option value="verified" <%= safeFilters.identity === 'verified' ? 'selected' : '' %>><%= safeT('admin.users.identity_done', 'ยืนยันแล้ว') %></option>
+            <option value="pending" <%= safeFilters.identity === 'pending' ? 'selected' : '' %>><%= safeT('admin.users.identity_pending', 'ยังไม่ยืนยัน') %></option>
+          </select>
+        </label>
 
-        <button type="submit" class="btn btn-primary"><%= safeT('common.search', 'ค้นหา') %></button>
-        <a href="/admin/users" class="btn btn-secondary"><%= safeT('common.reset', 'ล้างค่า') %></a>
+        <div class="admin-users-filter-actions">
+          <button type="submit" class="btn btn-primary"><%= safeT('common.search', 'ค้นหา') %></button>
+          <a href="/admin/users" class="btn btn-secondary"><%= safeT('common.reset', 'ล้างค่า') %></a>
+        </div>
       </form>
 
       <div class="admin-users-actions">
@@ -88,256 +187,423 @@ const safeFilters = filters || { q: '', status: '', role: '', identity: '' };
       </div>
     </div>
 
-    <div class="admin-users-table-wrap">
-      <table class="admin-users-table">
-        <thead>
-          <tr>
-            <th>ID</th>
-            <th><%= safeT('common.name', 'ชื่อ') %></th>
-            <th><%= safeT('common.email', 'อีเมล') %></th>
-            <th><%= safeT('admin.users.phone', 'เบอร์โทร') %></th>
-            <th>Role</th>
-            <th>Provider</th>
-            <th><%= safeT('admin.users.package', 'แพ็กเกจ') %></th>
-            <th><%= safeT('admin.users.status', 'สถานะ') %></th>
-            <th><%= safeT('admin.users.identity', 'ยืนยันตัวตน') %></th>
-            <th><%= safeT('admin.users.created_at', 'สมัครเมื่อ') %></th>
-            <th><%= safeT('common.actions', 'จัดการ') %></th>
-          </tr>
-        </thead>
-        <tbody>
-          <% if (!safeUsers.length) { %>
-            <tr>
-              <td colspan="11" class="empty-cell"><%= safeT('admin.users.empty', 'ยังไม่พบข้อมูลผู้ใช้') %></td>
-            </tr>
-          <% } %>
+    <div class="admin-users-result-meta">
+      แสดง <%= safeUsers.length %> รายการ · หน้า <%= userPg.currentPage || 1 %>/<%= userPg.totalPages || 1 %> · ทั้งหมด <%= Number(userPg.totalRows || 0).toLocaleString('th-TH') %> คน
+    </div>
 
-          <% safeUsers.forEach(function(u){ %>
+    <% if (!safeUsers.length) { %>
+      <div class="admin-users-empty"><%= safeT('admin.users.empty', 'ยังไม่พบข้อมูลผู้ใช้') %></div>
+    <% } else { %>
+      <div class="admin-users-table-wrap">
+        <table class="admin-users-table admin-users-table-compact">
+          <thead>
             <tr>
-              <td>#<%= u.display_id || u.id %></td>
-              <td>
-                <div class="user-main">
-                  <strong><%= u.identity_full_name || u.full_name || [u.first_name || '', u.last_name || ''].join(' ').trim() || '-' %></strong>
-                  <div class="cell-sub">
-                    <% if (u.email_verified) { %>
-                      <span class="mini-badge success">email verified</span>
+              <th><%= safeT('admin.users.member', 'สมาชิก') %></th>
+              <th><%= safeT('admin.users.package', 'แพ็กเกจ') %></th>
+              <th><%= safeT('admin.users.status', 'สถานะ') %></th>
+              <th><%= safeT('admin.users.created_at', 'สมัคร') %></th>
+              <th><%= safeT('common.actions', 'จัดการ') %></th>
+            </tr>
+          </thead>
+          <tbody>
+            <% safeUsers.forEach(function (u) {
+              const displayName = userDisplayName(u);
+              const detailJson = JSON.stringify(userDetailPayload(u)).replace(/</g, '\\u003c');
+            %>
+              <tr>
+                <td>
+                  <div class="user-cell-main">
+                    <strong class="user-cell-name" title="<%= displayName %>"><%= displayName %></strong>
+                    <div class="user-cell-sub">#<%= u.display_id || u.id %></div>
+                    <div class="user-cell-email" title="<%= u.email || '-' %>"><%= u.email || '-' %></div>
+                    <div class="user-cell-phone"><%= u.identity_phone || u.phone || '-' %></div>
+                  </div>
+                </td>
+                <td>
+                  <div class="user-cell-package" title="<%= u.active_package_name || '-' %>"><%= u.active_package_name || '-' %></div>
+                  <div class="user-cell-sub"><%= u.source_channel || u.provider || '-' %></div>
+                </td>
+                <td>
+                  <div class="user-pill-stack">
+                    <span class="pill role <%= u.role === 'admin' ? 'admin' : 'user' %>"><%= u.role || 'user' %></span>
+                    <span class="pill status <%= u.status === 'banned' ? 'banned' : (u.status === 'active' ? 'active' : 'other') %>"><%= u.status || 'active' %></span>
+                    <% if (u.identity_verified) { %>
+                      <span class="pill verify yes"><%= safeT('admin.users.identity_done', 'ยืนยันแล้ว') %></span>
                     <% } else { %>
-                      <span class="mini-badge warning">email pending</span>
+                      <span class="pill verify no"><%= safeT('admin.users.identity_pending', 'ยังไม่ยืนยัน') %></span>
                     <% } %>
                   </div>
-                </div>
-              </td>
-              <td><%= u.email || '-' %></td>
-              <td><%= u.identity_phone || u.phone || '-' %></td>
-              <td><span class="pill role <%= u.role === 'admin' ? 'admin' : 'user' %>"><%= u.role || 'user' %></span></td>
-              <td><span class="pill provider"><%= u.provider || '-' %></span></td>
-              <td>
-                <div><%= u.active_package_name || '-' %></div>
-                <div class="cell-sub"><%= u.source_channel || '-' %></div>
-              </td>
-              <td>
-                <span class="pill status <%= u.status === 'banned' ? 'banned' : (u.status === 'active' ? 'active' : 'other') %>">
-                  <%= u.status || 'active' %>
-                </span>
-              </td>
-              <td>
-                <% if (u.identity_verified) { %>
-                  <span class="pill verify yes"><%= safeT('admin.users.identity_done', 'ยืนยันแล้ว') %></span>
-                <% } else { %>
-                  <span class="pill verify no"><%= safeT('admin.users.identity_pending', 'ยังไม่ยืนยัน') %></span>
-                <% } %>
-              </td>
-              <td><%= u.created_at ? new Date(u.created_at).toLocaleString('th-TH') : '-' %></td>
-              <td>
-                <div class="user-action-menu">
-  <button type="button" class="user-action-toggle">
-    จัดการ ▾
-  </button>
+                </td>
+                <td>
+                  <div><%= formatUserDate(u.created_at) %></div>
+                  <div class="user-cell-sub"><%= u.last_login_at ? ('ล่าสุด ' + formatUserDate(u.last_login_at)) : 'ยังไม่ login' %></div>
+                </td>
+                <td>
+                  <%- include('./partials/user-actions-dropdown', { user: u, detailJson: detailJson }) %>
+                </td>
+              </tr>
+            <% }) %>
+          </tbody>
+        </table>
+      </div>
 
-  <div class="user-action-dropdown">
-    <button
-      type="button"
-      class="user-action-item"
-      onclick='openUserDetail(<%- JSON.stringify({
-        id: u.display_id || u.id,
-        name: u.identity_full_name || u.full_name || [u.first_name || "", u.last_name || ""].join(" ").trim() || "-",
-        email: u.email || "-",
-        phone: u.identity_phone || u.phone || "-",
-        address_line: u.address_line || "-",
-        subdistrict: u.subdistrict || "-",
-        district: u.district || "-",
-        province: u.province || "-",
-        postal_code: u.postal_code || "-",
-        verify_email: u.verify_email || "-",
-        identity_verified: !!u.identity_verified,
-        identity_verified_at: u.identity_verified_at ? new Date(u.identity_verified_at).toLocaleString("th-TH") : "-",
-        package_name: u.active_package_name || "-",
-        source_channel: u.source_channel || "-",
-        package_end_at: u.package_end_at ? new Date(u.package_end_at).toLocaleString("th-TH") : "-",
-        role: u.role || "user",
-        provider: u.provider || "-",
-        status: u.status || "active",
-        created_at: u.created_at ? new Date(u.created_at).toLocaleString("th-TH") : "-",
-        last_login_at: u.last_login_at ? new Date(u.last_login_at).toLocaleString("th-TH") : "-",
-        bank_name: u.bank_name || "-",
-        bank_account_name: u.bank_account_name || "-",
-        bank_account_number_masked: u.account_number_masked || "-",
-        bank_verify_email: u.bank_verify_email || "-",
-        bank_status: u.bank_status || "ยังไม่มีข้อมูล",
-        bank_is_verified: !!u.bank_is_verified,
-        bank_verified_at: u.bank_verified_at ? new Date(u.bank_verified_at).toLocaleString("th-TH") : "-",
-        bank_updated_at: u.bank_updated_at ? new Date(u.bank_updated_at).toLocaleString("th-TH") : "-"
-      }) %>)'
-    >
-      👁️ ดูรายละเอียด
-    </button>
+      <div class="admin-users-mobile-list">
+        <% safeUsers.forEach(function (u) {
+          const displayName = userDisplayName(u);
+          const detailJson = JSON.stringify(userDetailPayload(u)).replace(/</g, '\\u003c');
+        %>
+          <article class="admin-users-mobile-card">
+            <div class="admin-users-mobile-head">
+              <div>
+                <strong><%= displayName %></strong>
+                <div class="user-cell-sub">#<%= u.display_id || u.id %> · <%= u.email || '-' %></div>
+              </div>
+              <span class="pill status <%= u.status === 'banned' ? 'banned' : (u.status === 'active' ? 'active' : 'other') %>"><%= u.status || 'active' %></span>
+            </div>
+            <div class="admin-users-mobile-meta">
+              <span><%= u.active_package_name || '-' %></span>
+              <span><%= u.identity_phone || u.phone || '-' %></span>
+              <span><%= formatUserDate(u.created_at) %></span>
+            </div>
+            <div class="user-pill-stack">
+              <span class="pill role <%= u.role === 'admin' ? 'admin' : 'user' %>"><%= u.role || 'user' %></span>
+              <% if (u.identity_verified) { %>
+                <span class="pill verify yes"><%= safeT('admin.users.identity_done', 'ยืนยันแล้ว') %></span>
+              <% } else { %>
+                <span class="pill verify no"><%= safeT('admin.users.identity_pending', 'ยังไม่ยืนยัน') %></span>
+              <% } %>
+            </div>
+            <div class="admin-users-mobile-actions">
+              <%- include('./partials/user-actions-dropdown', { user: u, detailJson: detailJson, toggleLabel: 'จัดการ ▾' }) %>
+            </div>
+          </article>
+        <% }) %>
+      </div>
 
-    <a class="user-action-item" href="/admin/users/<%= u.id %>/edit">
-      ✏️ แก้ไข
-    </a>
-
-    <% if (u.status === 'banned') { %>
-      <form method="POST" action="/admin/users/<%= u.id %>/unban">
-        <button class="user-action-item success" type="submit">✅ ปลดแบน</button>
-      </form>
-    <% } else { %>
-      <form method="POST" action="/admin/users/<%= u.id %>/ban">
-        <button class="user-action-item warning" type="submit">🚫 แบน</button>
-      </form>
+      <div class="users-pagination">
+        <div class="users-pagination-info">หน้า <%= userPg.currentPage || 1 %> / <%= userPg.totalPages || 1 %></div>
+        <div class="users-pagination-actions">
+          <% if ((userPg.currentPage || 1) > 1) { %>
+            <a class="users-page-btn" href="<%= usersKeepParams({ page: (userPg.currentPage || 1) - 1 }) %>">ก่อนหน้า</a>
+          <% } else { %>
+            <span class="users-page-btn is-disabled">ก่อนหน้า</span>
+          <% } %>
+          <% if ((userPg.currentPage || 1) < (userPg.totalPages || 1)) { %>
+            <a class="users-page-btn" href="<%= usersKeepParams({ page: (userPg.currentPage || 1) + 1 }) %>">ถัดไป</a>
+          <% } else { %>
+            <span class="users-page-btn is-disabled">ถัดไป</span>
+          <% } %>
+        </div>
+      </div>
     <% } %>
-
-    <% if (u.subscription_id) { %>
-      <form
-        method="POST"
-        action="/admin/users/<%= u.id %>/remove-package"
-        onsubmit="return confirm('ยืนยันลบแพ็กเกจของผู้ใช้นี้? ระบบจะลบเฉพาะแพ็กเกจล่าสุด ไม่ลบข้อมูลผู้ใช้และไม่ลบประวัติการชำระเงิน')"
-      >
-        <input type="hidden" name="subscription_id" value="<%= u.subscription_id %>">
-        <button class="user-action-item danger" type="submit">📦 ลบแพ็กเกจ</button>
-      </form>
-    <% } %>
-
-    <div class="user-action-divider"></div>
-
-    <form method="POST" action="/admin/users/<%= u.id %>/delete" onsubmit="return confirm('ยืนยันลบผู้ใช้?')">
-      <button class="user-action-item danger" type="submit">🗑️ ลบ</button>
-    </form>
-  </div>
-</div>
-              </td>
-            </tr>
-          <% }) %>
-        </tbody>
-      </table>
-    </div>
   </section>
 </section>
 
 <div class="user-detail-modal" id="userDetailModal">
   <div class="user-detail-backdrop" onclick="closeUserDetail()"></div>
   <div class="user-detail-card">
-    <button type="button" class="user-detail-close" onclick="closeUserDetail()">×</button>
-    <h2>รายละเอียดสมาชิก</h2>
+    <button type="button" class="user-detail-close" onclick="closeUserDetail()" aria-label="ปิด">×</button>
 
-    <div class="user-detail-grid">
-      <div class="detail-item"><span>ID</span><strong id="detail-id">-</strong></div>
-      <div class="detail-item"><span>ชื่อ</span><strong id="detail-name">-</strong></div>
-      <div class="detail-item"><span>อีเมล</span><strong id="detail-email">-</strong></div>
-      <div class="detail-item"><span>เบอร์โทร</span><strong id="detail-phone">-</strong></div>
-      <div class="detail-item detail-col-2"><span>ที่อยู่</span><strong id="detail-address-line">-</strong></div>
-      <div class="detail-item"><span>ตำบล / แขวง</span><strong id="detail-subdistrict">-</strong></div>
-      <div class="detail-item"><span>อำเภอ / เขต</span><strong id="detail-district">-</strong></div>
-      <div class="detail-item"><span>จังหวัด</span><strong id="detail-province">-</strong></div>
-      <div class="detail-item"><span>รหัสไปรษณีย์</span><strong id="detail-postal-code">-</strong></div>
-      <div class="detail-item"><span>อีเมลรับ OTP</span><strong id="detail-verify-email">-</strong></div>
-      <div class="detail-item"><span>ยืนยันตัวตน</span><strong id="detail-identity-status">-</strong></div>
-      <div class="detail-item"><span>ยืนยันเมื่อ</span><strong id="detail-identity-verified-at">-</strong></div>
-      <div class="detail-item"><span>แพ็กเกจ</span><strong id="detail-package-name">-</strong></div>
-      <div class="detail-item"><span>ที่มาแพ็กเกจ</span><strong id="detail-source-channel">-</strong></div>
-      <div class="detail-item"><span>หมดอายุแพ็กเกจ</span><strong id="detail-package-end-at">-</strong></div>
-      <div class="detail-item"><span>Role</span><strong id="detail-role">-</strong></div>
-      <div class="detail-item"><span>Provider</span><strong id="detail-provider">-</strong></div>
-      <div class="detail-item"><span>สถานะบัญชี</span><strong id="detail-status">-</strong></div>
-      <div class="detail-item"><span>สมัครเมื่อ</span><strong id="detail-created-at">-</strong></div>
-      <div class="detail-item"><span>เข้าใช้ล่าสุด</span><strong id="detail-last-login-at">-</strong></div>
+    <div class="user-detail-hero">
+      <div class="user-detail-avatar" id="detail-avatar">U</div>
+      <div class="user-detail-hero-main">
+        <div class="user-detail-chip">MEMBER PROFILE</div>
+        <h2 id="detail-name">-</h2>
+        <div class="user-detail-hero-sub">
+          <span id="detail-email">-</span>
+          <span class="user-detail-dot">·</span>
+          <span id="detail-id-label">#-</span>
+        </div>
+        <div class="user-detail-badges">
+          <span class="user-detail-badge role" id="detail-role-badge">user</span>
+          <span class="user-detail-badge status" id="detail-status-badge">active</span>
+          <span class="user-detail-badge identity" id="detail-identity-badge">ยังไม่ยืนยัน</span>
+        </div>
+      </div>
     </div>
 
-    <div class="detail-bank-card">
-  <h4>ข้อมูลบัญชีธนาคาร</h4>
-  <div class="user-detail-grid">
-    <div class="detail-item"><span>ธนาคาร</span><strong id="detail-bank-name">-</strong></div>
-    <div class="detail-item"><span>ชื่อบัญชี</span><strong id="detail-bank-account-name">-</strong></div>
-    <div class="detail-item"><span>เลขบัญชี</span><strong id="detail-bank-account-number">-</strong></div>
-    <div class="detail-item"><span>อีเมลยืนยัน</span><strong id="detail-bank-verify-email">-</strong></div>
-    <div class="detail-item"><span>สถานะ</span><strong id="detail-bank-status">-</strong></div>
-    <div class="detail-item"><span>ยืนยันเมื่อ</span><strong id="detail-bank-verified-at">-</strong></div>
-    <div class="detail-item"><span>อัปเดตล่าสุด</span><strong id="detail-bank-updated-at">-</strong></div>
+    <div class="user-detail-layout">
+      <aside class="user-detail-doc-panel">
+        <div class="user-detail-section-head">
+          <span class="user-detail-section-icon">🪪</span>
+          <div>
+            <h3>เอกสารยืนยันตัวตน</h3>
+            <p id="detail-document-type">-</p>
+          </div>
+        </div>
+        <div class="user-detail-doc-frame">
+          <img id="detail-document-image" alt="รูปบัตร/เอกสาร" hidden>
+          <div class="user-detail-doc-empty" id="detail-document-empty">
+            <span>📄</span>
+            <p>ยังไม่มีรูปเอกสาร</p>
+          </div>
+        </div>
+        <div class="user-detail-doc-meta">
+          <div><span>เลขบัตร</span><strong id="detail-national-id">-</strong></div>
+          <div><span>เลขพาสปอร์ต</span><strong id="detail-passport-number">-</strong></div>
+          <div><span>วันเกิด</span><strong id="detail-date-of-birth">-</strong></div>
+          <div><span>หมดอายุ</span><strong id="detail-document-expiry">-</strong></div>
+        </div>
+      </aside>
+
+      <div class="user-detail-main">
+        <section class="user-detail-section">
+          <div class="user-detail-section-head">
+            <span class="user-detail-section-icon">👤</span>
+            <div>
+              <h3>ข้อมูลติดต่อ</h3>
+              <p>เบอร์โทรและอีเมลรับ OTP</p>
+            </div>
+          </div>
+          <div class="user-detail-fields">
+            <div class="user-detail-field"><span>เบอร์โทร</span><strong id="detail-phone">-</strong></div>
+            <div class="user-detail-field"><span>อีเมลรับ OTP</span><strong id="detail-verify-email">-</strong></div>
+            <div class="user-detail-field"><span>Provider</span><strong id="detail-provider">-</strong></div>
+          </div>
+        </section>
+
+        <section class="user-detail-section">
+          <div class="user-detail-section-head">
+            <span class="user-detail-section-icon">📍</span>
+            <div>
+              <h3>ที่อยู่</h3>
+              <p>ข้อมูลจากการยืนยันตัวตน</p>
+            </div>
+          </div>
+          <div class="user-detail-fields">
+            <div class="user-detail-field span-2"><span>บ้านเลขที่ / ถนน</span><strong id="detail-address-line">-</strong></div>
+            <div class="user-detail-field"><span>ตำบล / แขวง</span><strong id="detail-subdistrict">-</strong></div>
+            <div class="user-detail-field"><span>อำเภอ / เขต</span><strong id="detail-district">-</strong></div>
+            <div class="user-detail-field"><span>จังหวัด</span><strong id="detail-province">-</strong></div>
+            <div class="user-detail-field"><span>รหัสไปรษณีย์</span><strong id="detail-postal-code">-</strong></div>
+          </div>
+        </section>
+
+        <section class="user-detail-section">
+          <div class="user-detail-section-head">
+            <span class="user-detail-section-icon">📦</span>
+            <div>
+              <h3>แพ็กเกจ & บัญชี</h3>
+              <p>สถานะการใช้งาน</p>
+            </div>
+          </div>
+          <div class="user-detail-fields">
+            <div class="user-detail-field"><span>แพ็กเกจ</span><strong id="detail-package-name">-</strong></div>
+            <div class="user-detail-field"><span>ที่มาแพ็กเกจ</span><strong id="detail-source-channel">-</strong></div>
+            <div class="user-detail-field"><span>หมดอายุแพ็กเกจ</span><strong id="detail-package-end-at">-</strong></div>
+            <div class="user-detail-field"><span>ยืนยันเมื่อ</span><strong id="detail-identity-verified-at">-</strong></div>
+            <div class="user-detail-field"><span>สมัครเมื่อ</span><strong id="detail-created-at">-</strong></div>
+            <div class="user-detail-field"><span>เข้าใช้ล่าสุด</span><strong id="detail-last-login-at">-</strong></div>
+          </div>
+        </section>
+
+        <section class="user-detail-section">
+          <div class="user-detail-section-head">
+            <span class="user-detail-section-icon">🏦</span>
+            <div>
+              <h3>บัญชีธนาคาร</h3>
+              <p id="detail-bank-status">-</p>
+            </div>
+          </div>
+          <div class="user-detail-fields">
+            <div class="user-detail-field"><span>ธนาคาร</span><strong id="detail-bank-name">-</strong></div>
+            <div class="user-detail-field"><span>ชื่อบัญชี</span><strong id="detail-bank-account-name">-</strong></div>
+            <div class="user-detail-field"><span>เลขบัญชี</span><strong id="detail-bank-account-number">-</strong></div>
+            <div class="user-detail-field"><span>อีเมลยืนยัน</span><strong id="detail-bank-verify-email">-</strong></div>
+            <div class="user-detail-field"><span>ยืนยันเมื่อ</span><strong id="detail-bank-verified-at">-</strong></div>
+            <div class="user-detail-field"><span>อัปเดตล่าสุด</span><strong id="detail-bank-updated-at">-</strong></div>
+          </div>
+        </section>
+      </div>
+    </div>
+
+    <div class="user-detail-footer">
+      <a href="#" class="user-detail-btn secondary" id="detail-edit-link">อัปเดตข้อมูล</a>
+      <button type="button" class="user-detail-btn primary" onclick="closeUserDetail()">ปิด</button>
+    </div>
   </div>
-</div>
 </div>
 
 <script>
+  function setDetailText(id, value) {
+    const el = document.getElementById(id);
+    if (el) el.textContent = value || '-';
+  }
+
+  function userInitials(name) {
+    const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+    if (!parts.length) return 'U';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+  }
+
   function openUserDetail(user) {
-    document.getElementById('detail-id').textContent = user.id || '-';
-    document.getElementById('detail-name').textContent = user.name || '-';
-    document.getElementById('detail-email').textContent = user.email || '-';
-    document.getElementById('detail-phone').textContent = user.phone || '-';
-    document.getElementById('detail-address-line').textContent = user.address_line || '-';
-    document.getElementById('detail-subdistrict').textContent = user.subdistrict || '-';
-    document.getElementById('detail-district').textContent = user.district || '-';
-    document.getElementById('detail-province').textContent = user.province || '-';
-    document.getElementById('detail-postal-code').textContent = user.postal_code || '-';
-    document.getElementById('detail-verify-email').textContent = user.verify_email || '-';
-    document.getElementById('detail-identity-status').textContent = user.identity_verified ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน';
-    document.getElementById('detail-identity-verified-at').textContent = user.identity_verified_at || '-';
-    document.getElementById('detail-package-name').textContent = user.package_name || '-';
-    document.getElementById('detail-source-channel').textContent = user.source_channel || '-';
-    document.getElementById('detail-package-end-at').textContent = user.package_end_at || '-';
-    document.getElementById('detail-role').textContent = user.role || '-';
-    document.getElementById('detail-provider').textContent = user.provider || '-';
-    document.getElementById('detail-status').textContent = user.status || '-';
-    document.getElementById('detail-created-at').textContent = user.created_at || '-';
-    document.getElementById('detail-last-login-at').textContent = user.last_login_at || '-';
-    document.getElementById('detail-bank-name').textContent = user.bank_name || '-';
-    document.getElementById('detail-bank-account-name').textContent = user.bank_account_name || '-';
-    document.getElementById('detail-bank-account-number').textContent = user.bank_account_number_masked || '-';
-    document.getElementById('detail-bank-verify-email').textContent = user.bank_verify_email || '-';
-    document.getElementById('detail-bank-status').textContent = user.bank_is_verified ? 'ยืนยันแล้ว' : (user.bank_status || 'ยังไม่ยืนยัน');
-    document.getElementById('detail-bank-verified-at').textContent = user.bank_verified_at || '-';
-    document.getElementById('detail-bank-updated-at').textContent = user.bank_updated_at || '-';
+    setDetailText('detail-name', user.name);
+    setDetailText('detail-email', user.email);
+    setDetailText('detail-id-label', '#' + (user.id || '-'));
+    setDetailText('detail-phone', user.phone);
+    setDetailText('detail-address-line', user.address_line);
+    setDetailText('detail-subdistrict', user.subdistrict);
+    setDetailText('detail-district', user.district);
+    setDetailText('detail-province', user.province);
+    setDetailText('detail-postal-code', user.postal_code);
+    setDetailText('detail-verify-email', user.verify_email);
+    setDetailText('detail-document-type', user.document_type);
+    setDetailText('detail-national-id', user.national_id);
+    setDetailText('detail-passport-number', user.passport_number);
+    setDetailText('detail-date-of-birth', user.date_of_birth);
+    setDetailText('detail-document-expiry', user.document_expiry_date);
+    setDetailText('detail-identity-verified-at', user.identity_verified_at);
+    setDetailText('detail-package-name', user.package_name);
+    setDetailText('detail-source-channel', user.source_channel);
+    setDetailText('detail-package-end-at', user.package_end_at);
+    setDetailText('detail-provider', user.provider);
+    setDetailText('detail-created-at', user.created_at);
+    setDetailText('detail-last-login-at', user.last_login_at);
+    setDetailText('detail-bank-name', user.bank_name);
+    setDetailText('detail-bank-account-name', user.bank_account_name);
+    setDetailText('detail-bank-account-number', user.bank_account_number_masked);
+    setDetailText('detail-bank-verify-email', user.bank_verify_email);
+    setDetailText('detail-bank-verified-at', user.bank_verified_at);
+    setDetailText('detail-bank-updated-at', user.bank_updated_at);
+
+    const avatar = document.getElementById('detail-avatar');
+    if (avatar) avatar.textContent = userInitials(user.name);
+
+    const roleBadge = document.getElementById('detail-role-badge');
+    if (roleBadge) {
+      roleBadge.textContent = user.role || 'user';
+      roleBadge.className = 'user-detail-badge role ' + (user.role === 'admin' ? 'is-admin' : 'is-user');
+    }
+
+    const statusBadge = document.getElementById('detail-status-badge');
+    if (statusBadge) {
+      statusBadge.textContent = user.status || 'active';
+      statusBadge.className = 'user-detail-badge status ' + (user.status === 'banned' ? 'is-banned' : (user.status === 'active' ? 'is-active' : 'is-other'));
+    }
+
+    const identityBadge = document.getElementById('detail-identity-badge');
+    if (identityBadge) {
+      identityBadge.textContent = user.identity_verified ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน';
+      identityBadge.className = 'user-detail-badge identity ' + (user.identity_verified ? 'is-verified' : 'is-pending');
+    }
+
+    const bankStatus = document.getElementById('detail-bank-status');
+    if (bankStatus) {
+      bankStatus.textContent = user.bank_is_verified ? 'ยืนยันบัญชีแล้ว' : (user.bank_status || 'ยังไม่ยืนยัน');
+    }
+
+    const docImg = document.getElementById('detail-document-image');
+    const docEmpty = document.getElementById('detail-document-empty');
+    const imagePath = String(user.document_image_path || '').replace(/^\/+/, '');
+    if (docImg && docEmpty) {
+      if (imagePath) {
+        docImg.src = '/' + imagePath;
+        docImg.hidden = false;
+        docEmpty.hidden = true;
+      } else {
+        docImg.removeAttribute('src');
+        docImg.hidden = true;
+        docEmpty.hidden = false;
+      }
+    }
+
+    const editLink = document.getElementById('detail-edit-link');
+    if (editLink) editLink.href = user.edit_url || '#';
+
     document.getElementById('userDetailModal').classList.add('show');
     document.body.classList.add('modal-open');
-
-document.getElementById('detail-bank-name').textContent = user.bank_name || '-';
-document.getElementById('detail-bank-account-name').textContent = user.bank_account_name || '-';
-document.getElementById('detail-bank-account-number').textContent = user.bank_account_number_masked || '-';
-document.getElementById('detail-bank-verify-email').textContent = user.bank_verify_email || '-';
-document.getElementById('detail-bank-status').textContent = user.bank_is_verified ? 'ยืนยันแล้ว' : (user.bank_status || 'ยังไม่ยืนยัน');
-document.getElementById('detail-bank-verified-at').textContent = user.bank_verified_at || '-';
-document.getElementById('detail-bank-updated-at').textContent = user.bank_updated_at || '-';
-
   }
 
   function closeUserDetail() {
     document.getElementById('userDetailModal').classList.remove('show');
     document.body.classList.remove('modal-open');
   }
-</script>
 
-<script>
-document.addEventListener('click', function(e){
-  const toggle = e.target.closest('.user-action-toggle');
+  document.addEventListener('click', function (e) {
+    const toggle = e.target.closest('.user-action-toggle');
 
-  document.querySelectorAll('.user-action-menu.open').forEach(menu => {
-    if (!menu.contains(e.target)) menu.classList.remove('open');
+    function resetUserActionDropdown(menu) {
+      menu.classList.remove('open');
+      const dropdown = menu.querySelector('.user-action-dropdown');
+      if (!dropdown) return;
+      dropdown.classList.remove('is-fixed');
+      dropdown.style.display = '';
+      dropdown.style.position = '';
+      dropdown.style.top = '';
+      dropdown.style.left = '';
+      dropdown.style.right = '';
+      dropdown.style.bottom = '';
+      dropdown.style.minWidth = '';
+    }
+
+    function positionUserActionDropdown(menu, button) {
+      const dropdown = menu.querySelector('.user-action-dropdown');
+      if (!dropdown) return;
+      dropdown.classList.add('is-fixed');
+      dropdown.style.display = 'grid';
+      dropdown.style.position = 'fixed';
+      dropdown.style.right = 'auto';
+      dropdown.style.bottom = 'auto';
+      dropdown.style.minWidth = '196px';
+
+      const rect = button.getBoundingClientRect();
+      const width = dropdown.offsetWidth || 196;
+      const height = dropdown.offsetHeight || 220;
+      let left = rect.right - width;
+      let top = rect.bottom + 6;
+
+      left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+      if (top + height > window.innerHeight - 8) {
+        top = Math.max(8, rect.top - height - 6);
+      }
+
+      dropdown.style.left = left + 'px';
+      dropdown.style.top = top + 'px';
+    }
+
+    document.querySelectorAll('.user-action-menu.open').forEach(function (menu) {
+      if (!menu.contains(e.target)) resetUserActionDropdown(menu);
+    });
+
+    if (toggle) {
+      e.preventDefault();
+      e.stopPropagation();
+      const menu = toggle.closest('.user-action-menu');
+      const willOpen = !menu.classList.contains('open');
+      document.querySelectorAll('.user-action-menu.open').forEach(function (other) {
+        if (other !== menu) resetUserActionDropdown(other);
+      });
+      if (willOpen) {
+        menu.classList.add('open');
+        positionUserActionDropdown(menu, toggle);
+      } else {
+        resetUserActionDropdown(menu);
+      }
+    }
   });
 
-  if (toggle) {
-    e.preventDefault();
-    e.stopPropagation();
-    toggle.closest('.user-action-menu').classList.toggle('open');
-  }
-});
+  window.addEventListener('resize', function () {
+    document.querySelectorAll('.user-action-menu.open').forEach(function (menu) {
+      const toggle = menu.querySelector('.user-action-toggle');
+      if (toggle) {
+        const dropdown = menu.querySelector('.user-action-dropdown');
+        if (dropdown && dropdown.classList.contains('is-fixed')) {
+          const rect = toggle.getBoundingClientRect();
+          const width = dropdown.offsetWidth || 196;
+          const height = dropdown.offsetHeight || 220;
+          let left = rect.right - width;
+          let top = rect.bottom + 6;
+          left = Math.max(8, Math.min(left, window.innerWidth - width - 8));
+          if (top + height > window.innerHeight - 8) {
+            top = Math.max(8, rect.top - height - 6);
+          }
+          dropdown.style.left = left + 'px';
+          dropdown.style.top = top + 'px';
+        }
+      }
+    });
+  });
 </script>
 
 <%- include('../partials/admin-shell-end') %>
