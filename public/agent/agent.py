@@ -3986,7 +3986,9 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
     if is_bot_run_spawn:
         wait_timeout = 45.0
     deadline = time.time() + wait_timeout
-    _evict_login_after = time.time() if is_bot_run_spawn else time.time() + 8.0
+    wait_started = time.time()
+    _evict_login_after = wait_started if is_bot_run_spawn else wait_started + 8.0
+    _evict_stale_bot_after = wait_started + 3.0 if is_bot_run_spawn else wait_started + 45.0
 
     while True:
         reap_connect_workers()
@@ -3996,40 +3998,47 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
                 if wait_timeout > 0 and time.time() < deadline:
                     prev_pid = getattr(prev, "pid", "")
                     prev_ctype = ACTIVE_CONNECT_WORKER_CTYPES.get(key, "").lower()
-                    if is_bot_run_spawn and prev_ctype in ("run_mt5_bot", "run_mt5"):
+                    should_evict = False
+                    if is_bot_run_spawn:
+                        if prev_ctype in ("connect_mt5", "login_mt5") and time.time() >= _evict_login_after:
+                            should_evict = True
+                        elif (
+                            prev_ctype in ("run_mt5_bot", "run_mt5", "")
+                            and time.time() >= _evict_stale_bot_after
+                        ):
+                            should_evict = True
+                    if should_evict:
                         log(
-                            f"WORKER WAIT bot_run port={port} cmd_id={cmd_id} "
-                            f"busy_pid={prev_pid} remaining={max(0.0, deadline - time.time()):.1f}s"
+                            f"WORKER EVICT stale-worker for bot_run port={port} "
+                            f"pid={prev_pid} prev_type={prev_ctype or 'unknown'}"
                         )
-                    elif is_bot_run_spawn and time.time() >= _evict_login_after:
-                        if prev_ctype in ("connect_mt5", "login_mt5"):
-                            log(f"WORKER EVICT login-worker for bot_run port={port} pid={prev_pid} prev_type={prev_ctype}")
-                            try:
-                                port_dir = resolve_mt5_port_dir(port, payload)
-                                kill_all_mt5_for_port_dir(
-                                    port,
-                                    port_dir,
-                                    payload,
-                                    reason="evict_login_for_bot",
-                                    max_wait_sec=6.0,
-                                )
-                                kill_stray_terminal64_processes(
-                                    str(payload_get(payload, "mt5Login", "login") or "").strip(),
-                                    port_dir,
-                                    reason="evict_login_for_bot",
-                                )
-                            except Exception as evict_err:
-                                log(f"WORKER EVICT MT5 CLEAN ERROR port={port}: {evict_err}")
-                            try:
-                                prev.kill()
-                            except Exception:
-                                pass
-                            ACTIVE_CONNECT_WORKERS.pop(key, None)
-                            ACTIVE_CONNECT_WORKER_CTYPES.pop(key, None)
-                            break
+                        try:
+                            port_dir = resolve_mt5_port_dir(port, payload)
+                            kill_all_mt5_for_port_dir(
+                                port,
+                                port_dir,
+                                payload,
+                                reason="evict_stale_for_bot",
+                                max_wait_sec=6.0,
+                            )
+                            kill_stray_terminal64_processes(
+                                str(payload_get(payload, "mt5Login", "login") or "").strip(),
+                                port_dir,
+                                reason="evict_stale_for_bot",
+                            )
+                        except Exception as evict_err:
+                            log(f"WORKER EVICT MT5 CLEAN ERROR port={port}: {evict_err}")
+                        try:
+                            prev.kill()
+                        except Exception:
+                            pass
+                        ACTIVE_CONNECT_WORKERS.pop(key, None)
+                        ACTIVE_CONNECT_WORKER_CTYPES.pop(key, None)
+                        break
                     log(
                         f"WORKER WAIT port={port} cmd_id={cmd_id} type={ctype} "
-                        f"busy_pid={prev_pid} remaining={max(0.0, deadline - time.time()):.1f}s"
+                        f"busy_pid={prev_pid} prev_type={prev_ctype or 'unknown'} "
+                        f"remaining={max(0.0, deadline - time.time()):.1f}s"
                     )
                 else:
                     raise RuntimeError(f"PORT {port} มี worker กำลังทำงานอยู่ กรุณารอสักครู่")
