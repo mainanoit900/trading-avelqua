@@ -19,4 +19,11 @@ fi
 "$VENV/bin/pip" install -q -r "$APP_DIR/scripts/requirements-identity-ocr.txt"
 chmod +x "$APP_DIR/scripts/scan_identity_document.py" 2>/dev/null || true
 
+echo "Preloading EasyOCR models..."
+"$VENV/bin/python" - <<'PY' || echo "WARN: EasyOCR preload skipped"
+import easyocr
+easyocr.Reader(["th", "en"], gpu=False, verbose=False)
+print("EasyOCR ready")
+PY
+
 echo "Identity OCR ready: $VENV/bin/python"
