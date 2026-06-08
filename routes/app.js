@@ -48,7 +48,6 @@ const {
   enrichIdentityAddress,
   finalizeVerifiedDocumentImage
 } = require('../services/identityDocumentService');
-const { lookupPostalCode } = require('../lib/thaiPostalLookup');
 const { fetchCalendarPerformance, fetchMt5LoginPortfolio } = require('../lib/mt5CalendarPerformance');
 const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
@@ -2098,6 +2097,7 @@ router.post('/identity/scan-document', identityDocUpload.single('document_image'
       national_id: result.national_id || '',
       passport_number: result.passport_number || '',
       full_name: result.full_name,
+      full_address: (result.scan_json && result.scan_json.full_address) || '',
       address_line: result.address_line || '',
       subdistrict: result.subdistrict || '',
       district: result.district || '',
@@ -2117,6 +2117,7 @@ router.post('/identity/scan-document', identityDocUpload.single('document_image'
       national_id: result.national_id || '',
       passport_number: result.passport_number || '',
       full_name: result.full_name,
+      full_address: (result.scan_json && result.scan_json.full_address) || '',
       address_line: result.address_line || '',
       subdistrict: result.subdistrict || '',
       district: result.district || '',
@@ -2149,19 +2150,29 @@ function validateIdentityScanSession(req) {
 
 router.get('/identity/postal-code', async (req, res) => {
   try {
-    const subdistrict = normalizeText(req.query.subdistrict);
-    const district = normalizeText(req.query.district);
-    const province = normalizeText(req.query.province);
+    const enriched = enrichIdentityAddress({
+      document_type: 'thai_id',
+      address_line: normalizeText(req.query.address_line),
+      full_address: normalizeText(req.query.full_address),
+      subdistrict: normalizeText(req.query.subdistrict),
+      district: normalizeText(req.query.district),
+      province: normalizeText(req.query.province),
+      scan_json: {
+        full_address: normalizeText(req.query.full_address)
+      }
+    });
 
-    if (!district && !province && !subdistrict) {
-      return res.status(400).json({ ok: false, message: 'กรุณาระบุตำบล อำเภอ หรือจังหวัด' });
+    if (!enriched.subdistrict && !enriched.district && !enriched.province) {
+      return res.status(400).json({ ok: false, message: 'ไม่พบข้อมูล ตำบล อำเภอ จังหวัด สำหรับค้นหารหัสไปรษณีย์' });
     }
 
-    const postalCode = lookupPostalCode({ subdistrict, district, province });
     return res.json({
       ok: true,
-      postal_code: postalCode,
-      auto_filled: !!postalCode
+      postal_code: enriched.postal_code || '',
+      subdistrict: enriched.subdistrict || '',
+      district: enriched.district || '',
+      province: enriched.province || '',
+      auto_filled: !!enriched.postal_code
     });
   } catch (error) {
     console.error('identity postal lookup error:', error);

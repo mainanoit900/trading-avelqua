@@ -290,25 +290,34 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
     }
 
     async function autoFillPostalCode(data) {
-      if (data.postal_code) {
-        document.getElementById('postal_code').value = data.postal_code;
-        return data.postal_code;
+      const params = new URLSearchParams({
+        subdistrict: data.subdistrict || document.getElementById('subdistrict').value || '',
+        district: data.district || document.getElementById('district').value || '',
+        province: data.province || document.getElementById('province').value || '',
+        address_line: data.address_line || document.getElementById('address_line').value || '',
+        full_address: data.full_address || ''
+      });
+
+      if (!params.get('subdistrict') && !params.get('district') && !params.get('province') && !params.get('full_address')) {
+        return '';
       }
 
-      const subdistrict = data.subdistrict || '';
-      const district = data.district || '';
-      const province = data.province || '';
-      if (!subdistrict && !district && !province) return '';
-
-      const params = new URLSearchParams({ subdistrict, district, province });
       try {
         const res = await fetch('/app/identity/postal-code?' + params.toString(), { credentials: 'same-origin' });
         const json = await res.json().catch(function () { return {}; });
+        if (json.subdistrict) document.getElementById('subdistrict').value = json.subdistrict;
+        if (json.district) document.getElementById('district').value = json.district;
+        if (json.province) document.getElementById('province').value = json.province;
         if (json.postal_code) {
           document.getElementById('postal_code').value = json.postal_code;
           return json.postal_code;
         }
       } catch (_) {}
+
+      if (data.postal_code) {
+        document.getElementById('postal_code').value = data.postal_code;
+        return data.postal_code;
+      }
 
       return '';
     }
@@ -393,6 +402,16 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
 
     if (scanCompleted && requestOtpBtn) {
       requestOtpBtn.disabled = false;
+    }
+
+    if (!isVerified) {
+      autoFillPostalCode({
+        address_line: document.getElementById('address_line')?.value || '',
+        subdistrict: document.getElementById('subdistrict')?.value || '',
+        district: document.getElementById('district')?.value || '',
+        province: document.getElementById('province')?.value || '',
+        postal_code: document.getElementById('postal_code')?.value || ''
+      }).catch(function () {});
     }
   })();
 </script>

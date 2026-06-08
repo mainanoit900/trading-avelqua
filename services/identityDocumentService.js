@@ -293,15 +293,20 @@ function enrichIdentityAddress(data) {
   if (!data || data.document_type === 'passport') return data;
 
   const scanJson = data.scan_json || {};
-  const fullAddress = buildFullAddressText({
-    full_address: scanJson.full_address || scanJson.address_full || data.full_address,
+  const rawFullAddress = normalizeDocText(
+    scanJson.full_address
+    || scanJson.address_full
+    || data.full_address
+    || ''
+  );
+
+  const parsed = parseThaiIdAddress(rawFullAddress || buildFullAddressText({
+    full_address: rawFullAddress,
     address_line: data.address_line,
     subdistrict: data.subdistrict || scanJson.subdistrict,
     district: data.district || scanJson.district,
     province: data.province || scanJson.province
-  });
-
-  const parsed = parseThaiIdAddress(fullAddress, {
+  }), {
     subdistrict: data.subdistrict || scanJson.subdistrict,
     district: data.district || scanJson.district,
     province: data.province || scanJson.province
@@ -312,19 +317,19 @@ function enrichIdentityAddress(data) {
     ? houseStreet
     : (parsed.address_line || houseStreet);
 
+  const subdistrict = parsed.subdistrict || data.subdistrict || scanJson.subdistrict || '';
+  const district = parsed.district || data.district || scanJson.district || '';
+  const province = parsed.province || data.province || scanJson.province || '';
+
   const postalCode = normalizeDigits(data.postal_code).slice(0, 5)
-    || lookupPostalCode({
-      subdistrict: parsed.subdistrict,
-      district: parsed.district,
-      province: parsed.province
-    });
+    || lookupPostalCode({ subdistrict, district, province });
 
   return {
     ...data,
     address_line: addressLine,
-    subdistrict: parsed.subdistrict || data.subdistrict || scanJson.subdistrict || '',
-    district: parsed.district || data.district || scanJson.district || '',
-    province: parsed.province || data.province || scanJson.province || '',
+    subdistrict,
+    district,
+    province,
     postal_code: postalCode
   };
 }
