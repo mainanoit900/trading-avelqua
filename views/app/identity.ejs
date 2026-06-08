@@ -132,8 +132,8 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
           </div>
 
           <div class="identity-field">
-            <label for="postal_code"><%= safeT('identity.postal_code_auto', 'รหัสไปรษณีย์ (เติมอัตโนมัติ)') %></label>
-            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" maxlength="5" readonly placeholder="<%= safeT('identity.postal_code_auto_placeholder', 'ระบบเติมจาก ตำบล/อำเภอ/จังหวัด') %>">
+            <label for="postal_code"><%= safeT('identity.postal_code', 'รหัสไปรษณีย์') %></label>
+            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" maxlength="5" inputmode="numeric" placeholder="<%= safeT('identity.postal_code_placeholder', 'กรอกรหัส 5 หลัก') %>" <%= isIdentityVerified ? 'readonly' : '' %> <%= docType === 'passport' ? '' : 'required' %>>
           </div>
 
           <div class="identity-field">
@@ -290,6 +290,11 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
     }
 
     async function autoFillPostalCode(data) {
+      const postalInput = document.getElementById('postal_code');
+      if (postalInput && postalInput.value.trim()) {
+        return postalInput.value.trim();
+      }
+
       const params = new URLSearchParams({
         subdistrict: data.subdistrict || document.getElementById('subdistrict').value || '',
         district: data.district || document.getElementById('district').value || '',
@@ -386,11 +391,18 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
     }
 
     const phoneInput = document.getElementById('phone');
+    const postalInput = document.getElementById('postal_code');
     const otpInput = document.getElementById('otp_code');
 
     if (phoneInput) {
       phoneInput.addEventListener('input', function () {
         this.value = this.value.replace(/[^\d]/g, '').slice(0, 10);
+      });
+    }
+
+    if (postalInput) {
+      postalInput.addEventListener('input', function () {
+        this.value = this.value.replace(/[^\d]/g, '').slice(0, 5);
       });
     }
 

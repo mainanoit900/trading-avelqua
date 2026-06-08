@@ -2202,7 +2202,7 @@ router.post('/identity/request-code', async (req, res) => {
     const subdistrict = normalizeText(req.body.subdistrict || scan.subdistrict);
     const district = normalizeText(req.body.district || scan.district);
     const province = normalizeText(req.body.province || scan.province);
-    const postalCode = normalizeText(req.body.postal_code || scan.postal_code);
+    const postalCode = String(req.body.postal_code || scan.postal_code || '').replace(/[^\d]/g, '').slice(0, 5);
     const phone = normalizePhone(req.body.phone);
     const verifyEmail = normalizeEmail(req.body.verify_email || user.email);
     const documentType = scan.document_type === 'passport' ? 'passport' : 'thai_id';
@@ -2211,6 +2211,11 @@ router.post('/identity/request-code', async (req, res) => {
 
     if (!fullName || !addressLine || !phone || !verifyEmail) {
       req.session.error = 'กรุณากรอกข้อมูลให้ครบก่อนขอรหัสยืนยัน';
+      return res.redirect('/app/identity');
+    }
+
+    if (documentType === 'thai_id' && !/^\d{5}$/.test(postalCode)) {
+      req.session.error = 'กรุณากรอกรหัสไปรษณีย์ 5 หลัก';
       return res.redirect('/app/identity');
     }
 
@@ -2260,6 +2265,7 @@ router.post('/identity/request-code', async (req, res) => {
       postal_code: postalCode,
       scan_json: scan.scan_json || {}
     });
+    enriched.postal_code = postalCode || enriched.postal_code;
 
     const otpCode = generateOtpCode();
     const otpExpiresAt = new Date(Date.now() + 10 * 60 * 1000);
