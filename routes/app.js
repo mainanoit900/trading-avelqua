@@ -1,4 +1,5 @@
 const express = require('express');
+const multer = require('multer');
 const { requireLogin } = require('../middleware/requireAuth');
 const { query, getClient } = require('../config/database');
 const { sendMailSafe } = require('../services/mailService');
@@ -15,6 +16,7 @@ const {
   retrieveStripeCheckoutSession,
   constructStripeWebhookEvent
 } = require('../services/stripeService');
+const { ensurePaymentReceiptSnapshotById } = require('../services/paymentReceiptSnapshot');
 const {
   ensureUserReferralCode,
   ensureUserWallet,
@@ -38,11 +40,25 @@ const {
   applyPaidPackageSubscription
 } = require('../lib/subscriptionPackage');
 const { isIdentityVerified, requireIdentityVerified } = require('../middleware/requireIdentity');
+const {
+  scanIdentityDocument,
+  validateThaiNationalId,
+  validatePassportNumber,
+  checkDuplicateDocument
+} = require('../services/identityDocumentService');
 const { fetchCalendarPerformance, fetchMt5LoginPortfolio } = require('../lib/mt5CalendarPerformance');
 const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
 
 const router = express.Router();
+const identityDocUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 8 * 1024 * 1024, files: 1 },
+  fileFilter(req, file, cb) {
+    const ok = /^(image\/(jpeg|png|webp))$/i.test(String(file.mimetype || ''));
+    cb(ok ? null : new Error('รองรับเฉพาะ JPG PNG WEBP'), ok);
+  }
+});
 const packagePaymentTimeoutSecEnv = Number.parseInt(
   process.env.PACKAGE_PAYMENT_PENDING_TIMEOUT_SEC || '600',
   10
@@ -115,6 +131,10 @@ async function handleStripeWebhook(req, res) {
          WHERE id = $1`,
         [payment.id, session.id || null, stripeMethod]
       ).catch(() => null);
+
+      ensurePaymentReceiptSnapshotById(payment.id).catch((err) => {
+        console.error('receipt snapshot after webhook failed:', err.message || err);
+      });
 
       return res.status(200).json({ ok: true, handled: 'package_buy' });
     }
@@ -2043,6 +2063,87 @@ router.get('/identity', async (req, res) => {
   });
 });
 
+router.post('/identity/scan-document', identityDocUpload.single('document_image'), async (req, res) => {
+  try {
+    const base = await getBaseData(req);
+    const user = base.user;
+
+    if (isIdentityVerified(user)) {
+      return res.status(400).json({ ok: false, message: 'บัญชีนี้ยืนยันตัวตนแล้ว' });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ ok: false, message: 'กรุณาถ่ายหรืออัปโหลดรูปเอกสาร' });
+    }
+
+    const documentType = String(req.body.document_type || 'thai_id').trim().toLowerCase() === 'passport'
+      ? 'passport'
+      : 'thai_id';
+
+    const result = await scanIdentityDocument({
+      userId: user.id,
+      file: req.file,
+      documentType
+    });
+
+    if (!result.ok) {
+      return res.status(400).json(result);
+    }
+
+    req.session.identityDocScan = {
+      document_type: result.document_type,
+      national_id: result.national_id || '',
+      passport_number: result.passport_number || '',
+      full_name: result.full_name,
+      address_line: result.address_line || '',
+      subdistrict: result.subdistrict || '',
+      district: result.district || '',
+      province: result.province || '',
+      postal_code: result.postal_code || '',
+      date_of_birth: result.date_of_birth,
+      document_expiry_date: result.document_expiry_date,
+      document_image_path: result.document_image_path,
+      confidence: result.confidence,
+      scan_json: result.scan_json,
+      scanned_at: Date.now()
+    };
+
+    return res.json({
+      ok: true,
+      document_type: result.document_type,
+      national_id: result.national_id || '',
+      passport_number: result.passport_number || '',
+      full_name: result.full_name,
+      address_line: result.address_line || '',
+      subdistrict: result.subdistrict || '',
+      district: result.district || '',
+      province: result.province || '',
+      postal_code: result.postal_code || '',
+      date_of_birth: result.date_of_birth,
+      document_expiry_date: result.document_expiry_date,
+      document_image_path: result.document_image_path,
+      confidence: result.confidence
+    });
+  } catch (error) {
+    console.error('identity scan document error:', error);
+    return res.status(500).json({ ok: false, message: 'สแกนเอกสารไม่สำเร็จ กรุณาลองใหม่' });
+  }
+});
+
+function validateIdentityScanSession(req) {
+  const scan = req.session?.identityDocScan;
+  if (!scan?.document_image_path) {
+    return { ok: false, message: 'กรุณาสแกนบัตรประชาชนหรือพาสปอร์ตก่อนขอรหัส OTP' };
+  }
+
+  const scannedAt = Number(scan.scanned_at || 0);
+  if (!scannedAt || (Date.now() - scannedAt) > 30 * 60 * 1000) {
+    return { ok: false, message: 'ข้อมูลสแกนเอกสารหมดอายุ กรุณาสแกนใหม่' };
+  }
+
+  return { ok: true, scan };
+}
+
 router.post('/identity/request-code', async (req, res) => {
   try {
     const base = await getBaseData(req);
@@ -2053,17 +2154,64 @@ router.post('/identity/request-code', async (req, res) => {
       return res.redirect('/app/identity');
     }
 
-    const fullName = normalizeText(req.body.full_name);
-    const addressLine = normalizeText(req.body.address_line);
-    const subdistrict = normalizeText(req.body.subdistrict);
-    const district = normalizeText(req.body.district);
-    const province = normalizeText(req.body.province);
-    const postalCode = normalizeText(req.body.postal_code);
+    const scanCheck = validateIdentityScanSession(req);
+    if (!scanCheck.ok) {
+      req.session.error = scanCheck.message;
+      return res.redirect('/app/identity');
+    }
+
+    const scan = scanCheck.scan;
+    const fullName = normalizeText(req.body.full_name || scan.full_name);
+    const addressLine = normalizeText(req.body.address_line || scan.address_line);
+    const subdistrict = normalizeText(req.body.subdistrict || scan.subdistrict);
+    const district = normalizeText(req.body.district || scan.district);
+    const province = normalizeText(req.body.province || scan.province);
+    const postalCode = normalizeText(req.body.postal_code || scan.postal_code);
     const phone = normalizePhone(req.body.phone);
     const verifyEmail = normalizeEmail(req.body.verify_email || user.email);
+    const documentType = scan.document_type === 'passport' ? 'passport' : 'thai_id';
+    const nationalId = documentType === 'thai_id' ? normalizeText(req.body.national_id || scan.national_id) : '';
+    const passportNumber = documentType === 'passport' ? normalizeText(req.body.passport_number || scan.passport_number).toUpperCase() : '';
 
-    if (!fullName || !addressLine || !subdistrict || !district || !province || !postalCode || !phone || !verifyEmail) {
+    if (!fullName || !addressLine || !phone || !verifyEmail) {
       req.session.error = 'กรุณากรอกข้อมูลให้ครบก่อนขอรหัสยืนยัน';
+      return res.redirect('/app/identity');
+    }
+
+    if (fullName !== normalizeText(scan.full_name)) {
+      req.session.error = 'ชื่อ-นามสกุลต้องตรงกับข้อมูลจากเอกสาร';
+      return res.redirect('/app/identity');
+    }
+
+    if (documentType === 'thai_id') {
+      const idCheck = validateThaiNationalId(nationalId);
+      if (!idCheck.ok) {
+        req.session.error = idCheck.message;
+        return res.redirect('/app/identity');
+      }
+      if (idCheck.normalized !== normalizeText(scan.national_id)) {
+        req.session.error = 'เลขบัตรประชาชนไม่ตรงกับข้อมูลที่สแกน';
+        return res.redirect('/app/identity');
+      }
+    } else {
+      const passportCheck = validatePassportNumber(passportNumber);
+      if (!passportCheck.ok) {
+        req.session.error = passportCheck.message;
+        return res.redirect('/app/identity');
+      }
+      if (passportCheck.normalized !== normalizeText(scan.passport_number).toUpperCase()) {
+        req.session.error = 'เลขพาสปอร์ตไม่ตรงกับข้อมูลที่สแกน';
+        return res.redirect('/app/identity');
+      }
+    }
+
+    const duplicate = await checkDuplicateDocument({
+      nationalId: documentType === 'thai_id' ? nationalId : '',
+      passportNumber: documentType === 'passport' ? passportNumber : '',
+      userId: user.id
+    });
+    if (!duplicate.ok) {
+      req.session.error = duplicate.message;
       return res.redirect('/app/identity');
     }
 
@@ -2081,6 +2229,14 @@ router.post('/identity/request-code', async (req, res) => {
         postal_code,
         phone,
         verify_email,
+        document_type,
+        national_id,
+        passport_number,
+        date_of_birth,
+        document_expiry_date,
+        document_image_path,
+        document_scan_json,
+        document_verified_at,
         otp_code,
         otp_expires_at,
         verified_at,
@@ -2088,7 +2244,7 @@ router.post('/identity/request-code', async (req, res) => {
         created_at,
         updated_at
       )
-      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,NULL,'pending',NOW(),NOW())
+      VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16::jsonb,NOW(),$17,$18,NULL,'pending',NOW(),NOW())
       ON CONFLICT (user_id)
       DO UPDATE SET
         full_name = EXCLUDED.full_name,
@@ -2099,6 +2255,14 @@ router.post('/identity/request-code', async (req, res) => {
         postal_code = EXCLUDED.postal_code,
         phone = EXCLUDED.phone,
         verify_email = EXCLUDED.verify_email,
+        document_type = EXCLUDED.document_type,
+        national_id = EXCLUDED.national_id,
+        passport_number = EXCLUDED.passport_number,
+        date_of_birth = EXCLUDED.date_of_birth,
+        document_expiry_date = EXCLUDED.document_expiry_date,
+        document_image_path = EXCLUDED.document_image_path,
+        document_scan_json = EXCLUDED.document_scan_json,
+        document_verified_at = NOW(),
         otp_code = EXCLUDED.otp_code,
         otp_expires_at = EXCLUDED.otp_expires_at,
         verified_at = NULL,
@@ -2114,6 +2278,13 @@ router.post('/identity/request-code', async (req, res) => {
         postalCode,
         phone,
         verifyEmail,
+        documentType,
+        nationalId,
+        passportNumber,
+        scan.date_of_birth || null,
+        scan.document_expiry_date || null,
+        scan.document_image_path,
+        JSON.stringify(scan.scan_json || {}),
         otpCode,
         otpExpiresAt
       ]
@@ -2196,6 +2367,8 @@ router.post('/identity/verify', async (req, res) => {
     if (updatedUserRes.rows[0]) {
       req.session.user = updatedUserRes.rows[0];
     }
+
+    delete req.session.identityDocScan;
 
     req.session.success = 'ยืนยันตัวตนสำเร็จแล้ว';
     return res.redirect('/app/identity');

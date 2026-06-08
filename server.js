@@ -479,6 +479,27 @@ await query(`
     ON user_identity_verifications(user_id);
   `);
 
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS document_type TEXT NOT NULL DEFAULT ''`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS national_id TEXT NOT NULL DEFAULT ''`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS passport_number TEXT NOT NULL DEFAULT ''`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS date_of_birth DATE`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS document_expiry_date DATE`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS document_image_path TEXT NOT NULL DEFAULT ''`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS document_scan_json JSONB NOT NULL DEFAULT '{}'::jsonb`);
+  await query(`ALTER TABLE user_identity_verifications ADD COLUMN IF NOT EXISTS document_verified_at TIMESTAMPTZ`);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_identity_national_id_verified
+    ON user_identity_verifications(national_id)
+    WHERE national_id <> '' AND status = 'verified'
+  `);
+
+  await query(`
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_identity_passport_verified
+    ON user_identity_verifications(passport_number)
+    WHERE passport_number <> '' AND status = 'verified'
+  `);
+
   await query(`
     ALTER TABLE users
     ADD COLUMN IF NOT EXISTS identity_verified BOOLEAN NOT NULL DEFAULT FALSE
@@ -760,7 +781,7 @@ await query(`
     note TEXT NOT NULL DEFAULT '',
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   );
-`);
+`  );
 
 }
 

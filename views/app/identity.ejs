@@ -2,6 +2,7 @@
 const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
 const identityData = identity || {};
 const isIdentityVerified = !!(user && (user.identity_verified || user.identityVerified));
+const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_id';
 %>
 
 <%- include('../partials/app-shell') %>
@@ -13,7 +14,7 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
     <div>
       <div class="identity-chip"><%= safeT('identity.title', 'ยืนยันตัวตน') %></div>
       <h1><%= safeT('identity.page_title', 'Identity Verification') %></h1>
-      <p><%= safeT('identity.subtitle', 'กรอกข้อมูลและยืนยันด้วยรหัสที่ส่งไปทางอีเมล') %></p>
+      <p><%= safeT('identity.subtitle', 'ถ่ายบัตรประชาชนหรือพาสปอร์ต ระบบจะสแกนข้อมูลอัตโนมัติ แล้วยืนยันด้วย OTP ทางอีเมล') %></p>
     </div>
 
     <div class="identity-status-pill <%= isIdentityVerified ? 'verified' : 'pending' %>">
@@ -38,39 +39,96 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
     <section class="identity-card">
       <div class="identity-card-head">
         <h2><%= safeT('identity.form_title', 'ข้อมูลยืนยันตัวตน') %></h2>
-        <p><%= safeT('identity.form_desc', 'กรอกข้อมูลให้ครบ แล้วกดขอรหัส OTP ทางอีเมล') %></p>
+        <p><%= safeT('identity.form_desc', 'เลือกประเภทเอกสาร ถ่ายรูป แล้วกดสแกน — ข้อมูลจากเอกสารจะถูกตรวจสอบว่าเป็นของจริง') %></p>
       </div>
 
-      <form method="POST" action="/app/identity/request-code" class="identity-form">
+      <% if (!isIdentityVerified) { %>
+      <div class="identity-doc-type-row">
+        <button type="button" class="identity-doc-type-btn <%= docType === 'thai_id' ? 'active' : '' %>" data-doc-type="thai_id">
+          <%= safeT('identity.doc_thai_id', 'คนไทย — บัตรประชาชน') %>
+        </button>
+        <button type="button" class="identity-doc-type-btn <%= docType === 'passport' ? 'active' : '' %>" data-doc-type="passport">
+          <%= safeT('identity.doc_passport', 'ต่างชาติ — พาสปอร์ต') %>
+        </button>
+      </div>
+
+      <div class="identity-scan-panel">
+        <div class="identity-scan-preview" id="identityScanPreview">
+          <div class="identity-scan-placeholder">
+            <span><%= safeT('identity.scan_placeholder', 'ถ่ายหรืออัปโหลดรูปบัตร/พาสปอร์ต') %></span>
+          </div>
+          <img id="identityPreviewImage" alt="" hidden>
+        </div>
+
+        <div class="identity-scan-actions">
+          <label class="identity-btn identity-btn-secondary identity-upload-label">
+            <%= safeT('identity.upload_photo', 'เลือกรูป / ถ่ายภาพ') %>
+            <input type="file" id="identityDocumentFile" accept="image/jpeg,image/png,image/webp" capture="environment" hidden>
+          </label>
+          <button type="button" class="identity-btn identity-btn-primary" id="identityScanBtn" disabled>
+            <%= safeT('identity.scan_button', 'สแกนเอกสาร') %>
+          </button>
+        </div>
+
+        <div class="identity-scan-status" id="identityScanStatus"></div>
+      </div>
+      <% } %>
+
+      <form method="POST" action="/app/identity/request-code" class="identity-form" id="identityForm">
+        <input type="hidden" name="document_type" id="document_type" value="<%= docType %>">
+        <input type="hidden" name="national_id" id="national_id" value="<%= identityData.national_id || '' %>">
+        <input type="hidden" name="passport_number" id="passport_number" value="<%= identityData.passport_number || '' %>">
+        <input type="hidden" name="document_image_path" id="document_image_path" value="<%= identityData.document_image_path || '' %>">
+
         <div class="identity-grid">
+          <div class="identity-field identity-col-2 identity-doc-id-field" id="nationalIdField" <%= docType === 'passport' ? 'hidden' : '' %>>
+            <label for="national_id_display"><%= safeT('identity.national_id', 'เลขบัตรประชาชน') %></label>
+            <input type="text" id="national_id_display" value="<%= identityData.national_id || '' %>" placeholder="x xxxx xxxxx xx x" maxlength="17" readonly>
+          </div>
+
+          <div class="identity-field identity-col-2 identity-doc-id-field" id="passportField" <%= docType === 'thai_id' ? 'hidden' : '' %>>
+            <label for="passport_number_display"><%= safeT('identity.passport_number', 'เลขหนังสือเดินทาง') %></label>
+            <input type="text" id="passport_number_display" value="<%= identityData.passport_number || '' %>" placeholder="<%= safeT('identity.passport_placeholder', 'เลขพาสปอร์ต') %>" readonly>
+          </div>
+
           <div class="identity-field identity-col-2">
             <label for="full_name"><%= safeT('identity.full_name', 'ชื่อ-สกุล') %></label>
-            <input type="text" id="full_name" name="full_name" value="<%= identityData.full_name || user?.full_name || '' %>" placeholder="<%= safeT('identity.full_name_placeholder', 'กรอกชื่อ-สกุล') %>" required>
+            <input type="text" id="full_name" name="full_name" value="<%= identityData.full_name || user?.full_name || '' %>" placeholder="<%= safeT('identity.full_name_placeholder', 'จากเอกสาร') %>" readonly required>
+          </div>
+
+          <div class="identity-field">
+            <label for="date_of_birth_display"><%= safeT('identity.date_of_birth', 'วันเดือนปีเกิด') %></label>
+            <input type="text" id="date_of_birth_display" value="<%= identityData.date_of_birth ? new Date(identityData.date_of_birth).toLocaleDateString('th-TH') : '' %>" readonly>
+          </div>
+
+          <div class="identity-field">
+            <label for="document_expiry_display"><%= safeT('identity.document_expiry', 'วันหมดอายุเอกสาร') %></label>
+            <input type="text" id="document_expiry_display" value="<%= identityData.document_expiry_date ? new Date(identityData.document_expiry_date).toLocaleDateString('th-TH') : '' %>" readonly>
           </div>
 
           <div class="identity-field identity-col-2">
             <label for="address_line"><%= safeT('identity.address_line', 'ที่อยู่') %></label>
-            <input type="text" id="address_line" name="address_line" value="<%= identityData.address_line || '' %>" placeholder="<%= safeT('identity.address_line_placeholder', 'บ้านเลขที่ / หมู่ / ถนน / ซอย') %>" required>
+            <input type="text" id="address_line" name="address_line" value="<%= identityData.address_line || '' %>" placeholder="<%= safeT('identity.address_line_placeholder', 'จากเอกสาร') %>" readonly required>
           </div>
 
           <div class="identity-field">
             <label for="subdistrict"><%= safeT('identity.subdistrict', 'ตำบล / แขวง') %></label>
-            <input type="text" id="subdistrict" name="subdistrict" value="<%= identityData.subdistrict || '' %>" placeholder="<%= safeT('identity.subdistrict_placeholder', 'กรอกตำบล / แขวง') %>" required>
+            <input type="text" id="subdistrict" name="subdistrict" value="<%= identityData.subdistrict || '' %>" readonly>
           </div>
 
           <div class="identity-field">
             <label for="district"><%= safeT('identity.district', 'อำเภอ / เขต') %></label>
-            <input type="text" id="district" name="district" value="<%= identityData.district || '' %>" placeholder="<%= safeT('identity.district_placeholder', 'กรอกอำเภอ / เขต') %>" required>
+            <input type="text" id="district" name="district" value="<%= identityData.district || '' %>" readonly>
           </div>
 
           <div class="identity-field">
             <label for="province"><%= safeT('identity.province', 'จังหวัด') %></label>
-            <input type="text" id="province" name="province" value="<%= identityData.province || '' %>" placeholder="<%= safeT('identity.province_placeholder', 'กรอกจังหวัด') %>" required>
+            <input type="text" id="province" name="province" value="<%= identityData.province || '' %>" readonly>
           </div>
 
           <div class="identity-field">
             <label for="postal_code"><%= safeT('identity.postal_code', 'รหัสไปรษณีย์') %></label>
-            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" placeholder="<%= safeT('identity.postal_code_placeholder', 'กรอกรหัสไปรษณีย์') %>" maxlength="5" required>
+            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" maxlength="5" readonly>
           </div>
 
           <div class="identity-field">
@@ -85,16 +143,16 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
         </div>
 
         <div class="identity-actions">
-  <% if (isIdentityVerified) { %>
-    <button type="button" class="identity-btn identity-btn-disabled" disabled>
-      <%= safeT('identity.already_verified_no_otp', 'ยืนยันตัวตนแล้ว') %>
-    </button>
-  <% } else { %>
-    <button type="submit" class="identity-btn identity-btn-primary">
-      <%= safeT('identity.request_code', 'ขอรหัส OTP ทางอีเมล') %>
-    </button>
-  <% } %>
-</div>
+          <% if (isIdentityVerified) { %>
+            <button type="button" class="identity-btn identity-btn-disabled" disabled>
+              <%= safeT('identity.already_verified_no_otp', 'ยืนยันตัวตนแล้ว') %>
+            </button>
+          <% } else { %>
+            <button type="submit" class="identity-btn identity-btn-primary" id="identityRequestOtpBtn" disabled>
+              <%= safeT('identity.request_code', 'ขอรหัส OTP ทางอีเมล') %>
+            </button>
+          <% } %>
+        </div>
       </form>
     </section>
 
@@ -105,23 +163,23 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
       </div>
 
       <% if (!isIdentityVerified) { %>
-  <form method="POST" action="/app/identity/verify" class="identity-form">
-    <div class="identity-field">
-      <label for="otp_code"><%= safeT('identity.otp_code', 'รหัส OTP') %></label>
-      <input type="text" id="otp_code" name="otp_code" maxlength="6" placeholder="<%= safeT('identity.otp_code_placeholder', 'กรอกรหัส 6 หลัก') %>" required>
-    </div>
+        <form method="POST" action="/app/identity/verify" class="identity-form">
+          <div class="identity-field">
+            <label for="otp_code"><%= safeT('identity.otp_code', 'รหัส OTP') %></label>
+            <input type="text" id="otp_code" name="otp_code" maxlength="6" placeholder="<%= safeT('identity.otp_code_placeholder', 'กรอกรหัส 6 หลัก') %>" required>
+          </div>
 
-    <div class="identity-actions">
-      <button type="submit" class="identity-btn identity-btn-secondary">
-        <%= safeT('identity.verify_button', 'ยืนยันรหัส') %>
-      </button>
-    </div>
-  </form>
-<% } else { %>
-  <div class="identity-alert identity-alert-success">
-    <%= safeT('identity.already_verified_message', 'บัญชีนี้ยืนยันตัวตนเรียบร้อยแล้ว') %>
-  </div>
-<% } %>
+          <div class="identity-actions">
+            <button type="submit" class="identity-btn identity-btn-secondary">
+              <%= safeT('identity.verify_button', 'ยืนยันรหัส') %>
+            </button>
+          </div>
+        </form>
+      <% } else { %>
+        <div class="identity-alert identity-alert-success">
+          <%= safeT('identity.already_verified_message', 'บัญชีนี้ยืนยันตัวตนเรียบร้อยแล้ว') %>
+        </div>
+      <% } %>
 
       <div class="identity-mini-summary">
         <div>
@@ -130,6 +188,14 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
             <%= isIdentityVerified
               ? safeT('identity.status_done', 'ยืนยันแล้ว')
               : safeT('identity.status_waiting', 'รอยืนยัน') %>
+          </strong>
+        </div>
+        <div>
+          <span><%= safeT('identity.document_type', 'ประเภทเอกสาร') %></span>
+          <strong>
+            <%= identityData.document_type === 'passport'
+              ? safeT('identity.doc_passport_short', 'พาสปอร์ต')
+              : safeT('identity.doc_thai_id_short', 'บัตรประชาชน') %>
           </strong>
         </div>
         <div>
@@ -143,8 +209,144 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
 
 <script>
   (function () {
+    const isVerified = <%= isIdentityVerified ? 'true' : 'false' %>;
+    if (isVerified) return;
+
+    const docTypeInput = document.getElementById('document_type');
+    const docTypeButtons = document.querySelectorAll('.identity-doc-type-btn');
+    const fileInput = document.getElementById('identityDocumentFile');
+    const scanBtn = document.getElementById('identityScanBtn');
+    const scanStatus = document.getElementById('identityScanStatus');
+    const previewImage = document.getElementById('identityPreviewImage');
+    const previewWrap = document.getElementById('identityScanPreview');
+    const requestOtpBtn = document.getElementById('identityRequestOtpBtn');
+    const nationalIdField = document.getElementById('nationalIdField');
+    const passportField = document.getElementById('passportField');
+
+    let selectedFile = null;
+    let scanCompleted = <%= identityData.document_image_path ? 'true' : 'false' %>;
+
+    function formatThaiId(value) {
+      const digits = String(value || '').replace(/[^\d]/g, '').slice(0, 13);
+      const parts = [];
+      if (digits.length > 0) parts.push(digits.slice(0, 1));
+      if (digits.length > 1) parts.push(digits.slice(1, 5));
+      if (digits.length > 5) parts.push(digits.slice(5, 10));
+      if (digits.length > 10) parts.push(digits.slice(10, 12));
+      if (digits.length > 12) parts.push(digits.slice(12, 13));
+      return parts.join(' ');
+    }
+
+    function formatThaiDate(iso) {
+      if (!iso) return '';
+      const date = new Date(iso + 'T00:00:00');
+      if (Number.isNaN(date.getTime())) return iso;
+      return date.toLocaleDateString('th-TH');
+    }
+
+    function setScanStatus(message, type) {
+      if (!scanStatus) return;
+      scanStatus.textContent = message || '';
+      scanStatus.className = 'identity-scan-status' + (type ? ' is-' + type : '');
+    }
+
+    function updateDocType(type) {
+      if (docTypeInput) docTypeInput.value = type;
+      docTypeButtons.forEach(function (btn) {
+        btn.classList.toggle('active', btn.dataset.docType === type);
+      });
+      if (nationalIdField) nationalIdField.hidden = type !== 'thai_id';
+      if (passportField) passportField.hidden = type !== 'passport';
+      selectedFile = null;
+      scanCompleted = false;
+      if (scanBtn) scanBtn.disabled = true;
+      if (requestOtpBtn) requestOtpBtn.disabled = true;
+      if (previewImage) {
+        previewImage.hidden = true;
+        previewImage.removeAttribute('src');
+      }
+      setScanStatus('', '');
+    }
+
+    function fillFormFromScan(data) {
+      document.getElementById('national_id').value = data.national_id || '';
+      document.getElementById('passport_number').value = data.passport_number || '';
+      document.getElementById('document_image_path').value = data.document_image_path || '';
+      document.getElementById('national_id_display').value = formatThaiId(data.national_id || '');
+      document.getElementById('passport_number_display').value = data.passport_number || '';
+      document.getElementById('full_name').value = data.full_name || '';
+      document.getElementById('address_line').value = data.address_line || '';
+      document.getElementById('subdistrict').value = data.subdistrict || '';
+      document.getElementById('district').value = data.district || '';
+      document.getElementById('province').value = data.province || '';
+      document.getElementById('postal_code').value = data.postal_code || '';
+      document.getElementById('date_of_birth_display').value = formatThaiDate(data.date_of_birth);
+      document.getElementById('document_expiry_display').value = formatThaiDate(data.document_expiry_date);
+    }
+
+    docTypeButtons.forEach(function (btn) {
+      btn.addEventListener('click', function () {
+        updateDocType(btn.dataset.docType || 'thai_id');
+      });
+    });
+
+    if (fileInput) {
+      fileInput.addEventListener('change', function () {
+        const file = fileInput.files && fileInput.files[0];
+        selectedFile = file || null;
+        scanCompleted = false;
+        if (requestOtpBtn) requestOtpBtn.disabled = true;
+
+        if (file && previewImage) {
+          previewImage.src = URL.createObjectURL(file);
+          previewImage.hidden = false;
+        }
+
+        if (scanBtn) scanBtn.disabled = !selectedFile;
+        setScanStatus(file ? 'พร้อมสแกน — กดปุ่ม "สแกนเอกสาร"' : '', 'info');
+      });
+    }
+
+    if (scanBtn) {
+      scanBtn.addEventListener('click', async function () {
+        if (!selectedFile) {
+          setScanStatus('กรุณาเลือกรูปเอกสารก่อน', 'error');
+          return;
+        }
+
+        scanBtn.disabled = true;
+        setScanStatus('กำลังสแกนและตรวจสอบเอกสาร...', 'info');
+
+        const formData = new FormData();
+        formData.append('document_image', selectedFile);
+        formData.append('document_type', docTypeInput ? docTypeInput.value : 'thai_id');
+
+        try {
+          const res = await fetch('/app/identity/scan-document', {
+            method: 'POST',
+            body: formData,
+            credentials: 'same-origin'
+          });
+          const data = await res.json().catch(function () { return {}; });
+
+          if (!res.ok || !data.ok) {
+            setScanStatus(data.message || 'สแกนเอกสารไม่สำเร็จ', 'error');
+            scanBtn.disabled = false;
+            return;
+          }
+
+          fillFormFromScan(data);
+          scanCompleted = true;
+          if (requestOtpBtn) requestOtpBtn.disabled = false;
+          setScanStatus('สแกนสำเร็จ — ตรวจสอบข้อมูลแล้วกดขอรหัส OTP', 'success');
+        } catch (err) {
+          setScanStatus('สแกนเอกสารไม่สำเร็จ กรุณาลองใหม่', 'error');
+          scanBtn.disabled = false;
+        }
+      });
+    }
+
     const phoneInput = document.getElementById('phone');
-    const postalInput = document.getElementById('postal_code');
     const otpInput = document.getElementById('otp_code');
 
     if (phoneInput) {
@@ -153,16 +355,14 @@ const isIdentityVerified = !!(user && (user.identity_verified || user.identityVe
       });
     }
 
-    if (postalInput) {
-      postalInput.addEventListener('input', function () {
-        this.value = this.value.replace(/[^\d]/g, '').slice(0, 5);
-      });
-    }
-
     if (otpInput) {
       otpInput.addEventListener('input', function () {
         this.value = this.value.replace(/[^\d]/g, '').slice(0, 6);
       });
+    }
+
+    if (scanCompleted && requestOtpBtn) {
+      requestOtpBtn.disabled = false;
     }
   })();
 </script>
