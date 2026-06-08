@@ -723,8 +723,59 @@
   place-items: center;
   background: rgba(37, 99, 235, 0.12);
   border: 1px solid rgba(96, 165, 250, 0.16);
-  font-size: 18px;
   flex-shrink: 0;
+  color: #7dd3fc;
+}
+
+.user-detail-section-icon svg {
+  width: 20px;
+  height: 20px;
+}
+
+.user-detail-section-icon.is-id {
+  background: rgba(14, 165, 233, 0.14);
+  border-color: rgba(56, 189, 248, 0.24);
+  color: #38bdf8;
+}
+
+.user-detail-section-icon.is-user {
+  background: rgba(59, 130, 246, 0.14);
+  border-color: rgba(96, 165, 250, 0.22);
+  color: #60a5fa;
+}
+
+.user-detail-section-icon.is-location {
+  background: rgba(168, 85, 247, 0.14);
+  border-color: rgba(192, 132, 252, 0.22);
+  color: #c084fc;
+}
+
+.user-detail-section-icon.is-package {
+  background: rgba(99, 102, 241, 0.14);
+  border-color: rgba(129, 140, 248, 0.22);
+  color: #818cf8;
+}
+
+.user-detail-section-icon.is-bank {
+  background: rgba(16, 185, 129, 0.14);
+  border-color: rgba(52, 211, 153, 0.22);
+  color: #34d399;
+}
+
+.user-detail-doc-empty-icon {
+  display: grid;
+  place-items: center;
+  width: 56px;
+  height: 56px;
+  border-radius: 18px;
+  background: rgba(37, 99, 235, 0.08);
+  border: 1px solid rgba(96, 165, 250, 0.12);
+  color: #64748b;
+}
+
+.user-detail-doc-empty-icon svg {
+  width: 28px;
+  height: 28px;
 }
 
 .user-detail-section-head h3 {
@@ -767,8 +818,7 @@
 }
 
 .user-detail-doc-empty span {
-  font-size: 34px;
-  opacity: 0.7;
+  opacity: 1;
 }
 
 .user-detail-doc-empty p {
