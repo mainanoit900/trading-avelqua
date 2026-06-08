@@ -132,8 +132,8 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
           </div>
 
           <div class="identity-field">
-            <label for="postal_code"><%= safeT('identity.postal_code', 'รหัสไปรษณีย์') %></label>
-            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" maxlength="5" readonly>
+            <label for="postal_code"><%= safeT('identity.postal_code_auto', 'รหัสไปรษณีย์ (เติมอัตโนมัติ)') %></label>
+            <input type="text" id="postal_code" name="postal_code" value="<%= identityData.postal_code || '' %>" maxlength="5" readonly placeholder="<%= safeT('identity.postal_code_auto_placeholder', 'ระบบเติมจาก ตำบล/อำเภอ/จังหวัด') %>">
           </div>
 
           <div class="identity-field">
@@ -289,6 +289,30 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
       document.getElementById('document_expiry_display').value = formatThaiDate(data.document_expiry_date);
     }
 
+    async function autoFillPostalCode(data) {
+      if (data.postal_code) {
+        document.getElementById('postal_code').value = data.postal_code;
+        return data.postal_code;
+      }
+
+      const subdistrict = data.subdistrict || '';
+      const district = data.district || '';
+      const province = data.province || '';
+      if (!subdistrict && !district && !province) return '';
+
+      const params = new URLSearchParams({ subdistrict, district, province });
+      try {
+        const res = await fetch('/app/identity/postal-code?' + params.toString(), { credentials: 'same-origin' });
+        const json = await res.json().catch(function () { return {}; });
+        if (json.postal_code) {
+          document.getElementById('postal_code').value = json.postal_code;
+          return json.postal_code;
+        }
+      } catch (_) {}
+
+      return '';
+    }
+
     docTypeButtons.forEach(function (btn) {
       btn.addEventListener('click', function () {
         updateDocType(btn.dataset.docType || 'thai_id');
@@ -341,6 +365,7 @@ const docType = identityData.document_type === 'passport' ? 'passport' : 'thai_i
           }
 
           fillFormFromScan(data);
+          await autoFillPostalCode(data);
           scanCompleted = true;
           if (requestOtpBtn) requestOtpBtn.disabled = false;
           setScanStatus('สแกนสำเร็จ — ตรวจสอบข้อมูลแล้วกดขอรหัส OTP', 'success');

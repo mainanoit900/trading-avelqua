@@ -48,6 +48,7 @@ const {
   enrichIdentityAddress,
   finalizeVerifiedDocumentImage
 } = require('../services/identityDocumentService');
+const { lookupPostalCode } = require('../lib/thaiPostalLookup');
 const { fetchCalendarPerformance, fetchMt5LoginPortfolio } = require('../lib/mt5CalendarPerformance');
 const { fetchForecastForAccount } = require('../lib/mt5MarketForecast');
 const { SNAPSHOT_INTERVAL_SEC: MT5_CALENDAR_REFRESH_SEC } = require('../lib/mt5EquityChart');
@@ -2146,6 +2147,28 @@ function validateIdentityScanSession(req) {
   return { ok: true, scan };
 }
 
+router.get('/identity/postal-code', async (req, res) => {
+  try {
+    const subdistrict = normalizeText(req.query.subdistrict);
+    const district = normalizeText(req.query.district);
+    const province = normalizeText(req.query.province);
+
+    if (!district && !province && !subdistrict) {
+      return res.status(400).json({ ok: false, message: 'กรุณาระบุตำบล อำเภอ หรือจังหวัด' });
+    }
+
+    const postalCode = lookupPostalCode({ subdistrict, district, province });
+    return res.json({
+      ok: true,
+      postal_code: postalCode,
+      auto_filled: !!postalCode
+    });
+  } catch (error) {
+    console.error('identity postal lookup error:', error);
+    return res.status(500).json({ ok: false, message: 'ค้นหารหัสไปรษณีย์ไม่สำเร็จ' });
+  }
+});
+
 router.post('/identity/request-code', async (req, res) => {
   try {
     const base = await getBaseData(req);
@@ -2223,7 +2246,8 @@ router.post('/identity/request-code', async (req, res) => {
       subdistrict,
       district,
       province,
-      postal_code: postalCode
+      postal_code: postalCode,
+      scan_json: scan.scan_json || {}
     });
 
     const otpCode = generateOtpCode();
