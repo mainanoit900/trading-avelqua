@@ -12,6 +12,7 @@ tmp/
 .cursor/
 *.pyc
 __pycache__/
+.venv-identity-ocr/
 public/agent/.env
 .npm/
 coverage/

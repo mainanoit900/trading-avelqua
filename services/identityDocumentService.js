@@ -3,12 +3,25 @@
 const fs = require('fs');
 const path = require('path');
 const { randomUUID } = require('crypto');
+const { execFile } = require('child_process');
+const { promisify } = require('util');
 const { query } = require('../config/database');
 
+const execFileAsync = promisify(execFile);
 const UPLOAD_DIR = path.join(__dirname, '../uploads/identity-docs');
+const PYTHON_SCRIPT = path.join(__dirname, '../scripts/scan_identity_document.py');
+const PYTHON_BIN = process.env.IDENTITY_OCR_PYTHON
+  || (fs.existsSync(path.join(__dirname, '../.venv-identity-ocr/bin/python'))
+    ? path.join(__dirname, '../.venv-identity-ocr/bin/python')
+    : 'python3');
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_BYTES = 8 * 1024 * 1024;
-const MIN_CONFIDENCE = 0.72;
+const VISION_MODEL = process.env.IDENTITY_VISION_MODEL || 'gpt-4o';
+
+const MONTH_MAP = {
+  jan: 1, feb: 2, mar: 3, apr: 4, may: 5, jun: 6,
+  jul: 7, aug: 8, sep: 9, oct: 10, nov: 11, dec: 12
+};
 
 function ensureUploadDir() {
   fs.mkdirSync(UPLOAD_DIR, { recursive: true });
@@ -73,6 +86,15 @@ function parseIsoDate(value) {
     return Number.isNaN(date.getTime()) ? null : date;
   }
 
+  const engMatch = raw.match(/^(\d{1,2})\s+([A-Za-z]{3,9})\.?\s+((?:19|20)\d{2})$/i);
+  if (engMatch) {
+    const month = MONTH_MAP[String(engMatch[2]).slice(0, 3).toLowerCase()];
+    if (month) {
+      const date = new Date(`${engMatch[3]}-${String(month).padStart(2, '0')}-${String(engMatch[1]).padStart(2, '0')}T00:00:00.000Z`);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+  }
+
   const parsed = new Date(raw);
   return Number.isNaN(parsed.getTime()) ? null : parsed;
 }
@@ -96,8 +118,63 @@ async function getOpenAiSettings() {
   const row = result.rows[0] || {};
   return {
     apiKey: String(row.openai_api_key || process.env.OPENAI_API_KEY || '').trim(),
-    model: String(row.model_name || process.env.OPENAI_MODEL || 'gpt-4.1-mini').trim()
+    model: String(process.env.IDENTITY_VISION_MODEL || VISION_MODEL).trim()
   };
+}
+
+function buildVisionPrompt(expectedDocumentType) {
+  if (expectedDocumentType === 'passport') {
+    return [
+      'อ่านข้อมูลจากหนังสือเดินทาง (passport) ในรูปนี้',
+      'ตอบ JSON เท่านั้น ไม่มี markdown',
+      'ถ้าเป็นพาสปอร์ตจริงและอ่านเลขได้ ให้ is_authentic_document=true',
+      '{',
+      '  "is_authentic_document": boolean,',
+      '  "confidence": number,',
+      '  "document_type": "passport",',
+      '  "national_id": "",',
+      '  "passport_number": "เลขพาสปอร์ต",',
+      '  "full_name": "ชื่อ-นามสกุล",',
+      '  "date_of_birth": "YYYY-MM-DD",',
+      '  "address_line": "",',
+      '  "subdistrict": "",',
+      '  "district": "",',
+      '  "province": "",',
+      '  "postal_code": "",',
+      '  "expiry_date": "YYYY-MM-DD",',
+      '  "rejection_reason": ""',
+      '}'
+    ].join('\n');
+  }
+
+  return [
+    'อ่านข้อมูลจากบัตรประจำตัวประชาชนไทยในรูปนี้',
+    'กฎสำคัญ:',
+    '- บัตรประชาชนไทยไม่มีรหัสไปรษณีย์ ให้ postal_code="" เสมอ',
+    '- ถ้าเห็นบัตรจริงและอ่านเลข 13 หลักได้ ให้ is_authentic_document=true',
+    '- เลขบัตรอยู่บรรทัด Identification Number รูปแบบ X XXXX XXXXX XX X',
+    '- แปลงวันเกิด/วันหมดอายุเป็น YYYY-MM-DD (เช่น 14 Aug. 1988 -> 1988-08-14)',
+    '- address_line ใส่ที่อยู่เต็ม subdistrict/district/province แยกถ้าอ่านได้ ไม่บังคับ',
+    '- อย่าปฏิเสธเพราะไม่มีรหัสไปรษณีย์',
+    '- confidence คือความมั่นใจในการอ่านตัวอักษร ไม่ใช่การตัดสินความถูกต้องของบัตร',
+    'ตอบ JSON เท่านั้น:',
+    '{',
+    '  "is_authentic_document": boolean,',
+    '  "confidence": number,',
+    '  "document_type": "thai_id",',
+    '  "national_id": "13 digits no spaces",',
+    '  "passport_number": "",',
+    '  "full_name": "ชื่อ-นามสกุล",',
+    '  "date_of_birth": "YYYY-MM-DD",',
+    '  "address_line": "ที่อยู่ตามบัตร",',
+    '  "subdistrict": "",',
+    '  "district": "",',
+    '  "province": "",',
+    '  "postal_code": "",',
+    '  "expiry_date": "YYYY-MM-DD",',
+    '  "rejection_reason": ""',
+    '}'
+  ].join('\n');
 }
 
 async function scanDocumentWithAi({ imageBase64, mimeType, expectedDocumentType }) {
@@ -105,31 +182,6 @@ async function scanDocumentWithAi({ imageBase64, mimeType, expectedDocumentType 
   if (!settings.apiKey) {
     return { ok: false, message: 'ระบบสแกนเอกสารยังไม่พร้อม กรุณาติดต่อทีมงาน' };
   }
-
-  const docLabel = expectedDocumentType === 'passport' ? 'หนังสือเดินทาง (passport)' : 'บัตรประจำตัวประชาชนไทย';
-  const prompt = [
-    'คุณเป็นผู้เชี่ยวชาญตรวจสอบเอกสารยืนยันตัวตน',
-    `วิเคราะห์รูปนี้ว่าเป็น${docLabel}จริงหรือไม่`,
-    'ห้ามเดา หากไม่ชัด ไม่ครบ หรือไม่ใช่เอกสารจริง ให้ is_authentic_document=false',
-    'ตอบเป็น JSON เท่านั้น ไม่มี markdown',
-    'โครงสร้าง:',
-    '{',
-    '  "is_authentic_document": boolean,',
-    '  "confidence": number,',
-    `  "document_type": "${expectedDocumentType === 'passport' ? 'passport' : 'thai_id'}",`,
-    '  "national_id": "13 digits for thai id else empty",',
-    '  "passport_number": "passport number for passport else empty",',
-    '  "full_name": "ชื่อ-นามสกุล",',
-    '  "date_of_birth": "YYYY-MM-DD",',
-    '  "address_line": "ที่อยู่ตามบัตร",',
-    '  "subdistrict": "ตำบล/แขวง",',
-    '  "district": "อำเภอ/เขต",',
-    '  "province": "จังหวัด",',
-    '  "postal_code": "รหัสไปรษณีย์ 5 หลัก",',
-    '  "expiry_date": "YYYY-MM-DD",',
-    '  "rejection_reason": "เหตุผลถ้าไม่ผ่าน"',
-    '}'
-  ].join('\n');
 
   const res = await fetch('https://api.openai.com/v1/chat/completions', {
     method: 'POST',
@@ -145,7 +197,7 @@ async function scanDocumentWithAi({ imageBase64, mimeType, expectedDocumentType 
         {
           role: 'user',
           content: [
-            { type: 'text', text: prompt },
+            { type: 'text', text: buildVisionPrompt(expectedDocumentType) },
             {
               type: 'image_url',
               image_url: {
@@ -172,7 +224,26 @@ async function scanDocumentWithAi({ imageBase64, mimeType, expectedDocumentType 
     return { ok: false, message: 'อ่านข้อมูลจากเอกสารไม่สำเร็จ กรุณาถ่ายใหม่ให้ชัด' };
   }
 
+  parsed.scan_engine = 'openai';
   return { ok: true, parsed };
+}
+
+async function scanDocumentWithPython(absPath, expectedDocumentType) {
+  if (!fs.existsSync(PYTHON_SCRIPT)) return null;
+
+  try {
+    const { stdout } = await execFileAsync(
+      PYTHON_BIN,
+      [PYTHON_SCRIPT, absPath, expectedDocumentType],
+      { timeout: 90000, maxBuffer: 5 * 1024 * 1024 }
+    );
+    const parsed = JSON.parse(String(stdout || '').trim());
+    if (!parsed?.ok) return null;
+    parsed.scan_engine = 'tesseract';
+    return parsed;
+  } catch (_) {
+    return null;
+  }
 }
 
 async function checkDuplicateDocument({ nationalId, passportNumber, userId }) {
@@ -213,23 +284,7 @@ async function checkDuplicateDocument({ nationalId, passportNumber, userId }) {
 
 function normalizeScanResult(parsed, expectedDocumentType) {
   const confidence = Number(parsed.confidence || 0);
-  const isAuthentic = parsed.is_authentic_document === true;
   const documentType = String(parsed.document_type || expectedDocumentType || '').trim().toLowerCase();
-
-  if (!isAuthentic || confidence < MIN_CONFIDENCE) {
-    return {
-      ok: false,
-      message: normalizeDocText(parsed.rejection_reason) || 'ไม่สามารถยืนยันว่าเป็นเอกสารจริง กรุณาถ่ายบัตร/พาสปอร์ตให้ชัดเจน'
-    };
-  }
-
-  if (expectedDocumentType === 'thai_id' && documentType !== 'thai_id') {
-    return { ok: false, message: 'กรุณาอัปโหลดบัตรประชาชนไทย' };
-  }
-
-  if (expectedDocumentType === 'passport' && documentType !== 'passport') {
-    return { ok: false, message: 'กรุณาอัปโหลดหนังสือเดินทาง (พาสปอร์ต)' };
-  }
 
   const fullName = normalizeDocText(parsed.full_name);
   const addressLine = normalizeDocText(parsed.address_line);
@@ -238,7 +293,30 @@ function normalizeScanResult(parsed, expectedDocumentType) {
   const province = normalizeDocText(parsed.province);
   const postalCode = normalizeDigits(parsed.postal_code).slice(0, 5);
   const dateOfBirth = parseIsoDate(parsed.date_of_birth);
-  const expiryDate = parseIsoDate(parsed.expiry_date);
+  const expiryDate = parseIsoDate(parsed.expiry_date || parsed.document_expiry_date);
+
+  let nationalId = '';
+  let passportNumber = '';
+
+  if (expectedDocumentType === 'thai_id') {
+    const idCheck = validateThaiNationalId(parsed.national_id);
+    if (!idCheck.ok) {
+      return {
+        ok: false,
+        message: idCheck.message || 'อ่านเลขบัตรประชาชนไม่ได้ กรุณาถ่ายให้เห็นเลข 13 หลักชัดเจน'
+      };
+    }
+    nationalId = idCheck.normalized;
+  } else {
+    const passportCheck = validatePassportNumber(parsed.passport_number);
+    if (!passportCheck.ok) {
+      return {
+        ok: false,
+        message: passportCheck.message || 'อ่านเลขพาสปอร์ตไม่ได้ กรุณาถ่ายใหม่'
+      };
+    }
+    passportNumber = passportCheck.normalized;
+  }
 
   if (!fullName) {
     return { ok: false, message: 'อ่านชื่อ-นามสกุลจากเอกสารไม่ได้ กรุณาถ่ายใหม่' };
@@ -256,17 +334,30 @@ function normalizeScanResult(parsed, expectedDocumentType) {
     return { ok: false, message: 'เอกสารหมดอายุแล้ว กรุณาใช้เอกสารที่ยังไม่หมดอายุ' };
   }
 
-  let nationalId = '';
-  let passportNumber = '';
+  const hardVerified = expectedDocumentType === 'thai_id'
+    ? validateThaiNationalId(nationalId).ok
+    : validatePassportNumber(passportNumber).ok;
 
-  if (expectedDocumentType === 'thai_id') {
-    const idCheck = validateThaiNationalId(parsed.national_id);
-    if (!idCheck.ok) return idCheck;
-    nationalId = idCheck.normalized;
-  } else {
-    const passportCheck = validatePassportNumber(parsed.passport_number);
-    if (!passportCheck.ok) return passportCheck;
-    passportNumber = passportCheck.normalized;
+  const aiAuthentic = parsed.is_authentic_document === true;
+  const lowConfidence = confidence > 0 && confidence < 0.45;
+
+  if (!hardVerified) {
+    return { ok: false, message: 'ข้อมูลเอกสารไม่ผ่านการตรวจสอบ' };
+  }
+
+  if (!aiAuthentic && parsed.is_authentic_document === false && lowConfidence) {
+    return {
+      ok: false,
+      message: normalizeDocText(parsed.rejection_reason) || 'ไม่สามารถยืนยันเอกสารได้ กรุณาถ่ายบัตร/พาสปอร์ตให้ชัดเจน'
+    };
+  }
+
+  if (expectedDocumentType === 'thai_id' && documentType && documentType !== 'thai_id') {
+    return { ok: false, message: 'กรุณาอัปโหลดบัตรประชาชนไทย' };
+  }
+
+  if (expectedDocumentType === 'passport' && documentType && documentType !== 'passport') {
+    return { ok: false, message: 'กรุณาอัปโหลดหนังสือเดินทาง (พาสปอร์ต)' };
   }
 
   return {
@@ -283,7 +374,7 @@ function normalizeScanResult(parsed, expectedDocumentType) {
       postal_code: postalCode,
       date_of_birth: formatIsoDate(dateOfBirth),
       document_expiry_date: formatIsoDate(expiryDate),
-      confidence,
+      confidence: confidence || (hardVerified ? 0.85 : 0.5),
       scan_json: parsed
     }
   };
@@ -313,6 +404,7 @@ async function saveIdentityDocumentImage({ userId, file }) {
   return {
     ok: true,
     storedName,
+    absPath,
     relativePath: path.join('uploads/identity-docs', storedName).replace(/\\/g, '/'),
     mimeType: mime,
     base64: buffer.toString('base64')
@@ -324,14 +416,29 @@ async function scanIdentityDocument({ userId, file, documentType }) {
   const saved = await saveIdentityDocumentImage({ userId, file });
   if (!saved.ok) return saved;
 
+  let parsed = null;
+
   const aiResult = await scanDocumentWithAi({
     imageBase64: saved.base64,
     mimeType: saved.mimeType,
     expectedDocumentType
   });
-  if (!aiResult.ok) return aiResult;
+  if (aiResult.ok) {
+    parsed = aiResult.parsed;
+  }
 
-  const normalized = normalizeScanResult(aiResult.parsed, expectedDocumentType);
+  if (!parsed) {
+    parsed = await scanDocumentWithPython(saved.absPath, expectedDocumentType);
+  }
+
+  if (!parsed) {
+    return {
+      ok: false,
+      message: aiResult.message || 'สแกนเอกสารไม่สำเร็จ กรุณาถ่ายให้เห็นตัวเลขและชื่อชัดเจน'
+    };
+  }
+
+  const normalized = normalizeScanResult(parsed, expectedDocumentType);
   if (!normalized.ok) return normalized;
 
   const duplicate = await checkDuplicateDocument({

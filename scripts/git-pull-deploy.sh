@@ -95,6 +95,11 @@ if [ "$RUN_NPM_INSTALL" = "1" ] && [ -f package.json ]; then
   npm install --omit=dev
 fi
 
+if [ -f scripts/setup-identity-ocr.sh ]; then
+  echo "==> setup identity OCR"
+  bash scripts/setup-identity-ocr.sh "$APP_DIR" || echo "WARN: identity OCR setup failed"
+fi
+
 RELEASE_DIR="$APP_DIR/.release-9750207"
 if [ -d "$RELEASE_DIR" ] && [ -f "$RELEASE_DIR/server.js" ]; then
   echo "==> sync .release bundle (lib, routes, views, config)"
