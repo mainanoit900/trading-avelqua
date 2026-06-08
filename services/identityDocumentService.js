@@ -10,12 +10,24 @@ const { parseThaiIdAddress, buildFullAddressText, hasThaiAdminMarker } = require
 const { lookupPostalCode } = require('../lib/thaiPostalLookup');
 
 const execFileAsync = promisify(execFile);
+
+function findUpward(relativePath, startDir = path.resolve(__dirname, '..')) {
+  let dir = startDir;
+  for (let i = 0; i < 6; i += 1) {
+    const candidate = path.join(dir, relativePath);
+    if (fs.existsSync(candidate)) return candidate;
+    const parent = path.dirname(dir);
+    if (parent === dir) break;
+    dir = parent;
+  }
+  return null;
+}
+
 const UPLOAD_DIR = path.join(__dirname, '../uploads/identity-docs');
 const PYTHON_SCRIPT = path.join(__dirname, '../scripts/scan_identity_document.py');
 const PYTHON_BIN = process.env.IDENTITY_OCR_PYTHON
-  || (fs.existsSync(path.join(__dirname, '../.venv-identity-ocr/bin/python'))
-    ? path.join(__dirname, '../.venv-identity-ocr/bin/python')
-    : 'python3');
+  || findUpward('.venv-identity-ocr/bin/python')
+  || 'python3';
 const ALLOWED_MIME = new Set(['image/jpeg', 'image/png', 'image/webp']);
 const MAX_BYTES = 8 * 1024 * 1024;
 
