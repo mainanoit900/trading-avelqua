@@ -1,24 +1,308 @@
+<%
+const safeT = typeof t === 'function' ? t : (key, fallback='') => fallback || key;
+const localeTag = (typeof lang !== 'undefined' && lang === 'en') ? 'en-GB' : 'th-TH';
+const u = editUser || null;
+const iv = typeof identity !== 'undefined' ? identity : null;
+const ba = typeof bankAccount !== 'undefined' ? bankAccount : null;
+const sub = typeof subscription !== 'undefined' ? subscription : null;
+
+function formatUserDate(value) {
+  if (!value) return '-';
+  try { return new Date(value).toLocaleDateString(localeTag); }
+  catch (e) { return String(value); }
+}
+
+function formatUserDateTime(value) {
+  if (!value) return '-';
+  try { return new Date(value).toLocaleString(localeTag); }
+  catch (e) { return String(value); }
+}
+
+function formatThaiId(value) {
+  const digits = String(value || '').replace(/\D/g, '');
+  if (digits.length !== 13) return value || '-';
+  return `${digits[0]} ${digits.slice(1, 5)} ${digits.slice(5, 10)} ${digits.slice(10, 12)} ${digits[12]}`;
+}
+
+function documentTypeLabel(value) {
+  if (value === 'passport') return 'พาสปอร์ต';
+  if (value === 'thai_id') return 'บัตรประชาชน';
+  return value || '-';
+}
+
+function userDisplayName(user, identityRow) {
+  return identityRow?.full_name
+    || user?.full_name
+    || [user?.first_name || '', user?.last_name || ''].join(' ').trim()
+    || '-';
+}
+
+function userInitials(name) {
+  const parts = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!parts.length) return 'U';
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
+}
+
+const displayName = userDisplayName(u, iv);
+const docImagePath = String(iv?.document_image_path || '').replace(/^\/+/, '');
+const packageEndLocal = sub?.end_at
+  ? new Date(new Date(sub.end_at).getTime() - new Date(sub.end_at).getTimezoneOffset() * 60000).toISOString().slice(0, 16)
+  : '';
+%>
+
 <%- include('../partials/admin-shell') %>
-<section class="card form-card">
-  <div class="card-head"><div><h3><%= t('admin.users.edit_user', 'Edit User') %></h3><p><%= t('admin.users.edit_user_desc', 'Update profile, source channel, and latest package.') %></p></div></div>
-  <% if (!editUser) { %>
-    <div class="empty-box"><%= t('admin.users.empty', 'No users found') %></div>
+
+<section class="admin-user-edit-page">
+  <% if (!u) { %>
+    <div class="user-edit-empty"><%= safeT('admin.users.empty', 'ยังไม่พบข้อมูลผู้ใช้') %></div>
   <% } else { %>
-    <form method="POST" action="/admin/users/<%= editUser.id %>/update" class="form-grid three">
-      <label><%= t('admin.users.full_name', 'Full name') %><input type="text" name="full_name" value="<%= editUser.full_name || '' %>" /></label>
-      <label><%= t('admin.users.first_name', 'First name') %><input type="text" name="first_name" value="<%= editUser.first_name || '' %>" /></label>
-      <label><%= t('admin.users.last_name', 'Last name') %><input type="text" name="last_name" value="<%= editUser.last_name || '' %>" /></label>
-      <label><%= t('common.email', 'Email') %><input type="email" name="email" value="<%= editUser.email || '' %>" /></label>
-      <label><%= t('common.phone', 'Phone') %><input type="text" name="phone" value="<%= editUser.phone || '' %>" /></label>
-      <label><%= t('admin.users.role', 'Role') %><select name="role"><option value="user" <%= editUser.role==='user' ? 'selected' : '' %>><%= t('role.user', 'user') %></option><option value="admin" <%= editUser.role==='admin' ? 'selected' : '' %>><%= t('role.admin', 'admin') %></option></select></label>
-      <label><%= t('admin.users.provider', 'Provider') %><select name="provider"><option value="web" <%= editUser.provider==='web' ? 'selected' : '' %>>web</option><option value="google" <%= editUser.provider==='google' ? 'selected' : '' %>>google</option><option value="line" <%= editUser.provider==='line' ? 'selected' : '' %>>line</option><option value="local" <%= editUser.provider==='local' ? 'selected' : '' %>>local</option></select></label>
-      <label><%= t('admin.users.status', 'Status') %><select name="status"><option value="active" <%= editUser.status==='active' ? 'selected' : '' %>><%= t('status.active', 'active') %></option><option value="banned" <%= editUser.status==='banned' ? 'selected' : '' %>><%= t('status.banned', 'banned') %></option></select></label>
-      <input type="hidden" name="subscription_id" value="<%= subscription?.id || '' %>" />
-      <label><%= t('admin.users.source_channel', 'Source Channel') %><input type="text" name="source_channel" value="<%= subscription?.source_channel || '' %>" /></label>
-      <label><%= t('admin.users.latest_package', 'Latest package') %><input type="text" name="package_name_snapshot" value="<%= subscription?.package_name_snapshot || '' %>" /></label>
-      <label><%= t('admin.users.expires_at', 'Expires at') %><input type="datetime-local" name="package_end_at" value="<%= subscription?.end_at ? new Date(new Date(subscription.end_at).getTime() - new Date(subscription.end_at).getTimezoneOffset()*60000).toISOString().slice(0,16) : '' %>" /></label>
-      <div class="form-actions full"><button class="btn primary"><%= t('common.save', 'Save') %></button><a class="btn secondary" href="/admin/users"><%= t('common.back', 'Back') %></a></div>
-    </form>
+    <div class="user-edit-hero">
+      <div class="user-edit-hero-main">
+        <div class="user-detail-avatar"><%= userInitials(displayName) %></div>
+        <div>
+          <div class="user-detail-chip">UPDATE MEMBER</div>
+          <h1><%= displayName %></h1>
+          <div class="user-edit-hero-sub">
+            <span>#<%= u.display_id || u.id %></span>
+            <span class="user-detail-dot">·</span>
+            <span><%= u.email || '-' %></span>
+          </div>
+          <div class="user-detail-badges">
+            <span class="user-detail-badge role <%= u.role === 'admin' ? 'is-admin' : 'is-user' %>"><%= u.role || 'user' %></span>
+            <span class="user-detail-badge status <%= u.status === 'banned' ? 'is-banned' : (u.status === 'active' ? 'is-active' : 'is-other') %>"><%= u.status || 'active' %></span>
+            <span class="user-detail-badge identity <%= u.identity_verified ? 'is-verified' : 'is-pending' %>"><%= u.identity_verified ? 'ยืนยันแล้ว' : 'ยังไม่ยืนยัน' %></span>
+          </div>
+        </div>
+      </div>
+      <div class="user-edit-hero-actions">
+        <a href="/admin/users" class="user-detail-btn secondary">← กลับรายชื่อ</a>
+      </div>
+    </div>
+
+    <div class="user-edit-layout">
+      <aside class="user-detail-doc-panel user-edit-doc-panel">
+        <div class="user-detail-section-head">
+          <span class="user-detail-section-icon is-id" aria-hidden="true">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+              <rect x="3" y="4" width="18" height="16" rx="2.5"/>
+              <circle cx="9" cy="11" r="2.2"/>
+              <path d="M14 9.5h5M14 13h3.5M14 16.5h5"/>
+            </svg>
+          </span>
+          <div>
+            <h3>เอกสารยืนยันตัวตน</h3>
+            <p><%= documentTypeLabel(iv?.document_type) %></p>
+          </div>
+        </div>
+
+        <div class="user-detail-doc-frame">
+          <% if (docImagePath) { %>
+            <img src="/<%= docImagePath %>" alt="รูปบัตร/เอกสาร">
+          <% } else { %>
+            <div class="user-detail-doc-empty">
+              <span class="user-detail-doc-empty-icon" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M7 3h7l5 5v11a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2z"/>
+                  <path d="M14 3v5h5"/>
+                  <path d="M9 13h6"/>
+                  <path d="M9 17h4"/>
+                </svg>
+              </span>
+              <p>ยังไม่มีรูปเอกสาร</p>
+            </div>
+          <% } %>
+        </div>
+
+        <div class="user-detail-doc-meta">
+          <div><span>เลขบัตร</span><strong><%= formatThaiId(iv?.national_id) %></strong></div>
+          <div><span>เลขพาสปอร์ต</span><strong><%= iv?.passport_number || '-' %></strong></div>
+          <div><span>วันเกิด</span><strong><%= formatUserDate(iv?.date_of_birth) %></strong></div>
+          <div><span>หมดอายุ</span><strong><%= formatUserDate(iv?.document_expiry_date) %></strong></div>
+        </div>
+
+        <div class="user-edit-readonly-block">
+          <div class="user-detail-section-head">
+            <span class="user-detail-section-icon is-location" aria-hidden="true">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M12 21s6-5.1 6-10a6 6 0 1 0-12 0c0 4.9 6 10 6 10z"/>
+                <circle cx="12" cy="11" r="2.2"/>
+              </svg>
+            </span>
+            <div>
+              <h3>ที่อยู่</h3>
+              <p>จากการยืนยันตัวตน</p>
+            </div>
+          </div>
+          <div class="user-edit-readonly-list">
+            <div><span>บ้านเลขที่ / ถนน</span><strong><%= iv?.address_line || '-' %></strong></div>
+            <div><span>ตำบล / แขวง</span><strong><%= iv?.subdistrict || '-' %></strong></div>
+            <div><span>อำเภอ / เขต</span><strong><%= iv?.district || '-' %></strong></div>
+            <div><span>จังหวัด</span><strong><%= iv?.province || '-' %></strong></div>
+            <div><span>รหัสไปรษณีย์</span><strong><%= iv?.postal_code || '-' %></strong></div>
+          </div>
+        </div>
+
+        <% if (ba) { %>
+          <div class="user-edit-readonly-block">
+            <div class="user-detail-section-head">
+              <span class="user-detail-section-icon is-bank" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M3 10h18"/>
+                  <path d="M5 10V19M9 10V19M15 10V19M19 10V19"/>
+                  <path d="M4 19h16"/>
+                  <path d="M12 3 3 7h18l-9-4z"/>
+                </svg>
+              </span>
+              <div>
+                <h3>บัญชีธนาคาร</h3>
+                <p><%= ba.is_verified ? 'ยืนยันแล้ว' : (ba.status || 'ยังไม่ยืนยัน') %></p>
+              </div>
+            </div>
+            <div class="user-edit-readonly-list">
+              <div><span>ธนาคาร</span><strong><%= ba.bank_name || '-' %></strong></div>
+              <div><span>ชื่อบัญชี</span><strong><%= ba.account_name || '-' %></strong></div>
+              <div><span>เลขบัญชี</span><strong><%= ba.account_number_masked || '-' %></strong></div>
+            </div>
+          </div>
+        <% } %>
+      </aside>
+
+      <div class="user-edit-main">
+        <form method="POST" action="/admin/users/<%= u.id %>/update" class="user-edit-form">
+          <section class="user-detail-section user-edit-section">
+            <div class="user-detail-section-head">
+              <span class="user-detail-section-icon is-user" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <circle cx="12" cy="8" r="3.5"/>
+                  <path d="M6 20c0-3.3 2.7-6 6-6s6 2.7 6 6"/>
+                </svg>
+              </span>
+              <div>
+                <h3>ข้อมูลส่วนตัว</h3>
+                <p>ชื่อ อีเมล และเบอร์โทร</p>
+              </div>
+            </div>
+            <div class="user-edit-fields">
+              <label class="user-edit-field span-2">
+                <span><%= safeT('admin.users.full_name', 'ชื่อ-สกุล') %></span>
+                <input type="text" name="full_name" value="<%= u.full_name || '' %>">
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.first_name', 'ชื่อ') %></span>
+                <input type="text" name="first_name" value="<%= u.first_name || '' %>">
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.last_name', 'นามสกุล') %></span>
+                <input type="text" name="last_name" value="<%= u.last_name || '' %>">
+              </label>
+              <label class="user-edit-field span-2">
+                <span><%= safeT('common.email', 'อีเมล') %></span>
+                <input type="email" name="email" value="<%= u.email || '' %>">
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('common.phone', 'เบอร์โทร') %></span>
+                <input type="text" name="phone" value="<%= u.phone || '' %>">
+              </label>
+              <label class="user-edit-field">
+                <span>อีเมลรับ OTP</span>
+                <input type="text" value="<%= iv?.verify_email || '-' %>" readonly class="is-readonly">
+              </label>
+            </div>
+          </section>
+
+          <section class="user-detail-section user-edit-section">
+            <div class="user-detail-section-head">
+              <span class="user-detail-section-icon is-package" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 3 3 7.5 12 12l9-4.5L12 3z"/>
+                  <path d="M3 7.5 12 12l9-4.5"/>
+                  <path d="M12 12v9"/>
+                  <path d="M7.5 9.5v5.8L12 18l4.5-2.7V9.5"/>
+                </svg>
+              </span>
+              <div>
+                <h3>บัญชี & สิทธิ์</h3>
+                <p>Role, Provider และสถานะ</p>
+              </div>
+            </div>
+            <div class="user-edit-fields">
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.role', 'Role') %></span>
+                <select name="role">
+                  <option value="user" <%= u.role === 'user' ? 'selected' : '' %>><%= safeT('role.user', 'user') %></option>
+                  <option value="admin" <%= u.role === 'admin' ? 'selected' : '' %>><%= safeT('role.admin', 'admin') %></option>
+                </select>
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.provider', 'Provider') %></span>
+                <select name="provider">
+                  <option value="web" <%= u.provider === 'web' ? 'selected' : '' %>>web</option>
+                  <option value="google" <%= u.provider === 'google' ? 'selected' : '' %>>google</option>
+                  <option value="line" <%= u.provider === 'line' ? 'selected' : '' %>>line</option>
+                  <option value="local" <%= u.provider === 'local' ? 'selected' : '' %>>local</option>
+                </select>
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.status', 'สถานะ') %></span>
+                <select name="status">
+                  <option value="active" <%= u.status === 'active' ? 'selected' : '' %>><%= safeT('status.active', 'active') %></option>
+                  <option value="banned" <%= u.status === 'banned' ? 'selected' : '' %>><%= safeT('status.banned', 'banned') %></option>
+                </select>
+              </label>
+              <label class="user-edit-field">
+                <span>สมัครเมื่อ</span>
+                <input type="text" value="<%= formatUserDateTime(u.created_at) %>" readonly class="is-readonly">
+              </label>
+              <label class="user-edit-field">
+                <span>ยืนยันตัวตนเมื่อ</span>
+                <input type="text" value="<%= formatUserDateTime(u.identity_verified_at || iv?.verified_at) %>" readonly class="is-readonly">
+              </label>
+              <label class="user-edit-field">
+                <span>เข้าใช้ล่าสุด</span>
+                <input type="text" value="<%= formatUserDateTime(u.last_login_at) %>" readonly class="is-readonly">
+              </label>
+            </div>
+          </section>
+
+          <section class="user-detail-section user-edit-section">
+            <div class="user-detail-section-head">
+              <span class="user-detail-section-icon is-package" aria-hidden="true">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+                  <rect x="3" y="7" width="18" height="13" rx="2"/>
+                  <path d="M16 3v4M8 3v4M3 11h18"/>
+                </svg>
+              </span>
+              <div>
+                <h3>แพ็กเกจ</h3>
+                <p>แก้ไขแพ็กเกจล่าสุดของสมาชิก</p>
+              </div>
+            </div>
+            <input type="hidden" name="subscription_id" value="<%= sub?.id || '' %>">
+            <div class="user-edit-fields">
+              <label class="user-edit-field span-2">
+                <span><%= safeT('admin.users.latest_package', 'แพ็กเกจล่าสุด') %></span>
+                <input type="text" name="package_name_snapshot" value="<%= sub?.package_name_snapshot || '' %>">
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.source_channel', 'ที่มาแพ็กเกจ') %></span>
+                <input type="text" name="source_channel" value="<%= sub?.source_channel || '' %>">
+              </label>
+              <label class="user-edit-field">
+                <span><%= safeT('admin.users.expires_at', 'หมดอายุแพ็กเกจ') %></span>
+                <input type="datetime-local" name="package_end_at" value="<%= packageEndLocal %>">
+              </label>
+            </div>
+          </section>
+
+          <div class="user-edit-footer">
+            <a href="/admin/users" class="user-detail-btn secondary"><%= safeT('common.back', 'ยกเลิก') %></a>
+            <button type="submit" class="user-detail-btn primary"><%= safeT('common.save', 'บันทึกข้อมูล') %></button>
+          </div>
+        </form>
+      </div>
+    </div>
   <% } %>
 </section>
+
 <%- include('../partials/admin-shell-end') %>

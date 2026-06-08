@@ -788,16 +788,22 @@ router.get('/users/export.xlsx', async (req, res) => {
 });
 
 router.get('/users/:id/edit', async (req, res) => {
-  const [userRes, subscriptionRes] = await Promise.all([
-    query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [req.params.id]),
-    query(`SELECT * FROM user_subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, [req.params.id])
+  const userId = req.params.id;
+  const [userRes, subscriptionRes, identityRes, bankRes] = await Promise.all([
+    query(`SELECT * FROM users WHERE id = $1 LIMIT 1`, [userId]),
+    query(`SELECT * FROM user_subscriptions WHERE user_id = $1 ORDER BY created_at DESC LIMIT 1`, [userId]),
+    query(`SELECT * FROM user_identity_verifications WHERE user_id = $1 LIMIT 1`, [userId]),
+    query(`SELECT * FROM user_bank_accounts WHERE user_id = $1 LIMIT 1`, [userId])
   ]);
 
   return res.render('admin/user-edit', baseView(req, {
-    pageTitle: 'Edit User',
+    pageTitle: 'อัปเดตข้อมูลสมาชิก',
     currentPath: '/admin/users',
+    pageCss: 'admin-users.css',
     editUser: userRes.rows[0],
-    subscription: subscriptionRes.rows[0] || null
+    subscription: subscriptionRes.rows[0] || null,
+    identity: identityRes.rows[0] || null,
+    bankAccount: bankRes.rows[0] || null
   }));
 });
 
