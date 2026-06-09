@@ -43,6 +43,7 @@ const {
   ingestConnectResultEvent,
   ingestPortHealthEvent
 } = require('../lib/mt5ConnectAttempt');
+const { expireStaleLockedPorts } = require('../lib/adminVpsBridge');
 
 const router = express.Router();
 
@@ -588,6 +589,7 @@ router.post('/heartbeat', async (req, res) => {
     }
 
     await expireStaleConnectAttempts(node.id).catch(() => {});
+    await expireStaleLockedPorts(null, node.id).catch(() => 0);
 
     return res.json({
       ok: true,
@@ -941,7 +943,7 @@ router.get('/queue', async (req, res) => {
             < NOW() - ($2::text || ' seconds')::interval
     `, [node.id, String(loginStuckSec)]).catch(() => {});
 
-    const runBotStuckSec = Math.max(90, Number(process.env.MT5_RUN_BOT_STUCK_REQUEUE_SEC || 120));
+    const runBotStuckSec = Math.max(180, Number(process.env.MT5_RUN_BOT_STUCK_REQUEUE_SEC || 300));
     await query(`
       UPDATE vps_system.vps_agent_commands
       SET

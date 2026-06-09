@@ -3984,11 +3984,10 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
         "restart_port",
     )
     if is_bot_run_spawn:
-        wait_timeout = 45.0
+        wait_timeout = float(os.getenv("AVELQUA_BOT_RUN_WORKER_WAIT_SEC", "300"))
     deadline = time.time() + wait_timeout
     wait_started = time.time()
     _evict_login_after = wait_started if is_bot_run_spawn else wait_started + 8.0
-    _evict_stale_bot_after = wait_started + 3.0 if is_bot_run_spawn else wait_started + 45.0
 
     while True:
         reap_connect_workers()
@@ -3999,35 +3998,36 @@ def spawn_connect_worker(cmd_id: Any, ctype: str, payload: Dict[str, Any]) -> Di
                     prev_pid = getattr(prev, "pid", "")
                     prev_ctype = ACTIVE_CONNECT_WORKER_CTYPES.get(key, "").lower()
                     should_evict = False
+                    kill_mt5_on_evict = True
                     if is_bot_run_spawn:
                         if prev_ctype in ("connect_mt5", "login_mt5") and time.time() >= _evict_login_after:
                             should_evict = True
-                        elif (
-                            prev_ctype in ("run_mt5_bot", "run_mt5", "")
-                            and time.time() >= _evict_stale_bot_after
-                        ):
-                            should_evict = True
+                            kill_mt5_on_evict = True
+                        elif prev_ctype in ("run_mt5_bot", "run_mt5"):
+                            # Bot launch (login + EA attach) often takes 2–5 min — wait, do not kill MT5 mid-run.
+                            should_evict = False
                     if should_evict:
                         log(
                             f"WORKER EVICT stale-worker for bot_run port={port} "
                             f"pid={prev_pid} prev_type={prev_ctype or 'unknown'}"
                         )
-                        try:
-                            port_dir = resolve_mt5_port_dir(port, payload)
-                            kill_all_mt5_for_port_dir(
-                                port,
-                                port_dir,
-                                payload,
-                                reason="evict_stale_for_bot",
-                                max_wait_sec=6.0,
-                            )
-                            kill_stray_terminal64_processes(
-                                str(payload_get(payload, "mt5Login", "login") or "").strip(),
-                                port_dir,
-                                reason="evict_stale_for_bot",
-                            )
-                        except Exception as evict_err:
-                            log(f"WORKER EVICT MT5 CLEAN ERROR port={port}: {evict_err}")
+                        if kill_mt5_on_evict:
+                            try:
+                                port_dir = resolve_mt5_port_dir(port, payload)
+                                kill_all_mt5_for_port_dir(
+                                    port,
+                                    port_dir,
+                                    payload,
+                                    reason="evict_stale_for_bot",
+                                    max_wait_sec=6.0,
+                                )
+                                kill_stray_terminal64_processes(
+                                    str(payload_get(payload, "mt5Login", "login") or "").strip(),
+                                    port_dir,
+                                    reason="evict_stale_for_bot",
+                                )
+                            except Exception as evict_err:
+                                log(f"WORKER EVICT MT5 CLEAN ERROR port={port}: {evict_err}")
                         try:
                             prev.kill()
                         except Exception:
