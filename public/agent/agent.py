@@ -956,6 +956,12 @@ def send_port_health():
         )
         if run_heavy_dedupe and not any_priority_connect_worker_running():
             _PORT_HEALTH_DEDUPE_LAST_AT = now
+            try:
+                stray = kill_stray_terminal64_processes(reason="port_health_global_stray")
+                if stray.get("killed"):
+                    log(f"PORT HEALTH KILL STRAY global killed={stray.get('killed')}")
+            except Exception as stray_err:
+                log(f"PORT HEALTH KILL STRAY ERROR: {stray_err}")
             for folder in sorted(mt5_root.glob("*PORT*")):
                 try:
                     if not folder.is_dir():
@@ -2438,10 +2444,10 @@ def account_snapshot_mt5_api_isolated(port_dir: Path, payload: Optional[Dict[str
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {}
-    if not mt5_running_for_port_dir(port_dir) and not mt5_launch_allowed(payload):
+    # ห้าม mt5.initialize เปิด terminal ใหม่ — attach เฉพาะเมื่อ process ของ PORT นี้รันอยู่แล้ว
+    if not mt5_running_for_port_dir(port_dir):
         log(f"MT5 API ISOLATED SKIP terminal not running path={port_dir.name}")
         return {}
-    was_running = mt5_running_for_port_dir(port_dir)
     login_hint = 0
     try:
         login_hint = int(str(payload_get(payload or {}, "mt5Login", "login") or "0").strip() or "0")
@@ -2561,14 +2567,6 @@ except Exception as e:
     except Exception as e:
         log(f"MT5 API ISOLATED SNAPSHOT ERROR path={port_dir.name}: {e}")
         return {}
-    finally:
-        if not was_running:
-            try:
-                if mt5_running_for_port_dir(port_dir):
-                    stop_mt5_by_folder(str(port_dir))
-                    log(f"MT5 API ISOLATED CLEANUP killed cold-launched terminal path={port_dir.name}")
-            except Exception as cleanup_err:
-                log(f"MT5 API ISOLATED CLEANUP ERROR path={port_dir.name}: {cleanup_err}")
 
 
 def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -2580,7 +2578,7 @@ def account_snapshot_mt5_api(port_dir: Path, payload: Optional[Dict[str, Any]] =
     terminal = port_dir / "terminal64.exe"
     if not terminal.exists():
         return {}
-    if not mt5_running_for_port_dir(port_dir) and not mt5_launch_allowed(payload):
+    if not mt5_running_for_port_dir(port_dir):
         log(f"MT5 API SNAPSHOT SKIP terminal not running path={port_dir.name}")
         return {}
     login_hint = 0
@@ -3354,7 +3352,12 @@ def account_snapshot(
                         time.sleep(settle)
                 except Exception as ui_err:
                     log(f"LOGIN EQUITY UI AUTOFILL port={port} err={ui_err}")
-        if login_equity_purpose and not (terminal_up and keep_mt5_for_bot):
+        if login_equity_purpose and not terminal_up:
+            log(
+                f"MT5 SNAPSHOT SKIP isolated API port={port} — MT5 not running "
+                f"(login worker must open terminal first, not equity fetch)"
+            )
+        elif login_equity_purpose and not (terminal_up and keep_mt5_for_bot):
             iso_attempts = max(1, int(os.getenv("AVELQUA_LOGIN_EQUITY_ISOLATED_ATTEMPTS", "3")))
             for iso_i in range(iso_attempts):
                 if cmd_id and not command_still_active(cmd_id):
