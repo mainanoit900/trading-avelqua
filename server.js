@@ -16,6 +16,7 @@ const { appUserLocals } = require('./middleware/appUserLocals');
 const { languageMiddleware, normalizeLocale, localeCache, reloadLocaleCache } = require('./services/i18n');
 const { query, pool, repairVpsAgentCommandSequences } = require('./config/database');
 const { findById, findByEmail, findByGoogleId, createUser } = require('./repositories/usersRepo');
+const { getCachedUser, setCachedUser } = require('./lib/userCache');
 
 const app = express();
 app.use('/agent', express.static('/root/trading-avelqua/public/agent'));
@@ -47,7 +48,7 @@ const MT5_EXPIRY_ENFORCER_ENABLED =
   String(process.env.MT5_EXPIRY_ENFORCER_ENABLED || 'true').toLowerCase() !== 'false';
 const MT5_EXPIRY_ENFORCER_INTERVAL_MS = Math.max(
   15 * 1000,
-  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 15 * 1000)
+  Number(process.env.MT5_EXPIRY_ENFORCER_INTERVAL_MS || 60 * 1000)
 );
 
 async function runMt5ExpiryEnforcerSafe() {
@@ -132,7 +133,8 @@ app.use(
     store: new PgSession({
       pool,
       tableName: 'user_sessions',
-      createTableIfMissing: true
+      createTableIfMissing: true,
+      touchAfter: Math.max(30, Number(process.env.SESSION_TOUCH_AFTER_SEC || 120))
     }),
     cookie: {
       httpOnly: true,
@@ -148,7 +150,10 @@ app.use('/auth/', rateLimit({ windowMs: 15 * 60 * 1000, max: 100 }));
 passport.serializeUser((user, done) => done(null, String(user.id)));
 passport.deserializeUser(async (id, done) => {
   try {
+    const cached = getCachedUser(id);
+    if (cached) return done(null, cached);
     const user = await findById(id);
+    if (user) setCachedUser(id, user);
     done(null, user || false);
   } catch (error) {
     done(error);

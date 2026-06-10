@@ -68,7 +68,7 @@ const {
   stopActiveInstancesForAccount
 } = require('../lib/mt5InstanceDashboard');
 const { createConnectAttempt, repairUserMt5AccountStatuses, ensureMt5ConnectAttemptTables } = require('../lib/mt5ConnectAttempt');
-const { abortConnectForRemovedAccount } = require('../lib/vpsAgentCommandQueue');
+const { abortConnectForRemovedAccount, insertPendingAgentCommand } = require('../lib/vpsAgentCommandQueue');
 const { queueBotRunCommands, assertNoRecentBotRunAttempt } = require('../lib/mt5BotRunPhase2');
 const {
   PACKAGE_PORT_MAP,
@@ -1514,6 +1514,24 @@ async function ensureBotCatalog() {
   `).catch(() => {});
 }
 
+let botCatalogReady = false;
+async function ensureBotCatalogOnce() {
+  if (botCatalogReady) return;
+  await ensureBotCatalog();
+  botCatalogReady = true;
+}
+
+const mt5RepairLastAt = new Map();
+async function repairUserMt5IfStale(userId) {
+  const key = String(userId || '');
+  if (!key) return;
+  const last = mt5RepairLastAt.get(key) || 0;
+  if (Date.now() - last < 45000) return;
+  mt5RepairLastAt.set(key, Date.now());
+  await repairUserMt5AccountStatuses(userId).catch(() => {});
+  await repairUserMt5PortBindings(userId).catch(() => {});
+}
+
 router.get('/mt5/check-port', async (req, res) => {
   try {
     const userId = req.user.id;
@@ -1939,9 +1957,9 @@ router.get('/mt5', async (req, res) => {
   const historyPageSize = 5;
   const historyPage = Math.max(1, parseInt(req.query.history_page, 10) || 1);
 
-  await ensureBotCatalog().catch((e) => console.error('[ensureBotCatalog]', e.message));
+  await ensureBotCatalogOnce().catch((e) => console.error('[ensureBotCatalog]', e.message));
 
-  await query(`
+  query(`
     UPDATE vps_system.mt5_accounts
     SET status = CASE
           WHEN last_equity IS NOT NULL OR last_balance IS NOT NULL THEN 'connected'
@@ -1958,16 +1976,21 @@ router.get('/mt5', async (req, res) => {
       AND updated_at < NOW() - INTERVAL '5 minutes'
   `, [userId]).catch(() => {});
 
-  await repairUserMt5AccountStatuses(userId).catch(() => {});
-  await repairUserMt5PortBindings(userId).catch(() => {});
+  await repairUserMt5IfStale(userId);
 
-  const summary = await getPortSummaryReadOnly(userId);
-  const portScoinPrices = await getMt5PortScoinPrices().catch(() => ({
-    temporary: 1,
-    permanent: 10
-  }));
-
-  const accounts = await safeQuery(`
+  const [
+    summary,
+    portScoinPrices,
+    accounts,
+    portSlotAccounts,
+    botsRaw,
+    dashPage,
+    activeRunInstances,
+    equityBudget
+  ] = await Promise.all([
+    getPortSummaryReadOnly(userId),
+    getMt5PortScoinPrices().catch(() => ({ temporary: 1, permanent: 10 })),
+    safeQuery(`
     SELECT a.*, (
       SELECT COUNT(*)::int FROM vps_system.bot_instances bi
       WHERE bi.mt5_account_id=a.id AND bi.status IN ('running','pending')
@@ -1976,9 +1999,8 @@ router.get('/mt5', async (req, res) => {
     WHERE a.user_id=$1
       AND LOWER(TRIM(COALESCE(a.status,'ready'))) IN ('ready','connected','checking','connecting','starting')
     ORDER BY a.port_slot ASC, a.id ASC
-  `, [userId]);
-
-  const portSlotAccounts = await safeQuery(`
+  `, [userId]),
+    safeQuery(`
     SELECT a.*, (
       SELECT COUNT(*)::int FROM vps_system.bot_instances bi
       WHERE bi.mt5_account_id=a.id AND bi.status IN ('running','pending')
@@ -1998,7 +2020,22 @@ router.get('/mt5', async (req, res) => {
         )
       )
     ORDER BY a.port_slot ASC, a.id ASC
-  `, [userId]);
+  `, [userId]),
+    safeQuery(`SELECT * FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`, []),
+    fetchHistoryInstances(userId, {
+      limit: historyPageSize,
+      offset: (Math.max(1, historyPage) - 1) * historyPageSize
+    }).catch(() => ({ instances: [], total: 0, pageSize: historyPageSize, pageCount: 1 })),
+    fetchActiveRunInstances(userId).catch(() => []),
+    getUserEquityCapitalBudget(userId).catch(() => ({
+      totalEquity: 0,
+      allocatedCapital: 0,
+      remainingCapital: 0,
+      activeBotCount: 0
+    }))
+  ]);
+
+  const bots = (botsRaw || []).filter((row) => isProductionBot(row));
 
   const pendingConnectAccount = (accounts || []).find((row) =>
     row.port_slot != null
@@ -2010,29 +2047,15 @@ router.get('/mt5', async (req, res) => {
     .filter((row) => isRunnableMt5Account(row))
     .map((row) => mapRunnableMt5Account(row));
 
-  const bots = (await safeQuery(`SELECT * FROM vps_system.bot_catalog WHERE is_active=TRUE ORDER BY sort_order ASC, id ASC`, []))
-    .filter((row) => isProductionBot(row));
   const runLotMeta = packageLotLimits(summary);
   const runBotUi = Object.fromEntries(
     (bots || []).map((bot) => [String(bot.bot_code || '').trim(), botUiMeta(bot)])
   );
-  const vpsProbe = await findAvailableVpsPort();
 
-  const dashPage = await fetchHistoryInstances(userId, {
-    limit: historyPageSize,
-    offset: (Math.max(1, historyPage) - 1) * historyPageSize
-  }).catch(() => ({ instances: [], total: 0, pageSize: historyPageSize, pageCount: 1 }));
   const instances = dashPage.instances || [];
   const historyTotal = dashPage.total || 0;
   const historyPageCount = dashPage.pageCount || 1;
   const historySafePage = Math.min(historyPage, historyPageCount);
-  const activeRunInstances = await fetchActiveRunInstances(userId).catch(() => []);
-  const equityBudget = await getUserEquityCapitalBudget(userId).catch(() => ({
-    totalEquity: 0,
-    allocatedCapital: 0,
-    remainingCapital: 0,
-    activeBotCount: 0
-  }));
 
   const flashData = pullFlash(req);
 
@@ -2132,8 +2155,8 @@ router.get('/mt5', async (req, res) => {
     packageLotMin: runLotMeta.lotMin,
     packageLotMax: runLotMeta.lotMax,
     packageDefaultLot: runLotMeta.defaultLot,
-    vpsProbe,
-    vpsProbeText: vpsProbeText(vpsProbe)
+    vpsProbe: null,
+    vpsProbeText: vpsProbeText(null)
   });
 });
 
@@ -3416,12 +3439,15 @@ router.post('/mt5/run', async (req, res) => {
         [mt5AccountId, attemptId]
       );
     } else {
-      const cmd = await client.query(`
-      INSERT INTO vps_system.vps_agent_commands (vps_id, node_id, command_type, payload, status, created_at)
-      VALUES ($1,$1,'run_mt5_bot',$2::jsonb,'pending',NOW())
-      RETURNING id
-    `, [node.id, JSON.stringify({ ...payload, instanceId: inst.rows[0].id })]);
-      cmdId = num(cmd.rows?.[0]?.id);
+      const cmdIns = await insertPendingAgentCommand({
+        vpsId: node.id,
+        nodeId: node.id,
+        portId: portCtx.id || account.port_id || null,
+        commandType: 'run_mt5_bot',
+        payload: { ...payload, instanceId: inst.rows[0].id },
+        client
+      });
+      cmdId = num(cmdIns?.id);
     }
 
     await client.query(`UPDATE vps_system.bot_instances SET run_payload=$2::jsonb, updated_at=NOW() WHERE id=$1`, [

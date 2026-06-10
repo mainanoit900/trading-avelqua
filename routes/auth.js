@@ -7,6 +7,7 @@ const passport = require('passport');
 const { query } = require('../config/database');
 const { requireGuest, requireLogin } = require('../middleware/requireAuth');
 const { markSessionActive } = require('../middleware/sessionIdleTimeout');
+const { invalidateUserCache, setCachedUser } = require('../lib/userCache');
 const { sendMailSafe } = require('../services/mailService');
 const {
   ensureUserReferralCode
@@ -300,6 +301,8 @@ router.post('/login', requireGuest, async (req, res) => {
       if (err) {
         return renderLogin(req, res, { error: authT(req, 'login.error.login_failed', 'เข้าสู่ระบบไม่สำเร็จ') });
       }
+      invalidateUserCache(user.id);
+      setCachedUser(user.id, user);
       req.session.user = user;
       markSessionActive(req);
       return res.redirect(String(user.role || 'user') === 'admin' ? '/admin' : '/app');
