@@ -1102,7 +1102,7 @@ router.get('/queue', async (req, res) => {
               AND COALESCE(c.payload->>'purpose', '') ~* 'login_equity'
               THEN -3
             WHEN c.command_type IN ('stop_mt5_bot') THEN -2
-            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5') THEN -1
+            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'enable_mt5_algo') THEN -1
             WHEN c.command_type IN ('login_exit_mt5', 'stop_mt5', 'force_stop_mt5', 'kill_mt5')
               AND COALESCE(c.payload->>'purpose', '') = 'post_connect_exit'
               THEN 10
@@ -1230,7 +1230,7 @@ router.get('/queue', async (req, res) => {
               AND COALESCE(c.payload->>'purpose', '') ~* 'login_equity'
               THEN -3
             WHEN c.command_type IN ('stop_mt5_bot') THEN -2
-            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5') THEN -1
+            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'enable_mt5_algo') THEN -1
             WHEN c.command_type IN ('login_exit_mt5', 'stop_mt5', 'force_stop_mt5', 'kill_mt5')
               AND COALESCE(c.payload->>'purpose', '') = 'post_connect_exit'
               THEN 10

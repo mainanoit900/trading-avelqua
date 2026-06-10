@@ -6822,6 +6822,26 @@ def _is_modern_run_bot_payload(payload: Dict[str, Any]) -> bool:
     return action in ("run_bot", "restart_ea", "run_mt5_bot", "restart_mt5_bot")
 
 
+def _run_bot_phase(payload: Optional[Dict[str, Any]]) -> str:
+    return str(payload_get(payload or {}, "botPhase", "bot_phase") or "full").strip().lower()
+
+
+def run_bot_enable_algo_command(payload: Dict[str, Any]) -> Dict[str, Any]:
+    port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
+    if not port:
+        raise RuntimeError("payload.port is required")
+    max_rounds = max(2, int(os.getenv("AVELQUA_ENABLE_ALGO_MAX_ROUNDS", "5")))
+    perms = ensure_mt5_trading_permissions_until_ready(
+        port, payload, max_rounds=max_rounds, wait_between_sec=2.5
+    )
+    return {
+        "action": "enable_mt5_algo",
+        "ok": bool(perms.get("ok")),
+        "portNumber": normalize_port(port),
+        **perms,
+    }
+
+
 def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
     if not port:
@@ -6883,6 +6903,23 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     startup_set = ""
     if not set_info.get("skipped"):
         startup_set = str(set_info.get("fileName") or "").strip()
+
+    bot_phase = _run_bot_phase(payload)
+    if bot_phase == "finalize":
+        return _run_bot_finalize_phase(
+            payload,
+            port_dir=port_dir,
+            port=port,
+            login=login,
+            bot_code=bot_code,
+            symbol=symbol,
+            period=period,
+            experts_dir=experts_dir,
+            ea_info=ea_info,
+            set_info=set_info,
+            source_sync=source_sync,
+            compile_info=compile_info,
+        )
 
     write_avelqua_trading_gate(port_dir, True, payload)
     patch_mt5_experts_config(port_dir, True)
@@ -7090,19 +7127,78 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         except Exception as clear_err:
             log(f"RUN BOT CLEAR OLD POSITIONS ERROR port={port}: {clear_err}")
 
+    if bot_phase == "launch":
+        ui_target = _resolve_mt5_ui_window(port, payload)
+        return {
+            "action": "run_bot_launch",
+            "ok": True,
+            "phase": "launch",
+            "status": "launch_ok",
+            "message": f"MT5 launched with EA on {symbol} ({period})",
+            "folderPath": str(port_dir),
+            "portNumber": normalize_port(port),
+            "mt5Running": True,
+            "processId": proc_pid,
+            "loginVerified": True,
+            "uiTarget": ui_target,
+            "botCode": bot_code,
+            "eaSetApplied": set_info.get("eaSetApplied") or payload_get(payload, "eaSetPreview", "ea_set_preview") or {},
+        }
+
+    return _run_bot_finalize_phase(
+        payload,
+        port_dir=port_dir,
+        port=port,
+        login=login,
+        bot_code=bot_code,
+        symbol=symbol,
+        period=period,
+        experts_dir=experts_dir,
+        ea_info=ea_info,
+        set_info=set_info,
+        source_sync=source_sync,
+        compile_info=compile_info,
+        proc_pid=proc_pid,
+        patched_cfg=patched_cfg,
+        bot_phase=bot_phase,
+    )
+
+
+def _run_bot_finalize_phase(
+    payload: Dict[str, Any],
+    *,
+    port_dir: Path,
+    port: Any,
+    login: str,
+    bot_code: str,
+    symbol: str,
+    period: str,
+    experts_dir: Path,
+    ea_info: Dict[str, Any],
+    set_info: Dict[str, Any],
+    source_sync: Dict[str, Any],
+    compile_info: Optional[Dict[str, Any]],
+    proc_pid: Any = None,
+    patched_cfg: Optional[List[str]] = None,
+    bot_phase: str = "finalize",
+) -> Dict[str, Any]:
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     ui_target: Dict[str, Any] = {}
-    for _wait in range(15):
+    for _wait in range(8 if bot_phase == "finalize" else 15):
         ui_target = _resolve_mt5_ui_window(port, payload)
         if ui_target.get("hwnd"):
             break
-        time.sleep(2)
+        time.sleep(1.5 if bot_phase == "finalize" else 2)
     if not ui_target.get("hwnd"):
-        time.sleep(4)
         ui_target = _resolve_mt5_ui_window(port, payload)
-    trading_permissions = ensure_mt5_trading_permissions_until_ready(
-        port, payload, max_rounds=8, wait_between_sec=3.0
-    )
+    if bot_phase == "full":
+        trading_permissions = ensure_mt5_trading_permissions_until_ready(
+            port, payload, max_rounds=8, wait_between_sec=3.0
+        )
+    else:
+        trading_permissions = ensure_mt5_trading_permissions_until_ready(
+            port, payload, max_rounds=3, wait_between_sec=2.0
+        )
     time.sleep(1)
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     trade_gate: Dict[str, Any] = {}
@@ -7729,6 +7825,23 @@ def handle_command(cmd: Dict[str, Any]) -> None:
 
         elif ctype == "delete_file":
             command_result(cmd_id, True, delete_file(payload))
+
+        elif ctype == "enable_mt5_algo":
+            port = _worker_port_num(payload)
+            key = str(port or "")
+            wait_deadline = time.time() + float(os.getenv("AVELQUA_ENABLE_ALGO_WAIT_LAUNCH_SEC", "300"))
+            while key and time.time() < wait_deadline:
+                reap_connect_workers()
+                with ACTIVE_CONNECT_WORKERS_LOCK:
+                    prev = ACTIVE_CONNECT_WORKERS.get(key)
+                    if not prev or prev.poll() is not None:
+                        break
+                time.sleep(0.4)
+            else:
+                if key:
+                    raise RuntimeError(f"PORT {port}: launch worker still running — skip enable algo")
+            algo_result = run_bot_enable_algo_command(payload)
+            command_result(cmd_id, True, algo_result)
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
             try:
