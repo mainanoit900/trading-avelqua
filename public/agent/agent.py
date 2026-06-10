@@ -1823,12 +1823,29 @@ if ($button) {{
     }} catch {{}}
   }}
 }}
-if ($method -eq 'none') {{
+    if ($method -eq 'none') {{
   [System.Windows.Forms.SendKeys]::SendWait("^(e)")
   $method = 'ctrl_e'
   Start-Sleep -Milliseconds 700
 }}
-@{{ ok = $true; method = $method; state = $state; button = $buttonName }} | ConvertTo-Json -Compress
+if ($win -and ($method -eq 'ctrl_e' -or $method -eq 'invoke' -or $method -eq 'toggle')) {{
+  try {{
+    $buttons2 = $win.FindAll([Windows.Automation.TreeScope]::Descendants, $cond)
+    foreach ($b in $buttons2) {{
+      $name2 = [string]($b.Current.Name)
+      if ($name2 -match '(?i)algo\\s*trading|auto\\s*trading') {{
+        $tpObj2 = $b.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+        if ($tpObj2) {{
+          $state = [string]([Windows.Automation.TogglePattern]$tpObj2).Current.ToggleState
+          $buttonName = $name2
+        }}
+        break
+      }}
+    }}
+  }} catch {{}}
+}}
+$enabled = ($state -eq 'On' -or $method -eq 'already_on')
+@{{ ok = $enabled; method = $method; state = $state; button = $buttonName }} | ConvertTo-Json -Compress
 """
             raw = _run_powershell(ps, timeout=25).strip()
             last_raw = raw
@@ -2309,8 +2326,9 @@ def ensure_mt5_trading_permissions_uia(
         "true",
         "yes",
     )
+    options_ok: Optional[bool] = None
     if skip_options_ui and purpose in ("bot_run", "legacy_run"):
-        options_ok = True
+        options_ok = None
     else:
         options_ok = enable_mt5_options_algo_trading_uia(
             port, payload, attempts=max(1, min(2, int(attempts or 1))), wait_between_sec=wait_between_sec
@@ -2318,7 +2336,9 @@ def ensure_mt5_trading_permissions_uia(
     chart_ok = enable_mt5_chart_algo_trading_uia(
         port, payload, attempts=max(1, min(3, int(attempts or 1))), wait_between_sec=wait_between_sec
     )
-    combined = bool(global_ok or options_ok or chart_ok)
+    combined = bool(global_ok) and bool(chart_ok)
+    if options_ok is False:
+        combined = False
     log(
         f"ENABLE TRADING PERMISSIONS port={port} ok={combined} "
         f"global_ok={global_ok} options_ok={options_ok} chart_ok={chart_ok}"
@@ -2326,9 +2346,73 @@ def ensure_mt5_trading_permissions_uia(
     return {
         "ok": combined,
         "globalEnabled": bool(global_ok),
-        "optionsEnabled": bool(options_ok),
+        "optionsEnabled": (bool(options_ok) if options_ok is not None else None),
         "chartEnabled": bool(chart_ok),
     }
+
+
+def mt5_terminal_trade_allowed_api(port_dir: Path) -> Optional[bool]:
+    """Read TERMINAL_TRADE_ALLOWED from running MT5 — attach only, never spawn."""
+    if os.name != "nt":
+        return None
+    terminal = port_dir / "terminal64.exe"
+    if not terminal.exists() or not mt5_running_for_port_dir(port_dir):
+        return None
+    try:
+        import MetaTrader5 as mt5  # type: ignore
+    except Exception:
+        return None
+    try:
+        with mt5_api_global_file_lock(timeout_sec=12.0) as got_lock:
+            if not got_lock:
+                return None
+            with contextlib.suppress(Exception):
+                mt5.shutdown()
+            if not mt5.initialize(path=str(terminal)):
+                return None
+            ti = mt5.terminal_info()
+            allowed = bool(getattr(ti, "trade_allowed", False)) if ti is not None else False
+            with contextlib.suppress(Exception):
+                mt5.shutdown()
+            return allowed
+    except Exception as e:
+        log(f"MT5 TRADE ALLOWED API ERROR path={port_dir.name}: {e}")
+        return None
+
+
+def ensure_mt5_trading_permissions_until_ready(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    max_rounds: int = 8,
+    wait_between_sec: float = 3.0,
+) -> Dict[str, Any]:
+    """Enable global/chart algo trading and verify trade_allowed before declaring bot ready."""
+    port_dir = resolve_mt5_port_dir(port, payload)
+    rounds = max(1, int(max_rounds or 1))
+    last: Dict[str, Any] = {"ok": False, "globalEnabled": False, "chartEnabled": False, "tradeAllowed": False}
+    for round_no in range(1, rounds + 1):
+        last = ensure_mt5_trading_permissions_uia(
+            port, payload, attempts=3, wait_between_sec=max(1.5, float(wait_between_sec or 2.0))
+        )
+        trade_allowed = mt5_terminal_trade_allowed_api(port_dir)
+        last["tradeAllowed"] = trade_allowed
+        if trade_allowed is True and last.get("ok"):
+            log(f"ENABLE TRADING READY port={port} round={round_no}/{rounds} trade_allowed=True")
+            return last
+        if mt5_log_has_auto_trading_disabled(port_dir):
+            log(f"ENABLE TRADING RETRY port={port} round={round_no}/{rounds} journal=auto_trading_disabled")
+        elif trade_allowed is False:
+            log(f"ENABLE TRADING RETRY port={port} round={round_no}/{rounds} trade_allowed=False")
+        if round_no < rounds:
+            time.sleep(max(1.0, float(wait_between_sec or 2.0)))
+    last["ok"] = bool(last.get("globalEnabled")) and last.get("tradeAllowed") is True
+    log(
+        f"ENABLE TRADING FINAL port={port} ok={last.get('ok')} "
+        f"global={last.get('globalEnabled')} chart={last.get('chartEnabled')} "
+        f"trade_allowed={last.get('tradeAllowed')}"
+    )
+    return last
 
 
 def mt5_log_has_auto_trading_disabled(port_dir: Path) -> bool:
@@ -2990,6 +3074,8 @@ NewsEnable=1
 AllowLiveTrading={trade_flag}
 AllowDllImport=1
 Enabled={trade_flag}
+Account=0
+Profile=0
 """
     if startup_expert:
         ini += "\n[StartUp]\n"
@@ -3136,7 +3222,7 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
     lines = text.splitlines() if text else []
     out: List[str] = []
     in_exp = False
-    seen_allow = seen_en = seen_dll = False
+    seen_allow = seen_en = seen_dll = seen_account = seen_profile = False
     for line in lines:
         low = line.strip().lower()
         if low == "[experts]":
@@ -3158,11 +3244,28 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
                 out.append("AllowDllImport=1")
                 seen_dll = True
                 continue
+            if low.startswith("account="):
+                out.append("Account=0")
+                seen_account = True
+                continue
+            if low.startswith("profile="):
+                out.append("Profile=0")
+                seen_profile = True
+                continue
         out.append(line)
     if not any(l.strip().lower() == "[experts]" for l in out):
         if out and out[-1].strip():
             out.append("")
-        out.extend(["[Experts]", f"AllowLiveTrading={trade}", "AllowDllImport=1", f"Enabled={flag}"])
+        out.extend(
+            [
+                "[Experts]",
+                f"AllowLiveTrading={trade}",
+                "AllowDllImport=1",
+                f"Enabled={flag}",
+                "Account=0",
+                "Profile=0",
+            ]
+        )
     else:
         idx = max(i for i, l in enumerate(out) if l.strip().lower() == "[experts]")
         insert: List[str] = []
@@ -3172,6 +3275,10 @@ def _patch_ini_experts_section(path: Path, enabled: bool) -> bool:
             insert.append("AllowDllImport=1")
         if not seen_en:
             insert.append(f"Enabled={flag}")
+        if not seen_account:
+            insert.append("Account=0")
+        if not seen_profile:
+            insert.append("Profile=0")
         if insert:
             out[idx + 1 : idx + 1] = insert
     try:
@@ -3473,11 +3580,12 @@ def mt5_test_trade(port: Any, payload: Optional[Dict[str, Any]] = None) -> Dict[
         "yes",
     )
     if skip_when_running and mt5_running_for_port_dir(port_dir):
+        trade_allowed = mt5_terminal_trade_allowed_api(port_dir)
         return {
-            "ok": True,
+            "ok": trade_allowed is True,
             "skipped": True,
             "reason": "terminal_already_running",
-            "terminalInfo": {"tradeAllowed": None},
+            "terminalInfo": {"tradeAllowed": trade_allowed},
         }
     try:
         import MetaTrader5 as mt5  # type: ignore
@@ -6655,7 +6763,15 @@ def _resolve_run_bot_live_status(
     if ea_base == "attach_required":
         return "starting", "attach_required"
     algo_ok = bool(trading_permissions.get("ok"))
+    trade_allowed = trading_permissions.get("tradeAllowed")
+    if trade_allowed is False:
+        algo_ok = False
     trade_ok = bool(trade_gate.get("ok"))
+    gate_allowed = (trade_gate.get("terminalInfo") or {}).get("tradeAllowed")
+    if gate_allowed is False:
+        trade_ok = False
+    elif gate_allowed is True:
+        trade_ok = True
     if algo_ok and trade_ok and ea_base == "ready":
         return "running", "running"
     if ea_base == "ready":
@@ -6665,7 +6781,9 @@ def _resolve_run_bot_live_status(
 
 def _send_run_bot_status_upgrade(port: Any, payload: Dict[str, Any], port_dir: Path) -> None:
     try:
-        trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=3, wait_between_sec=2.0)
+        trading_permissions = ensure_mt5_trading_permissions_until_ready(
+            port, payload, max_rounds=6, wait_between_sec=2.5
+        )
         trade_gate: Dict[str, Any] = {}
         try:
             trade_gate = mt5_test_trade(port, payload)
@@ -6982,7 +7100,9 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     if not ui_target.get("hwnd"):
         time.sleep(4)
         ui_target = _resolve_mt5_ui_window(port, payload)
-    trading_permissions = ensure_mt5_trading_permissions_uia(port, payload, attempts=6, wait_between_sec=3.0)
+    trading_permissions = ensure_mt5_trading_permissions_until_ready(
+        port, payload, max_rounds=8, wait_between_sec=3.0
+    )
     time.sleep(1)
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     trade_gate: Dict[str, Any] = {}
@@ -7048,8 +7168,8 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         target=lambda: (time.sleep(8), _send_run_bot_status_upgrade(port, payload, port_dir)),
         daemon=True,
     ).start()
-    threading.Thread(target=lambda: (time.sleep(20), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
-    threading.Thread(target=lambda: (time.sleep(35), ensure_mt5_trading_permissions_uia(port, payload, attempts=2, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(20), ensure_mt5_trading_permissions_until_ready(port, payload, max_rounds=3, wait_between_sec=2.0)), daemon=True).start()
+    threading.Thread(target=lambda: (time.sleep(35), ensure_mt5_trading_permissions_until_ready(port, payload, max_rounds=3, wait_between_sec=2.0)), daemon=True).start()
     threading.Thread(
         target=lambda: (time.sleep(6), watch_mt5_instance(payload)),
         daemon=True,
@@ -7082,7 +7202,12 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         "algoEnabled": bool(trading_permissions.get("ok")),
         "globalAlgoEnabled": bool(trading_permissions.get("globalEnabled")),
         "chartAlgoEnabled": bool(trading_permissions.get("chartEnabled")),
-        "optionsAlgoEnabled": bool(trading_permissions.get("optionsEnabled")),
+        "optionsAlgoEnabled": (
+            bool(trading_permissions.get("optionsEnabled"))
+            if trading_permissions.get("optionsEnabled") is not None
+            else None
+        ),
+        "tradeAllowed": trading_permissions.get("tradeAllowed"),
         "configPatched": patched_cfg,
         "tradeGate": trade_gate,
         "instanceId": instance_id,
@@ -7186,6 +7311,8 @@ def watch_mt5_instance(payload: Dict[str, Any]) -> None:
             return
         instance_id = payload_get(payload, "instanceId")
         port_dir = resolve_mt5_port_dir(port, payload)
+        if mt5_log_has_auto_trading_disabled(port_dir):
+            ensure_mt5_trading_permissions_until_ready(port, payload, max_rounds=2, wait_between_sec=2.0)
         trading_allowed = read_avelqua_trading_gate(port_dir)
         st = mt5_port_status_one(port, payload)
         snap = account_snapshot(port, payload)
