@@ -56,15 +56,8 @@ function sanitizeJournalText(text) {
 
 /** payload / port_id → FolderPort number for queue concurrency rules */
 function commandPortNumberExpr(alias) {
-  return `COALESCE(
-    NULLIF(${alias}.payload->>'port', '')::int,
-    NULLIF(${alias}.payload->>'portNumber', '')::int,
-    NULLIF(${alias}.payload->>'port_no', '')::int,
-    NULLIF(${alias}.payload->>'portNo', '')::int,
-    NULLIF(${alias}.payload->>'folderPort', '')::int,
-    NULLIF(${alias}.payload->>'vpsPortNumber', '')::int,
-    0
-  )`;
+  const { payloadFolderPortSql } = require('../lib/mt5ReservedPortNo');
+  return payloadFolderPortSql(`${alias}.payload`);
 }
 
 /** True when two queued commands target the same VPS FolderPort */

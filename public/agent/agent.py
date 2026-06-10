@@ -76,11 +76,24 @@ STOP_FLAG = AGENT_DIR / "agent.disabled"
 LOGIN_UI_LOCK_FILE = AGENT_DIR / "login-ui.lock"  # legacy global (port 0 fallback only)
 
 
+def folder_port_lock_num(port: Any) -> int:
+    """Normalize package slot (3) and system port (103) to the same worker lock key."""
+    try:
+        p = int(re.sub(r"[^0-9]", "", str(port or "")) or "0")
+    except Exception:
+        return 0
+    if p <= 0:
+        return 0
+    if p >= 100:
+        return p
+    return system_port_no(p)
+
+
 def login_ui_lock_path(port: Any) -> Path:
-    p = int(re.sub(r"[^0-9]", "", str(port or "")) or "0")
+    p = folder_port_lock_num(port)
     if p <= 0:
         return LOGIN_UI_LOCK_FILE
-    return AGENT_DIR / f"login-ui-port-{p:02d}.lock"
+    return AGENT_DIR / f"login-ui-port-{p}.lock"
 MAX_LOG_DAYS = int(os.getenv("AVELQUA_MAX_LOG_DAYS", "10"))
 LOOP_SECONDS = float(os.getenv("AVELQUA_LOOP_SECONDS", "0.35"))
 QUEUE_WAIT_MS = int(os.getenv("AVELQUA_QUEUE_WAIT_MS", "2500"))
@@ -93,7 +106,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-10-runbot-no-login-dialog-v139"
+AGENT_BUILD_ID = "2026-06-10-folder-port-normalize-v140"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -4017,9 +4030,10 @@ def release_login_ui_lock_for_current_process(port: Any = None) -> None:
 
 def _worker_port_num(payload: Dict[str, Any]) -> int:
     try:
-        return int(payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort") or 0)
+        raw = int(payload_get(payload, "port", "portSlot", "portNumber", "vpsPortNumber", "folderPort") or 0)
     except Exception:
         return 0
+    return folder_port_lock_num(raw)
 
 
 def worker_state_path(port: Any) -> Path:
