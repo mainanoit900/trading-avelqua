@@ -93,7 +93,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-10-runbot-single-mt5-v138"
+AGENT_BUILD_ID = "2026-06-10-runbot-no-login-dialog-v139"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -2284,9 +2284,18 @@ def ensure_mt5_trading_permissions_uia(
     global_ok = enable_mt5_algo_trading_uia(
         port, payload, attempts=attempts, wait_between_sec=wait_between_sec
     )
-    options_ok = enable_mt5_options_algo_trading_uia(
-        port, payload, attempts=max(1, min(2, int(attempts or 1))), wait_between_sec=wait_between_sec
+    purpose = str(payload_get(payload or {}, "purposeType", "purpose_type") or "").lower()
+    skip_options_ui = str(os.getenv("AVELQUA_SKIP_OPTIONS_UI_ON_BOT_RUN", "1")).strip().lower() in (
+        "1",
+        "true",
+        "yes",
     )
+    if skip_options_ui and purpose in ("bot_run", "legacy_run"):
+        options_ok = True
+    else:
+        options_ok = enable_mt5_options_algo_trading_uia(
+            port, payload, attempts=max(1, min(2, int(attempts or 1))), wait_between_sec=wait_between_sec
+        )
     chart_ok = enable_mt5_chart_algo_trading_uia(
         port, payload, attempts=max(1, min(3, int(attempts or 1))), wait_between_sec=wait_between_sec
     )
@@ -2734,6 +2743,116 @@ def resolve_mt5_server(payload: Optional[Dict[str, Any]] = None) -> str:
     return s
 
 
+def _should_preserve_mt5_login_cache(payload: Optional[Dict[str, Any]] = None) -> bool:
+    """Bot re-run บน PORT ที่ login แล้ว — เก็บ accounts.dat ไม่ให้โผล่หน้า Options login."""
+    if not payload:
+        return False
+    flag = payload_get(payload, "loginVerified", "login_verified")
+    if str(flag).lower() in ("1", "true", "yes"):
+        return True
+    purpose = str(payload_get(payload, "purposeType", "purpose_type") or "").lower()
+    return purpose in ("bot_run", "legacy_run")
+
+
+def dismiss_mt5_startup_login_options_dialog(
+    port_dir: Path,
+    login: str = "",
+    process_id: Any = None,
+) -> bool:
+    """ปิดหน้า Options/Login (Server tab) ถ้ายังค้าง — ติ๊ก Keep personal แล้วกด OK."""
+    if os.name != "nt":
+        return False
+    root_esc = str(port_dir or "").replace("'", "''").lower()
+    login_esc = str(login or "").replace("'", "''")
+    try:
+        pid_hint = int(process_id or 0)
+    except Exception:
+        pid_hint = 0
+    ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type -AssemblyName UIAutomationClient
+Add-Type -AssemblyName UIAutomationTypes
+Add-Type -AssemblyName System.Windows.Forms
+$root = '{root_esc}'
+$login = '{login_esc}'
+$pidHint = {pid_hint}
+$winCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Window
+)
+$dlg = $null
+$rootEl = [Windows.Automation.AutomationElement]::RootElement
+$wins = $rootEl.FindAll([Windows.Automation.TreeScope]::Children, $winCond)
+foreach ($w in $wins) {{
+  try {{
+    if ($pidHint -gt 0 -and $w.Current.ProcessId -ne $pidHint) {{ continue }}
+    $name = [string]($w.Current.Name)
+    if ($name -notmatch '(?i)options|ตัวเลือก|properties|login|authorization|server') {{ continue }}
+    $edCond = New-Object Windows.Automation.PropertyCondition(
+      [Windows.Automation.AutomationElement]::ControlTypeProperty,
+      [Windows.Automation.ControlType]::Edit
+    )
+    $edits = $w.FindAll([Windows.Automation.TreeScope]::Descendants, $edCond)
+    if ($edits.Count -lt 2) {{ continue }}
+    $dlg = $w
+    break
+  }} catch {{}}
+}}
+if (-not $dlg) {{ Write-Output "FOUND=0"; exit 0 }}
+$checkCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::CheckBox
+)
+$btnCond = New-Object Windows.Automation.PropertyCondition(
+  [Windows.Automation.AutomationElement]::ControlTypeProperty,
+  [Windows.Automation.ControlType]::Button
+)
+foreach ($c in $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $checkCond)) {{
+  $name = [string]($c.Current.Name)
+  if ($name -match '(?i)keep\\s*personal|save.*settings|personal\\s*settings|เก็บ.*ข้อมูล') {{
+    try {{
+      $tpObj = $c.GetCurrentPattern([Windows.Automation.TogglePattern]::Pattern)
+      if ($tpObj) {{
+        $tp = [Windows.Automation.TogglePattern]$tpObj
+        if ([string]$tp.Current.ToggleState -ne 'On') {{ $tp.Toggle() }}
+      }} else {{
+        $c.SetFocus(); [System.Windows.Forms.SendKeys]::SendWait(" ")
+      }}
+    }} catch {{}}
+    break
+  }}
+}}
+$okBtn = $null
+foreach ($b in $dlg.FindAll([Windows.Automation.TreeScope]::Descendants, $btnCond)) {{
+  $name = [string]($b.Current.Name)
+  if ($name -match '(?i)^ok$|ตกลง|connect|login') {{
+    $okBtn = $b
+    break
+  }}
+}}
+if ($okBtn) {{
+  try {{
+    $ipObj = $okBtn.GetCurrentPattern([Windows.Automation.InvokePattern]::Pattern)
+    if ($ipObj) {{ [Windows.Automation.InvokePattern]$ipObj.Invoke() }}
+  }} catch {{
+    try {{ [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}") }} catch {{}}
+  }}
+}} else {{
+  [System.Windows.Forms.SendKeys]::SendWait("{{ENTER}}")
+}}
+Write-Output "FOUND=1"
+"""
+    try:
+        out = _run_powershell(ps, timeout=12)
+        found = "FOUND=1" in str(out or "")
+        if found:
+            log(f"DISMISS MT5 LOGIN OPTIONS folder={port_dir} login={login}")
+        return found
+    except Exception as e:
+        log(f"DISMISS MT5 LOGIN OPTIONS ERROR folder={port_dir}: {e}")
+        return False
+
+
 def _patch_ini_common_login(path: Path, login: str, password: str, server: str) -> bool:
     """บันทึก Login/Password/Server ใน config/common.ini ของ portable"""
     if not login or not server:
@@ -2751,7 +2870,7 @@ def _patch_ini_common_login(path: Path, login: str, password: str, server: str) 
     lines = text.splitlines() if text else []
     out: List[str] = []
     in_common = False
-    seen_login = seen_pw = seen_srv = False
+    seen_login = seen_pw = seen_srv = seen_keep = False
     for line in lines:
         low = line.strip().lower()
         if low == "[common]":
@@ -2773,6 +2892,10 @@ def _patch_ini_common_login(path: Path, login: str, password: str, server: str) 
                 out.append(f"Server={server}")
                 seen_srv = True
                 continue
+            if low.startswith("keepprivate="):
+                out.append("KeepPrivate=1")
+                seen_keep = True
+                continue
         out.append(line)
     if not any(l.strip().lower() == "[common]" for l in out):
         if out and out[-1].strip():
@@ -2786,6 +2909,8 @@ def _patch_ini_common_login(path: Path, login: str, password: str, server: str) 
         insert.append(pw_line)
     if not seen_srv:
         insert.append(f"Server={server}")
+    if not seen_keep:
+        insert.append("KeepPrivate=1")
     if insert:
         out[idx + 1 : idx + 1] = insert
     try:
@@ -2844,9 +2969,11 @@ def write_mt5_login_ini(
 Login={login}
 {pw_line}
 Server={server}
+KeepPrivate=1
 AutoConfiguration=true
 ProxyEnable=false
 CertInstall=0
+NewsEnable=1
 
 [Experts]
 AllowLiveTrading={trade_flag}
@@ -6667,8 +6794,11 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
                 raise RuntimeError(
                     f"PORT {port}: ยังมี MT5 ค้างในโฟลเดอร์นี้ — ปิดไม่ครบก่อนเปิดบอท"
                 )
-            clear_mt5_port_session(port_dir)
-            clear_mt5_login_cache(port_dir)
+            if _should_preserve_mt5_login_cache(payload):
+                log(f"RUN BOT PRESERVE LOGIN CACHE port={port} login={login}")
+            else:
+                clear_mt5_port_session(port_dir)
+                clear_mt5_login_cache(port_dir)
             remove_mt5_login_ini(port_dir)
             time.sleep(float(os.getenv("AVELQUA_PRELOGIN_CLEAN_SEC", "0.6")))
         except Exception as e:
@@ -6731,7 +6861,12 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     )
     if login_verified_phase1:
         # Login ผ่าน Journal แล้ว — ใช้ startup.ini auto-login เท่านั้น (SendKeys ทำลายรหัสที่มี * ฯลฯ)
-        time.sleep(float(os.getenv("AVELQUA_RUN_BOT_INI_LOGIN_SEC", "2.0")))
+        wait_sec = float(os.getenv("AVELQUA_RUN_BOT_INI_LOGIN_SEC", "4.0"))
+        time.sleep(wait_sec)
+        try:
+            dismiss_mt5_startup_login_options_dialog(port_dir, login=login, process_id=proc_pid)
+        except Exception as dismiss_err:
+            log(f"RUN BOT DISMISS LOGIN OPTIONS ERROR port={port}: {dismiss_err}")
     else:
         token = acquire_login_ui_lock(port, timeout_sec=45)
         try:
