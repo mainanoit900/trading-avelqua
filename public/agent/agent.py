@@ -106,7 +106,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-10-folder-port-normalize-v140"
+AGENT_BUILD_ID = "2026-06-10-enable-algo-window-wait-v144"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -1674,6 +1674,127 @@ def _resolve_mt5_ui_window(port: Any, payload: Optional[Dict[str, Any]] = None) 
     return out
 
 
+def bot_launch_hint_path(port_dir: Path) -> Path:
+    return port_dir / ".avelqua-bot-launch.json"
+
+
+def write_bot_launch_hint(port_dir: Path, process_id: Any, login: str = "") -> None:
+    try:
+        hint = {
+            "processId": int(process_id or 0) or None,
+            "login": str(login or "").strip(),
+            "savedAt": datetime.now().isoformat(timespec="seconds"),
+        }
+        bot_launch_hint_path(port_dir).write_text(
+            json.dumps(hint, ensure_ascii=False),
+            encoding="utf-8",
+        )
+    except Exception as e:
+        log(f"BOT LAUNCH HINT WRITE ERROR path={port_dir.name}: {e}")
+
+
+def read_bot_launch_hint(port_dir: Path) -> Dict[str, Any]:
+    try:
+        p = bot_launch_hint_path(port_dir)
+        if not p.is_file():
+            return {}
+        data = json.loads(p.read_text(encoding="utf-8", errors="ignore") or "{}")
+        return data if isinstance(data, dict) else {}
+    except Exception:
+        return {}
+
+
+def _mt5_restore_main_window(port: Any, payload: Optional[Dict[str, Any]] = None, process_id: Any = None) -> None:
+    if os.name != "nt":
+        return
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+        root = str(port_dir).replace("\\", "\\\\")
+        login = str(payload_get(payload or {}, "mt5Login", "login") or "").strip()
+        pid_hint = int(process_id or payload_get(payload or {}, "processId", "process_id") or 0)
+        ps = f"""
+$ErrorActionPreference = 'SilentlyContinue'
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+public class AvqShow {{
+  [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}}
+"@
+$root = '{root.replace("'", "''")}'
+$login = '{login.replace("'", "''")}'
+$pidHint = {pid_hint}
+$proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
+  $p = $_.Path
+  if ($pidHint -gt 0 -and $_.Id -eq $pidHint) {{ return $true }}
+  if ($p -and $p -like "*$root*") {{ return $true }}
+  if ($login -and $_.MainWindowTitle -match [regex]::Escape($login)) {{ return $true }}
+  return $false
+}} | Select-Object -First 1
+if ($proc -and $proc.MainWindowHandle -ne [IntPtr]::Zero) {{
+  [void][AvqShow]::ShowWindow($proc.MainWindowHandle, 9)
+  Start-Sleep -Milliseconds 200
+  [void][AvqShow]::SetForegroundWindow($proc.MainWindowHandle)
+}}
+"""
+        _run_powershell(ps, timeout=8)
+    except Exception as e:
+        log(f"MT5 RESTORE WINDOW ERROR port={port}: {e}")
+
+
+def wait_mt5_ui_window_ready(
+    port: Any,
+    payload: Optional[Dict[str, Any]] = None,
+    *,
+    timeout_sec: float = 90.0,
+    process_id: Any = None,
+) -> Dict[str, Any]:
+    """Wait until MT5 process exists and a main window HWND is available for UIA."""
+    payload = dict(payload or {})
+    if process_id:
+        payload["processId"] = process_id
+        payload["process_id"] = process_id
+    try:
+        port_dir = resolve_mt5_port_dir(port, payload)
+    except Exception:
+        port_dir = None
+    hint: Dict[str, Any] = {}
+    if port_dir is not None:
+        hint = read_bot_launch_hint(port_dir)
+        if not payload.get("processId") and hint.get("processId"):
+            payload["processId"] = hint["processId"]
+            payload["process_id"] = hint["processId"]
+    deadline = time.time() + max(8.0, float(timeout_sec or 90.0))
+    last: Dict[str, Any] = {"ok": False, "reason": "window_wait_timeout"}
+    while time.time() < deadline:
+        running = False
+        if port_dir is not None:
+            running = mt5_running_for_port_dir(port_dir)
+        if not running:
+            try:
+                running = len(mt5_port_processes(port, payload)) > 0
+            except Exception:
+                running = False
+        if not running:
+            time.sleep(0.6)
+            continue
+        _mt5_restore_main_window(port, payload, payload.get("processId"))
+        last = _resolve_mt5_ui_window(port, payload)
+        if last.get("hwnd"):
+            log(
+                f"MT5 WINDOW READY port={port} hwnd={last.get('hwnd')} "
+                f"pid={last.get('pid')} method={last.get('method')}"
+            )
+            return last
+        time.sleep(0.75)
+    log(
+        f"MT5 WINDOW WAIT TIMEOUT port={port} reason={last.get('reason')} "
+        f"pids={last.get('pids')} hint_pid={hint.get('processId')}"
+    )
+    return last
+
+
 def _ps_mt5_window_setup_block(hwnd: int, pid_hint: int, root: str, login: str) -> str:
     """PowerShell: resolve $mainHwnd / $procId (EnumWindows hint or Get-Process fallback)."""
     root_esc = _ps_escape_single(root.replace("\\", "\\\\"))
@@ -1690,7 +1811,7 @@ if ($hwndHint -gt 0) {{
   $procId = $pidHint
 }}
 if ($mainHwnd -eq [IntPtr]::Zero) {{
-  $deadline = (Get-Date).AddSeconds(12)
+  $deadline = (Get-Date).AddSeconds(25)
   $proc = $null
   while ((Get-Date) -lt $deadline) {{
     $proc = Get-Process terminal64 -ErrorAction SilentlyContinue | Where-Object {{
@@ -2391,6 +2512,12 @@ def ensure_mt5_trading_permissions_until_ready(
     port_dir = resolve_mt5_port_dir(port, payload)
     rounds = max(1, int(max_rounds or 1))
     last: Dict[str, Any] = {"ok": False, "globalEnabled": False, "chartEnabled": False, "tradeAllowed": False}
+    wait_mt5_ui_window_ready(
+        port,
+        payload,
+        timeout_sec=min(45.0, max(12.0, float(wait_between_sec or 2.0) * 4)),
+        process_id=payload_get(payload or {}, "processId", "process_id"),
+    )
     for round_no in range(1, rounds + 1):
         last = ensure_mt5_trading_permissions_uia(
             port, payload, attempts=3, wait_between_sec=max(1.5, float(wait_between_sec or 2.0))
@@ -6830,14 +6957,31 @@ def run_bot_enable_algo_command(payload: Dict[str, Any]) -> Dict[str, Any]:
     port = payload_get(payload, "port", "portNumber", "port_no", "portSlot")
     if not port:
         raise RuntimeError("payload.port is required")
+    port_dir = resolve_mt5_port_dir(port, payload)
+    hint = read_bot_launch_hint(port_dir)
+    merged = dict(payload)
+    if hint.get("processId"):
+        merged["processId"] = hint["processId"]
+        merged["process_id"] = hint["processId"]
+    wait_sec = float(os.getenv("AVELQUA_ENABLE_ALGO_WINDOW_WAIT_SEC", "90"))
+    ui = wait_mt5_ui_window_ready(port, merged, timeout_sec=wait_sec, process_id=merged.get("processId"))
+    if not ui.get("hwnd") and not mt5_running_for_port_dir(port_dir):
+        return {
+            "action": "enable_mt5_algo",
+            "ok": False,
+            "reason": "mt5_not_running",
+            "uiTarget": ui,
+            "portNumber": normalize_port(port),
+        }
     max_rounds = max(2, int(os.getenv("AVELQUA_ENABLE_ALGO_MAX_ROUNDS", "5")))
     perms = ensure_mt5_trading_permissions_until_ready(
-        port, payload, max_rounds=max_rounds, wait_between_sec=2.5
+        port, merged, max_rounds=max_rounds, wait_between_sec=2.5
     )
     return {
         "action": "enable_mt5_algo",
         "ok": bool(perms.get("ok")),
         "portNumber": normalize_port(port),
+        "uiTarget": ui,
         **perms,
     }
 
@@ -7128,7 +7272,15 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
             log(f"RUN BOT CLEAR OLD POSITIONS ERROR port={port}: {clear_err}")
 
     if bot_phase == "launch":
-        ui_target = _resolve_mt5_ui_window(port, payload)
+        write_bot_launch_hint(port_dir, proc_pid, login=login)
+        ui_target = wait_mt5_ui_window_ready(
+            port,
+            {**payload, "processId": proc_pid, "process_id": proc_pid},
+            timeout_sec=float(os.getenv("AVELQUA_LAUNCH_WINDOW_WAIT_SEC", "45")),
+            process_id=proc_pid,
+        )
+        if not ui_target.get("hwnd") and not mt5_running_for_port_dir(port_dir):
+            raise RuntimeError(f"PORT {port}: MT5 launched but no window/process detected")
         return {
             "action": "run_bot_launch",
             "ok": True,
@@ -7840,8 +7992,15 @@ def handle_command(cmd: Dict[str, Any]) -> None:
             else:
                 if key:
                     raise RuntimeError(f"PORT {port}: launch worker still running — skip enable algo")
-            algo_result = run_bot_enable_algo_command(payload)
-            command_result(cmd_id, True, algo_result)
+            post_launch = float(os.getenv("AVELQUA_ENABLE_ALGO_POST_LAUNCH_SEC", "2.5"))
+            if post_launch > 0:
+                time.sleep(post_launch)
+            try:
+                algo_result = run_bot_enable_algo_command(payload)
+                command_result(cmd_id, bool(algo_result.get("ok")), algo_result, "" if algo_result.get("ok") else "enable_mt5_algo_failed")
+            except Exception as algo_err:
+                log(f"ENABLE MT5 ALGO ERROR port={port} cmd_id={cmd_id}: {algo_err}")
+                command_result(cmd_id, False, {}, str(algo_err))
 
         elif ctype in ("connect_mt5", "login_mt5", "run_mt5_bot", "run_mt5"):
             try:
