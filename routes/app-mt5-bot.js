@@ -3927,7 +3927,7 @@ const trend = emaFast - emaSlow;
   }
 }
 
-if (String(process.env.MT5_AI_BRAIN_ENABLED || 'true').toLowerCase() !== 'false') {
+if (String(process.env.MT5_AI_BRAIN_ENABLED || 'false').toLowerCase() === 'true') {
   setInterval(async () => {
     const rows = await query(`
       SELECT bi.*, n.ping_ms, n.cpu_percent, n.ram_percent
