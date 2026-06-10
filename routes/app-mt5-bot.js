@@ -1488,8 +1488,7 @@ async function ensureBotCatalog() {
     VALUES
     ('AK-SNIPER-VIP-VER4.0','AK-SNIPER-VIP-VER4.0','AK-SNIPER-VIP-VER4.0','XAUUSD',1,0.01,50,FALSE,10,TRUE),
     ('QUEEN-SNIPER-AI-V1.0','QUEEN-SNIPER-AI-V1.0','QUEEN-SNIPER-AI-V1.0','XAUUSD',1,0.01,50,FALSE,20,TRUE),
-    ('Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','XAUUSD',1,0.01,50,FALSE,30,TRUE),
-    ('SNIPER-AI-TRADING','SNIPER-AI-TRADING','SNIPER AI Trading (Auto)','XAUUSD',1,0.01,50,FALSE,25,TRUE)
+    ('Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','Quantum-Queen-MT5-3.65','XAUUSD',1,0.01,50,FALSE,30,TRUE)
     ON CONFLICT (bot_code) DO UPDATE SET
       bot_name=EXCLUDED.bot_name,
       display_name=EXCLUDED.display_name,
@@ -1508,9 +1507,13 @@ async function ensureBotCatalog() {
     WHERE UPPER(bot_code) NOT IN (
       'AK-SNIPER-VIP-VER4.0',
       'QUEEN-SNIPER-AI-V1.0',
-      'QUANTUM-QUEEN-MT5-3.65',
-      'SNIPER-AI-TRADING'
+      'QUANTUM-QUEEN-MT5-3.65'
     )
+  `).catch(() => {});
+  await query(`
+    UPDATE vps_system.bot_catalog
+    SET is_active=FALSE, updated_at=NOW()
+    WHERE UPPER(bot_code) = 'SNIPER-AI-TRADING'
   `).catch(() => {});
 }
 
