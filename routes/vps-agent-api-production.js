@@ -233,6 +233,7 @@ async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
   const instanceId = Number(pl?.instanceId || pl?.instance_id || result?.instanceId || result?.instance_id || 0);
   if (!instanceId) return;
 
+  const accountId = Number(pl?.accountId || pl?.account_id || 0);
   const balance = positiveMoney(result?.balance ?? result?.mt5_balance ?? result?.mt5Balance);
   const equity = positiveMoney(result?.equity ?? result?.mt5_equity ?? result?.mt5Equity);
   const failMsg = String(message || result?.message || result?.error || 'run_mt5_bot failed').trim() || 'run_mt5_bot failed';
@@ -245,19 +246,48 @@ async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
       tradeGateOk: resolved.tradeGateOk,
       runConfirmedAt: resolved.dbStatus === 'running' ? new Date().toISOString() : null
     });
+    let seedBal = balance;
+    let seedEq = equity;
+    let accRow = {};
+    if (accountId) {
+      const acc = await query(
+        `
+        SELECT last_balance, last_equity, mt5_login, assigned_port_no, vps_id,
+               COALESCE(vp.folder_path, '') AS folder_path
+        FROM vps_system.mt5_accounts a
+        LEFT JOIN vps_system.vps_ports vp ON vp.id = a.port_id
+        WHERE a.id = $1
+        LIMIT 1
+      `,
+        [accountId]
+      ).catch(() => ({ rows: [] }));
+      accRow = acc.rows?.[0] || {};
+      seedBal = seedBal ?? positiveMoney(accRow.last_balance);
+      seedEq = seedEq ?? positiveMoney(accRow.last_equity);
+    }
+    const vpsId = Number(pl?.vpsId || pl?.vps_id || accRow.vps_id || 0);
+    const portNo = Number(pl?.port || pl?.portNo || pl?.port_no || accRow.assigned_port_no || 0);
+    const folderPath = String(pl?.folderPath || pl?.folder_path || accRow.folder_path || '').trim();
+    const mt5Login = String(pl?.mt5Login || pl?.mt5_login || accRow.mt5_login || '').trim();
+    if (vpsId && portNo && resolved.dbStatus === 'running') {
+      const { upsertPortHealthRunning } = require('../lib/adminVpsBridge');
+      await upsertPortHealthRunning(vpsId, portNo, folderPath, mt5Login).catch(() => {});
+    }
     await query(`
       UPDATE vps_system.bot_instances
       SET status=$3,
           ea_status=COALESCE(NULLIF($2::text, ''), 'starting'),
+          mt5_balance=COALESCE($5::numeric, mt5_balance),
+          mt5_equity=COALESCE($6::numeric, mt5_equity),
           last_error=NULL,
           last_agent_ping=NOW(),
           last_heartbeat=NOW(),
           updated_at=NOW(),
           run_payload=COALESCE(run_payload, '{}'::jsonb) || $4::jsonb
       WHERE id=$1
-    `, [instanceId, resolved.eaStatus, resolved.dbStatus, runMeta]).catch(() => {});
+    `, [instanceId, resolved.eaStatus, resolved.dbStatus, runMeta, seedBal, seedEq]).catch(() => {});
     const { seedInstanceLiveMetrics } = require('../lib/mt5EquityChart');
-    await seedInstanceLiveMetrics(instanceId, balance, equity).catch(() => {});
+    await seedInstanceLiveMetrics(instanceId, seedBal, seedEq).catch(() => {});
   } else {
     await query(`
       UPDATE vps_system.vps_nodes n
@@ -275,7 +305,6 @@ async function applyRunMt5BotCommandSideEffects(pl, result, ok, message) {
     await finalizeBotInstanceRecord(instanceId, { status: 'failed', lastError: failMsg }).catch(() => {});
   }
 
-  const accountId = Number(pl?.accountId || pl?.account_id || 0);
   if (accountId && (balance != null || equity != null)) {
     await query(`
       UPDATE vps_system.mt5_accounts
@@ -1079,7 +1108,8 @@ router.get('/queue', async (req, res) => {
             WHEN c.command_type IN ('account_snapshot', 'sync_mt5_account', 'read_account_metrics')
               AND COALESCE(c.payload->>'purpose', '') ~* 'login_equity'
               THEN -3
-            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN -1
+            WHEN c.command_type IN ('stop_mt5_bot') THEN -2
+            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5') THEN -1
             WHEN c.command_type IN ('login_exit_mt5', 'stop_mt5', 'force_stop_mt5', 'kill_mt5')
               AND COALESCE(c.payload->>'purpose', '') = 'post_connect_exit'
               THEN 10
@@ -1206,7 +1236,8 @@ router.get('/queue', async (req, res) => {
             WHEN c.command_type IN ('account_snapshot', 'sync_mt5_account', 'read_account_metrics')
               AND COALESCE(c.payload->>'purpose', '') ~* 'login_equity'
               THEN -3
-            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5', 'stop_mt5_bot') THEN -1
+            WHEN c.command_type IN ('stop_mt5_bot') THEN -2
+            WHEN c.command_type IN ('run_mt5_bot', 'run_mt5') THEN -1
             WHEN c.command_type IN ('login_exit_mt5', 'stop_mt5', 'force_stop_mt5', 'kill_mt5')
               AND COALESCE(c.payload->>'purpose', '') = 'post_connect_exit'
               THEN 10

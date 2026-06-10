@@ -93,7 +93,7 @@ JOURNAL_OK_MSG = "เชื่อมต่อสำเร็จ"
 JOURNAL_FAIL_MSG = "เชื่อมต่อไม่สำเร็จผู้ใช้งานผิด"
 JOURNAL_TIMEOUT_MSG = "ไม่สามารถยืนยัน Login จาก MT5 ได้ทันเวลา กรุณาลองใหม่"
 DEFAULT_CALLBACK_URL = os.getenv("AVELQUA_CONNECT_CALLBACK", "https://trading.avelqua.com/api/vps-agent/connect-result")
-AGENT_BUILD_ID = "2026-06-10-perf-poll-v136"
+AGENT_BUILD_ID = "2026-06-10-runbot-portlock-v137"
 # รายงานเวอร์ชันจากโค้ดจริง — ไม่ให้ .env เก่าค้างทำให้เว็บคิดว่ายังเป็น agent เก่า
 AGENT_VERSION = AGENT_BUILD_ID
 # ชื่อไฟล์ INI ในโฟลเดอร์แต่ละ PORT สำหรับ MT5 portable /config: (มาตรฐานโปรเจกต์: startUp.ini)
@@ -6635,11 +6635,23 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
                 max_wait_sec=12.0,
             )
             kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch")
-            _kill_deadline = time.time() + 5.0
+            _kill_wait_sec = float(os.getenv("AVELQUA_RUN_BOT_KILL_WAIT_SEC", "12"))
+            _kill_deadline = time.time() + _kill_wait_sec
             while time.time() < _kill_deadline and mt5_processes_for_port_dir(port_dir):
+                kill_all_mt5_for_port_dir(
+                    port,
+                    port_dir,
+                    payload,
+                    reason="run_bot_prelaunch_wait",
+                    max_wait_sec=3.0,
+                )
                 kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch_wait")
-                time.sleep(0.3)
+                time.sleep(0.4)
             kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch_final")
+            if mt5_processes_for_port_dir(port_dir):
+                raise RuntimeError(
+                    f"PORT {port}: ยังมี MT5 ค้างในโฟลเดอร์นี้ — ปิดไม่ครบก่อนเปิดบอท"
+                )
             clear_mt5_port_session(port_dir)
             clear_mt5_login_cache(port_dir)
             remove_mt5_login_ini(port_dir)
@@ -6661,9 +6673,14 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
 
     if mt5_processes_for_port_dir(port_dir):
         stop_mt5_port_only(port, payload)
-        _kill_deadline2 = time.time() + 3.0
+        _kill_deadline2 = time.time() + float(os.getenv("AVELQUA_RUN_BOT_KILL_WAIT_SEC", "12"))
         while time.time() < _kill_deadline2 and mt5_processes_for_port_dir(port_dir):
-            time.sleep(0.3)
+            kill_stray_terminal64_processes(login, port_dir, reason="run_bot_prelaunch_final2")
+            time.sleep(0.4)
+        if mt5_processes_for_port_dir(port_dir):
+            raise RuntimeError(
+                f"PORT {port}: ยังมี MT5 ค้างก่อน launch — ยกเลิกเพื่อไม่ให้เปิดซ้ำ 2 โปรแกรม"
+            )
 
     patched_cfg = patch_mt5_experts_config(port_dir, True)
     log(f"PATCH AUTO TRADING CONFIG port={port} files={patched_cfg}")
@@ -6760,6 +6777,15 @@ def run_bot_command(payload: Dict[str, Any]) -> Dict[str, Any]:
         )
     except Exception as dedupe_err:
         log(f"RUN BOT POST VERIFY DEDUPE ERROR port={port}: {dedupe_err}")
+
+    try:
+        clear_result = close_all_positions_mt5_api(port, payload)
+        log(
+            f"RUN BOT CLEAR OLD POSITIONS port={port} ok={clear_result.get('ok')} "
+            f"closed={clear_result.get('closed')} remaining={clear_result.get('remaining')}"
+        )
+    except Exception as clear_err:
+        log(f"RUN BOT CLEAR OLD POSITIONS ERROR port={port}: {clear_err}")
 
     launch_diag = _get_mt5_launch_diag(str(port_dir))
     ui_target: Dict[str, Any] = {}

@@ -3411,7 +3411,7 @@ router.post('/mt5/run', async (req, res) => {
         instanceId: inst.rows[0].id,
         attemptId,
         journalTimeoutSec,
-        queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || Number(loginQueueDelaySec) || 0)
+        queueDelaySec: Math.max(0, Number(runBotQueueDelaySec) || 0)
       };
 
       const queued = await queueBotRunCommands({
